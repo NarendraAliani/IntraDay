@@ -1,0 +1,15 @@
+# config/strategies/example.yaml
+#
+# Example StrategyVersion configuration instance (Checkpoint 6).
+# Illustrative only — this project has no implemented strategy yet.
+# Validated against domain.strategy.StrategyVersion via
+# application/config_schema/strategy.py:load_strategy_version(). Note:
+# strategy PARAMETERS (e.g. indicator periods) are intentionally absent —
+# no domain contract models them yet (see strategy.py's module docstring).
+strategy_id: "example-strategy"
+specification_version: "spec-v1"
+code_version: "unversioned"
+configuration_version: "cfg-v1"
+universe_version: "v1"
+timeframe: "5m"
+maturity_state: "IDEA"

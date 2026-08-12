@@ -119,3 +119,33 @@ decisions with genuine alternatives.
   `import-linter` validation; see taskReport.md's Checkpoint 5 section.
 - `import-linter`'s 5 contracts remain unchanged and still pass 5/5 —
   no architecture rule was weakened to accommodate the new code.
+
+## Checkpoint 6 — Configuration Management & Parameter Governance (2026-08-12)
+
+Implements `application/config_schema`: schema derivation + validated
+loaders bridging `config/*.yaml` instances to the Checkpoint 5 domain
+contracts. Full detail: [CONFIGURATION_MANAGEMENT.md](CONFIGURATION_MANAGEMENT.md).
+
+| # | Decision | Reason | Alternatives Considered | Status |
+|---|---|---|---|---|
+| 37 | Config schemas are derived by **introspecting domain dataclasses** (`dataclasses.fields()` + `typing.get_type_hints`) rather than hand-written schema classes (e.g. separate Pydantic/marshmallow models per contract); config instances are static YAML files under `config/*`, parsed by a contract-agnostic `loader.py` and validated by each contract's own `__post_init__` (never re-implemented in the config layer). Strategy *parameters* were explicitly left unmodeled — only `StrategyVersion`'s lineage/maturity shape is configurable. | Introspection is the only mechanism that makes Rule 13 ("never redefine a parameter independently of its domain contract") structurally true rather than a convention to remember; YAML is human-editable, needs no database (none exists yet), and keeps configuration in version control alongside the code it configures — appropriate for this checkpoint's pre-persistence stage. Strategy parameters have no domain contract yet (Checkpoint 5 scope), so schematizing them now would invent unjustified fields. | Hand-written Pydantic/marshmallow schema classes per contract (rejected — a second, independently-maintained field list that WILL drift from the domain dataclass, the exact anti-pattern Rule 13 forbids); JSON instead of YAML (rejected — no comment support, worse human-editability for operator-facing risk/universe config); modeling a generic strategy-parameters dict now (rejected — no domain contract justifies its shape yet). | LOCKED |
+
+## Notes (Checkpoint 6)
+
+- No domain contract was added or modified — `application/config_schema`
+  only *consumes* the 14 Checkpoint 5 contracts.
+- A real test-collection bug was found and fixed: two unrelated test
+  files both named `test_risk.py` (and `test_universe.py`, `test_strategy.py`)
+  in different `tests/unit/` subdirectories caused a pytest basename
+  collision. Fixed by adding `__init__.py` package markers to every
+  `tests/` subdirectory, making each test module's fully-qualified name
+  unique — the standard fix for this class of collision, not a
+  workaround. See taskReport.md's Checkpoint 6 section.
+- `import-linter` remains 5/5 kept, 0 broken (81 files analyzed, up from
+  72) — no architecture rule changed.
+- **Frontend UX Testing Readiness gate evaluated and NOT triggered**: no
+  API endpoint exposes these config schemas yet (`application/contracts`
+  is still empty of business content), no persistence layer exists, and
+  no frontend screen exists to configure anything through. The gate
+  remains open for a future checkpoint once at least one real API
+  endpoint + persistence + a corresponding frontend screen exist together.

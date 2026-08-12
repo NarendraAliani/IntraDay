@@ -4,7 +4,7 @@
 
 ## Responsibility
 
-Risk limit configuration instances validated against domain/risk contracts.
+Risk limit configuration instances validated against domain/risk contracts. **Implemented at Checkpoint 6:** `default.yaml` is an example instance loaded/validated via `application/config_schema/risk.py` — see [CONFIGURATION_MANAGEMENT.md](../../docs/architecture/CONFIGURATION_MANAGEMENT.md). Values are illustrative placeholders, not an approved production risk policy.
 
 ## Depends On
 

@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "intraday"
-version = "0.4.0"
-description = "Intraday Indian cash-equity algorithmic trading platform. Checkpoint 4: repository bootstrap and tooling only — no business logic."
+version = "0.6.0"
+description = "Intraday Indian cash-equity algorithmic trading platform. Checkpoint 6: canonical domain contracts + configuration management — no strategy/broker/market-data business logic."
 authors = ["Narendra Aliani"]
 license = "Proprietary"
 readme = "README.md"
@@ -20,6 +20,7 @@ psycopg = { extras = ["binary"], version = "^3.2" }
 structlog = "^24.4"
 drf-spectacular = "^0.27"
 python-dotenv = "^1.0"
+pyyaml = "^6.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3"
@@ -32,6 +33,7 @@ hypothesis = "^6.112"
 import-linter = "^2.1"
 schemathesis = "^3.35"
 pip-audit = "^2.7"
+types-pyyaml = "^6.0"
 
 [build-system]
 requires = ["poetry-core>=1.9.0"]

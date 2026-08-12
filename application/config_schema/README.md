@@ -15,9 +15,15 @@ derive its field definitions from the corresponding `domain/strategy` or
 so a single edit to the domain contract propagates to both the config
 instances in `config/` and the generated frontend form.
 
+**Implemented at Checkpoint 6:** `src/intraday/application/config_schema/`
+— schema derivation (`schema.py`, introspects domain dataclasses, never
+hand-lists fields), and loaders for `RiskLimits`, `Universe`, and
+`StrategyVersion`. See
+[docs/architecture/CONFIGURATION_MANAGEMENT.md](../../docs/architecture/CONFIGURATION_MANAGEMENT.md).
+
 ## Depends On
 
-domain/strategy, domain/risk
+domain/strategy, domain/risk, domain/universe
 
 ## Must Not Depend On
 

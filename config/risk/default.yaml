@@ -1,0 +1,11 @@
+# config/risk/default.yaml
+#
+# Example RiskLimits configuration instance (Checkpoint 6). Validated
+# against domain.risk.RiskLimits via
+# application/config_schema/risk.py:load_risk_limits(). Values below are
+# illustrative placeholders only — NOT an approved production risk
+# policy. Approving real limits is an operational decision for a future
+# checkpoint, not this one.
+max_intraday_loss: "10000.00"
+max_position_size: "50000.00"
+max_per_trade_risk: "2000.00"

@@ -23,6 +23,7 @@ for market context and research — never as tradable instruments.
 - [docs/architecture/ARCHITECTURE_DECISIONS.md](docs/architecture/ARCHITECTURE_DECISIONS.md) — decision log
 - [docs/architecture/TECHNOLOGY_MAPPING.md](docs/architecture/TECHNOLOGY_MAPPING.md) — the concrete technology stack and why
 - [docs/architecture/DOMAIN_CONTRACTS.md](docs/architecture/DOMAIN_CONTRACTS.md) — the 14 canonical domain contracts, field by field
+- [docs/architecture/CONFIGURATION_MANAGEMENT.md](docs/architecture/CONFIGURATION_MANAGEMENT.md) — how `config/*.yaml` validates against domain contracts
 - [docs/development/LOCAL_DEVELOPMENT.md](docs/development/LOCAL_DEVELOPMENT.md) — developer commands (install, test, lint, Docker)
 - [taskReport.md](taskReport.md) — handoff report across all checkpoints
 

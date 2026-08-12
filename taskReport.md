@@ -971,3 +971,112 @@ instances against the now-implemented `domain.strategy`/`domain.risk`
 contracts) before introducing market-data ingestion or persistence — this
 keeps the "domain contract → config schema → frontend form" pipeline
 (Rule 13) grounded in real contracts before more consumers are added.
+
+---
+
+# Checkpoint 6 — Configuration Management & Parameter Governance (2026-08-12)
+
+## Implemented
+
+`src/intraday/application/config_schema/`: `schema.py` (generic
+introspection-based schema derivation from any domain dataclass —
+`build_schema_for()`), `errors.py` (`ConfigValidationError`), `loader.py`
+(contract-agnostic YAML file → dict), and three concrete schema+loader
+modules: `risk.py` (`RiskLimits`), `universe.py` (`Universe`), `strategy.py`
+(`StrategyVersion`, deliberately scoped to version/lineage/maturity only —
+no strategy-parameter schema, since no domain contract models parameters
+yet). Three example config instances committed:
+`config/risk/default.yaml`, `config/universe/example.yaml`,
+`config/strategies/example.yaml`. Full documentation:
+`docs/architecture/CONFIGURATION_MANAGEMENT.md`.
+
+## Configuration Boundaries Preserved
+
+Domain Contracts / Configuration / Application Schema / Runtime Settings /
+Secrets were kept as five separate concepts (see
+CONFIGURATION_MANAGEMENT.md §1) — `application/config_schema` never reads
+an environment variable or Django setting, and never duplicates a domain
+invariant (all actual validation happens inside the domain contract's own
+`__post_init__`; the config layer only adds source-file context via
+`ConfigValidationError`).
+
+## Tests
+
+19 new tests (`tests/unit/application/config_schema/`, 5 files): schema
+derivation, all three loaders' valid/invalid paths, and an end-to-end test
+loading the actual committed YAML example files (not just synthetic dicts)
+through the full `config/*.yaml → domain contract` pipeline. Combined
+total: **103 passed, 3 correctly skipped** (no live Postgres/Redis in this
+sandbox), 0 failed.
+
+## Bug Found and Fixed
+
+Adding `tests/unit/application/config_schema/test_risk.py` collided with
+the pre-existing `tests/unit/domain/test_risk.py` (same basename, no
+`__init__.py` in either directory) — pytest refused to collect with an
+"import file mismatch" error. Fixed by adding `__init__.py` package
+markers to every `tests/` subdirectory (`tests/`, `tests/unit/`,
+`tests/unit/domain/`, `tests/unit/application/`,
+`tests/unit/application/config_schema/`, `tests/unit/architecture/`,
+`tests/integration/`), giving every test module a unique fully-qualified
+name. This is the standard, correct fix for this pytest collision class,
+not a workaround.
+
+## Architecture Validation
+
+Ruff ✅ · mypy strict ✅ (64 files) · pytest ✅ 103 passed/3 skipped ·
+import-linter ✅ **5/5 kept, 0 broken** (81 files analyzed, up from 72 —
+consistent growth, no contract weakened) · `manage.py check` ✅ ·
+`manage.py makemigrations --check` ✅ "No changes detected" ·
+`manage.py spectacular --fail-on-warn` ✅. **Docker: deferred by project
+decision — not installed, not run, not touched.**
+
+## Frontend UX Testing Readiness — Evaluated, NOT Triggered
+
+Per the standing instruction to continuously evaluate this gate: **not
+ready this checkpoint.** No `application/contracts` API endpoint exposes
+business content yet (only `/healthz`/`/readyz`/`/version` exist), no
+persistence layer stores anything, and no frontend screen exists to
+configure through. `app.bat` was correspondingly **not created** — creating
+it now would provide a doorway into a system with nothing behind it. The
+gate will most plausibly trigger once a checkpoint adds: (a) at least one
+real `application/contracts` endpoint exposing a config schema or domain
+read model, (b) a persistence layer so state survives a restart, and (c) a
+corresponding frontend screen — likely 2-3 checkpoints out (after
+persistence and a first API surface).
+
+## Files Created
+
+`docs/architecture/CONFIGURATION_MANAGEMENT.md`; 6 files under
+`src/intraday/application/config_schema/` (`__init__.py`, `schema.py`,
+`errors.py`, `loader.py`, `risk.py`, `universe.py`, `strategy.py` — 7
+total); 3 example YAML files under `config/{risk,universe,strategies}/`;
+5 test files under `tests/unit/application/config_schema/`; 7
+`__init__.py` package markers under `tests/` (the collision fix).
+
+## Files Modified
+
+`pyproject.toml` (added `pyyaml`, `types-pyyaml`; version bump to 0.6.0),
+`poetry.lock`, `docs/architecture/ARCHITECTURE.md` (status),
+`docs/architecture/ARCHITECTURE_DECISIONS.md` (decision #37),
+`application/config_schema/README.md`, `config/risk/README.md`,
+`config/universe/README.md`, `config/strategies/README.md`, `README.md`
+(doc link), this file.
+
+## Deferred Items
+
+Strategy parameter schema (no domain contract yet); `config/broker` and
+`config/environments` (no consumer yet / already handled by Django
+settings); persistence of config instances; frontend config forms;
+runtime config reload. Docker remains deferred per the roadmap. `app.bat`
+remains deferred pending the Frontend UX Testing Readiness gate (not
+triggered this checkpoint — see above).
+
+## Next Checkpoint
+
+Recommend **Market Data Abstraction** or **Persistence Foundation** next
+— both were named as prerequisites for the Frontend UX Testing Readiness
+gate above. Persistence first is likely the better sequencing: it lets
+config instances (and eventually domain state generally) survive a
+restart, which is a precondition for any meaningful API surface, which is
+itself a precondition for frontend UX testing.

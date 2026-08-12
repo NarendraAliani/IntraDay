@@ -1,0 +1,16 @@
+# config/universe/example.yaml
+#
+# Example Universe configuration instance (Checkpoint 6). Illustrative
+# only — NOT an authoritative or production tradable-universe definition
+# (only two well-known large-cap symbols are listed, purely to exercise
+# the schema/loader pipeline end-to-end). Validated against
+# domain.universe.Universe via
+# application/config_schema/universe.py:load_universe().
+universe_id: "example-universe"
+version: "v1"
+exchange: "NSE"
+members:
+  - symbol: "RELIANCE"
+    status: "INCLUDED"
+  - symbol: "TCS"
+    status: "INCLUDED"

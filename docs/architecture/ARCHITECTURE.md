@@ -21,10 +21,13 @@ CI-validated project — Django/Celery/Channels boot, `/healthz`/`/readyz`/
 mechanically enforced by `import-linter` (`.importlinter`); Checkpoint 5
 implemented all 14 shared-kernel domain contracts as real, immutable,
 Decimal/UTC-enforcing, broker-neutral Python code — see
-[DOMAIN_CONTRACTS.md](DOMAIN_CONTRACTS.md). Still no strategy, signal,
-risk, order-placement, broker, market-data, backtesting, or frontend
-business logic exists. See
-[ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md) decisions #11–#36 for
+[DOMAIN_CONTRACTS.md](DOMAIN_CONTRACTS.md); Checkpoint 6 implemented the
+configuration-management layer (`application/config_schema`), deriving
+validated config schemas directly from those domain contracts — see
+[CONFIGURATION_MANAGEMENT.md](CONFIGURATION_MANAGEMENT.md). Still no
+strategy, signal, risk-evaluation, order-placement, broker, market-data,
+backtesting, persistence, API, or frontend business logic exists. See
+[ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md) decisions #11–#37 for
 everything that changed and why.
 
 ## 1. Product Scope
