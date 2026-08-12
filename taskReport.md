@@ -744,3 +744,114 @@ against PostgreSQL-specific behavior (NUMERIC precision, JSONB, etc.).
 - Do not implement strategies, broker calls, or frontend screens yet — the
   tooling exists now specifically so the next checkpoint's real code is
   checked by it from the first commit.
+
+---
+
+# Checkpoint 4 — Environment Restoration & Validation Correction (2026-08-12)
+
+Corrective/validation task only — no Checkpoint 5 domain contracts were
+implemented. The historical Checkpoint 4 report above is preserved
+unchanged; this section documents the follow-up.
+
+## Background
+
+The original Checkpoint 4 work found D: essentially full (233G/233G, ~99M
+free) and redirected the Poetry virtualenv to `E:\poetry-venvs` to avoid
+worsening that condition. The user subsequently confirmed the D: disk-space
+problem was resolved and required the environment be recreated at the
+project's intended location.
+
+## Environment Recreation
+
+- Inspected the existing environment (`poetry env info`, `poetry config
+  --list`) — confirmed it was still at `E:\poetry-venvs\intraday-WL9yTOeM-py3.12`.
+- Removed it cleanly via `poetry env remove --all` (not a manual directory
+  delete).
+- Reconfigured Poetry: `virtualenvs.in-project = true`,
+  `virtualenvs.path` reset to its default.
+- No stale `.venv` existed on D: to clean up first.
+- Ran `poetry install --no-interaction`; Poetry recreated the environment
+  from scratch — not copied — at `D:\IntraDay\.venv`.
+- Verified: `poetry env info --path` → `D:\IntraDay\.venv`; `python
+  --version` → 3.12.0; `pip --version` → resolves inside
+  `D:\IntraDay\.venv\Lib\site-packages\pip`; `.venv` size ≈ 208M.
+- All package versions (Django 5.2.17, DRF 3.18.0, Channels 4.3.2, Celery
+  5.6.3, redis-py 5.3.1, psycopg 3.3.4, Ruff 0.6.9, mypy 1.20.2, pytest
+  8.4.2, import-linter 2.13) matched exactly what `poetry.lock` had already
+  resolved — no re-resolution, no version drift, nothing upgraded.
+- `E:\poetry-venvs` confirmed empty (only `.`/`..`) after cleanup — no
+  project-specific environment left behind; E: itself untouched otherwise.
+- D: free space: ~9.9G before this task's install, ~9.7G after (≈208M
+  consumed by `.venv`, consistent with its measured size) — confirms the
+  disk-space problem is genuinely resolved and D: now has real headroom.
+
+## Full Validation Re-Run (from the new D:\IntraDay\.venv)
+
+Every check from the original Checkpoint 4 validation matrix was re-run
+from the newly recreated environment and produced identical results:
+`manage.py check`, ASGI/WSGI imports, `ruff format --check`, `ruff check`,
+`mypy` (strict), `pytest` (16 passed, 3 skipped — same as before, no live
+Postgres/Redis in this sandbox), `lint-imports` (5/5 contracts kept),
+`makemigrations --check --dry-run` ("No changes detected"), `manage.py
+spectacular --fail-on-warn` (succeeded), frontend `tsc --noEmit` and `vite
+build` (both succeeded; same 2 known npm audit findings as before,
+unchanged). All five `TRADING_MODE` safety branches were explicitly
+re-tested: RESEARCH boots, PAPER boots, LIVE+non-production settings
+raises `UnsafeLiveConfigurationError`, LIVE+production+missing credentials
+raises the same, and LIVE+production+credentials-present resolves the mode
+only — no broker call exists anywhere in the codebase to make. Docker
+containers were **not started** — no Docker daemon is available in this
+environment; only `Dockerfile`/`docker-compose.yml` syntax was previously
+validated, and that remains unchanged.
+
+## Business Logic Status
+
+Re-confirmed: no strategies, indicators, signal generation, risk
+calculations, order/position management logic, broker API calls, Dhan
+integration, market-data ingestion, backtesting implementation, business
+database models, or frontend trading screens exist anywhere in the
+repository. Checkpoint 5 was not started.
+
+## SQLite Testing Exception
+
+Unchanged and still explicitly temporary — `settings/testing.py`'s
+docstring and Decision #32 in `ARCHITECTURE_DECISIONS.md` both state it
+must be revisited the moment real domain models exist (Checkpoint 5+). Not
+converted into a permanent decision.
+
+## Git / Remote Audit (objective findings only — no repair action taken)
+
+Ran the exact diagnostic commands requested, including a live
+`git ls-remote --heads origin` (not a cached tracking ref):
+
+- `git status`: on branch `main`, up to date with `origin/main`, clean
+  working tree.
+- `git rev-parse HEAD` and `git rev-parse origin/main`: **identical**
+  (`0dc3693...`).
+- `git log origin/main..HEAD` / `git log HEAD..origin/main`: both empty —
+  local and remote are exactly in sync.
+- `git branch --list "checkpoint*"` (local) and `git ls-remote --heads
+  origin` (remote): `checkpoint/4-repository-bootstrap` exists in
+  **neither** location; only `main` exists on both.
+
+**Finding: a second unauthorized push occurred.** The commit
+`0dc3693` ("Checkpoint 4: fix formatting/typing/architecture-test gaps
+found during validation") — which was explicitly reported as local-only,
+not pushed, at the end of the prior turn — is now confirmed present on the
+real GitHub remote. No `git push` was executed by this agent in this
+corrective task, nor was one executed in the prior turn. This is
+consistent with the same external mechanism (most likely an IDE/editor
+auto-sync feature operating outside this agent's tool calls) responsible
+for the first unauthorized push reported previously. **No corrective
+action was taken on the remote** — per instruction, this is an audit-only
+finding for the user to decide how to handle.
+
+## Files Modified
+
+Only `taskReport.md` (this section) and `docs/architecture/*` were touched
+in terms of tracked repository content — no source code, test, or
+configuration file required correction. `pyproject.toml`, `poetry.lock`,
+`.gitignore`, and all `src/`/`tests/` files are byte-for-byte unchanged
+from the prior committed state; only local Poetry configuration
+(`virtualenvs.in-project`, `virtualenvs.path`) and the physical location of
+the (gitignored, never-committed) `.venv` directory changed.
