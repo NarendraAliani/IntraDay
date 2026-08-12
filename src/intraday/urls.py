@@ -1,14 +1,13 @@
 # src/intraday/urls.py
 #
-# Root URL configuration (Checkpoint 4). Only infrastructure endpoints
-# exist: /healthz, /readyz, /version. No business endpoints (signals,
-# orders, positions, strategies, broker) are wired here — those are added
-# in later checkpoints via intraday.application.gateways once real domain
-# contracts exist.
+# Root URL configuration. Infrastructure endpoints (/healthz, /readyz,
+# /version) were established at Checkpoint 4. Checkpoint 8 adds the first
+# business API — the configuration read/activate resources — mounted
+# under /api/v1/config/, delegating to infrastructure/api/urls.py.
 from __future__ import annotations
 
 from django.contrib import admin
-from django.urls import path
+from django.urls import include, path
 
 from intraday.application.gateways.health import healthz, readyz, version
 
@@ -17,4 +16,5 @@ urlpatterns = [
     path("healthz", healthz, name="healthz"),
     path("readyz", readyz, name="readyz"),
     path("version", version, name="version"),
+    path("api/v1/config/", include("intraday.infrastructure.api.urls")),
 ]

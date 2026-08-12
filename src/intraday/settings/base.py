@@ -151,11 +151,13 @@ REST_FRAMEWORK = {
 SPECTACULAR_SETTINGS = {
     "TITLE": "IntraDay API",
     "DESCRIPTION": (
-        "Application-layer contracts for the IntraDay platform. "
-        "Checkpoint 4: only infrastructure endpoints (health/version) exist; "
-        "no domain contracts have been added yet."
+        "Application-layer contracts for the IntraDay platform. Infrastructure "
+        "endpoints (/healthz, /readyz, /version) plus the Checkpoint 8 "
+        "configuration API (read + version-activate for risk configuration, "
+        "universe, and strategy version) under /api/v1/config/. No trading, "
+        "signal, broker, or market-data business logic exists yet."
     ),
-    "VERSION": "0.4.0",
+    "VERSION": "0.8.0",
     "SERVE_INCLUDE_SCHEMA": False,
 }
 

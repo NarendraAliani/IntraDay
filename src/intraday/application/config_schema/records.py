@@ -1,17 +1,26 @@
 # File: src/intraday/application/config_schema/records.py
 #
-# Application-level versioning envelope for RiskLimits (Checkpoint 7).
+# Application-level versioning envelopes (Checkpoint 7; extended
+# Checkpoint 8).
 #
 # domain.risk.RiskLimits (Checkpoint 5) is a pure value object — it has no
 # identity or version, deliberately, because the shared kernel is locked
 # to exactly 14 contracts and identity/versioning was not part of that
 # approved shape. Persistence requires identity + version + a creation
 # timestamp to make configuration reconstructable and immutable
-# (Checkpoint 7 §5-6), so this small application-layer wrapper adds
-# exactly those three fields WITHOUT modifying the locked domain
-# contract. This is application code, not domain code — it may know
-# about persistence-oriented concerns (identity, versioning) that the
-# domain contract itself must not.
+# (Checkpoint 7 §5-6), so RiskConfigurationRecord adds exactly those
+# fields WITHOUT modifying the locked domain contract.
+#
+# domain.universe.Universe and domain.strategy.StrategyVersion already
+# carry their own identity/version fields, so Checkpoint 7 did not wrap
+# them — but neither carries a `created_at`. Checkpoint 8's API surface
+# needs "when was this version created" for all three resources (a
+# genuine, newly-surfaced requirement, not scope creep), so
+# UniverseRecord and StrategyVersionSnapshot add exactly that one field
+# each, the same pattern as RiskConfigurationRecord. This is application
+# code, not domain code — it may know about persistence/API-oriented
+# concerns (timestamps of record creation) that the domain contracts
+# themselves must not.
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -19,6 +28,8 @@ from datetime import datetime
 
 from intraday.domain.risk.contracts import RiskLimits
 from intraday.domain.shared_kernel.contracts import Version, ensure_utc
+from intraday.domain.strategy.contracts import StrategyVersion
+from intraday.domain.universe.contracts import Universe
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,3 +52,30 @@ class RiskConfigurationRecord:
         if not self.risk_configuration_id.strip():
             raise ValueError("RiskConfigurationRecord.risk_configuration_id must be non-empty")
         ensure_utc(self.created_at, field_name="RiskConfigurationRecord.created_at")
+
+
+@dataclass(frozen=True, slots=True)
+class UniverseRecord:
+    """A persisted `Universe` version plus its creation timestamp
+    (Checkpoint 8) — `Universe` itself already carries identity/version,
+    so this wrapper adds only `created_at`."""
+
+    universe: Universe
+    created_at: datetime
+
+    def __post_init__(self) -> None:
+        ensure_utc(self.created_at, field_name="UniverseRecord.created_at")
+
+
+@dataclass(frozen=True, slots=True)
+class StrategyVersionSnapshot:
+    """A persisted `StrategyVersion` plus its creation timestamp
+    (Checkpoint 8). Named "Snapshot", not "Record", to avoid confusion
+    with the unrelated `StrategyVersionRecord` Django model in
+    `infrastructure/persistence/models.py`."""
+
+    strategy_version: StrategyVersion
+    created_at: datetime
+
+    def __post_init__(self) -> None:
+        ensure_utc(self.created_at, field_name="StrategyVersionSnapshot.created_at")

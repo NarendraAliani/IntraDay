@@ -65,10 +65,11 @@ def test_universe_round_trip_from_example_yaml() -> None:
     reconstructed = repo.get_version(universe.universe_id, universe.version.value)
 
     assert reconstructed is not None
-    assert reconstructed.universe_id == universe.universe_id
-    assert reconstructed.version == universe.version
-    assert reconstructed.exchange == universe.exchange
-    assert set(reconstructed.members) == set(universe.members)
+    assert reconstructed.universe.universe_id == universe.universe_id
+    assert reconstructed.universe.version == universe.version
+    assert reconstructed.universe.exchange == universe.exchange
+    assert set(reconstructed.universe.members) == set(universe.members)
+    assert reconstructed.created_at is not None
 
 
 @requires_postgres
@@ -86,4 +87,6 @@ def test_strategy_version_round_trip_from_example_yaml() -> None:
         strategy_version.configuration_version.value,
     )
 
-    assert reconstructed == strategy_version  # full dataclass equality
+    assert reconstructed is not None
+    assert reconstructed.strategy_version == strategy_version  # full dataclass equality
+    assert reconstructed.created_at is not None

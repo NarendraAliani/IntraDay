@@ -179,3 +179,37 @@ Full detail: [PERSISTENCE_ARCHITECTURE.md](PERSISTENCE_ARCHITECTURE.md).
 - Frontend UX Testing Readiness gate evaluated again — still **NOT
   triggered**: persistence now exists, but no business API endpoint and no
   frontend screen exist yet. `app.bat` was not created. See taskReport.md.
+
+## Checkpoint 8 — Business API & Application Contracts (2026-08-12)
+
+Implements the first business API: read + version-activate endpoints for
+risk configuration, universe, and strategy version, under
+`/api/v1/config/`. Full detail:
+[docs/api/CONFIGURATION_API.md](../api/CONFIGURATION_API.md).
+
+| # | Decision | Reason | Alternatives Considered | Status |
+|---|---|---|---|---|
+| 41 | Added `application/services/` (use-case orchestration, depends only on repository Protocols) and `infrastructure/api/` (DRF views + URL routing, the HTTP delivery adapter) as two new directories. `infrastructure/api` composes concrete `infrastructure.persistence` repositories with `application.services` — the composition root lives there, not in `application/`, because `.importlinter` contract #6 forbids `application` from depending on `infrastructure`. | An HTTP API is a delivery mechanism ("driving adapter" in ports-and-adapters terms) — architecturally the same category as `infrastructure/persistence` ("driven adapter"), both allowed to depend on `application`, never the reverse. This resolves a genuine tension: something has to wire a concrete repository into a service for a view to use it, and that wiring cannot legally live inside `application/`. | A separate top-level `intraday.composition` module outside every layer (considered — would work, since import-linter's forbidden-module checks are scoped to named layers, but adds a new architectural concept not needed once `infrastructure/api` already provides a legitimate home); putting views inside `application/gateways` (rejected — would require `application/gateways` to import `infrastructure`, directly violating contract #6, confirmed by attempting the equivalent adversarial test pattern used for contract #6 itself at Checkpoint 7). | LOCKED |
+| 42 | Extended the Checkpoint 7 `UniverseRepository`/`StrategyVersionRepository` Protocol return types from bare `Universe`/`StrategyVersion` to new wrapper types `UniverseRecord`/`StrategyVersionSnapshot` (adding only `created_at`), mirroring `RiskConfigurationRecord`'s existing pattern. Checkpoint 7's own tests were updated to match. | The Checkpoint 8 API surface needs "when was this version created" for all three resources — a genuine, newly-surfaced requirement (Checkpoint 7 didn't expose a created_at API for universe/strategy, only for risk, since only `RiskConfigurationRecord` needed a wrapper at that checkpoint for a different reason — identity). Not scope creep: the alternative (querying persistence a second time from the view layer to get a timestamp) would leak persistence concerns into `infrastructure/api`. | Adding `created_at` directly to `domain.universe.Universe`/`domain.strategy.StrategyVersion` (rejected — would expand two locked Checkpoint 5 domain contracts for an API/persistence-layer need, the exact anti-pattern avoided for `RiskLimits` at Checkpoint 7); having the view issue a second repository call for the timestamp (rejected — unnecessary complexity when the repository already has the row in hand). | LOCKED |
+| 43 | Response bodies are plain Python dicts (`Response(body)`), not `Serializer(...).data` — the `@extend_schema` decorator's declared `responses=` schema drives the OpenAPI shape independently of whether a serializer instance is constructed at runtime, the exact pattern Checkpoint 4's `health.py` already established. Response serializers therefore use `serializers.Serializer[None]` (mypy strict requires a concrete type argument; `None` signals "not instantiated against a model/dataclass instance at runtime"). | Instantiating a DRF `Serializer` purely to call `.data` on a dict that's already in the exact right shape is redundant — the serializer's only job here is to describe the schema for OpenAPI generation. Discovered this was necessary when mypy strict correctly rejected passing a `dict`/`list[dict]` as the `instance` argument to a `Serializer[None]`. | Typing serializers as `Serializer[dict[str, object]]` to permit dict instances (rejected — weakens the type parameter's meaning project-wide for a single-checkpoint convenience); reverting to actually rendering through serializer instances (rejected — reintroduces the exact redundancy just removed, and re-couples response construction to DRF's instance/attribute-access machinery when a plain dict already matches the contract). | LOCKED |
+
+## Notes (Checkpoint 8)
+
+- `import-linter` remains 6 contracts (unchanged) — re-verified 6/6 kept
+  with 106 files analyzed (up from 89), confirming `application/services`
+  and `infrastructure/api` introduced no violation.
+- A real, stale-documentation gap was found and fixed: `application/contracts/README.md`
+  still said "Must Not Depend On: Any specific API framework" — written at
+  Checkpoint 1 before Checkpoint 3 locked DRF. Updated to reflect that DRF
+  is now the locked technology, not a violation of the original intent
+  (never invent business meaning untraceable to a domain contract).
+- `SPECTACULAR_SETTINGS`'s `DESCRIPTION`/`VERSION` were still Checkpoint-4-era
+  ("no domain contracts have been added yet") — found while inspecting the
+  generated OpenAPI schema output, corrected to describe the real API.
+- Frontend TypeScript contract generation remains deliberately deferred —
+  no codegen tool is installed in `frontend/package.json` yet; generating
+  types for an API with no frontend consumer would be premature. Named as
+  the trigger for the next frontend-focused checkpoint.
+- Frontend UX Testing Readiness gate evaluated again: **Persistence YES,
+  Business API YES (new this checkpoint), Frontend NO, Human workflow
+  NO — overall gate NO.** `app.bat` was not created. See taskReport.md.

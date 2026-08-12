@@ -1247,3 +1247,186 @@ persisted risk/universe/strategy-version configuration (read + versioned-
 activate) through `application/contracts` (DRF + OpenAPI), which would
 satisfy the Frontend UX Testing Readiness gate's second criterion and set
 up the third (a real frontend screen) as the natural following checkpoint.
+
+---
+
+# Checkpoint 8 — Business API & Application Contracts (2026-08-12)
+
+## Implemented
+
+Full vertical slice: `application/services/` (3 use-case services +
+shared errors), `application/contracts/` (DRF serializers: risk, universe,
+strategy, plus `ApiErrorSerializer`), `infrastructure/api/` (DRF views +
+error mapping + URL routing for all 3 resources), wired into
+`intraday/urls.py` under `/api/v1/config/`. 12 endpoints total (4 per
+resource × 3 resources): list, get-active, get-version, activate.
+
+## A Necessary Interface Extension (Checkpoint 7 → 8)
+
+Building the API surfaced a real gap: Checkpoint 7's
+`UniverseRepository`/`StrategyVersionRepository` returned bare domain
+objects with no `created_at`, but the API needs it (like
+`RiskConfigurationRecord` already had). Extended both Protocol return
+types to new wrapper types `UniverseRecord`/`StrategyVersionSnapshot`
+(adding only `created_at`, mirroring the existing pattern) — updated the
+Django ORM implementations and **all of Checkpoint 7's own tests** to
+match. This is a deliberate, documented interface evolution (Decision
+#42), not a silent regression — Checkpoint 7's tests still assert the
+same behavior, just through the new wrapper's `.universe`/
+`.strategy_version` attribute.
+
+## Where Views Live — a Real Architectural Question Resolved
+
+Composing a concrete (Django-backed) repository with an application
+service — necessary for any view to actually do anything — requires
+importing `infrastructure.persistence`. `.importlinter` contract #6
+forbids `application` from depending on `infrastructure`. Resolution:
+placed views under **`infrastructure/api/`**, not `application/gateways/`
+— an HTTP API is a delivery mechanism (a "driving adapter"), the same
+category as `infrastructure/persistence` (a "driven adapter"), both
+legitimately allowed to depend on `application`. Verified: `import-linter`
+still reports **6/6 kept** with this composition in place, and a new
+architecture test (`test_api_boundaries.py`) independently re-confirms
+`application/services` and `application/contracts` import zero
+`infrastructure` code.
+
+## Response Serialization Approach
+
+Views return plain dicts via `Response(body)`, not
+`Serializer(...).data` — `@extend_schema`'s declared `responses=` drives
+the OpenAPI shape independently of runtime instantiation, the same
+pattern Checkpoint 4's `health.py` already used. Discovered this was
+necessary (not just a style choice) when mypy strict correctly rejected
+passing a `dict` as the `instance` argument to a `Serializer[None]`.
+
+## Two Stale-Documentation Gaps Found and Fixed
+
+1. `application/contracts/README.md` still said "Must Not Depend On: Any
+   specific API framework" — written at Checkpoint 1, before Checkpoint 3
+   locked DRF. Updated to explain DRF is now the locked technology, not a
+   violation of the original intent.
+2. `SPECTACULAR_SETTINGS`'s `DESCRIPTION`/`VERSION` in `settings/base.py`
+   were still Checkpoint-4-era text ("no domain contracts have been added
+   yet") — found by actually inspecting the generated OpenAPI schema
+   output, not just checking that generation succeeded. Corrected, and
+   `pyproject.toml`'s version bumped to `0.8.0` to match (it had not been
+   bumped at Checkpoint 7 either — a minor, now-corrected drift).
+
+## Tests
+
+23 new tests: 7 pure-Python application-service tests (in-memory fake
+repository — no Django, no database, proving the DI/testability claim),
+13 Postgres-gated API endpoint tests (`test_risk_api.py` — the "most
+important test in this checkpoint" per the brief, a full vertical slice
+plus list/active/404/idempotent-activation/error-shape coverage;
+`test_universe_api.py`, `test_strategy_api.py` — lighter parity coverage),
+2 architecture boundary tests, 1 additional. **114 passed, 34 skipped, 0
+failed** (up from 105 passed/21 skipped at Checkpoint 7 — the 9 new
+passes are the pure-Python service tests, which genuinely ran; the 13 new
+skips are the Postgres-gated API tests, honestly reported as skipped, not
+claimed as passed).
+
+## PostgreSQL Validation Status
+
+**No PostgreSQL server available in this environment** (consistent with
+every prior checkpoint). `manage.py check`, `makemigrations --check`
+("No changes detected" — no model changes this checkpoint), and
+`spectacular --fail-on-warn` (succeeded, inspected the actual output, not
+just the exit code) all ran successfully without a live connection. The
+13 API endpoint tests and all persistence tests from Checkpoint 7 are
+**skipped**, individually reported, never claimed as passed. In CI (real
+Postgres service container), all of these run for real.
+
+## Architecture Validation
+
+Ruff ✅ · mypy strict ✅ (86 files) · pytest ✅ **114 passed, 34 skipped, 0
+failed** · import-linter ✅ **6/6 kept, 0 broken** (106 files analyzed, up
+from 89) · `manage.py check` ✅ · `makemigrations --check` ✅ ("No changes
+detected") · `spectacular --fail-on-warn` ✅ (output inspected, not just
+exit code). **Docker: deferred by project decision** — untouched.
+
+## Frontend Contract Generation — Deferred, Documented Why
+
+Not generated this checkpoint. No codegen tool (`openapi-typescript` or
+equivalent) is installed in `frontend/package.json` yet — only the
+toolchain itself was bootstrapped at Checkpoint 4. Generating TypeScript
+types for an API with no frontend consumer would be premature, and CI's
+current OpenAPI step is a "smoke check," not yet a real drift-diff check —
+upgrading it is a discrete change deserving its own checkpoint's
+attention. Both named as triggers for the next frontend-focused checkpoint.
+
+## Security Review
+
+No SQL injection surface (ORM-only, no raw SQL). No mass assignment
+(hand-constructed response dicts, never `ModelSerializer.data`). No
+internal Django `id` primary keys exposed in any response — only
+domain/application identity fields. Activation accepts only a
+configuration id + version from the URL path, validated against existing
+rows. No credentials, passwords, or real database URLs in any file. Error
+responses verified (by test) to never contain `traceback`, `django.db`,
+`select `, or `integrityerror`.
+
+## Files Created
+
+`src/intraday/application/services/{__init__,errors,risk,universe,strategy}.py`,
+`src/intraday/application/contracts/{__init__,errors,risk,universe,strategy}.py`,
+`src/intraday/infrastructure/api/{__init__,errors,risk_views,universe_views,strategy_views,urls}.py`,
+`application/services/README.md`, `infrastructure/api/README.md`,
+`docs/api/CONFIGURATION_API.md`,
+`tests/unit/application/services/{__init__,test_risk_service}.py`,
+`tests/unit/infrastructure/api/{__init__,test_risk_api,test_universe_api,test_strategy_api}.py`,
+`tests/unit/architecture/test_api_boundaries.py`.
+
+## Files Modified
+
+`src/intraday/application/config_schema/records.py` (added
+`UniverseRecord`, `StrategyVersionSnapshot`),
+`src/intraday/application/repositories/__init__.py` (Protocol return-type
+extension), `src/intraday/infrastructure/persistence/repositories.py`
+(matching implementation update), `src/intraday/settings/base.py`
+(`SPECTACULAR_SETTINGS` correction), `src/intraday/urls.py` (mounted
+`/api/v1/config/`), `pyproject.toml` (version bump),
+`tests/unit/infrastructure/persistence/{test_repositories,test_round_trip}.py`
+(updated to match the new wrapper return types),
+`docs/architecture/{ARCHITECTURE.md,DOMAIN_BOUNDARIES.md,ARCHITECTURE_DECISIONS.md}`,
+`application/contracts/README.md` (stale guardrail correction), `README.md`,
+this file.
+
+## Frontend UX Testing Readiness
+
+| Criterion | Status |
+|---|---|
+| Persistence | ✅ YES |
+| Business API | ✅ **YES (new this checkpoint)** |
+| Frontend | ❌ NO |
+| Human workflow | ❌ NO |
+
+**Overall gate: `NO — NOT YET`.** Two of four criteria now met. `app.bat`
+was **not created** — the brief's explicit condition (all four criteria)
+is not satisfied.
+
+## Deferred Items
+
+Frontend TypeScript contract generation (documented why above); CI drift
+enforcement upgrade from smoke-check to real diff; authentication/
+authorization (endpoints remain open, explicitly not "production secure" —
+documented); a bare `GET /api/v1/config/risk/` listing all configuration
+families (no repository method exists, no demonstrated need); pagination
+(not yet justified by resource size); caching (not yet justified).
+Docker remains deferred. `app.bat` remains deferred — gate not yet fully
+triggered.
+
+## Git Status
+
+Committed locally to `main`. **Not pushed.**
+
+## Next Checkpoint
+
+Recommend **Frontend Bootstrap for the Configuration API**: wire
+`openapi-typescript` (or equivalent) into `frontend/package.json`, generate
+real TypeScript types into `frontend/shared/generated_contracts`, upgrade
+CI's OpenAPI step to a real drift-diff check, and build the first real
+React screen (read-only configuration viewer) consuming the Checkpoint 8
+API. That would satisfy Frontend UX Testing Readiness criterion 3, and a
+subsequent activation-capable screen would satisfy criterion 4 — likely
+triggering `app.bat`'s creation at that point.

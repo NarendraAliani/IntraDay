@@ -114,7 +114,8 @@ def test_universe_repository_round_trips_members() -> None:
     repo.save(universe)
     fetched = repo.get_version("example", "v1")
     assert fetched is not None
-    assert fetched.contains(make_instrument_id(Exchange.NSE, "RELIANCE"))
+    assert fetched.universe.contains(make_instrument_id(Exchange.NSE, "RELIANCE"))
+    assert fetched.created_at is not None
 
 
 @requires_postgres
@@ -133,9 +134,9 @@ def test_strategy_version_repository_identity_and_activation() -> None:
     repo.save(version)
     fetched = repo.get_version("example-strategy", "spec-v1", "code-v1", "cfg-v1")
     assert fetched is not None
-    assert fetched.maturity_state is StrategyMaturityState.IDEA
+    assert fetched.strategy_version.maturity_state is StrategyMaturityState.IDEA
 
     repo.activate("example-strategy", "spec-v1", "code-v1", "cfg-v1")
     active = repo.get_active("example-strategy")
     assert active is not None
-    assert active.specification_version.value == "spec-v1"
+    assert active.strategy_version.specification_version.value == "spec-v1"

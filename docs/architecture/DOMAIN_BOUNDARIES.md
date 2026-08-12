@@ -243,6 +243,23 @@ justification. It holds `typing.Protocol` repository interfaces;
 depend on `infrastructure` — the dependency inversion runs the other way.
 Full detail: [PERSISTENCE_ARCHITECTURE.md](PERSISTENCE_ARCHITECTURE.md).
 
+## API Boundary (Checkpoint 8)
+
+```
+HTTP → infrastructure/api (views, composes application + infrastructure.persistence)
+     → application/contracts (DRF serializer shape) + application/services (use cases)
+     → application/repositories → infrastructure/persistence → PostgreSQL
+```
+
+Two more directories were added: `application/services` (use-case
+orchestration, depends only on repository Protocols) and
+`infrastructure/api` (the HTTP delivery adapter — a "driving adapter" in
+ports-and-adapters terms, the same category as `infrastructure/persistence`,
+allowed to depend on `application` and compose it with concrete
+infrastructure, which `application` itself must never do). See
+[ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md) decisions #41–#42
+and [docs/api/CONFIGURATION_API.md](../api/CONFIGURATION_API.md).
+
 ## Explicit Non-Dependencies (Guardrails)
 
 - `domain/instrument` and `domain/universe` cannot represent derivatives,

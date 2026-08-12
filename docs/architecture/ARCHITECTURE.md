@@ -31,10 +31,17 @@ exactly three concepts — risk configuration, universe, strategy version —
 each versioned and immutable with a separately-modeled active pointer, and
 retired Checkpoint 4's temporary SQLite testing exception now that real
 PostgreSQL-specific models exist — see
-[PERSISTENCE_ARCHITECTURE.md](PERSISTENCE_ARCHITECTURE.md). Still no
+[PERSISTENCE_ARCHITECTURE.md](PERSISTENCE_ARCHITECTURE.md); Checkpoint 8
+implemented the first business API — read + version-activate endpoints for
+risk configuration, universe, and strategy version under
+`/api/v1/config/`, via two new directories (`application/services`,
+`infrastructure/api`) and a new `.importlinter` contract confirming
+`application` still never depends on `infrastructure` even with the API
+layer composing both — see
+[docs/api/CONFIGURATION_API.md](../api/CONFIGURATION_API.md). Still no
 strategy, signal, risk-evaluation, order-placement, broker, market-data,
-backtesting, API, or frontend business logic exists. See
-[ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md) decisions #11–#39 for
+backtesting, or frontend business logic exists. See
+[ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md) decisions #11–#42 for
 everything that changed and why.
 
 ## 1. Product Scope

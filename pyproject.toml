@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "intraday"
-version = "0.6.0"
-description = "Intraday Indian cash-equity algorithmic trading platform. Checkpoint 6: canonical domain contracts + configuration management — no strategy/broker/market-data business logic."
+version = "0.8.0"
+description = "Intraday Indian cash-equity algorithmic trading platform. Checkpoint 8: domain contracts + configuration management + persistence + first business API (configuration read/activate) — no strategy/broker/market-data business logic."
 authors = ["Narendra Aliani"]
 license = "Proprietary"
 readme = "README.md"

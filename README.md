@@ -25,6 +25,7 @@ for market context and research — never as tradable instruments.
 - [docs/architecture/DOMAIN_CONTRACTS.md](docs/architecture/DOMAIN_CONTRACTS.md) — the 14 canonical domain contracts, field by field
 - [docs/architecture/CONFIGURATION_MANAGEMENT.md](docs/architecture/CONFIGURATION_MANAGEMENT.md) — how `config/*.yaml` validates against domain contracts
 - [docs/architecture/PERSISTENCE_ARCHITECTURE.md](docs/architecture/PERSISTENCE_ARCHITECTURE.md) — repository interfaces, Django models, versioning, PostgreSQL strategy
+- [docs/api/CONFIGURATION_API.md](docs/api/CONFIGURATION_API.md) — the first business API: endpoints, contracts, errors, activation semantics
 - [docs/development/LOCAL_DEVELOPMENT.md](docs/development/LOCAL_DEVELOPMENT.md) — developer commands (install, test, lint, Docker)
 - [taskReport.md](taskReport.md) — handoff report across all checkpoints
 

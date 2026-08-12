@@ -17,7 +17,11 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from intraday.application.config_schema.records import RiskConfigurationRecord
+from intraday.application.config_schema.records import (
+    RiskConfigurationRecord,
+    StrategyVersionSnapshot,
+    UniverseRecord,
+)
 from intraday.domain.strategy.contracts import StrategyVersion
 from intraday.domain.universe.contracts import Universe
 
@@ -49,23 +53,26 @@ class RiskConfigurationRepository(Protocol):
 
 
 class UniverseRepository(Protocol):
-    """Persists and retrieves versioned `Universe` instances. Historical
-    versions are immutable — `save()` only ever inserts a new version."""
+    """Persists and retrieves versioned `Universe` instances, returned
+    wrapped in `UniverseRecord` (adds `created_at` — Checkpoint 8).
+    Historical versions are immutable — `save()` only ever inserts a new
+    version."""
 
     def save(self, universe: Universe) -> None: ...
 
-    def get_version(self, universe_id: str, version: str) -> Universe | None: ...
+    def get_version(self, universe_id: str, version: str) -> UniverseRecord | None: ...
 
-    def get_active(self, universe_id: str) -> Universe | None: ...
+    def get_active(self, universe_id: str) -> UniverseRecord | None: ...
 
-    def list_versions(self, universe_id: str) -> tuple[Universe, ...]: ...
+    def list_versions(self, universe_id: str) -> tuple[UniverseRecord, ...]: ...
 
     def activate(self, universe_id: str, version: str) -> None: ...
 
 
 class StrategyVersionRepository(Protocol):
-    """Persists and retrieves `StrategyVersion` records. A version is
-    identified by the tuple (strategy_id, specification_version,
+    """Persists and retrieves `StrategyVersion` records, returned wrapped
+    in `StrategyVersionSnapshot` (adds `created_at` — Checkpoint 8). A
+    version is identified by the tuple (strategy_id, specification_version,
     code_version, configuration_version) — `universe_version` may differ
     across otherwise-identical records without creating a new identity,
     per how `domain.strategy.StrategyVersion` itself is shaped."""
@@ -78,11 +85,11 @@ class StrategyVersionRepository(Protocol):
         specification_version: str,
         code_version: str,
         configuration_version: str,
-    ) -> StrategyVersion | None: ...
+    ) -> StrategyVersionSnapshot | None: ...
 
-    def get_active(self, strategy_id: str) -> StrategyVersion | None: ...
+    def get_active(self, strategy_id: str) -> StrategyVersionSnapshot | None: ...
 
-    def list_versions(self, strategy_id: str) -> tuple[StrategyVersion, ...]: ...
+    def list_versions(self, strategy_id: str) -> tuple[StrategyVersionSnapshot, ...]: ...
 
     def activate(
         self,

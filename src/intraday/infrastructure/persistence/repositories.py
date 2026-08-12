@@ -11,7 +11,11 @@ from __future__ import annotations
 
 from django.db import IntegrityError, transaction
 
-from intraday.application.config_schema.records import RiskConfigurationRecord
+from intraday.application.config_schema.records import (
+    RiskConfigurationRecord,
+    StrategyVersionSnapshot,
+    UniverseRecord,
+)
 from intraday.application.repositories import DuplicateVersionError
 from intraday.domain.risk.contracts import RiskLimits
 from intraday.domain.shared_kernel.contracts import (
@@ -130,19 +134,19 @@ class DjangoUniverseRepository:
                 "already exists"
             ) from exc
 
-    def get_version(self, universe_id: str, version: str) -> Universe | None:
+    def get_version(self, universe_id: str, version: str) -> UniverseRecord | None:
         row = UniverseVersion.objects.filter(universe_id=universe_id, version=version).first()
-        return _universe_row_to_domain(row) if row is not None else None
+        return _universe_row_to_record(row) if row is not None else None
 
-    def get_active(self, universe_id: str) -> Universe | None:
+    def get_active(self, universe_id: str) -> UniverseRecord | None:
         pointer = ActiveUniverse.objects.filter(universe_id=universe_id).first()
         if pointer is None:
             return None
         return self.get_version(universe_id, pointer.active_version)
 
-    def list_versions(self, universe_id: str) -> tuple[Universe, ...]:
+    def list_versions(self, universe_id: str) -> tuple[UniverseRecord, ...]:
         rows = UniverseVersion.objects.filter(universe_id=universe_id).order_by("created_at")
-        return tuple(_universe_row_to_domain(row) for row in rows)
+        return tuple(_universe_row_to_record(row) for row in rows)
 
     def activate(self, universe_id: str, version: str) -> None:
         with transaction.atomic():
@@ -157,7 +161,7 @@ class DjangoUniverseRepository:
             )
 
 
-def _universe_row_to_domain(row: UniverseVersion) -> Universe:
+def _universe_row_to_record(row: UniverseVersion) -> UniverseRecord:
     members = tuple(
         UniverseMember(
             instrument_id=InstrumentId(entry["instrument_id"]),
@@ -165,12 +169,13 @@ def _universe_row_to_domain(row: UniverseVersion) -> Universe:
         )
         for entry in row.members
     )
-    return Universe(
+    universe = Universe(
         universe_id=row.universe_id,
         version=Version(value=row.version),
         exchange=Exchange(row.exchange),
         members=members,
     )
+    return UniverseRecord(universe=universe, created_at=row.created_at)
 
 
 # --- Strategy version -----------------------------------------------------------
@@ -204,16 +209,16 @@ class DjangoStrategyVersionRepository:
         specification_version: str,
         code_version: str,
         configuration_version: str,
-    ) -> StrategyVersion | None:
+    ) -> StrategyVersionSnapshot | None:
         row = StrategyVersionRecord.objects.filter(
             strategy_id=strategy_id,
             specification_version=specification_version,
             code_version=code_version,
             configuration_version=configuration_version,
         ).first()
-        return _strategy_row_to_domain(row) if row is not None else None
+        return _strategy_row_to_snapshot(row) if row is not None else None
 
-    def get_active(self, strategy_id: str) -> StrategyVersion | None:
+    def get_active(self, strategy_id: str) -> StrategyVersionSnapshot | None:
         pointer = ActiveStrategyVersion.objects.filter(strategy_id=strategy_id).first()
         if pointer is None:
             return None
@@ -224,9 +229,9 @@ class DjangoStrategyVersionRepository:
             pointer.active_configuration_version,
         )
 
-    def list_versions(self, strategy_id: str) -> tuple[StrategyVersion, ...]:
+    def list_versions(self, strategy_id: str) -> tuple[StrategyVersionSnapshot, ...]:
         rows = StrategyVersionRecord.objects.filter(strategy_id=strategy_id).order_by("created_at")
-        return tuple(_strategy_row_to_domain(row) for row in rows)
+        return tuple(_strategy_row_to_snapshot(row) for row in rows)
 
     def activate(
         self,
@@ -255,8 +260,8 @@ class DjangoStrategyVersionRepository:
             )
 
 
-def _strategy_row_to_domain(row: StrategyVersionRecord) -> StrategyVersion:
-    return StrategyVersion(
+def _strategy_row_to_snapshot(row: StrategyVersionRecord) -> StrategyVersionSnapshot:
+    strategy_version = StrategyVersion(
         strategy_id=StrategyId(row.strategy_id),
         specification_version=Version(value=row.specification_version),
         code_version=Version(value=row.code_version),
@@ -265,3 +270,4 @@ def _strategy_row_to_domain(row: StrategyVersionRecord) -> StrategyVersion:
         timeframe=Timeframe(row.timeframe),
         maturity_state=StrategyMaturityState(row.maturity_state),
     )
+    return StrategyVersionSnapshot(strategy_version=strategy_version, created_at=row.created_at)
