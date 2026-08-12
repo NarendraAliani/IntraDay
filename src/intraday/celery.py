@@ -23,11 +23,17 @@ app.config_from_object("django.conf:settings", namespace="CELERY")
 app.autodiscover_tasks()
 
 
-@app.task(name="intraday.infrastructure.celery_smoke_task")
+@app.task(name="intraday.infrastructure.celery_smoke_task")  # type: ignore[untyped-decorator]
 def celery_smoke_task() -> str:
     """Infrastructure-only smoke task (Checkpoint 4).
 
     Verifies that a Celery worker can receive and execute a task. Contains
     no business logic and must not be extended — see module docstring.
+
+    The ignore above is necessary because Celery's `@app.task` decorator
+    has no type stubs (see the `celery.*` override in pyproject.toml's
+    [tool.mypy] config) — this is a known third-party typing gap, not a
+    project-code typing gap (Checkpoint 4 §11: "strict project code, not
+    pretending every third-party library is perfectly typed").
     """
     return "ok"

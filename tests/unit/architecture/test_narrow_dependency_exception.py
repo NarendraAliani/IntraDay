@@ -28,6 +28,17 @@ BACKTESTING_PACKAGE = (
 
 
 def _imported_module_names(source_file: Path) -> set[str]:
+    """Return every fully-qualified module path this file's import
+    statements could plausibly reference.
+
+    Handles both `import a.b.c` and `from a.b import c` — the latter must
+    also contribute `a.b.c` as a candidate, since `from intraday.trading_engine
+    import risk_engine` imports the *submodule* `risk_engine`, not merely a
+    name from within `trading_engine`'s own namespace. Missing this form was
+    caught by an adversarial test run during Checkpoint 4 (see
+    taskReport.md's Checkpoint 4 "Known Issues / Deferred Items" for the
+    record of that finding) — this function was fixed in response.
+    """
     tree = ast.parse(source_file.read_text(encoding="utf-8"), filename=str(source_file))
     names: set[str] = set()
     for node in ast.walk(tree):
@@ -35,6 +46,8 @@ def _imported_module_names(source_file: Path) -> set[str]:
             names.update(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module:
             names.add(node.module)
+            for alias in node.names:
+                names.add(f"{node.module}.{alias.name}")
     return names
 
 
@@ -55,13 +68,11 @@ def test_backtesting_does_not_import_forbidden_trading_engine_submodules() -> No
 
     assert not violations, (
         "research.backtesting must not import these trading_engine internals "
-        f"(only trading_engine.strategy_execution is permitted):\n" + "\n".join(violations)
+        "(only trading_engine.strategy_execution is permitted):\n" + "\n".join(violations)
     )
 
 
-def test_backtesting_strategy_execution_import_is_the_only_permitted_trading_engine_dependency() -> (
-    None
-):
+def test_backtesting_only_imports_strategy_execution_from_trading_engine() -> None:
     """Positive check: if backtesting imports trading_engine at all, it must
     be exactly the strategy_execution submodule — catches accidental typos
     or refactors that would otherwise slip past the forbidden-list check

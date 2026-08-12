@@ -23,6 +23,8 @@ def test_celery_smoke_task_runs_synchronously() -> None:
 
 def test_celery_smoke_task_runs_against_live_broker() -> None:
     if not os.environ.get("REDIS_URL"):
-        pytest.skip("REDIS_URL not set - live Celery broker integration skipped in this environment")
+        pytest.skip(
+            "REDIS_URL not set - live Celery broker integration skipped in this environment"
+        )
     async_result = celery_smoke_task.delay()
     assert async_result.get(timeout=5) == "ok"

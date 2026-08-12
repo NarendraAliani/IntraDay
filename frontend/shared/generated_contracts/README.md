@@ -21,6 +21,18 @@ step (GitHub Actions, locked at Checkpoint 3) regenerates this directory from
 against what's committed — that check is the concrete mechanism that makes
 frontend/backend configuration drift detectable, not merely documented.
 
+**Why this directory is still empty at Checkpoint 4:** the OpenAPI
+generation pipeline itself is wired and verified (CI runs
+`manage.py spectacular` as a smoke check — see
+`.github/workflows/ci.yml`), but no *business* API contract exists yet
+(only infrastructure endpoints: `/healthz`, `/readyz`, `/version`, which are
+not part of `application/contracts`'s domain-facing surface and are
+intentionally not generated into this directory). Generating TypeScript
+types now would mean generating types for nothing meaningful — deferred,
+not forgotten, to the checkpoint that adds the first real
+`application/contracts` entry. This directory remains tracked (not
+gitignored) per policy, even while empty.
+
 ## Depends On
 
 application/contracts

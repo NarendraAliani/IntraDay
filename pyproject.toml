@@ -91,7 +91,7 @@ show_error_codes = true
 exclude = ["migrations/"]
 
 [[tool.mypy.overrides]]
-module = ["celery.*", "channels_redis.*", "drf_spectacular.*", "structlog.*"]
+module = ["celery.*", "channels.*", "channels_redis.*", "drf_spectacular.*", "structlog.*"]
 ignore_missing_imports = true
 
 [tool.django-stubs]

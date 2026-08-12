@@ -487,3 +487,260 @@ specify `domain/*` in code.
   screens until Checkpoint 4's tooling bootstrap is in place — code without
   the enforcement/testing scaffolding around it risks silently violating
   the architecture this and the prior two checkpoints established.
+
+---
+
+# Checkpoint 4 — Repository Bootstrap, Development Tooling & Architecture Enforcement (2026-08-12)
+
+## Review Performed
+
+Re-read `README.md`, this file, `ARCHITECTURE.md`, `DOMAIN_BOUNDARIES.md`,
+`ARCHITECTURE_DECISIONS.md`, `TECHNOLOGY_MAPPING.md` before changing
+anything. Independently verified — not assumed — the following:
+
+- **Git**: local repo existed on branch `main` at commit `447d789`
+  ("Checkpoints 1-3..."), remote `origin` correctly pointed at
+  `https://github.com/NarendraAliani/IntraDay.git`, working tree clean, no
+  push had ever occurred. A live fetch of the GitHub URL confirmed the
+  remote repository is still empty.
+- **Architecture**: all 17 approved top-level directories intact;
+  `domain/trade/` exists; `domain/experiment/` does not exist;
+  `research/experiments/` owns the experiment contract; the shared kernel
+  lists all 14 contracts in both `domain/README.md` and
+  `DOMAIN_BOUNDARIES.md`.
+- **Directory-count discrepancy resolved precisely**: 137 manifest-driven
+  architectural directories (each with a README) + 5 `docs/` subdirectories
+  (`docs`, `docs/architecture`, `docs/research`, `docs/api`,
+  `docs/runbooks` — created via a separate `mkdir` in Checkpoint 1, never
+  part of the domain-boundary manifest) + 1 (`find .`'s own report of the
+  repository root, which is not itself a directory in the architectural
+  sense) = **143**, exactly matching the filesystem count with zero
+  unexplained directories and zero `.git/` internals counted. This is
+  distinct from the **183** directories now on disk after this checkpoint —
+  the additional ~40 are `src/intraday/*` Python packages,
+  `tests/unit/architecture/`, `.github/workflows/`, and `frontend/src/` —
+  real *code* package directories bootstrapped inside the already-approved
+  `application/`, `domain/`, `research/`, `signal_intelligence/`,
+  `trading_engine/`, `control_plane/`, `communication/`, `infrastructure/`
+  boundaries (via `src/intraday/`), not new top-level architectural areas.
+  No architecture directory was added, removed, or renamed at the top
+  level.
+- **Redis terminology**: `TECHNOLOGY_MAPPING.md` §5 already stated Redis
+  "is never a system of record" but did not enumerate its distinct roles;
+  added an explicit 7-role taxonomy (cache, Channels layer, Celery broker,
+  Celery result backend, Pub/Sub, distributed locks, rate-limit counters)
+  to remove any ambiguity, per this checkpoint's §3.
+- **Technology mapping**: confirmed the plan (Python 3.12, Django, DRF,
+  Channels, PostgreSQL, TimescaleDB, Redis, Celery, React+TypeScript+Vite,
+  Poetry, Ruff, mypy, pytest, Hypothesis, Schemathesis, import-linter,
+  GitHub Actions, Docker) and implemented against it. Two deliberate,
+  documented deviations were required during implementation — see
+  Architecture Decisions #30 and #31 below (testcontainers-python →
+  direct-connect-and-skip; Playwright deferred, not installed).
+
+## What Was Built
+
+- **Poetry project**: `pyproject.toml` (Python 3.12, runtime + dev
+  dependency groups, Ruff/mypy/pytest config inline), `poetry.lock`
+  committed.
+- **Package skeleton**: `src/intraday/` with one Python package per
+  approved bounded context (`domain`, `research` incl. `backtesting`,
+  `signal_intelligence`, `trading_engine` incl. its 6 submodules
+  referenced by the narrow-exception rule, `control_plane`,
+  `communication`, `application` incl. `gateways`, `infrastructure`) —
+  every `__init__.py` carries a Rule-14-compliant header and contains no
+  business logic.
+- **Django project**: `intraday/settings/{base,development,testing,paper,production}.py`
+  (deliberately named `settings/`, not `config/`, to avoid colliding with
+  the approved `config/` data directory — Decision #29), `urls.py`,
+  `asgi.py` (the real serving entrypoint, Channels-wrapped), `wsgi.py`
+  (compatibility only), `celery.py` (app bootstrap + one infrastructure-only
+  smoke task), `manage.py`.
+- **TRADING_MODE safety mechanism**: `settings/trading_mode.py` — a single
+  authoritative `resolve_trading_mode()` function enforcing "LIVE requires
+  production settings + TRADING_MODE=LIVE + live broker credentials,
+  simultaneously," called once by every settings module. Verified by 6 unit
+  tests covering every branch (default, PAPER outside production, LIVE
+  rejected outside production, LIVE rejected without credentials, LIVE
+  allowed only with both conditions, unrecognized mode rejected).
+- **Infrastructure endpoints**: `/healthz` (liveness, no dependencies),
+  `/readyz` (readiness, checks DB + cache without leaking secrets),
+  `/version` (reads `intraday.__version__`, itself sourced from package
+  metadata — no second version source), each with an OpenAPI response
+  schema via `drf-spectacular`.
+- **Architecture enforcement**: `.importlinter` with 5 contracts (domain
+  isolation, infrastructure isolation, application→bounded-context→domain
+  layering, bounded-context independence, and the narrow
+  `research.backtesting → trading_engine.strategy_execution` exception
+  scoped to that one submodule only) plus a supplementary, independent
+  `tests/unit/architecture/test_narrow_dependency_exception.py` using `ast`
+  static analysis.
+- **Tests**: 16 passing infrastructure/unit tests + 3 integration tests
+  that correctly skip without live Postgres/Redis (`tests/unit/`,
+  `tests/unit/architecture/`, `tests/integration/`). No business-logic
+  tests, per the hard boundary.
+- **Docker**: `Dockerfile` (dev-oriented, labeled as such),
+  `docker-compose.yml` (db, redis, web, celery_worker, celery_beat — all
+  hardcoded to `intraday.settings.development`, cannot reach production),
+  `.dockerignore`.
+- **CI**: `.github/workflows/ci.yml` — Ruff format/lint, mypy strict,
+  pytest (with real Postgres/Redis service containers), import-linter,
+  Django migration check, gitleaks secret scan, pip-audit dependency audit
+  (with 6 documented, tracked ignores — Decision #33), and an OpenAPI
+  schema-generation smoke check. No deployment step.
+- **Secrets**: `.env.example` (placeholders only) committed; `.env`
+  confirmed gitignored via `git check-ignore`.
+- **Frontend bootstrap**: `frontend/package.json`, `tsconfig.json`,
+  `vite.config.ts`, `index.html`, `src/main.tsx`, `src/BootstrapPlaceholder.tsx`
+  — no screens, no business logic, just enough to prove the toolchain
+  builds.
+- **Developer tooling**: `Makefile` (`install`, `format`, `lint`,
+  `typecheck`, `test`, `architecture-check`, `check`, `migrate`, `dev-up`,
+  `dev-down`, `dev-logs`) and `docs/development/LOCAL_DEVELOPMENT.md`.
+
+## Validation Performed (all commands actually executed, not assumed)
+
+| Check | Result |
+|---|---|
+| `poetry install` | ✅ succeeded (see Known Issues re: disk space) |
+| `python manage.py check` | ✅ "System check identified no issues" |
+| ASGI import (`intraday.asgi:application`) | ✅ `ProtocolTypeRouter` constructed |
+| WSGI import (`intraday.wsgi:application`) | ✅ `WSGIHandler` constructed |
+| `ruff format --check .` | ✅ 37 files formatted (2 initial violations fixed) |
+| `ruff check .` | ✅ all checks passed (4 initial violations fixed) |
+| `mypy` (strict) | ✅ no issues in 29 source files (3 initial errors fixed) |
+| `pytest` | ✅ 16 passed, 3 skipped (no live Postgres/Redis in this sandbox), 0 failed |
+| `lint-imports` (import-linter) | ✅ 5/5 contracts kept |
+| **Adversarial re-test**: injected a forbidden `trading_engine.risk_engine` import into `research.backtesting` | ✅ import-linter correctly failed (3 contracts broken); the `ast`-based pytest test **initially missed it** (a real gap — see Known Issues), was fixed, then correctly failed too; both restored to green afterward |
+| `manage.py makemigrations --check --dry-run` | ✅ "No changes detected" |
+| `manage.py spectacular --fail-on-warn` | ✅ succeeded after adding response serializers to the health endpoints |
+| `pip-audit` | ✅ clean with 6 documented, tracked ignores (Decision #33) |
+| YAML syntax (`ci.yml`, `docker-compose.yml`) | ✅ both parse |
+| `npm install`, `tsc --noEmit`, `vite build` (frontend) | ✅ all succeeded; 2 known npm audit findings (esbuild/vite dev-server CORS issue, dev-only) — see Known Issues |
+| Docker container startup | ⚠️ **not run** — no Docker daemon available in this environment (see Known Issues) |
+
+## Files Created
+
+`pyproject.toml`, `poetry.lock`, `manage.py`, `.env.example`,
+`.importlinter`, `Makefile`, `Dockerfile`, `.dockerignore`,
+`docker-compose.yml`, `.github/workflows/ci.yml`,
+`docs/development/LOCAL_DEVELOPMENT.md`; the full `src/intraday/` package
+tree (24 files: `__init__.py`/`celery.py`/`urls.py`/`asgi.py`/`wsgi.py` at
+the root, 5 settings modules + `trading_mode.py`, one `__init__.py` per
+bounded-context package and trading_engine submodule, plus
+`application/gateways/health.py`); `tests/unit/test_django_boot.py`,
+`tests/unit/test_trading_mode.py`, `tests/unit/test_health_endpoints.py`,
+`tests/unit/architecture/test_narrow_dependency_exception.py`,
+`tests/integration/test_postgres_connectivity.py`,
+`tests/integration/test_redis_connectivity.py`,
+`tests/integration/test_celery_bootstrap.py`;
+`frontend/package.json`, `frontend/package-lock.json`,
+`frontend/tsconfig.json`, `frontend/vite.config.ts`, `frontend/index.html`,
+`frontend/src/main.tsx`, `frontend/src/BootstrapPlaceholder.tsx`,
+`frontend/src/vite-env.d.ts`.
+
+## Files Modified
+
+`docs/architecture/TECHNOLOGY_MAPPING.md` (Redis role taxonomy),
+`docs/architecture/ARCHITECTURE_DECISIONS.md` (decisions #29–#35),
+`docs/architecture/ARCHITECTURE.md` (status), `README.md` (status, Quick
+Start, LOCAL_DEVELOPMENT link), `frontend/shared/generated_contracts/README.md`
+(explains why still empty at Checkpoint 4), this file.
+
+No top-level architecture directory was created, removed, or renamed.
+
+## Known Issues / Deferred Items
+
+- **D: drive was found essentially full (233G/233G, ~99M free) before any
+  work in this checkpoint** — a pre-existing condition on the user's
+  machine, unrelated to this project's own footprint (a few MB of text
+  files). The Python virtualenv was redirected to `E:\poetry-venvs` (74G
+  free) to avoid making this worse; frontend `node_modules`/`dist` were
+  removed after validating the build, since they are regenerable and not
+  committed. **This should be flagged to the user directly — a full system
+  drive can cause failures well beyond this repository.**
+- **Docker containers were not actually started** — no Docker daemon is
+  available in this validation environment. `docker-compose.yml` and
+  `Dockerfile` were validated for YAML/syntax correctness only, not a live
+  `docker compose up`. Recommend the user (or the next checkpoint, if it
+  has Docker access) run `make dev-up` and confirm all five services reach
+  a healthy state.
+- **`settings/testing.py` uses SQLite** as a documented, temporary
+  exception (Decision #32) — must be revisited the moment real domain
+  models exist (Checkpoint 5+).
+- **`tests/integration/*` use direct connections + `pytest.skip`** instead
+  of `testcontainers-python` as Checkpoint 3 originally anticipated
+  (Decision #30) — reconsider testcontainers once tests need per-run
+  container isolation.
+- **Playwright was not installed** (Decision #31) — deferred to Checkpoint
+  14 once real frontend screens exist to test.
+- **pip-audit has 6 tracked, ignored findings** (pytest 8.4.2, starlette
+  0.52.1 via schemathesis) — dev-only, not shipped in the runtime image,
+  but must be re-evaluated on the next dependency bump (Decision #33).
+- **npm audit reports 2 findings** (esbuild ≤0.24.2 / Vite ≤6.4.2 dev-server
+  CORS issue, GHSA-67mh-4wv8-2f99) — affects the Vite *development* server
+  only, not production build output; fixing requires a breaking Vite 5→8
+  major-version bump not attempted at this bootstrap checkpoint. Tracked
+  for the next frontend-focused checkpoint.
+- **A real bug was found and fixed during this checkpoint**: the initial
+  `ast`-based supplementary architecture test only checked
+  `ImportFrom.module`, missing the `from trading_engine import risk_engine`
+  form (where the forbidden submodule is a *name*, not part of the module
+  path). Caught by deliberately injecting a forbidden import and observing
+  the test still passed when it should have failed; fixed to also check
+  `f"{module}.{alias.name}"` for every imported name. Documented in the
+  test file's own docstring so this class of gap doesn't regress silently.
+
+## Tests
+
+16 infrastructure/unit tests pass; 3 integration tests correctly skip in
+this sandbox (no live Postgres/Redis) and are designed to run for real in
+CI (GitHub Actions service containers) and in a docker-compose-backed local
+environment. No business-logic tests were written or run, per the hard
+boundary for this checkpoint.
+
+## Current Architecture Status
+
+The platform now installs reproducibly (`poetry install`, `npm install`),
+boots (Django, Celery, Channels all verified), exposes three infrastructure
+endpoints, and has its Checkpoint 1–2 dependency-direction rules
+mechanically enforced by CI rather than relying on README documentation
+alone. Zero business logic, zero domain models, zero API endpoints beyond
+health/version, zero broker or market-data code exist. All Checkpoint 1–3
+architectural decisions remain unchanged; Checkpoint 4 only implemented the
+tooling around them.
+
+## Recommended Checkpoint 5
+
+**Canonical Domain Contracts**: formally implement the 14 shared-kernel
+contracts (`domain/shared_kernel`, `market_data`, `instrument`, `universe`,
+`feature`, `strategy`, `signal`, `risk`, `portfolio`, `order`, `position`,
+`trade`, `broker`, `session`) as real Python types (dataclasses or Pydantic
+models — a choice this checkpoint deliberately did not make), with mypy
+strict passing and unit tests for every contract's invariants. This is the
+first checkpoint where `settings/testing.py`'s SQLite exception (Decision
+#32) must be revisited, since real models will exist to migrate and test
+against PostgreSQL-specific behavior (NUMERIC precision, JSONB, etc.).
+
+## Notes for Next AI Agent
+
+- Read `docs/architecture/TECHNOLOGY_MAPPING.md` and this checkpoint's
+  section before adding any dependency — the dependency set here was
+  deliberately minimal ("only what's required for this checkpoint");
+  justify anything new the same way.
+- `.importlinter` and `tests/unit/architecture/test_narrow_dependency_exception.py`
+  are both live and enforced — a new domain contract or bounded-context
+  module will automatically be checked against them. If you add a new
+  `trading_engine` submodule, decide explicitly whether `research.backtesting`
+  needs it and update contract #5 and the forbidden-list constant together
+  — don't let them drift apart.
+- The D: drive space issue (see Known Issues) may still be a problem —
+  check `df -h` before any large install/build step, and prefer redirecting
+  large caches/venvs to a drive with headroom (this checkpoint used
+  `E:\poetry-venvs`) rather than assuming D: has room.
+- `settings/testing.py`'s SQLite exception is not permission to keep
+  avoiding real PostgreSQL testing — Checkpoint 5 must address it head-on
+  once models exist.
+- Do not implement strategies, broker calls, or frontend screens yet — the
+  tooling exists now specifically so the next checkpoint's real code is
+  checked by it from the first commit.

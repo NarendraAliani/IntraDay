@@ -6,8 +6,10 @@
 # justification). No business-logic assertions.
 from __future__ import annotations
 
-import intraday
+import pytest
 from django.test import Client
+
+import intraday
 
 
 def test_healthz_returns_alive() -> None:
@@ -24,6 +26,7 @@ def test_version_matches_package_metadata() -> None:
     assert response.json()["version"] == intraday.__version__
 
 
+@pytest.mark.django_db
 def test_readyz_reports_checks_without_leaking_secrets() -> None:
     client = Client()
     response = client.get("/readyz")
@@ -37,6 +40,7 @@ def test_readyz_reports_checks_without_leaking_secrets() -> None:
         assert forbidden_token not in serialized
 
 
+@pytest.mark.django_db
 def test_readyz_reports_database_ok_with_test_database() -> None:
     client = Client()
     response = client.get("/readyz")

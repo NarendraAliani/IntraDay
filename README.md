@@ -1,10 +1,12 @@
 # IntraDay — Intraday Indian Cash-Equity Algorithmic Trading Platform
 
-> **Status: ARCHITECTURE / TECHNOLOGY MAPPING PHASE (Checkpoint 3).** This
-> repository currently contains the foundational directory structure,
-> architecture documentation, and an approved technology mapping. No
-> business logic, database schema, API, broker integration, or frontend
-> screens have been implemented yet.
+> **Status: REPOSITORY BOOTSTRAP / TOOLING PHASE (Checkpoint 4).** The
+> project installs and boots (Django, Celery, Channels, React/Vite), and is
+> protected by CI-enforced formatting, linting, strict typing, tests, and
+> mechanical architecture enforcement (import-linter). No business logic,
+> database models, API endpoints, broker integration, or frontend screens
+> have been implemented yet — only `/healthz`, `/readyz`, `/version` exist
+> as infrastructure endpoints.
 
 ## Scope
 
@@ -20,11 +22,22 @@ for market context and research — never as tradable instruments.
 - [docs/architecture/DOMAIN_BOUNDARIES.md](docs/architecture/DOMAIN_BOUNDARIES.md) — how the major domains relate
 - [docs/architecture/ARCHITECTURE_DECISIONS.md](docs/architecture/ARCHITECTURE_DECISIONS.md) — decision log
 - [docs/architecture/TECHNOLOGY_MAPPING.md](docs/architecture/TECHNOLOGY_MAPPING.md) — the concrete technology stack and why
+- [docs/development/LOCAL_DEVELOPMENT.md](docs/development/LOCAL_DEVELOPMENT.md) — developer commands (install, test, lint, Docker)
 - [taskReport.md](taskReport.md) — handoff report across all checkpoints
 
 Every directory in this repository contains its own `README.md` describing
 its responsibility, its allowed dependencies, and what it must never depend
 on — start with the directory closest to what you're working on.
+
+## Quick Start
+
+```bash
+poetry install && cp .env.example .env   # backend
+cd frontend && npm install               # frontend (optional at this checkpoint)
+make check                               # format, lint, typecheck, architecture-check, test
+```
+
+Full command reference: [docs/development/LOCAL_DEVELOPMENT.md](docs/development/LOCAL_DEVELOPMENT.md).
 
 ## Top-Level Map
 

@@ -35,13 +35,17 @@ def test_paper_mode_allowed_outside_production(monkeypatch: pytest.MonkeyPatch) 
 def test_live_mode_rejected_outside_production_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TRADING_MODE", "LIVE")
     with pytest.raises(UnsafeLiveConfigurationError):
-        resolve_trading_mode(settings_module_is_production=False, live_broker_credentials_present=True)
+        resolve_trading_mode(
+            settings_module_is_production=False, live_broker_credentials_present=True
+        )
 
 
 def test_live_mode_rejected_without_broker_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TRADING_MODE", "LIVE")
     with pytest.raises(UnsafeLiveConfigurationError):
-        resolve_trading_mode(settings_module_is_production=True, live_broker_credentials_present=False)
+        resolve_trading_mode(
+            settings_module_is_production=True, live_broker_credentials_present=False
+        )
 
 
 def test_live_mode_allowed_only_with_both_conditions(monkeypatch: pytest.MonkeyPatch) -> None:

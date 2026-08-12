@@ -6,14 +6,20 @@
 # at import time and Django refuses to start. See settings/trading_mode.py.
 from __future__ import annotations
 
+import os
+
 from .base import *  # noqa: F401,F403
 from .trading_mode import resolve_trading_mode
 
 DEBUG = True
 ALLOWED_HOSTS = ["localhost", "127.0.0.1", "0.0.0.0"]  # noqa: S104 - local dev only
 
-if not SECRET_KEY:  # noqa: F405 - inherited from base
-    SECRET_KEY = "django-insecure-development-only-key-do-not-use-elsewhere"  # noqa: S105
+# Unconditional override (not `if not SECRET_KEY`) so the value's origin is
+# unambiguous to both readers and static analysis: an explicit env var
+# always wins, otherwise this fixed development-only placeholder is used.
+SECRET_KEY = os.environ.get(  # noqa: S105 - placeholder, development-only
+    "DJANGO_SECRET_KEY", "django-insecure-development-only-key-do-not-use-elsewhere"
+)
 
 TRADING_MODE = resolve_trading_mode(
     settings_module_is_production=False,

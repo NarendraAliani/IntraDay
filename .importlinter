@@ -59,6 +59,8 @@ layers =
     intraday.application
     intraday.research | intraday.signal_intelligence | intraday.trading_engine | intraday.control_plane | intraday.communication
     intraday.domain
+ignore_imports =
+    intraday.research.backtesting -> intraday.trading_engine.strategy_execution
 
 ; ---------------------------------------------------------------------
 ; Contract 4 — bounded-context independence, with the ONE approved

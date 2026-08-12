@@ -21,16 +21,18 @@ def test_can_connect_to_postgres() -> None:
         pytest.skip("POSTGRES_HOST not set - PostgreSQL integration skipped in this environment")
 
     try:
-        with psycopg.connect(
-            host=host,
-            port=os.environ.get("POSTGRES_PORT", "5432"),
-            dbname=os.environ.get("POSTGRES_DB", "intraday"),
-            user=os.environ.get("POSTGRES_USER", "intraday"),
-            password=os.environ.get("POSTGRES_PASSWORD", ""),
-            connect_timeout=3,
-        ) as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT 1")
-                assert cur.fetchone() == (1,)
+        with (
+            psycopg.connect(
+                host=host,
+                port=os.environ.get("POSTGRES_PORT", "5432"),
+                dbname=os.environ.get("POSTGRES_DB", "intraday"),
+                user=os.environ.get("POSTGRES_USER", "intraday"),
+                password=os.environ.get("POSTGRES_PASSWORD", ""),
+                connect_timeout=3,
+            ) as conn,
+            conn.cursor() as cur,
+        ):
+            cur.execute("SELECT 1")
+            assert cur.fetchone() == (1,)
     except psycopg.OperationalError as exc:
         pytest.skip(f"PostgreSQL unreachable in this environment: {exc}")

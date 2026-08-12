@@ -1,0 +1,156 @@
+# .github/workflows/ci.yml
+#
+# Minimum reliable CI pipeline (Checkpoint 3 decision #26 / Checkpoint 4
+# §18). Runs on every pull request and on push to main. Deliberately does
+# NOT deploy anything — see docs/architecture/TECHNOLOGY_MAPPING.md §15.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+env:
+  DJANGO_SETTINGS_MODULE: intraday.settings.testing
+  DJANGO_SECRET_KEY: ci-test-secret-key-not-for-production
+  TRADING_MODE: RESEARCH
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+
+    # Service containers give integration tests (tests/integration/*) a
+    # real PostgreSQL/Redis to run against in CI, even though they are
+    # skipped in a local sandbox without Docker (see taskReport.md
+    # Checkpoint 4 "Known Issues / Deferred Items").
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: intraday_ci
+          POSTGRES_USER: intraday
+          POSTGRES_PASSWORD: intraday
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd="pg_isready -U intraday"
+          --health-interval=5s --health-timeout=5s --health-retries=10
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s --health-timeout=5s --health-retries=10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry
+        run: pipx install poetry==2.4.1
+
+      - name: Cache Poetry virtualenv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: poetry-${{ runner.os }}-${{ hashFiles('poetry.lock') }}
+
+      - name: Configure Poetry to use in-project virtualenv
+        run: poetry config virtualenvs.in-project true
+
+      - name: Install dependencies
+        run: poetry install --no-interaction
+
+      # --- 1. Formatting -----------------------------------------------
+      - name: Ruff format check
+        run: poetry run ruff format --check .
+
+      # --- 2. Linting ----------------------------------------------------
+      - name: Ruff lint
+        run: poetry run ruff check .
+
+      # --- 3. Type checking ------------------------------------------------
+      - name: mypy strict
+        run: poetry run mypy
+
+      # --- 4. Unit + integration tests ------------------------------------
+      - name: pytest
+        env:
+          POSTGRES_HOST: localhost
+          POSTGRES_PORT: 5432
+          POSTGRES_DB: intraday_ci
+          POSTGRES_USER: intraday
+          POSTGRES_PASSWORD: intraday
+          REDIS_URL: redis://localhost:6379/0
+        run: poetry run pytest
+
+      # --- 5. Architecture enforcement -------------------------------------
+      - name: import-linter (architecture dependency rules)
+        run: poetry run lint-imports
+
+      # --- 6. Django migration check ---------------------------------------
+      - name: Django migration check
+        env:
+          POSTGRES_HOST: localhost
+          POSTGRES_PORT: 5432
+          POSTGRES_DB: intraday_ci
+          POSTGRES_USER: intraday
+          POSTGRES_PASSWORD: intraday
+          REDIS_URL: redis://localhost:6379/0
+        run: poetry run python manage.py makemigrations --check --dry-run
+
+      # --- 7. Secret scanning ------------------------------------------------
+      - name: Secret scan (gitleaks)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # --- 8. Dependency vulnerability audit --------------------------------
+      # --strict is deliberately NOT used: pip-audit treats the editable
+      # local `intraday` package itself (--skip-editable's own skip notice)
+      # as a fatal error under --strict, which is a false positive, not a
+      # vulnerability. Real findings still fail this step because pip-audit
+      # exits non-zero whenever any vulnerability is found, --strict or not.
+      #
+      # KNOWN, TRACKED, LOW-RISK EXCEPTIONS (Checkpoint 4 — see taskReport.md
+      # "Known Issues / Deferred Items" for the full record):
+      #   - PYSEC-2026-1845 (pytest 8.4.2): dev/test-only tool, fix requires
+      #     pytest 9.x; not adopted yet pending pytest-django/hypothesis
+      #     compatibility confirmation. Never shipped in the runtime image.
+      #   - PYSEC-2026-161 / 248 / 249 / 2281 / 2280 (starlette 0.52.1, pulled
+      #     in transitively by schemathesis's ASGI test client support):
+      #     schemathesis currently pins `starlette >=0.13,<1`, so no fixed
+      #     version (>=1.0.1) can be resolved without an upstream
+      #     schemathesis release widening that constraint. Dev/test-only;
+      #     never shipped in the runtime image.
+      # Both must be re-evaluated (and these ignores removed) the next time
+      # dependencies are bumped — do not let this list grow silently.
+      - name: Dependency vulnerability audit
+        run: >-
+          poetry run pip-audit --skip-editable
+          --ignore-vuln PYSEC-2026-1845
+          --ignore-vuln PYSEC-2026-161
+          --ignore-vuln PYSEC-2026-248
+          --ignore-vuln PYSEC-2026-249
+          --ignore-vuln PYSEC-2026-2281
+          --ignore-vuln PYSEC-2026-2280
+
+      # --- 9. Contract-generation pipeline check (placeholder) --------------
+      # No business API contracts exist yet, so there is nothing to diff
+      # against frontend/shared/generated_contracts (Checkpoint 4 §19/§30).
+      # This step only proves the OpenAPI generation command itself runs
+      # without error against the current (infrastructure-only) schema, so
+      # the pipeline direction is verified end-to-end before any real
+      # contract is added. It intentionally does not write into
+      # frontend/shared/generated_contracts yet.
+      - name: OpenAPI schema generation smoke check
+        env:
+          POSTGRES_HOST: localhost
+          POSTGRES_PORT: 5432
+          POSTGRES_DB: intraday_ci
+          POSTGRES_USER: intraday
+          POSTGRES_PASSWORD: intraday
+          REDIS_URL: redis://localhost:6379/0
+        run: poetry run python manage.py spectacular --file openapi_ci_check.json --fail-on-warn

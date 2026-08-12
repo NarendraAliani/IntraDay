@@ -14,6 +14,8 @@ import structlog
 from django.core.cache import cache
 from django.db import connections
 from django.db.utils import Error as DjangoDatabaseError
+from drf_spectacular.utils import OpenApiResponse, extend_schema
+from rest_framework import serializers
 from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -23,6 +25,24 @@ import intraday
 logger = structlog.get_logger(__name__)
 
 
+# Response-shape declarations for OpenAPI schema generation only (Checkpoint
+# 4 §29 tooling direction: DRF -> OpenAPI -> generated TypeScript). These
+# are infrastructure response shapes, not domain contracts — real domain
+# serializers belong to application/contracts in a later checkpoint.
+class HealthzResponseSerializer(serializers.Serializer[None]):
+    status = serializers.ChoiceField(choices=["alive"])
+
+
+class ReadyzResponseSerializer(serializers.Serializer[None]):
+    status = serializers.ChoiceField(choices=["ready", "not_ready"])
+    checks = serializers.DictField(child=serializers.CharField())
+
+
+class VersionResponseSerializer(serializers.Serializer[None]):
+    version = serializers.CharField()
+
+
+@extend_schema(responses={200: HealthzResponseSerializer})
 @api_view(["GET"])
 def healthz(request: Request) -> Response:
     """Liveness: is the process alive?
@@ -34,6 +54,12 @@ def healthz(request: Request) -> Response:
     return Response({"status": "alive"})
 
 
+@extend_schema(
+    responses={
+        200: ReadyzResponseSerializer,
+        503: OpenApiResponse(ReadyzResponseSerializer, description="Not ready"),
+    }
+)
 @api_view(["GET"])
 def readyz(request: Request) -> Response:
     """Readiness: is this instance ready to serve its configured environment?
@@ -66,6 +92,7 @@ def readyz(request: Request) -> Response:
     )
 
 
+@extend_schema(responses={200: VersionResponseSerializer})
 @api_view(["GET"])
 def version(request: Request) -> Response:
     """Returns the application version from the single authoritative source

@@ -6,7 +6,7 @@ Intraday Indian Cash-Equity Algorithmic Trading Platform
 
 ## Status
 
-ARCHITECTURE / TECHNOLOGY MAPPING PHASE. Checkpoint 1 established the
+REPOSITORY BOOTSTRAP / TOOLING PHASE. Checkpoint 1 established the
 foundational file structure; Checkpoint 2 reviewed and refined it (minimum-
 viable shared kernel, explicit Signal/Order/Position/Trade model, strategy
 spec-vs-implementation split, AI authority model, control-plane authority
@@ -15,9 +15,13 @@ Checkpoint 3 mapped the now-approved architecture onto a concrete technology
 stack (Django/DRF/Channels, PostgreSQL+TimescaleDB, Redis, Celery, React,
 OpenAPI-driven contract generation — full detail in
 [TECHNOLOGY_MAPPING.md](TECHNOLOGY_MAPPING.md)) and established Git/CI
-governance. Still no business logic implemented — this remains an
-architecture/bootstrap-only repository. See
-[ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md) decisions #11–#28 for
+governance; Checkpoint 4 bootstrapped that stack into a real, installable,
+CI-validated project — Django/Celery/Channels boot, `/healthz`/`/readyz`/
+`/version` exist, and the approved dependency-direction rules are now
+mechanically enforced by `import-linter` (`.importlinter`) rather than
+README documentation alone. Still no business logic implemented — this
+remains an architecture/tooling-only repository. See
+[ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md) decisions #11–#29 for
 everything that changed and why.
 
 ## 1. Product Scope

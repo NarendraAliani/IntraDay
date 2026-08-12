@@ -1,0 +1,97 @@
+# docker-compose.yml
+#
+# Repository root. Local DEVELOPMENT environment only (Checkpoint 4 §20-21).
+# Every service here is hardcoded to intraday.settings.development — this
+# compose file cannot be pointed at production or a live broker by
+# accident (Docker Safety, Checkpoint 4 §21). A separate, hardened
+# production/paper deployment configuration is an explicitly deferred
+# Checkpoint 17 concern.
+#
+# Startup order / health dependencies: db and redis must report healthy
+# before web/celery_worker/celery_beat start (enforced via
+# `depends_on: condition: service_healthy` below).
+#
+# Usage: `make dev-up` / `make dev-down` (see Makefile), or directly:
+#   docker compose up -d
+#   docker compose down
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-intraday}
+      POSTGRES_USER: ${POSTGRES_USER:-intraday}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    ports:
+      - "5432:5432"
+    volumes:
+      - intraday_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-intraday}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python manage.py runserver 0.0.0.0:8000
+    env_file: .env
+    environment:
+      DJANGO_SETTINGS_MODULE: intraday.settings.development
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./src:/app/src
+      - ./manage.py:/app/manage.py
+
+  celery_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: celery -A intraday worker -l info
+    env_file: .env
+    environment:
+      DJANGO_SETTINGS_MODULE: intraday.settings.development
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./src:/app/src
+
+  celery_beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: celery -A intraday beat -l info
+    env_file: .env
+    environment:
+      DJANGO_SETTINGS_MODULE: intraday.settings.development
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./src:/app/src
+
+volumes:
+  intraday_postgres_data:
