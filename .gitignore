@@ -67,3 +67,9 @@ logs/
 #     tracked exception: keep committed snapshots so drift is diffable —
 #     see docs/architecture/TECHNOLOGY_MAPPING.md §9. Do NOT ignore
 #     frontend/shared/generated_contracts — it must stay committed.)
+# Checkpoint 9: the raw OpenAPI schema is an intermediate build artifact,
+# not the committed contract (the generated TypeScript in
+# frontend/shared/generated_contracts is) — regenerated on demand by
+# `npm run generate:api`, never committed.
+/openapi.json
+frontend/openapi.json

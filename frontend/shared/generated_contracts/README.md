@@ -21,17 +21,21 @@ step (GitHub Actions, locked at Checkpoint 3) regenerates this directory from
 against what's committed — that check is the concrete mechanism that makes
 frontend/backend configuration drift detectable, not merely documented.
 
-**Why this directory is still empty at Checkpoint 4:** the OpenAPI
-generation pipeline itself is wired and verified (CI runs
-`manage.py spectacular` as a smoke check — see
-`.github/workflows/ci.yml`), but no *business* API contract exists yet
-(only infrastructure endpoints: `/healthz`, `/readyz`, `/version`, which are
-not part of `application/contracts`'s domain-facing surface and are
-intentionally not generated into this directory). Generating TypeScript
-types now would mean generating types for nothing meaningful — deferred,
-not forgotten, to the checkpoint that adds the first real
-`application/contracts` entry. This directory remains tracked (not
-gitignored) per policy, even while empty.
+**History:** this directory was still empty at Checkpoint 4 — the OpenAPI
+generation pipeline was wired and verified (CI ran `manage.py spectacular`
+as a smoke check), but no *business* API contract existed yet (only
+infrastructure endpoints: `/healthz`, `/readyz`, `/version`, not part of
+`application/contracts`'s domain-facing surface and intentionally not
+generated into this directory).
+
+**Populated at Checkpoint 9**, once the Checkpoint 8 business API
+(`/api/v1/config/...`) existed: `api-types.ts` is now generated here via
+`npm run generate:api` (see
+[../../docs/api/FRONTEND_API_CONSUMPTION.md](../../../docs/api/FRONTEND_API_CONSUMPTION.md)
+for the full pipeline). CI (`.github/workflows/ci.yml`) regenerates this
+file on every run and fails the build on any diff against what's
+committed — the drift-detection mechanism described above, now active
+rather than a placeholder.
 
 ## Depends On
 

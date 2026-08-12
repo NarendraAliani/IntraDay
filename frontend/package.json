@@ -1,24 +1,33 @@
 {
   "name": "intraday-frontend",
-  "version": "0.4.0",
+  "version": "0.9.0",
   "private": true,
-  "description": "IntraDay platform frontend. Checkpoint 4: minimal React + TypeScript + Vite bootstrap only — no screens, no business logic. See docs/architecture/TECHNOLOGY_MAPPING.md §8.",
+  "description": "IntraDay platform frontend. Checkpoint 9: first real screen (read-only configuration viewer) consuming the Checkpoint 8 business API via generated TypeScript contracts. See docs/api/FRONTEND_API_CONSUMPTION.md.",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "generate:api:schema": "cd .. && poetry run python manage.py spectacular --file openapi.json --format openapi-json --fail-on-warn",
+    "generate:api:types": "openapi-typescript ../openapi.json -o shared/generated_contracts/api-types.ts",
+    "generate:api": "npm run generate:api:schema && npm run generate:api:types"
   },
   "dependencies": {
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@testing-library/jest-dom": "^6.5.0",
+    "@testing-library/react": "^16.0.1",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",
+    "jsdom": "^25.0.1",
+    "openapi-typescript": "^7.4.1",
     "typescript": "^5.5.4",
-    "vite": "^5.4.1"
+    "vite": "^5.4.1",
+    "vitest": "^2.1.4"
   }
 }

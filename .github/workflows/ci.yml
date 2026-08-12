@@ -137,15 +137,18 @@ jobs:
           --ignore-vuln PYSEC-2026-2281
           --ignore-vuln PYSEC-2026-2280
 
-      # --- 9. Contract-generation pipeline check (placeholder) --------------
-      # No business API contracts exist yet, so there is nothing to diff
-      # against frontend/shared/generated_contracts (Checkpoint 4 §19/§30).
-      # This step only proves the OpenAPI generation command itself runs
-      # without error against the current (infrastructure-only) schema, so
-      # the pipeline direction is verified end-to-end before any real
-      # contract is added. It intentionally does not write into
-      # frontend/shared/generated_contracts yet.
-      - name: OpenAPI schema generation smoke check
+      # --- 9. Contract-generation drift detection ---------------------------
+      # Checkpoint 9: upgraded from a generation "smoke check" (Checkpoint 4)
+      # to real drift detection now that a business API and committed
+      # generated TypeScript contracts exist. Regenerates both the OpenAPI
+      # schema and the TypeScript types into a scratch location, then diffs
+      # the regenerated TS against the committed
+      # frontend/shared/generated_contracts/api-types.ts. Any difference
+      # (contract changed but generated file not regenerated/committed, or
+      # vice versa) fails the build. This step never writes into the
+      # committed generated_contracts directory - only into openapi.json
+      # (gitignored) and a scratch file that is diffed, not copied over.
+      - name: OpenAPI schema generation (fail-on-warn)
         env:
           POSTGRES_HOST: localhost
           POSTGRES_PORT: 5432
@@ -153,4 +156,48 @@ jobs:
           POSTGRES_USER: intraday
           POSTGRES_PASSWORD: intraday
           REDIS_URL: redis://localhost:6379/0
-        run: poetry run python manage.py spectacular --file openapi_ci_check.json --fail-on-warn
+        run: poetry run python manage.py spectacular --file openapi.json --format openapi-json --fail-on-warn
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Generate TypeScript contract types
+        working-directory: frontend
+        run: npm run generate:api:types
+
+      - name: Fail on generated-contract drift
+        run: |
+          if ! git diff --exit-code -- frontend/shared/generated_contracts/api-types.ts; then
+            echo "::error::frontend/shared/generated_contracts/api-types.ts is out of date." \
+              "Run 'npm run generate:api' in frontend/ and commit the result."
+            exit 1
+          fi
+
+      # --- 10. Frontend typecheck, build, test -------------------------------
+      - name: Frontend typecheck
+        working-directory: frontend
+        run: npm run typecheck
+
+      - name: Frontend build
+        working-directory: frontend
+        run: npm run build
+
+      - name: Frontend tests
+        working-directory: frontend
+        run: npm run test
+
+      - name: Frontend dependency vulnerability audit
+        # Documented, not gated: see docs/api/FRONTEND_API_CONSUMPTION.md
+        # "Known Issues" for the current dev-server-only advisories
+        # (esbuild/vite). None affect `vite build`'s static output. Not
+        # force-fixed mid-checkpoint to avoid an unreviewed breaking major
+        # upgrade; re-evaluated on the next dependency bump.
+        working-directory: frontend
+        run: npm audit --omit=dev || true

@@ -1430,3 +1430,214 @@ React screen (read-only configuration viewer) consuming the Checkpoint 8
 API. That would satisfy Frontend UX Testing Readiness criterion 3, and a
 subsequent activation-capable screen would satisfy criterion 4 — likely
 triggering `app.bat`'s creation at that point.
+
+# Checkpoint 9 — Frontend Configuration Viewer & API Contract Generation (2026-08-12)
+
+## Objective
+
+Establish the OpenAPI → TypeScript contract-generation pipeline
+(`openapi-typescript`), commit the generated contracts under
+`frontend/shared/generated_contracts/`, upgrade CI from an OpenAPI
+"smoke check" to real generated-contract drift detection, and build the
+first real React screen — a read-only Configuration Viewer (Risk
+Configuration / Universe / Strategy Version tabs) — consuming the
+Checkpoint 8 business API through those generated types.
+
+## Contract Generation Pipeline
+
+`frontend/package.json` gained `generate:api:schema` (runs
+`manage.py spectacular --format openapi-json --fail-on-warn` from the repo
+root) and `generate:api:types` (runs `openapi-typescript` against that
+schema into `frontend/shared/generated_contracts/api-types.ts`), chained
+as `generate:api`.
+
+**Real finding this checkpoint:** `manage.py spectacular`'s default
+`--format` is YAML *regardless of the output filename's extension* — a
+file literally named `openapi.json` written without `--format
+openapi-json` contains YAML, not JSON. Confirmed by direct inspection
+(first line `openapi: 3.0.3`) before fixing the npm script to pass the
+flag explicitly. `openapi-typescript` requires true JSON input.
+
+Generated `api-types.ts` confirmed (by direct inspection, not assumed) to
+export `components["schemas"]["RiskConfigurationResponse"]`,
+`UniverseResponse`, `StrategyVersionResponse`, `UniverseMember`,
+`RiskLimits`, and `ApiError` — matching the Checkpoint 8 API exactly. The
+raw `openapi.json` schema is gitignored (intermediate build artifact,
+regenerated on demand); only the generated TypeScript is committed, per
+`frontend/shared/generated_contracts/README.md`'s existing "never
+hand-edited" rule.
+
+## Frontend Architecture Added
+
+- `frontend/src/common/api/client.ts` — small, dependency-free `fetch`
+  wrapper (`apiGet<T>`), no React Query/SWR/axios. Base URL from
+  `VITE_API_BASE_URL` (see `frontend/.env.example`, safe dev default,
+  never a secret). Decodes non-2xx bodies as the backend's own
+  `ApiErrorSerializer` contract (`components["schemas"]["ApiError"]`);
+  falls back to a generic, safe message (never raw response text) if the
+  body doesn't match. Separate `ApiNetworkError` for transport failures.
+- `frontend/src/common/api/configApi.ts` — typed wrappers for the three
+  list endpoints (`listRiskConfigurationVersions`,
+  `listUniverseVersions`, `listStrategyVersions`); each response array
+  already carries `is_active` per version.
+- `frontend/src/common/components/` — `LoadingState`, `ErrorState`,
+  `EmptyState`, `ActiveBadge` (icon + text, not color alone).
+- `frontend/src/common/useConfigQuery.ts` — minimal shared fetch-on-mount
+  hook used by all three panels.
+- `frontend/src/features/configuration/` — `ConfigurationViewer.tsx`
+  (WAI-ARIA tabs, arrow-key navigation) plus `RiskConfigurationPanel.tsx`,
+  `UniversePanel.tsx`, `StrategyVersionPanel.tsx`. Each panel takes an
+  ID via a lookup form (the API has no "list all" endpoint) and renders
+  every persisted version, active vs. historical distinguished via
+  `ActiveBadge`.
+- `frontend/src/app/App.tsx` + `styles.css` — replaces Checkpoint 4's
+  `BootstrapPlaceholder` (removed) as the render root in `main.tsx`.
+
+Directory naming decision: `frontend/src/common/` (app-local shared code)
+is deliberately named differently from `frontend/shared/` (repo-level,
+`@shared` alias, generated contracts only) to avoid ambiguity between
+"app-local shared utilities" and "cross-cutting generated contracts."
+
+## Testing
+
+No frontend test framework existed before this checkpoint. Added Vitest +
+`@testing-library/react` + `@testing-library/jest-dom` + `jsdom` (minimal
+addition, inspected `package.json` first — confirmed nothing existed).
+8 tests across 2 files, all passing:
+
+- `client.test.ts` (4 tests): success decoding, `ApiRequestError` carrying
+  the real `ApiError` contract, safe fallback on a non-conforming error
+  body (HTML never leaks into the message), `ApiNetworkError` on a
+  transport failure.
+- `RiskConfigurationPanel.test.tsx` (4 tests): loading state, **real
+  contract-boundary test** (generated `RiskConfigurationResponse` type →
+  real `listRiskConfigurationVersions`/`apiGet` → real component, only
+  `global.fetch` mocked — active/historical badges asserted from real
+  rendered DOM), safe error rendering, empty state (no fabricated data).
+
+## Validation
+
+Frontend: `npm run typecheck` ✅ (no errors) · `npm run build` ✅ (`tsc -b
+&& vite build`, 42 modules, 151.7 kB JS / 3.2 kB CSS) · `npm run test` ✅
+**8 passed, 0 failed**. No ESLint config exists in this repo (checked,
+none present before or added this checkpoint — noted honestly, not
+claimed as run).
+
+Backend regression (must not regress Checkpoint 8's 114/34/0 baseline):
+Ruff format ✅ (134 files) · Ruff lint ✅ · mypy strict ✅ (86 files) ·
+pytest ✅ **114 passed, 34 skipped, 0 failed** (unchanged from Checkpoint
+8 — no backend source changed) · import-linter ✅ **6/6 kept** (106 files) ·
+`manage.py check` ✅ · `spectacular --fail-on-warn` ✅ (output inspected:
+silent success, schema re-confirmed to contain
+`RiskConfigurationResponse`/`UniverseResponse`/`StrategyVersionResponse`/
+`ApiError`). `makemigrations --check --dry-run` **could not run** in this
+sandbox — it requires a live PostgreSQL connection even to compare
+migration state (`ImproperlyConfigured: settings.DATABASES is improperly
+configured`), consistent with every prior checkpoint's documented "no
+PostgreSQL in this sandbox" constraint; not claimed as passed, runs for
+real in CI's Postgres service container.
+
+`npm audit` findings (documented, not force-fixed): `esbuild <=0.24.2`
+(moderate, GHSA-67mh-4wv8-2f99 — known since Checkpoint 4) plus three new
+`vite` dev-server advisories (GHSA-4w7w-66w2-5vf9, GHSA-v6wh-96g9-6wx3,
+GHSA-fx2h-pf6j-xcff — path traversal / NTLMv2 disclosure / `fs.deny`
+bypass, all Windows-dev-server-scoped). None affect `vite build`'s static
+output; `npm audit fix --force` would force a breaking Vite 8/Vitest 4
+upgrade and was deliberately not run mid-checkpoint. Documented in
+`docs/api/FRONTEND_API_CONSUMPTION.md` and here, following the same
+tracked-not-hidden pattern as the Python `pip-audit` exceptions.
+
+## CI Upgrade
+
+`.github/workflows/ci.yml` step 9 upgraded from a generation-only "smoke
+check" to real drift detection: regenerates `openapi.json` (with
+`--format openapi-json` this time) and `frontend/shared/generated_
+contracts/api-types.ts`, then runs `git diff --exit-code` against the
+committed file — fails the build on any difference, never auto-overwrites
+committed files. Added `actions/setup-node@v4`, `npm ci`, frontend
+typecheck/build/test steps, and a non-gating `npm audit` step (documents
+findings without failing CI on the known dev-server-only advisories
+above).
+
+## Security Review
+
+No secrets in any frontend source file or `.env.example` (only a
+non-sensitive base URL). `VITE_API_BASE_URL` correctly scoped as
+client-visible-safe. Generated contracts contain only response shapes, no
+credentials. Error rendering path verified (by test) to never surface raw
+HTML/response text — falls back to a generic message instead. No new
+backend endpoints or fields were added; no backend change was required
+for frontend correctness this checkpoint.
+
+## Accessibility
+
+Semantic `<h1>`/`<h2>`/`<h3>` heading hierarchy. Tabs use the WAI-ARIA
+`tablist`/`tab`/`tabpanel` pattern with `aria-selected`, `aria-controls`,
+roving `tabIndex`, and Left/Right arrow-key navigation. Loading state uses
+`role="status"`; error state uses `role="alert"`. Active/historical status
+conveyed by icon (`●`/`○`) + text label, never color alone. Form inputs
+have associated `<label>`s.
+
+## Files Created
+
+`frontend/.env.example`,
+`frontend/src/common/api/{client,client.test,configApi}.ts`,
+`frontend/src/common/components/{LoadingState,ErrorState,EmptyState,ActiveBadge}.tsx`,
+`frontend/src/common/useConfigQuery.ts`,
+`frontend/src/features/configuration/{ConfigurationViewer,RiskConfigurationPanel,RiskConfigurationPanel.test,UniversePanel,StrategyVersionPanel}.tsx`,
+`frontend/src/app/{App.tsx,styles.css}`, `frontend/src/test/setup.ts`,
+`frontend/shared/generated_contracts/api-types.ts` (generated),
+`docs/api/FRONTEND_API_CONSUMPTION.md`.
+
+## Files Modified
+
+`frontend/package.json` (0.4.0 → 0.9.0; codegen + test scripts/deps),
+`frontend/vite.config.ts` (Vitest config), `frontend/src/main.tsx`
+(renders `App`, not `BootstrapPlaceholder`), `frontend/src/vite-env.d.ts`
+(`ImportMetaEnv` augmentation), `.gitignore` (`openapi.json` ignored),
+`.github/workflows/ci.yml` (drift detection + frontend steps),
+`frontend/README.md`, `frontend/shared/generated_contracts/README.md`,
+`README.md`, this file. `frontend/src/BootstrapPlaceholder.tsx` removed
+(superseded, no longer referenced).
+
+## Frontend UX Testing Readiness
+
+| Criterion | Status |
+|---|---|
+| Persistence | ✅ YES |
+| Business API | ✅ YES |
+| Frontend | ✅ **YES (new this checkpoint)** |
+| Human workflow | ❌ NO |
+
+**Overall gate: `NO — NOT YET`.** Three of four criteria now met. The
+Configuration Viewer lets a user *navigate and view* persisted
+configuration data, but that is not a "meaningful action" in the sense
+the gate requires — there is no create/update/activate/submit workflow
+exposed in the UI yet (the Checkpoint 8 API's activation endpoints exist
+but are not wired to any frontend control). `app.bat` was **not
+created** — the brief's explicit condition (all four criteria) is not
+satisfied, and navigation-only YES-ing the Frontend criterion does not
+retroactively satisfy Human workflow.
+
+## Deferred Items
+
+Human-workflow screen (e.g. a version-activation action) — the trigger
+for the fourth gate criterion and `app.bat`'s creation. ESLint (no config
+exists; not added this checkpoint — noted, not silently skipped).
+Authentication/authorization (endpoints remain open, unchanged from
+Checkpoint 8). `npm audit`'s dev-server-only Vite/esbuild advisories
+(tracked, re-evaluated at next dependency bump). Docker remains deferred.
+
+## Git Status
+
+Committed locally to `main` as `Checkpoint 9: frontend configuration
+viewer and API contract generation`. **Not pushed.**
+
+## Next Checkpoint
+
+Recommend a **human-workflow screen** built on the Checkpoint 8
+activation endpoints (e.g. selecting a historical risk-configuration
+version and activating it from the UI, with confirmation and
+success/error feedback) — the concrete, meaningful action that would
+satisfy the Human Workflow gate criterion and, with all four criteria
+met, trigger `app.bat`'s creation per the established spec.

@@ -1,13 +1,14 @@
 // frontend/src/main.tsx
 //
-// React entry point (Checkpoint 4 §28 — minimal bootstrap only, no
-// screens/business logic). Mounts a single placeholder component so the
-// dev server and build pipeline can be verified end-to-end. Replace with
-// real routing/screens starting at Checkpoint 14 (Frontend).
+// React entry point. Checkpoint 4 mounted a BootstrapPlaceholder only, to
+// verify the dev server/build pipeline end-to-end with no real screens.
+// Checkpoint 9 replaces it with the real application root now that the
+// first screen (Configuration Viewer) exists.
 import React from "react";
 import ReactDOM from "react-dom/client";
 
-import { BootstrapPlaceholder } from "./BootstrapPlaceholder";
+import { App } from "./app/App";
+import "./app/styles.css";
 
 const rootElement = document.getElementById("root");
 if (!rootElement) {
@@ -16,6 +17,6 @@ if (!rootElement) {
 
 ReactDOM.createRoot(rootElement).render(
   <React.StrictMode>
-    <BootstrapPlaceholder />
+    <App />
   </React.StrictMode>,
 );

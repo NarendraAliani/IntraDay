@@ -1,12 +1,19 @@
 # IntraDay — Intraday Indian Cash-Equity Algorithmic Trading Platform
 
-> **Status: REPOSITORY BOOTSTRAP / TOOLING PHASE (Checkpoint 4).** The
+> **Status: FIRST BUSINESS API + FRONTEND SCREEN (Checkpoint 9).** The
 > project installs and boots (Django, Celery, Channels, React/Vite), and is
 > protected by CI-enforced formatting, linting, strict typing, tests, and
-> mechanical architecture enforcement (import-linter). No business logic,
-> database models, API endpoints, broker integration, or frontend screens
-> have been implemented yet — only `/healthz`, `/readyz`, `/version` exist
-> as infrastructure endpoints.
+> mechanical architecture enforcement (import-linter). The first business
+> API exists — read + version-activate endpoints for risk configuration,
+> universe, and strategy version under `/api/v1/config/` — and the frontend
+> now has its first real screen, a read-only Configuration Viewer
+> consuming that API via generated TypeScript contracts (see
+> [docs/api/FRONTEND_API_CONSUMPTION.md](docs/api/FRONTEND_API_CONSUMPTION.md)).
+> No strategies, indicators, signals, risk engine, order management, broker
+> integration, market-data ingestion, backtesting, or live trading have
+> been implemented yet. The Frontend UX Testing Readiness Gate is not yet
+> fully satisfied (no meaningful human workflow action exists yet) — see
+> `taskReport.md`'s Checkpoint 9 section — so `app.bat` does not exist yet.
 
 ## Scope
 
@@ -26,6 +33,7 @@ for market context and research — never as tradable instruments.
 - [docs/architecture/CONFIGURATION_MANAGEMENT.md](docs/architecture/CONFIGURATION_MANAGEMENT.md) — how `config/*.yaml` validates against domain contracts
 - [docs/architecture/PERSISTENCE_ARCHITECTURE.md](docs/architecture/PERSISTENCE_ARCHITECTURE.md) — repository interfaces, Django models, versioning, PostgreSQL strategy
 - [docs/api/CONFIGURATION_API.md](docs/api/CONFIGURATION_API.md) — the first business API: endpoints, contracts, errors, activation semantics
+- [docs/api/FRONTEND_API_CONSUMPTION.md](docs/api/FRONTEND_API_CONSUMPTION.md) — how the frontend consumes it: OpenAPI→TypeScript contract generation, API client, CI drift detection
 - [docs/development/LOCAL_DEVELOPMENT.md](docs/development/LOCAL_DEVELOPMENT.md) — developer commands (install, test, lint, Docker)
 - [taskReport.md](taskReport.md) — handoff report across all checkpoints
 
@@ -37,7 +45,7 @@ on — start with the directory closest to what you're working on.
 
 ```bash
 poetry install && cp .env.example .env   # backend
-cd frontend && npm install               # frontend (optional at this checkpoint)
+cd frontend && npm install && npm run generate:api && cd ..  # frontend + contract generation
 make check                               # format, lint, typecheck, architecture-check, test
 ```
 
