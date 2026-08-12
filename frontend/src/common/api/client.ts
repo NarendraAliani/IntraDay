@@ -64,24 +64,18 @@ function isApiErrorShape(value: unknown): value is ApiError {
   );
 }
 
-/**
- * Perform a GET request against the IntraDay API and decode the JSON body
- * as `T`. `T` should always be a `components["schemas"][...]` type from the
- * generated contract, never a hand-written interface, so the client stays
- * bound to the real OpenAPI shape.
- */
-export async function apiGet<T>(path: string): Promise<T> {
-  const url = `${resolveBaseUrl()}${path}`;
-  let response: Response;
+async function performRequest(url: string, method: "GET" | "POST"): Promise<Response> {
   try {
-    response = await fetch(url, {
-      method: "GET",
+    return await fetch(url, {
+      method,
       headers: { Accept: "application/json" },
     });
   } catch (cause) {
     throw new ApiNetworkError(cause);
   }
+}
 
+async function decodeResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
     let parsed: unknown;
     try {
@@ -102,4 +96,26 @@ export async function apiGet<T>(path: string): Promise<T> {
   }
 
   return (await response.json()) as T;
+}
+
+/**
+ * Perform a GET request against the IntraDay API and decode the JSON body
+ * as `T`. `T` should always be a `components["schemas"][...]` type from the
+ * generated contract, never a hand-written interface, so the client stays
+ * bound to the real OpenAPI shape.
+ */
+export async function apiGet<T>(path: string): Promise<T> {
+  const response = await performRequest(`${resolveBaseUrl()}${path}`, "GET");
+  return decodeResponse<T>(response);
+}
+
+/**
+ * Perform a POST request with no request body (every current write
+ * operation - activation - is a bare state-transition action identified
+ * entirely by the URL path, matching the backend's `request=None`
+ * `@extend_schema` declarations) and decode the JSON body as `T`.
+ */
+export async function apiPost<T>(path: string): Promise<T> {
+  const response = await performRequest(`${resolveBaseUrl()}${path}`, "POST");
+  return decodeResponse<T>(response);
 }

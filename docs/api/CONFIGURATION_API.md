@@ -64,6 +64,15 @@ AI-proposal approval — not exposed to an anonymous or read-only role. No
 fake security (e.g. a no-op permission class) was added to give a false
 impression of protection.
 
+**Checkpoint 10** built the first frontend UI that calls this activation
+endpoint (see `frontend/src/features/configuration/RiskConfigurationPanel.tsx`).
+No login screen or authentication layer was added to the frontend either —
+doing so would only give a false impression of protection when the API
+underneath remains open. The activation UI is explicitly a
+development/admin workflow, not a production-secure trading control; see
+`docs/api/FRONTEND_API_CONSUMPTION.md` and this checkpoint's `taskReport.md`
+section for the full security review.
+
 ## 4. Endpoints
 
 Three resources, each with an identical shape: list, get-active,
@@ -196,6 +205,24 @@ the error body never contains `traceback`, `django.db`, `select `, or
 - Activation returns the newly-active representation (`200`, not `201` —
   no new resource is created; an existing version's active status
   changed).
+- **Transactional and concurrency-safe** (verified Checkpoint 10, not
+  newly built): `DjangoRiskConfigurationRepository.activate()` wraps the
+  existence check and the active-pointer `update_or_create` in a single
+  `transaction.atomic()` block, and `ActiveRiskConfiguration.
+  risk_configuration_id` carries a database-level `unique=True`
+  constraint — PostgreSQL itself, not application code, guarantees at
+  most one active pointer row per configuration id even under concurrent
+  activation requests. No additional locking was added because the
+  existing design already provides this guarantee; see Checkpoint 10's
+  Concurrency Review in `taskReport.md`.
+- **Auditability: partially available.** `ActiveRiskConfiguration.
+  updated_at` (`auto_now=True`) records *when* the active pointer last
+  changed, but there is no append-only log of *who* activated *which*
+  version and *when* each transition happened — only the current state
+  is retrievable, not the activation history. This is a documented gap,
+  not built out in Checkpoint 10 (no existing architecture component
+  requires it yet); a dedicated audit trail is a candidate for a future
+  checkpoint if/when authentication introduces a real "who."
 
 ## 8. HTTP Status Codes Used
 
@@ -228,17 +255,12 @@ merely for theoretical purity").
 endpoint, request/response schema, and error schema is present in the
 generated schema, with no warnings suppressed.
 
-**TypeScript generation into `frontend/shared/generated_contracts` is
-deliberately deferred**, not forgotten: no codegen tool (e.g.
-`openapi-typescript`) is installed in `frontend/package.json` yet — the
-frontend bootstrap (Checkpoint 4) only established the toolchain, not the
-contract-generation step. Wiring it up now, for an API with no frontend
-consumer yet, would mean generating and committing TypeScript types
-nobody imports — premature. It is also the natural moment CI's current
-OpenAPI "smoke check" step (`.github/workflows/ci.yml`, added Checkpoint 4)
-should become a *real* drift-diff check, which deserves its own
-checkpoint's attention rather than being folded into this one. Both are
-explicitly named as the trigger for the next frontend-focused checkpoint.
+**Implemented as of Checkpoint 9**: `openapi-typescript` generates
+`frontend/shared/generated_contracts/api-types.ts` from this schema
+(`npm run generate:api` in `frontend/`), and CI diffs the regenerated file
+against what's committed, failing the build on drift. See
+[FRONTEND_API_CONSUMPTION.md](FRONTEND_API_CONSUMPTION.md) for the full
+pipeline and the frontend API client that consumes it.
 
 ## 11. Security Notes
 

@@ -120,6 +120,44 @@ Copy `frontend/.env.example` to `frontend/.env.local` (gitignored) to
 override `VITE_API_BASE_URL` for local development. No secrets are needed
 or permitted in any `VITE_*` variable.
 
+## Activation workflow (Checkpoint 10)
+
+The Risk Configuration panel is the first *state-changing* human workflow
+in the frontend. `frontend/src/common/api/client.ts` gained `apiPost<T>`
+(mirrors `apiGet<T>`, same `ApiError`/network-error handling, no request
+body — every current write is a bare state-transition identified entirely
+by the URL path). `frontend/src/common/api/configApi.ts` gained
+`activateRiskConfigurationVersion(configurationId, version)`, calling the
+existing Checkpoint 8 `POST /api/v1/config/risk/{configuration_id}/
+{version}/activate/` endpoint — no new backend endpoint or contract field
+was needed; the OpenAPI schema already declared this operation's 200/404
+response shapes, confirmed unchanged by regenerating and diffing before
+this checkpoint's changes.
+
+Workflow: select a historical version → `frontend/src/common/components/
+ConfirmDialog.tsx` (reusable, accessible: `role="dialog"`, `aria-modal`,
+focus-on-open, Escape-to-cancel) shows the current active version, the
+target version, its risk limits, and the consequence of confirming → on
+Confirm, the button set is disabled and a `role="status"` "Processing…"
+message appears (blocks double-submission) → on success, the panel calls
+`refetch()` (from `useConfigQuery`) to re-pull the real version list from
+the backend rather than locally mutating `is_active` — the backend is
+always the source of truth for what's actually active — and shows a
+success message → on failure, the dialog stays open with a `role="alert"`
+message decoded from the real `ApiError` contract (never raw HTML/Django
+internals), and the user can retry or cancel.
+
+**Security status**: unchanged from the backend — no authentication or
+authorization exists on the activation endpoint, and the frontend does not
+add a login screen (which would only imply protection that isn't there).
+This remains a development/admin workflow.
+
+**Concurrency**: the backend's `transaction.atomic()` + `unique=True`
+active-pointer design (already in place since Checkpoint 7) makes
+concurrent activation requests safe at the database level; the frontend
+does not attempt any additional client-side locking and always trusts the
+post-activation refetch over any locally-held state.
+
 ## Testing
 
 `frontend/src/common/api/client.test.ts` and
@@ -128,6 +166,12 @@ only `global.fetch` (the network boundary) — the real generated types, the
 real `configApi`/`client` functions, and the real React component are all
 exercised together, proving the generated-type → API-client → component
 boundary rather than a fully mocked interface.
+`RiskConfigurationPanel.activation.test.tsx` extends this to the full
+write workflow: historical-version affordance, confirmation dialog
+content, cancel/Escape (no API call), confirm (real `POST` to the real
+path), double-submission protection, success (real refetch + fresh DOM
+state), backend rejection, and network failure — 10 tests, none of which
+mock the component's own logic.
 
 ## Known issues (dev-tooling only)
 

@@ -6,21 +6,26 @@ Presentation layer for a non-technical end user (Section 12). Framework locked a
 
 **Checkpoint 9** added the first real screen — a read-only Configuration
 Viewer under `src/features/configuration/`, consuming the Checkpoint 8
-business API via generated TypeScript contracts. See
+business API via generated TypeScript contracts. **Checkpoint 10** added
+the first state-changing human workflow — activating a historical risk
+configuration version, with an explicit confirmation dialog, real backend
+state refresh, and double-submission protection. See
 [../docs/api/FRONTEND_API_CONSUMPTION.md](../docs/api/FRONTEND_API_CONSUMPTION.md)
-for the full contract-generation pipeline, API client design, and dev
-workflow.
+for the full contract-generation pipeline, API client design, activation
+workflow, and dev workflow.
 
-### Directory layout (as of Checkpoint 9)
+### Directory layout (as of Checkpoint 10)
 
 - `src/app/` — application root (`App.tsx`) and global styles.
 - `src/common/` — app-local shared code: the API client
   (`common/api/client.ts`, `common/api/configApi.ts`) and shared UI
   components (`common/components/`: loading/error/empty states, active
-  badge). Deliberately named `common/`, not `shared/`, to avoid confusion
-  with the repo-level `frontend/shared/` (generated contracts, `@shared`
-  alias) below.
-- `src/features/configuration/` — the Configuration Viewer screen.
+  badge, and — new in Checkpoint 10 — `ConfirmDialog`, a reusable
+  accessible confirmation dialog for state-changing actions). Deliberately
+  named `common/`, not `shared/`, to avoid confusion with the repo-level
+  `frontend/shared/` (generated contracts, `@shared` alias) below.
+- `src/features/configuration/` — the Configuration Viewer screen,
+  including the risk-configuration activation workflow.
 - `src/test/` — Vitest setup (`setup.ts`).
 - `shared/` — repo-level, cross-cutting frontend architecture; currently
   only `shared/generated_contracts/` (see its own README). Imported via

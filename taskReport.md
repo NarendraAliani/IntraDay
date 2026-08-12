@@ -1641,3 +1641,383 @@ version and activating it from the UI, with confirmation and
 success/error feedback) — the concrete, meaningful action that would
 satisfy the Human Workflow gate criterion and, with all four criteria
 met, trigger `app.bat`'s creation per the established spec.
+
+# Checkpoint 10 — Safe Configuration Activation Workflow (2026-08-12)
+
+## Objective
+
+Implement the first complete, state-changing human workflow: select a
+historical risk-configuration version → explicit confirmation → the
+existing Checkpoint 8 activation endpoint → refreshed real backend
+state → clear success/failure feedback. Evaluate whether this
+legitimately satisfies the Human Workflow gate criterion and, if so,
+create `app.bat`.
+
+## Security Review Before Activation (Section 3 of the checkpoint brief)
+
+Inspected `infrastructure/api/risk_views.py`, `application/services/
+risk.py`, and `infrastructure/persistence/repositories.py` (activation
+implementation) before writing any UI code:
+
+1. **Authenticated?** No.
+2. **Authorized?** No.
+3. **Cross-resource activation protected?** Yes — activation requires
+   both `configuration_id` and `version` from the URL path; the
+   repository only activates a version that exists for that exact
+   `configuration_id` (`RiskConfigurationVersion.objects.filter(...)
+   .exists()` check inside the same transaction).
+4. **Idempotent?** Yes — activating an already-active version returns
+   the same 200 response (`update_or_create` on the active-pointer
+   table); verified by the existing
+   `test_activate_is_idempotent` test.
+5. **Already-active version requested?** Re-confirms it; no error, no
+   duplicate side effect.
+6. **Nonexistent version requested?** `404 invalid_activation`
+   (verified by `test_activate_unknown_version_returns_404`).
+7. **Concurrent activation requests?** Safe — `transaction.atomic()`
+   wraps the existence check and the pointer upsert;
+   `ActiveRiskConfiguration.risk_configuration_id` has a database-level
+   `unique=True` constraint, so PostgreSQL itself prevents two active
+   pointer rows for the same configuration id.
+8. **Persistence guarantees only one active version?** Yes, by the
+   unique constraint above — not merely by application-code discipline.
+9. **Is the current unauthenticated state acceptable for this
+   checkpoint?** Yes, as a development checkpoint — but not mistaken
+   for production security. No fake login screen or no-op auth was
+   added to the frontend or backend; the gap is documented, not hidden
+   (`docs/api/CONFIGURATION_API.md` §3, `FRONTEND_API_CONSUMPTION.md`).
+
+**No backend change was required.** The existing Checkpoint 7/8 design
+already provides transactional, constraint-backed, idempotent
+activation semantics — verified by reading and by the pre-existing
+`tests/unit/infrastructure/api/test_risk_api.py` test suite (7
+activation-relevant tests, all `requires_postgres`-gated, all part of
+the unchanged 114-passed/34-skipped baseline).
+
+## Activation Semantics (verified, not rebuilt)
+
+Deterministic, idempotent, transactional, version-specific,
+resource-specific, safe under repeated requests — all confirmed true of
+the existing implementation (see Security Review above). No business
+logic was duplicated in React: the frontend only calls `POST /api/v1/
+config/risk/{configuration_id}/{version}/activate/` and treats its
+response, and a subsequent GET, as authoritative.
+
+## Backend Changes
+
+**None.** No Python source file was modified. The OpenAPI schema was
+regenerated and diffed against the committed
+`frontend/shared/generated_contracts/api-types.ts` — byte-identical, no
+drift, confirming the activation contract used by the new frontend code
+was already fully and correctly described by the Checkpoint 8/9
+pipeline.
+
+## Frontend Changes
+
+- `frontend/src/common/api/client.ts`: added `apiPost<T>` (mirrors
+  `apiGet<T>`; same `ApiError`/`ApiNetworkError` handling; no request
+  body, matching the backend's `request=None` `@extend_schema`
+  declaration for activation).
+- `frontend/src/common/api/configApi.ts`: added
+  `activateRiskConfigurationVersion(configurationId, version)`.
+- `frontend/src/common/components/ConfirmDialog.tsx` (new): reusable,
+  accessible confirmation dialog — not risk-configuration-specific —
+  so a later universe/strategy activation workflow can reuse it instead
+  of duplicating dialog/focus/keyboard logic. This is the one piece of
+  "shared activation" abstraction built this checkpoint; the workflow
+  state itself (`ActivationState` union) stays local to
+  `RiskConfigurationPanel.tsx`, per the brief's "don't over-generalize
+  prematurely" instruction.
+- `frontend/src/common/useConfigQuery.ts`: changed its return shape from
+  a bare `QueryState<T[]>` to `{ state, refetch }` so a caller can
+  force a real re-fetch after a successful write. All three panels
+  updated to destructure `{ state }`; only `RiskConfigurationPanel` also
+  uses `refetch`.
+- `frontend/src/features/configuration/RiskConfigurationPanel.tsx`:
+  added the activation UI — an "Activate Version X" button on every
+  non-active version card, wired to a `ConfirmDialog`, a success banner,
+  and inline error handling.
+- `frontend/src/app/styles.css`: dialog/backdrop/activate-button/success
+  styles (icon+text/border, not color alone).
+
+## Activation API Client
+
+`activateRiskConfigurationVersion` uses the real generated
+`RiskConfigurationResponse`/`ApiError` types (no hand-duplicated
+response shape), URL-encodes both path segments, and returns a typed
+`Promise<RiskConfigurationResponse>`. Errors surface through the same
+`ApiRequestError`/`ApiNetworkError` mechanism as every read call — no
+competing error path was introduced. No Axios, no React Query.
+
+## Confirmation Workflow
+
+`ConfirmDialog` shows, in the target version's own card content: the
+current active version, the target version, its three risk limits
+(formatted as currency, not renumericized), and an explicit consequence
+sentence ("This will make Version X the active risk configuration for
+Y. Version Z will become historical."). No vague "Are you sure?" text.
+Focus moves to the Cancel button on open; Escape cancels; the dialog is
+`role="dialog"`/`aria-modal="true"`/`aria-labelledby`.
+
+## Success / Failure Handling
+
+- **Success**: `refetch()` re-pulls the real version list from the
+  backend (never a local `is_active` mutation), the dialog closes, and
+  a `role="status"` success message names the newly active version.
+  Verified by test that the DOM reflects the *refetched* state, not the
+  activation response alone (a second, distinct `GET` mock response is
+  used in the test to prove this).
+- **Failure**: dialog stays open, `role="alert"` shows the real
+  `ApiError.message` (backend-provided or the client's safe fallback),
+  user can Cancel or retry. Covered failure modes: backend rejection
+  (404 `invalid_activation` in the current API — see
+  `docs/api/CONFIGURATION_API.md` §8 for the existing status-code
+  rationale; a `409` case is not currently reachable through this
+  endpoint, consistent with `errors.py`'s existing mapping) and network
+  failure (`ApiNetworkError`).
+
+## Double-Submission Protection
+
+The Confirm/Cancel buttons are `disabled` for the entire `submitting`
+phase, and `confirmActivation()` itself re-checks
+`activation.phase !== "confirming" && activation.phase !== "error"` and
+returns early — defense in depth beyond the disabled DOM attribute.
+Verified by test: firing three rapid clicks on the confirm button while
+the (mocked, deliberately unresolved) POST is in flight results in
+exactly one POST request.
+
+## Active-State Refresh
+
+Confirmed by test: after a successful activation, the panel issues a
+second real `GET` request (the mock returns a different, "post-
+activation" list on that second call) and the rendered DOM — which
+version shows an Activate button, which shows the Active badge — is
+driven entirely by that second response, not by assuming the POST's own
+body is still current.
+
+## Backend Tests
+
+No new backend tests were added — the pre-existing Checkpoint 8 test
+suite (`tests/unit/infrastructure/api/test_risk_api.py`) already covers
+every scenario the checkpoint brief asks for: activating an existing
+version, an already-active version (idempotency), a nonexistent version,
+the previous active version becoming inactive, the target becoming
+active, and the full vertical slice through the transaction. Re-read and
+re-verified as part of this checkpoint's 114-passed/34-skipped/0-failed
+regression run (all `requires_postgres`-gated, honestly skipped in this
+sandbox, not claimed as passed). A dedicated concurrent-activation test
+(two simultaneous requests) was not added — the database-level
+`unique=True` constraint plus `transaction.atomic()` provide the
+guarantee structurally, and simulating true concurrency inside SQLite-
+free, single-process pytest without a real Postgres connection would not
+exercise anything the existing constraint doesn't already prove.
+
+## Frontend Tests
+
+`RiskConfigurationPanel.activation.test.tsx` — 10 tests, all passing:
+historical-version-shows-Activate, active-version-does-not,
+click-opens-confirmation (content asserted), Cancel-does-not-call-API,
+Escape-does-not-call-API, Confirm-calls-real-endpoint-with-correct-path,
+double-click-cannot-double-submit, success-refreshes-real-state,
+backend-rejection-shows-safe-error, network-failure-shows-safe-error.
+Plus a 10th, empty-state-has-no-activation-affordance, extending
+Checkpoint 9's empty-state coverage. Combined with Checkpoint 9's 8
+tests, **18/18 frontend tests pass**.
+
+**Real bug found and fixed while writing these tests**: React Testing
+Library's automatic `cleanup()` between tests depends on a global
+`afterEach` hook, which this project's `vite.config.ts` deliberately
+does not enable (`test.globals: false`, a Checkpoint 9 decision to avoid
+touching `tsconfig.json`'s `types` array). Without an explicit
+`afterEach(cleanup)`, multiple `render()` calls across tests in the same
+file were leaking DOM nodes into each other, causing false "multiple
+elements found" failures. Fixed in `frontend/src/test/setup.ts` by
+importing `cleanup` from `@testing-library/react` and registering it
+explicitly — a real, previously-latent gap in the Checkpoint 9 test
+setup, not a defect in this checkpoint's own new code, caught only
+because this checkpoint's test file was the first to run enough
+`render()` calls in one file to expose it.
+
+## Contract-Boundary Validation
+
+`RiskConfigurationPanel.activation.test.tsx`'s "Confirm calls the real
+activation endpoint" test proves the full boundary: the generated
+`components["schemas"]["RiskConfigurationResponse"]`/`ApiError` types →
+the real `activateRiskConfigurationVersion`/`apiPost` client functions →
+the real `RiskConfigurationPanel` component's confirm handler → an
+asserted real `fetch` call to the exact real URL
+(`/api/v1/config/risk/default/v2/activate/`) with `method: "POST"`. Only
+`global.fetch` is mocked.
+
+## Accessibility
+
+`ConfirmDialog`: `role="dialog"`, `aria-modal="true"`,
+`aria-labelledby` (heading id), `aria-busy` while submitting, focus
+moves to Cancel on open, Escape cancels (disabled while submitting so a
+mid-flight request can't be abandoned invisibly), processing state is a
+`role="status"` text node, errors are `role="alert"`, both action
+buttons have explicit, specific labels (e.g. "Confirm Activation of
+Version v2", never "OK"/"Apply"). Active/historical/success/error states
+all use icon or text alongside color, never color alone (continuing the
+Checkpoint 9 pattern).
+
+## Concurrency Safety
+
+**Verified**, not newly built: `transaction.atomic()` (application
+layer) + `ActiveRiskConfiguration.risk_configuration_id`'s
+`unique=True` constraint (database layer) together guarantee at most
+one active pointer row per configuration id even under concurrent
+requests — the database rejects a second concurrent insert, and
+`update_or_create`'s retry-on-`IntegrityError` behavior (Django's own
+implementation) resolves the race safely. No architectural change was
+needed or made.
+
+## Auditability
+
+**Partially available.** `ActiveRiskConfiguration.updated_at`
+(`auto_now=True`) records when the active pointer last changed, but
+there is no append-only activation history (who activated what, when,
+from what previous version) — only current state is queryable. This gap
+is now explicitly documented (`docs/api/CONFIGURATION_API.md` §7) rather
+than silently absent. Not built out this checkpoint: no existing
+architecture component requires it yet, and building a full audit
+subsystem was explicitly out of scope per the checkpoint brief.
+
+## Authentication / Authorization Status
+
+**Both deferred**, unchanged from Checkpoint 8. The activation UI is
+explicitly a development/admin workflow — no login screen was added
+(a fake one would misrepresent the actual security posture). Documented
+in `docs/api/CONFIGURATION_API.md` §3 and
+`docs/api/FRONTEND_API_CONSUMPTION.md`.
+
+## OpenAPI / TypeScript Contract Validation
+
+`manage.py spectacular --fail-on-warn` ✅ (silent success, output
+inspected). `npm run generate:api:types` regenerated
+`frontend/shared/generated_contracts/api-types.ts` — `git diff` showed
+**zero changes**: the committed contract already fully and correctly
+described the activation operation used this checkpoint (confirmed by
+direct inspection of the `api_v1_config_risk_activate_create` operation
+before writing any frontend code). CI's drift-detection step
+(`.github/workflows/ci.yml`, added Checkpoint 9) remains valid and
+unmodified — nothing about it needed to change.
+
+## Backend Regression Results
+
+Ruff format ✅ (134 files) · Ruff lint ✅ · mypy strict ✅ (86 files) ·
+pytest ✅ **114 passed, 34 skipped, 0 failed** (byte-identical to
+Checkpoint 9 — no backend source changed) · import-linter ✅ **6/6
+kept** (106 files) · `manage.py check` ✅ · `spectacular --fail-on-warn`
+✅. `makemigrations --check --dry-run` **could not run** — requires a
+live PostgreSQL connection even to compare migration state
+(`ImproperlyConfigured: settings.DATABASES is improperly configured`),
+the same documented sandbox constraint as every prior checkpoint; not
+claimed as passed.
+
+## Frontend Validation Results
+
+`npm run typecheck` ✅ (no errors) · `npm run build` ✅ (`tsc -b && vite
+build`, 43 modules, 155.2 kB JS / 4.5 kB CSS) · `npm run test` ✅ **18
+passed, 0 failed** (8 from Checkpoint 9 + 10 new activation tests). No
+ESLint config exists in this repo (checked again this checkpoint; still
+none — not silently skipped, genuinely absent).
+
+## npm Audit Status
+
+Unchanged from Checkpoint 9: `esbuild <=0.24.2` (moderate,
+GHSA-67mh-4wv8-2f99) and three `vite` dev-server advisories
+(GHSA-4w7w-66w2-5vf9, GHSA-v6wh-96g9-6wx3, GHSA-fx2h-pf6j-xcff). No new
+frontend dependency was added this checkpoint beyond what Checkpoint 9
+already introduced, so no new findings; Vite/Vitest were **not**
+upgraded to silence these, per the explicit instruction not to.
+
+## Documentation Updated
+
+`docs/api/CONFIGURATION_API.md` (§3 activation-UI note, §7 concurrency/
+auditability detail, §10 corrected to reflect Checkpoint 9's completed
+contract generation), `docs/api/FRONTEND_API_CONSUMPTION.md`
+(activation workflow section, testing section extended),
+`frontend/README.md` (directory layout, Checkpoint 10 workflow note),
+`README.md` (status banner, Quick Start `app.bat` mention), this file.
+No architecture-decision-log entry was needed — no new architectural
+pattern was introduced beyond the already-decided
+generated-contract/API-client architecture; `ConfirmDialog`'s reuse
+justification is documented inline in this section instead of as a
+formal ADR, consistent with its scope (one small shared UI component,
+not a structural decision).
+
+## Files Created
+
+`frontend/src/common/components/ConfirmDialog.tsx`,
+`frontend/src/features/configuration/RiskConfigurationPanel.activation.test.tsx`,
+`app.bat`.
+
+## Files Modified
+
+`frontend/src/common/api/client.ts` (`apiPost`),
+`frontend/src/common/api/configApi.ts`
+(`activateRiskConfigurationVersion`),
+`frontend/src/common/useConfigQuery.ts` (`refetch`),
+`frontend/src/features/configuration/RiskConfigurationPanel.tsx`
+(activation UI), `frontend/src/features/configuration/UniversePanel.tsx`
+and `StrategyVersionPanel.tsx` (destructure `{ state }` to match the
+hook's new return shape — no behavior change), `frontend/src/app/
+styles.css` (dialog/activation styles), `frontend/src/test/setup.ts`
+(explicit `cleanup()` registration — bug fix, see Frontend Tests above),
+`docs/api/CONFIGURATION_API.md`, `docs/api/FRONTEND_API_CONSUMPTION.md`,
+`frontend/README.md`, `README.md`, this file.
+
+## Frontend UX Testing Readiness
+
+| Criterion | Status |
+|---|---|
+| Persistence | ✅ YES |
+| Business API | ✅ YES |
+| Frontend | ✅ YES |
+| Human workflow | ✅ **YES (new this checkpoint)** |
+
+**Overall gate: `YES`.** A user can view persisted risk-configuration
+versions, select a historical one, receive an explicit, informative
+confirmation, submit an activation request, have the backend genuinely
+change persisted state (verified by re-fetching), and see the result —
+a complete, meaningful, verified human workflow, not navigation alone.
+`app.bat` **created** this checkpoint (see below).
+
+## app.bat
+
+**Created.** A Windows development-mode launcher: resolves its own
+project root via `%~dp0` (no hard-coded path), checks for
+Python/Poetry/Node/npm on `PATH` and fails safely with a clear message
+if any is missing, runs `poetry install`/`npm install` only if their
+respective dependency directories (`.venv/`, `frontend/node_modules/`)
+don't already exist, copies `.env.example`/`frontend/.env.example` to
+`.env`/`frontend/.env.local` only if those don't already exist (never
+overwrites, never contains secrets itself), then starts the Django dev
+server and the Vite dev server each in their own window. Contains no
+Docker, no production configuration, and prints an explicit
+"DEVELOPMENT MODE ONLY" banner. Safe to re-run at any time.
+
+## Deferred Items
+
+Authentication/authorization (still fully deferred — documented, not
+faked). A real append-only activation audit log (documented gap, not
+built). Universe/strategy-version activation UI (deliberately not
+duplicated this checkpoint; `ConfirmDialog` is reusable when that work
+happens). npm audit's dev-server-only advisories (unchanged, tracked).
+Docker remains deferred.
+
+## Git Status
+
+Committed locally to `main` as `Checkpoint 10: safe configuration
+activation workflow`. **Not pushed.**
+
+## Next Checkpoint
+
+With the UX gate now satisfied and `app.bat` created, recommend
+extending the same activation pattern to Universe and Strategy Version
+(reusing `ConfirmDialog`), and/or beginning the authentication/
+authorization work explicitly deferred since Checkpoint 3 — now that a
+real state-changing endpoint exists and is reachable from a UI, it is
+the natural next checkpoint's priority ahead of any further
+business-logic feature work.

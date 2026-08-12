@@ -1,19 +1,24 @@
 # IntraDay — Intraday Indian Cash-Equity Algorithmic Trading Platform
 
-> **Status: FIRST BUSINESS API + FRONTEND SCREEN (Checkpoint 9).** The
+> **Status: FIRST HUMAN WORKFLOW — UX GATE SATISFIED (Checkpoint 10).** The
 > project installs and boots (Django, Celery, Channels, React/Vite), and is
 > protected by CI-enforced formatting, linting, strict typing, tests, and
 > mechanical architecture enforcement (import-linter). The first business
 > API exists — read + version-activate endpoints for risk configuration,
-> universe, and strategy version under `/api/v1/config/` — and the frontend
-> now has its first real screen, a read-only Configuration Viewer
-> consuming that API via generated TypeScript contracts (see
+> universe, and strategy version under `/api/v1/config/` — the frontend has
+> a read-only Configuration Viewer, and Checkpoint 10 added the first real,
+> state-changing human workflow: selecting a historical risk-configuration
+> version, confirming, activating it via the existing backend endpoint, and
+> seeing the refreshed active state (see
 > [docs/api/FRONTEND_API_CONSUMPTION.md](docs/api/FRONTEND_API_CONSUMPTION.md)).
 > No strategies, indicators, signals, risk engine, order management, broker
 > integration, market-data ingestion, backtesting, or live trading have
-> been implemented yet. The Frontend UX Testing Readiness Gate is not yet
-> fully satisfied (no meaningful human workflow action exists yet) — see
-> `taskReport.md`'s Checkpoint 9 section — so `app.bat` does not exist yet.
+> been implemented yet. **No authentication/authorization exists** —
+> this is a development/admin workflow, not a production-secure trading
+> control (see `docs/api/CONFIGURATION_API.md` §3). With all four Frontend
+> UX Testing Readiness Gate criteria now satisfied,
+> [app.bat](app.bat) was created — a development-mode launcher only
+> (no Docker, no secrets, no production hardening).
 
 ## Scope
 
@@ -48,6 +53,10 @@ poetry install && cp .env.example .env   # backend
 cd frontend && npm install && npm run generate:api && cd ..  # frontend + contract generation
 make check                               # format, lint, typecheck, architecture-check, test
 ```
+
+Or, on Windows, run [`app.bat`](app.bat) to install missing dependencies
+and start both dev servers (development mode only — see the status note
+above).
 
 Full command reference: [docs/development/LOCAL_DEVELOPMENT.md](docs/development/LOCAL_DEVELOPMENT.md).
 

@@ -6,7 +6,7 @@
 // there is deliberately no separate "list" vs "active" call here, since the
 // list endpoint already carries the active/historical distinction the
 // Configuration Viewer needs.
-import { apiGet } from "./client";
+import { apiGet, apiPost } from "./client";
 import type { components } from "@shared/generated_contracts/api-types";
 
 export type RiskConfigurationResponse = components["schemas"]["RiskConfigurationResponse"];
@@ -31,5 +31,23 @@ export function listUniverseVersions(universeId: string): Promise<UniverseRespon
 export function listStrategyVersions(strategyId: string): Promise<StrategyVersionResponse[]> {
   return apiGet<StrategyVersionResponse[]>(
     `/api/v1/config/strategy/${encodeURIComponent(strategyId)}/`,
+  );
+}
+
+/**
+ * Activate a specific persisted risk-configuration version (Checkpoint 8's
+ * `POST /api/v1/config/risk/{configuration_id}/{version}/activate/`).
+ * Backend-authoritative and idempotent - activating an already-active
+ * version simply re-confirms it. Never mutates local state directly; the
+ * caller must treat the returned record (or a follow-up
+ * `listRiskConfigurationVersions` call) as the source of truth for what
+ * is actually active.
+ */
+export function activateRiskConfigurationVersion(
+  configurationId: string,
+  version: string,
+): Promise<RiskConfigurationResponse> {
+  return apiPost<RiskConfigurationResponse>(
+    `/api/v1/config/risk/${encodeURIComponent(configurationId)}/${encodeURIComponent(version)}/activate/`,
   );
 }

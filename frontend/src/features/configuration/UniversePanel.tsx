@@ -22,7 +22,7 @@ function formatDateTime(value: string): string {
 export function UniversePanel(): JSX.Element {
   const [universeId, setUniverseId] = useState("example");
   const [inputValue, setInputValue] = useState("example");
-  const state = useConfigQuery(listUniverseVersions, universeId);
+  const { state } = useConfigQuery(listUniverseVersions, universeId);
 
   return (
     <section aria-labelledby="universe-panel-heading">

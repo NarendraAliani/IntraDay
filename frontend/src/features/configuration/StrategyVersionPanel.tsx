@@ -24,7 +24,7 @@ function formatDateTime(value: string): string {
 export function StrategyVersionPanel(): JSX.Element {
   const [strategyId, setStrategyId] = useState("example-strategy");
   const [inputValue, setInputValue] = useState("example-strategy");
-  const state = useConfigQuery(listStrategyVersions, strategyId);
+  const { state } = useConfigQuery(listStrategyVersions, strategyId);
 
   return (
     <section aria-labelledby="strategy-panel-heading">
