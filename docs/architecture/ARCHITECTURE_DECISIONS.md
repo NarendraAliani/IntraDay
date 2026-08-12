@@ -94,3 +94,28 @@ section for the full validation log.
   that must be revisited at specific future triggers (first domain model;
   next dependency bump) — tracked in taskReport.md's Checkpoint 4 "Known
   Issues / Deferred Items", not merely here.
+
+## Checkpoint 5 — Canonical Domain Contracts (2026-08-12)
+
+Implements the 14 approved shared-kernel contracts as real Python code.
+Full contract-by-contract documentation is in
+[DOMAIN_CONTRACTS.md](DOMAIN_CONTRACTS.md) — this table records only the
+decisions with genuine alternatives.
+
+| # | Decision | Reason | Alternatives Considered | Status |
+|---|---|---|---|---|
+| 36 | Domain contracts implemented as `@dataclass(frozen=True, slots=True)` value objects (plain Python, not Pydantic/attrs), with `NewType`-based string identifiers rather than UUIDs, and validation performed in `__post_init__` rather than a separate validation layer. | Stdlib-only keeps the domain layer's zero-infrastructure-dependency guarantee trivially true (no third-party validation library to audit for hidden I/O); `frozen=True` gives immutability for free; most domain identities (instrument, strategy) are naturally derivable/human-legible, so opaque UUIDs would be implementation convenience, not a domain requirement (Checkpoint 5 Section 6 test: "why does more than one bounded context require this?" applies equally to *how* an identifier is shaped). | Pydantic (rejected — adds a third-party dependency and its own validation framework where stdlib dataclasses already suffice; also blurs the "domain vs. serialization" line Checkpoint 5 Section 24 explicitly warns against, since Pydantic models double as serializers); UUID identifiers everywhere (rejected — no domain requirement demands opacity; human-legible IDs aid debugging and reproducibility). | LOCKED |
+
+## Notes (Checkpoint 5)
+
+- No new contract was added to the shared kernel beyond the 14 approved at
+  Checkpoint 2/3 — the "ask before expanding the kernel" rule (Checkpoint 5
+  Section 3) was not triggered; every field needed fit inside an existing
+  contract.
+- All 14 domain subpackages under `src/intraday/domain/` now have both an
+  explicit `__init__.py` (package marker) and a `contracts.py` (the actual
+  contract) — a real gap (missing `__init__.py`, relying on implicit
+  namespace packages) was found and fixed during this checkpoint's
+  `import-linter` validation; see taskReport.md's Checkpoint 5 section.
+- `import-linter`'s 5 contracts remain unchanged and still pass 5/5 —
+  no architecture rule was weakened to accommodate the new code.

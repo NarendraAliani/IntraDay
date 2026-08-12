@@ -20,6 +20,13 @@ generic version/lineage identifier primitive remains here, in
 consumed by only one bounded context — put it there instead and reference it
 by id.
 
+**Implemented at Checkpoint 5:** all 14 contracts now exist as real,
+typed, tested Python code under `src/intraday/domain/*/contracts.py` —
+see [docs/architecture/DOMAIN_CONTRACTS.md](../docs/architecture/DOMAIN_CONTRACTS.md)
+for the full contract-by-contract documentation. This `domain/` directory
+tree remains the architectural/documentation home; the executable code
+lives in the `src/` package tree per Checkpoint 4's src-layout decision.
+
 ## Depends On
 
 Nothing (innermost layer)

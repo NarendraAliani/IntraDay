@@ -855,3 +855,119 @@ configuration file required correction. `pyproject.toml`, `poetry.lock`,
 from the prior committed state; only local Poetry configuration
 (`virtualenvs.in-project`, `virtualenvs.path`) and the physical location of
 the (gitignored, never-committed) `.venv` directory changed.
+
+---
+
+# Checkpoint 5 — Canonical Domain Contracts (2026-08-12)
+
+## Contracts Implemented
+
+All 14 approved shared-kernel contracts, as real, immutable
+(`@dataclass(frozen=True, slots=True)`), stdlib-only Python code under
+`src/intraday/domain/*/contracts.py`: `shared_kernel` (identifiers,
+`Version`, `Exchange`, `Side`, `Timeframe`, `Price`, `Quantity`,
+`ensure_utc`), `instrument`, `universe`, `market_data` (`Bar`, `Quote`),
+`feature`, `strategy` (`StrategyIdentity`, `StrategyVersion`,
+`StrategyMaturityState`), `signal`, `risk` (`RiskLimits`, `RiskDecision`,
+`TradingHaltState`), `portfolio`, `order` (`OrderIntent`), `position`,
+`trade`, `broker` (`BrokerGateway` Protocol, `BrokerOrderStatusReport`),
+`session`. Full field-level documentation:
+`docs/architecture/DOMAIN_CONTRACTS.md`.
+
+## Contracts Intentionally Not Implemented
+
+No 15th contract was added — the shared kernel remains exactly the 14
+approved at Checkpoint 2/3. No strategy runtime, indicator math, risk
+evaluation, order placement, broker HTTP/WebSocket code, market-data
+ingestion, backtesting engine, database model, API endpoint, or frontend
+screen was implemented, per the hard boundary.
+
+## Design Decisions
+
+- Plain stdlib `dataclasses`, not Pydantic/attrs — keeps the domain layer's
+  zero-third-party-dependency guarantee trivially auditable and avoids
+  blurring domain vs. serialization (Decision #36).
+- String `NewType` identifiers, not UUIDs — most domain identities are
+  naturally derivable (e.g. `instrument_id` from exchange+symbol via
+  `make_instrument_id`), so opacity would be convenience, not requirement.
+- Validation lives in each contract's own `__post_init__` — no separate
+  validation framework/layer.
+
+## Invariants Enforced (representative, not exhaustive — see DOMAIN_CONTRACTS.md)
+
+Every timestamp field rejects naive or non-UTC datetimes
+(`shared_kernel.ensure_utc`). Every money/quantity field rejects `float`/
+`int` in favor of `Decimal`. `Bar` enforces `low <= open,close <= high`.
+`Signal` enforces stop-loss on the correct side of entry per direction and
+confidence within [0,1]. `OrderIntent` enforces `idempotency_key` presence
+and order-type-specific required fields (limit/trigger price).
+`RiskDecision`/`TradingHaltState` require `reasons`/`reason` when rejecting/
+halting. `Position`/`Trade` enforce closed-at-not-before-opened-at and
+status/closed_at consistency. `Instrument.is_tradable` is `True` only for
+`EQUITY` + `ACTIVE` — `INDEX` (NIFTY/SENSEX-style) is never tradable,
+regardless of status.
+
+## Tests
+
+68 new unit tests across `tests/unit/domain/` (one file per contract, 14
+files), including targeted Hypothesis property-based tests for `Price`
+(any positive/negative `Decimal`) and `Bar`'s OHLC invariant across
+generated ranges, plus a structural test asserting `BrokerGateway`'s
+methods are all unimplemented stubs and a test asserting `InstrumentType`
+contains no derivative/F&O member. Combined with the 16 infrastructure
+tests from Checkpoint 4: **84 passed, 3 correctly skipped** (no live
+Postgres/Redis in this sandbox), 0 failed.
+
+## Architecture Validation
+
+`import-linter`: **5/5 contracts kept, 0 broken** — unchanged from
+Checkpoint 4, confirming the new domain code introduced no dependency
+violation. A grep audit confirmed zero imports of `django`,
+`rest_framework`, `celery`, `redis`, `psycopg`, `requests`, or `httpx`
+anywhere under `src/intraday/domain/`. A separate grep confirmed no
+accidental futures/options/derivatives terminology exists outside
+deliberate "this must never exist" exclusion comments.
+
+**A real gap was found and fixed during this checkpoint**: the 14 new
+domain subpackages initially had only `contracts.py`, no `__init__.py` —
+Python's implicit namespace packages made imports/tests/mypy work anyway,
+but `import-linter` under-counted the codebase ("Analyzed 40 files" instead
+of the correct 72) as a symptom. Fixed by adding an explicit,
+Rule-14-compliant `__init__.py` to all 14 subpackages, matching every other
+subpackage's convention in the codebase; `import-linter` then correctly
+reported "Analyzed 72 files, 123 dependencies," still 5/5 contracts kept.
+
+## Files Created
+
+`docs/architecture/DOMAIN_CONTRACTS.md`; 14 `contracts.py` files and 14
+`__init__.py` files under `src/intraday/domain/*/`; 14 test files under
+`tests/unit/domain/`.
+
+## Files Modified
+
+`docs/architecture/ARCHITECTURE.md` (status), `docs/architecture/DOMAIN_BOUNDARIES.md`
+(link to DOMAIN_CONTRACTS.md), `docs/architecture/ARCHITECTURE_DECISIONS.md`
+(decision #36), `domain/README.md` (implementation status), `README.md`
+(doc link), this file.
+
+## Deferred Items
+
+Everything explicitly out of scope per Checkpoint 5 Section 1 remains
+deferred to its named future checkpoint: strategy runtime, feature
+computation, signal generation, risk evaluation, order/broker execution,
+market-data ingestion, backtesting, persistence/migrations, API endpoints,
+frontend screens. Docker remains deferred per the roadmap change
+(untouched, not validated, not run). The `settings/testing.py` SQLite
+exception (Decision #32) is **not yet triggered** — these are pure Python
+value objects with no database mapping, so no PostgreSQL-specific behavior
+exists to test yet; it will be triggered at the first checkpoint that adds
+persistence (repository implementations in `infrastructure/persistence`).
+
+## Next Checkpoint
+
+Recommend **Configuration Management** (mapping `config/strategies`,
+`config/risk`, `config/universe` to `application/config_schema`-validated
+instances against the now-implemented `domain.strategy`/`domain.risk`
+contracts) before introducing market-data ingestion or persistence — this
+keeps the "domain contract → config schema → frontend form" pipeline
+(Rule 13) grounded in real contracts before more consumers are added.

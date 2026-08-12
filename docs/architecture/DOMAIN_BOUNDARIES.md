@@ -166,6 +166,9 @@ depend on trading_engine" and must never become bidirectional.
 
 ## Minimum Viable Shared Kernel (Checkpoint 2, Section 3.1; count corrected at Checkpoint 3 §29)
 
+**Implemented at Checkpoint 5** — see [DOMAIN_CONTRACTS.md](DOMAIN_CONTRACTS.md)
+for full field-level documentation of every contract below.
+
 `domain/` retains **14 contracts**: `shared_kernel`, `market_data`,
 `instrument`, `universe`, `feature`, `strategy`, `signal`, `risk`,
 `portfolio`, `order`, `position`, `trade`, `broker`, `session`. Each is
