@@ -1080,3 +1080,170 @@ gate above. Persistence first is likely the better sequencing: it lets
 config instances (and eventually domain state generally) survive a
 restart, which is a precondition for any meaningful API surface, which is
 itself a precondition for frontend UX testing.
+
+---
+
+# Checkpoint 7 — Persistence Foundation & Repository Architecture (2026-08-12)
+
+## Implemented
+
+- `application/repositories/__init__.py`: three `typing.Protocol`
+  interfaces (`RiskConfigurationRepository`, `UniverseRepository`,
+  `StrategyVersionRepository`) + `DuplicateVersionError`. New directory
+  under the approved `application/` layer — justified in
+  ARCHITECTURE_DECISIONS.md decision #38.
+- `application/config_schema/records.py`: `RiskConfigurationRecord`, a
+  small application-layer versioning envelope for the identity/version-free
+  `RiskLimits` domain contract (which was NOT modified).
+- `infrastructure/persistence/` Django app: `apps.py`, `models.py` (6
+  models — 3 immutable version tables + 3 mutable active-pointer tables),
+  `repositories.py` (3 Django-ORM Protocol implementations),
+  `migrations/0001_initial.py`.
+- `settings/base.py`: registered the persistence app in `INSTALLED_APPS`;
+  added `DATABASES.OPTIONS.connect_timeout` (fail-fast fix, see below).
+- `settings/testing.py`: retired the Checkpoint 4 SQLite exception — now
+  uses real PostgreSQL configuration, matching `base.py`.
+- `.importlinter`: new contract #6 ("application must not depend on
+  infrastructure"), adversarially verified.
+- `docs/architecture/PERSISTENCE_ARCHITECTURE.md`: full documentation.
+
+## Domain Remains ORM-Free — Verified
+
+Grep/AST-based architecture test
+(`tests/unit/architecture/test_persistence_boundaries.py`) confirms zero
+imports of `django`, `rest_framework`, `psycopg`, `celery`, `redis`, or
+`channels` anywhere under `src/intraday/domain/`, and confirms
+`application/repositories`' three interfaces remain structural
+`Protocol`s (every method is a stub). No domain dataclass was converted
+into or annotated as a Django model.
+
+## Persisted Domain Concepts (and why only these)
+
+`RiskLimits` (via `RiskConfigurationRecord`), `Universe`, `StrategyVersion`
+— the three concepts Checkpoint 7 §4 explicitly named. Every other domain
+contract, every config-schema introspection object, and every transient
+value object was deliberately left unpersisted — no current consumer
+needs them to survive a restart. Full justification table in
+`PERSISTENCE_ARCHITECTURE.md` §2.
+
+## A Real Hang Was Found and Fixed
+
+`manage.py makemigrations` (and any DB-touching command) hung
+indefinitely against an unreachable PostgreSQL host, because psycopg has
+no default connect timeout. Diagnosed by testing against `localhost`,
+`127.0.0.1`, and even a definitely-closed port (1) — all hung past a 15s
+`timeout` wrapper. Fixed by adding `DATABASES.OPTIONS.connect_timeout`
+(default 5s, `POSTGRES_CONNECT_TIMEOUT`-overridable) to `settings/base.py`
+— a permanent production fail-fast improvement, not a one-off workaround.
+
+## PostgreSQL Availability — Honestly Reported
+
+**No PostgreSQL server is available in this validation environment**
+(confirmed absent since Checkpoint 4; re-confirmed this checkpoint via
+`psql` absence and connection timeouts against loopback). Consequently:
+
+| Command | Result |
+|---|---|
+| `manage.py makemigrations persistence` | ✅ **Succeeded** — generated `0001_initial.py` with all 6 models, indexes, constraints (does not require a live connection; the migration-history consistency check warns and continues on `OperationalError`) |
+| `manage.py makemigrations --check --dry-run` | ✅ **Succeeded** — "No changes detected" |
+| `manage.py migrate --plan` | ❌ **Failed with `OperationalError: connection timeout expired`** — this command genuinely requires a live connection. **Not run successfully. Not faked as passing.** |
+| `manage.py migrate` (actual apply) | **Not attempted** — would fail identically to `--plan` |
+| 18 new persistence tests (`tests/unit/infrastructure/persistence/`) | **All skipped** via `@requires_postgres`, individually reported, never claimed as passed |
+| 2 pre-existing `readyz` DB tests | **Now also skipped** (previously passed against SQLite; testing.py no longer has a SQLite fallback) |
+| 3 `tests/integration/` tests | Skipped, as in every prior checkpoint |
+
+In CI (GitHub Actions, real Postgres service container), all of the above
+run for real — this is a validation-environment limitation, not a design
+flaw; the CI workflow's Postgres service container was already provisioned
+at Checkpoint 4 for exactly this purpose.
+
+## Tests
+
+**105 passed, 21 skipped, 0 failed** (up from 103 passed/3 skipped at
+Checkpoint 6 — 18 new persistence tests, all appropriately skipped, plus 2
+previously-passing tests now also correctly skipped for the reason above).
+Test categories added: model tests (constraints, Decimal precision,
+JSONB), repository tests (create/read/version-resolution/duplicate-
+rejection/activation), full YAML→domain→persistence→repository round-trip
+tests verifying semantic equality (not just row existence), and the
+domain-ORM-free architecture test (always runs, no DB needed).
+
+## Architecture Validation
+
+Ruff ✅ · mypy strict ✅ (70 files) · pytest ✅ 105 passed/21 skipped/0
+failed · import-linter ✅ **6/6 kept, 0 broken** (89 files analyzed, up
+from 81; new contract #6 adversarially verified — injected violation
+confirmed broken, then removed and re-verified clean) · `manage.py check`
+✅ · `makemigrations --check` ✅ · `spectacular --fail-on-warn` ✅ ·
+`migrate --plan` — **honestly reported as failed/unrunnable, no live
+PostgreSQL available**. **Docker: deferred by project decision** — not
+installed, not run, not touched.
+
+## Frontend UX Testing Readiness — Evaluated
+
+| Criterion | Status |
+|---|---|
+| Persistence exists (state survives restart) | ✅ Yes, for 3 configuration concepts |
+| Business API exists (real domain data exposed) | ❌ No — only `/healthz`/`/readyz`/`/version` |
+| Frontend exists (real screen consuming that API) | ❌ No — only the Checkpoint 4 bootstrap placeholder |
+| Human workflow exists (meaningful action, not just viewing health) | ❌ No |
+
+**Result: `NO — NOT YET`.** Three of four criteria remain unmet.
+`app.bat` was **not created**. Persistence (criterion 1) is now the piece
+that just became true — the next checkpoint that adds a real
+`application/contracts` endpoint exposing the persisted configuration
+would satisfy criterion 2, moving the gate meaningfully closer.
+
+## Security Review
+
+`.gitignore` re-checked: `.env`/secrets still correctly ignored. No
+credentials, passwords, or real broker/database URLs appear in any file
+created this checkpoint — `config/risk/default.yaml` etc. remain
+illustrative placeholders (unchanged from Checkpoint 6); test fixtures use
+literal, obviously-fake values (`"intraday"`/`"test-secret-key..."`,
+already present in `.github/workflows/ci.yml` since Checkpoint 4).
+
+## Files Created
+
+`src/intraday/application/repositories/__init__.py`,
+`src/intraday/application/config_schema/records.py`,
+`src/intraday/infrastructure/persistence/{apps.py, models.py, repositories.py}`,
+`src/intraday/infrastructure/persistence/migrations/{__init__.py, 0001_initial.py}`,
+`tests/postgres_utils.py`,
+`tests/unit/infrastructure/{__init__.py, persistence/__init__.py, persistence/test_models.py, persistence/test_repositories.py, persistence/test_round_trip.py}`,
+`tests/unit/architecture/test_persistence_boundaries.py`,
+`docs/architecture/PERSISTENCE_ARCHITECTURE.md`,
+`application/repositories/README.md`.
+
+## Files Modified
+
+`src/intraday/settings/base.py` (INSTALLED_APPS, connect_timeout),
+`src/intraday/settings/testing.py` (SQLite exception retired),
+`tests/unit/test_health_endpoints.py` (requires_postgres guard added),
+`.importlinter` (contract #6), `docs/architecture/ARCHITECTURE.md`,
+`docs/architecture/DOMAIN_BOUNDARIES.md`,
+`docs/architecture/ARCHITECTURE_DECISIONS.md` (decisions #38-#40),
+`infrastructure/persistence/README.md`,
+`application/config_schema/README.md`, `README.md`, this file.
+
+## Deferred Items
+
+Instrument master persistence (no consumer yet); market data, signal,
+order, position, trade persistence (no producing engine yet); repository
+caching; concurrency beyond `transaction.atomic()` (no demonstrated
+contention); `application/contracts` API exposure of persisted
+configuration (identified as future work, not built); frontend
+consumption. Docker remains deferred. `app.bat` remains deferred — gate
+not yet triggered.
+
+## Git Status
+
+Committed locally to `main`. **Not pushed.**
+
+## Next Checkpoint
+
+Recommend **Business API — Application Contracts**: expose the now-
+persisted risk/universe/strategy-version configuration (read + versioned-
+activate) through `application/contracts` (DRF + OpenAPI), which would
+satisfy the Frontend UX Testing Readiness gate's second criterion and set
+up the third (a real frontend screen) as the natural following checkpoint.

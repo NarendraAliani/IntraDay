@@ -97,3 +97,19 @@ forbidden_modules =
     intraday.trading_engine.execution_management
     intraday.trading_engine.broker_abstraction
     intraday.trading_engine.session_management
+
+; ---------------------------------------------------------------------
+; Contract 6 — application must not depend on infrastructure
+; (Checkpoint 7): repository interfaces live in
+; intraday.application.repositories; infrastructure/persistence
+; IMPLEMENTS them (dependency inversion) — the direction must never
+; reverse, or persistence technology stops being swappable behind the
+; application-layer interface.
+; ---------------------------------------------------------------------
+[importlinter:contract:6]
+name = Application must not depend on infrastructure
+type = forbidden
+source_modules =
+    intraday.application
+forbidden_modules =
+    intraday.infrastructure

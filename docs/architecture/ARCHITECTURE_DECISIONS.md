@@ -149,3 +149,33 @@ contracts. Full detail: [CONFIGURATION_MANAGEMENT.md](CONFIGURATION_MANAGEMENT.m
   no frontend screen exists to configure anything through. The gate
   remains open for a future checkpoint once at least one real API
   endpoint + persistence + a corresponding frontend screen exist together.
+
+## Checkpoint 7 — Persistence Foundation & Repository Architecture (2026-08-12)
+
+Implements `application/repositories` + `infrastructure/persistence` for
+exactly three concepts (risk configuration, universe, strategy version).
+Full detail: [PERSISTENCE_ARCHITECTURE.md](PERSISTENCE_ARCHITECTURE.md).
+
+| # | Decision | Reason | Alternatives Considered | Status |
+|---|---|---|---|---|
+| 38 | Added `application/repositories/` as a new directory under the approved `application/` layer, holding `typing.Protocol` repository interfaces (one per persisted concept), and added `.importlinter` contract #6 ("application must not depend on infrastructure") to mechanically enforce the dependency-inversion direction. | Checkpoint 7 explicitly required repository/application interfaces; `application/gateways` (existing) is described as "orchestration entry points," a different concept from a persistence-abstraction interface — reusing it would conflate two responsibilities. Contract #2 already forbade domain/bounded-contexts from depending on infrastructure but never covered `application` — a real, previously-latent gap this checkpoint's code would otherwise have silently permitted. | Putting repository interfaces inside `application/gateways` (rejected — conflates orchestration with persistence abstraction); putting them in `domain/` (rejected — domain must stay persistence-unaware, Checkpoint 7 §1); skipping a dedicated interface and having application code import Django models directly (rejected — the explicit anti-pattern Checkpoint 7 §2 forbids). | LOCKED |
+| 39 | `settings/testing.py`'s SQLite exception (Checkpoint 4 decision #32) is retired — testing now uses the same PostgreSQL configuration as `settings/base.py`. DB-touching tests are gated by a `requires_postgres` collection-time `skipif` (`tests/postgres_utils.py`) alongside `@pytest.mark.django_db`, so an unreachable PostgreSQL server produces individually-reported skips, not a session-wide failure. Additionally, `DATABASES.OPTIONS.connect_timeout` (default 5s, env-overridable) was added to `settings/base.py` after discovering psycopg has no default connect timeout, which caused `manage.py makemigrations` itself to hang indefinitely against an unreachable host. | Checkpoint 7 explicitly required revisiting the SQLite exception now that real PostgreSQL-specific models exist (NUMERIC precision, JSONB, CHECK constraints) that SQLite cannot faithfully test. A collection-time skipif (not a runtime `pytest.skip()`) is required because pytest-django's session-level test-database creation triggers on the first `django_db`-marked test that actually runs, not merely on marker presence — a body-level skip is too late. The connect-timeout fix is a permanent production-safety improvement (fail fast on an unreachable DB), not merely a workaround for this checkpoint's sandboxed validation. | Keeping SQLite for testing indefinitely (rejected — Checkpoint 7 explicitly forbids this: "do not simply change the test settings back to SQLite to make tests easier"); a runtime `pytest.skip()` inside each test body (rejected — evaluated too late, session-level db setup would already have been attempted and failed hard). | LOCKED |
+| 40 | Persistence scope limited to exactly three concepts (RiskLimits via a new `RiskConfigurationRecord` application-layer wrapper, Universe, StrategyVersion), each as one immutable "version" table + one separately-modeled mutable "active pointer" table. `RiskLimits` itself (locked domain contract) was NOT modified to add identity/version fields — those live only in the new application-layer `RiskConfigurationRecord` wrapper. | Checkpoint 7 explicitly required starting with "the smallest justified persistence scope" and explicitly forbade tables for every domain dataclass. Modifying `RiskLimits` to add identity/version would have expanded a locked, approved domain contract for a persistence-layer need — the wrapper pattern keeps the domain contract exactly as approved at Checkpoint 5 while still meeting Checkpoint 7's requirement that "a historical configuration must remain reconstructable." | Persisting every domain contract "for completeness" (rejected — explicitly forbidden, Checkpoint 7 §4); adding `id`/`version` fields directly to `RiskLimits` (rejected — would silently expand a locked Checkpoint 5 contract for a concern, persistence, that Checkpoint 7 §1 says the domain must remain unaware of). | LOCKED |
+
+## Notes (Checkpoint 7)
+
+- `migrate --plan` and an actual `migrate` require a live PostgreSQL
+  connection and were **not** run successfully in this environment — no
+  PostgreSQL server was available (consistent with every prior checkpoint's
+  finding). `makemigrations` (generation) and `makemigrations --check`
+  (drift detection) do not require a live connection and were both
+  validated successfully. This is reported as a real limitation, not
+  papered over — see taskReport.md's Checkpoint 7 section for exact
+  commands and results.
+- `import-linter` contract count is now 6 (was 5) — the new contract #6 was
+  adversarially verified the same way every prior contract has been: a
+  violation was deliberately injected, confirmed to break the contract,
+  then removed.
+- Frontend UX Testing Readiness gate evaluated again — still **NOT
+  triggered**: persistence now exists, but no business API endpoint and no
+  frontend screen exist yet. `app.bat` was not created. See taskReport.md.

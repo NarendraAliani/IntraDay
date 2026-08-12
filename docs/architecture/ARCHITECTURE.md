@@ -24,10 +24,17 @@ Decimal/UTC-enforcing, broker-neutral Python code — see
 [DOMAIN_CONTRACTS.md](DOMAIN_CONTRACTS.md); Checkpoint 6 implemented the
 configuration-management layer (`application/config_schema`), deriving
 validated config schemas directly from those domain contracts — see
-[CONFIGURATION_MANAGEMENT.md](CONFIGURATION_MANAGEMENT.md). Still no
+[CONFIGURATION_MANAGEMENT.md](CONFIGURATION_MANAGEMENT.md); Checkpoint 7
+implemented the persistence foundation (`application/repositories` Protocol
+interfaces + `infrastructure/persistence` Django ORM implementations) for
+exactly three concepts — risk configuration, universe, strategy version —
+each versioned and immutable with a separately-modeled active pointer, and
+retired Checkpoint 4's temporary SQLite testing exception now that real
+PostgreSQL-specific models exist — see
+[PERSISTENCE_ARCHITECTURE.md](PERSISTENCE_ARCHITECTURE.md). Still no
 strategy, signal, risk-evaluation, order-placement, broker, market-data,
-backtesting, persistence, API, or frontend business logic exists. See
-[ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md) decisions #11–#37 for
+backtesting, API, or frontend business logic exists. See
+[ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md) decisions #11–#39 for
 everything that changed and why.
 
 ## 1. Product Scope

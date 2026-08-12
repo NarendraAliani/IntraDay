@@ -226,6 +226,23 @@ in `domain/`, informed by the lifecycle semantics documented in `data/` (e.g.
 technology is even eligible) — the physical choice is always downstream of,
 never upstream of, the logical category.
 
+## Persistence Boundary (Checkpoint 7)
+
+```
+domain contracts → application/config_schema → application/repositories (Protocol interfaces)
+      → infrastructure/persistence (Django ORM implementations) → PostgreSQL
+```
+
+`application/repositories` is a **new directory** added to the approved
+`application/` layer at Checkpoint 7 (alongside `contracts/`, `gateways/`,
+`config_schema/`) — see
+[ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md) decision #38 for the
+justification. It holds `typing.Protocol` repository interfaces;
+`infrastructure/persistence` implements them. `.importlinter` contract #6
+(new this checkpoint) mechanically enforces that `application` must never
+depend on `infrastructure` — the dependency inversion runs the other way.
+Full detail: [PERSISTENCE_ARCHITECTURE.md](PERSISTENCE_ARCHITECTURE.md).
+
 ## Explicit Non-Dependencies (Guardrails)
 
 - `domain/instrument` and `domain/universe` cannot represent derivatives,

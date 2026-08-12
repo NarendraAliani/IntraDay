@@ -16,12 +16,15 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "")
 
 # ---------------------------------------------------------------------------
-# Installed apps: framework-level only. No app in this list defines any
-# business model. `django.contrib.admin` is included because Checkpoint 3
-# §2 named Django's admin as a primary architectural reason for choosing
-# Django (control-plane/governance/audit review screens) — no models are
-# registered with it yet, so it currently exposes nothing but the
-# framework's own auth/session/contenttype scaffolding.
+# Installed apps: framework-level, plus (as of Checkpoint 7) the single
+# persistence app. `intraday.infrastructure.persistence` holds the ONLY
+# business-adjacent Django models in this codebase — versioned
+# configuration records (RiskConfigurationVersion, UniverseVersion,
+# StrategyVersionRecord) and their active-pointer tables. See
+# docs/architecture/PERSISTENCE_ARCHITECTURE.md. `django.contrib.admin`
+# is included because Checkpoint 3 §2 named Django's admin as a primary
+# architectural reason for choosing Django (control-plane/governance/
+# audit review screens); no admin registrations exist yet.
 # ---------------------------------------------------------------------------
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -33,6 +36,7 @@ INSTALLED_APPS = [
     "rest_framework",
     "drf_spectacular",
     "channels",
+    "intraday.infrastructure.persistence",
 ]
 
 MIDDLEWARE = [
@@ -94,6 +98,12 @@ DATABASES = {
         "HOST": os.environ.get("POSTGRES_HOST", ""),
         "PORT": os.environ.get("POSTGRES_PORT", "5432"),
         "CONN_MAX_AGE": 60,
+        # Fail fast rather than hang indefinitely if PostgreSQL is
+        # unreachable (Checkpoint 7): psycopg has no default connect
+        # timeout, so a firewalled/absent host previously caused any
+        # DB-touching command (including `manage.py makemigrations`'s own
+        # migration-history consistency check) to hang rather than error.
+        "OPTIONS": {"connect_timeout": int(os.environ.get("POSTGRES_CONNECT_TIMEOUT", "5"))},
     }
 }
 

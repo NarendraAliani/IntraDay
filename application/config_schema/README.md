@@ -21,6 +21,12 @@ hand-lists fields), and loaders for `RiskLimits`, `Universe`, and
 `StrategyVersion`. See
 [docs/architecture/CONFIGURATION_MANAGEMENT.md](../../docs/architecture/CONFIGURATION_MANAGEMENT.md).
 
+**Extended at Checkpoint 7:** `records.py` adds `RiskConfigurationRecord`
+— a small application-layer versioning envelope (identity + `Version` +
+`RiskLimits` + timestamp) needed to persist `RiskLimits`, which itself has
+no identity/version (the locked domain contract was not modified). See
+[docs/architecture/PERSISTENCE_ARCHITECTURE.md](../../docs/architecture/PERSISTENCE_ARCHITECTURE.md).
+
 ## Depends On
 
 domain/strategy, domain/risk, domain/universe
