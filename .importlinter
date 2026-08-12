@@ -1,0 +1,97 @@
+; .importlinter
+;
+; Mechanical enforcement of the dependency-direction rules approved at
+; Checkpoints 1-2 (docs/architecture/DOMAIN_BOUNDARIES.md) and locked as
+; the enforcement mechanism at Checkpoint 3 §16 / decision #25. Run via
+; `poetry run lint-imports` (also `make architecture-check`, and required
+; in CI — see .github/workflows/ci.yml).
+;
+; Layout under review: src/intraday/{domain, research, signal_intelligence,
+; trading_engine, control_plane, communication, application, infrastructure}
+
+[importlinter]
+root_package = intraday
+include_external_packages = True
+
+; ---------------------------------------------------------------------
+; Contract 1 — domain is the innermost layer: nothing above it may be
+; imported by domain code.
+; ---------------------------------------------------------------------
+[importlinter:contract:1]
+name = Domain must not depend on bounded contexts, application, or infrastructure
+type = forbidden
+source_modules =
+    intraday.domain
+forbidden_modules =
+    intraday.research
+    intraday.signal_intelligence
+    intraday.trading_engine
+    intraday.control_plane
+    intraday.communication
+    intraday.application
+    intraday.infrastructure
+
+; ---------------------------------------------------------------------
+; Contract 2 — infrastructure implements domain/bounded-context
+; interfaces; nothing may depend back on it (dependency inversion).
+; ---------------------------------------------------------------------
+[importlinter:contract:2]
+name = Domain and bounded contexts must not depend on infrastructure
+type = forbidden
+source_modules =
+    intraday.domain
+    intraday.research
+    intraday.signal_intelligence
+    intraday.trading_engine
+    intraday.control_plane
+    intraday.communication
+forbidden_modules =
+    intraday.infrastructure
+
+; ---------------------------------------------------------------------
+; Contract 3 — overall layering: application orchestrates the bounded
+; contexts, which in turn depend inward on domain.
+; ---------------------------------------------------------------------
+[importlinter:contract:3]
+name = Application -> bounded contexts -> domain layering
+type = layers
+layers =
+    intraday.application
+    intraday.research | intraday.signal_intelligence | intraday.trading_engine | intraday.control_plane | intraday.communication
+    intraday.domain
+
+; ---------------------------------------------------------------------
+; Contract 4 — bounded-context independence, with the ONE approved
+; narrow exception (Checkpoint 2 §4 / Checkpoint 3 §16):
+; research.backtesting -> trading_engine.strategy_execution.
+; ---------------------------------------------------------------------
+[importlinter:contract:4]
+name = Bounded-context independence (narrow backtest/strategy_execution exception only)
+type = independence
+modules =
+    intraday.research
+    intraday.signal_intelligence
+    intraday.trading_engine
+    intraday.control_plane
+    intraday.communication
+ignore_imports =
+    intraday.research.backtesting -> intraday.trading_engine.strategy_execution
+
+; ---------------------------------------------------------------------
+; Contract 5 — the narrow exception is scoped to strategy_execution
+; ONLY, never to trading_engine's execution-path internals. See
+; Checkpoint 4 §17 and
+; tests/unit/architecture/test_narrow_dependency_exception.py for an
+; independent, tool-agnostic re-verification of this same rule.
+; ---------------------------------------------------------------------
+[importlinter:contract:5]
+name = research.backtesting exception is scoped to strategy_execution only
+type = forbidden
+source_modules =
+    intraday.research.backtesting
+forbidden_modules =
+    intraday.trading_engine.risk_engine
+    intraday.trading_engine.order_management
+    intraday.trading_engine.execution_management
+    intraday.trading_engine.broker_abstraction
+    intraday.trading_engine.session_management

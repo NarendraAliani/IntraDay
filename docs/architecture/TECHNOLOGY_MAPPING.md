@@ -174,18 +174,31 @@ using the storage indicated above.
 
 ## 5. Cache and Async Architecture
 
-**Cache: Redis.** Allowed to contain: transient live market-data snapshots
-(latest tick/bar per instrument), Django session state, Django Channels'
-channel layer, distributed locks (e.g. preventing double order submission),
-rate-limiting counters, short-lived computed values (e.g. current-bar feature
-cache), and the Celery broker + result backend.
+**Redis is infrastructure for ephemeral/cache/messaging/coordination
+workloads only — it is never a system of record.** (Terminology corrected
+at Checkpoint 4 §3 to remove any ambiguity in how "cache" was previously
+used as shorthand for several distinct roles.) One Redis instance serves
+seven distinct, individually-scoped roles — distinct in *purpose*, not
+necessarily in physical deployment:
 
-**Must NOT rely exclusively on cache:** orders, positions, trades, risk
-limits, audit records, strategy registry state, experiment records,
-reconciliation results, broker credentials. All of these are durably
-persisted in PostgreSQL; Redis may hold a read-optimized copy but Postgres
-is always authoritative — an empty/flushed Redis must never be able to lose
-trading state.
+| # | Role | Contents | Notes |
+|---|---|---|---|
+| 1 | **Cache** (Django cache framework) | Transient live market-data snapshots (latest tick/bar), short-lived computed values (e.g. current-bar feature cache), Django session state | Read-optimized copies only; source of truth is always PostgreSQL where one exists |
+| 2 | **Django Channels layer** | In-flight WebSocket group-broadcast routing state | Ephemeral by nature of the channel-layer abstraction itself |
+| 3 | **Celery broker** | Pending/in-flight task messages (reconciliation runs, notification dispatch, scheduled jobs) | A crashed/flushed broker loses only *queued, not-yet-executed* work, which is re-triggerable, not authoritative state |
+| 4 | **Celery result backend** | Task result/status for a bounded retention window | Never the durable record of what a task *did* to trading state — that's written to PostgreSQL by the task itself |
+| 5 | **Pub/Sub** | Live tick fan-out to feature engine / WebSocket clients / persistence writer | Fire-and-forget; the persistence writer's PostgreSQL write is what makes the tick durable |
+| 6 | **Distributed locks** | e.g. preventing double order submission during a retry window | Coordination only — the lock's existence never substitutes for the authoritative order-state row in PostgreSQL |
+| 7 | **Rate-limiting counters** | API/broker call throttling counters | Purely operational; resets safely to zero with no data-loss implication |
+
+**PostgreSQL remains authoritative** for: orders, positions, trades, risk
+limits, audit records, configuration, strategy registry, experiment
+metadata, reconciliation state. All of these are durably persisted in
+PostgreSQL; Redis may hold a read-optimized copy (role 1) but Postgres is
+always the source of truth — **an empty or flushed Redis instance must never
+cause loss of authoritative trading state**, only a cold cache, a
+re-triggerable job queue, or a dropped live-data fan-out message (all
+recoverable from PostgreSQL or the next incoming tick).
 
 **Async / background processing: Celery, using Redis as both broker and
 result backend** (reuses the Redis already required for cache — no new
