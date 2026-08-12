@@ -2021,3 +2021,399 @@ authorization work explicitly deferred since Checkpoint 3 — now that a
 real state-changing endpoint exists and is reachable from a UI, it is
 the natural next checkpoint's priority ahead of any further
 business-logic feature work.
+
+# Checkpoint 11 — Authentication, Authorization & Control-Plane Access Boundary (2026-08-12)
+
+## Objective
+
+Replace the deliberately-open configuration API/UI with a real,
+backend-enforced authentication and authorization boundary: Django
+session authentication, Group-based authorization
+(`configuration.read` for any authenticated user,
+`configuration.activate` for `configuration-operators` Group members or
+superusers), a login/logout/current-user API, and a frontend login
+screen + authentication context, before any further state-changing
+configuration workflows are added.
+
+## Mechanism Decision
+
+Django session authentication + secure HttpOnly cookies (DRF
+`SessionAuthentication`), not JWT/DRF-token/OAuth2. Full rationale and
+rejected alternatives: `docs/architecture/AUTHENTICATION_AUTHORIZATION.md`
+§1; decision-log entries #44-49 in `ARCHITECTURE_DECISIONS.md`. Summary:
+Django's session framework was already installed (Checkpoint 4);
+HttpOnly cookies resist XSS-based token theft in a way a JWT/localStorage
+token cannot; Django's session store gives real, immediate revocation on
+logout. No cross-service/stateless-token requirement exists to justify
+JWT's added complexity — chosen deliberately against the "trendy"
+default per the checkpoint brief's own instruction.
+
+## Identity & Authorization Model
+
+Django's built-in `auth.User`, unmodified — no custom user model (no
+genuine domain requirement justified one). Authorization via a single
+`configuration-operators` Django `Group` (seeded by a data migration,
+`infrastructure/persistence/migrations/0002_seed_configuration_operators_group.py`)
+plus `is_superuser` — not a bespoke permission table, not Django's
+per-model custom-permission mechanism (no model naturally owns
+"may activate configuration," a capability spanning three resource
+types). `infrastructure/api/permissions.py`'s `user_capabilities()` is
+the single source of truth both the DRF permission class and the
+`/api/v1/auth/session/` response use — the frontend's capability list and
+the backend's actual authorization decision cannot independently drift.
+
+## Backend Changes
+
+- **New**: `infrastructure/api/permissions.py` (`IsConfigurationOperator`,
+  `user_capabilities()`), `infrastructure/api/auth_views.py`
+  (login/logout/session), `infrastructure/api/auth_urls.py`,
+  `application/contracts/auth.py` (`LoginRequestSerializer`,
+  `CurrentUserResponseSerializer`), one data migration seeding the
+  `configuration-operators` Group.
+- **Modified**: `risk_views.py`/`universe_views.py`/`strategy_views.py`
+  gained explicit `permission_classes` (`IsAuthenticated` on every read,
+  `IsAuthenticated` + `IsConfigurationOperator` on every `activate`);
+  `infrastructure/api/errors.py` gained `invalid_credentials()`;
+  `intraday/urls.py` mounted `/api/v1/auth/`; `settings/base.py` added
+  `corsheaders` (new dependency), `REST_FRAMEWORK`'s
+  `DEFAULT_AUTHENTICATION_CLASSES`/`DEFAULT_THROTTLE_RATES`,
+  `SESSION_COOKIE_AGE`, `CORS_ALLOWED_ORIGINS`/`CSRF_TRUSTED_ORIGINS`
+  scaffolding; `settings/development.py` added the Vite dev server to
+  both allowlists; `settings/production.py` reads them from a new
+  `DJANGO_CORS_ALLOWED_ORIGINS` env var (empty/same-origin-only by
+  default); `SPECTACULAR_SETTINGS["VERSION"]` bumped to 0.11.0.
+- **Not changed**: no risk/universe/strategy business logic, no
+  persistence model, no domain contract. `manage.py check` confirms the
+  new settings/migration load correctly.
+
+## Protected API Surface
+
+| Endpoint | Permission |
+|---|---|
+| `/healthz`, `/readyz`, `/version` | Open (unchanged) |
+| `POST /api/v1/auth/login/` | Open (must be, to authenticate) |
+| `POST /api/v1/auth/logout/` | `IsAuthenticated` |
+| `GET /api/v1/auth/session/` | Open (answers "am I logged in" for anyone; also sets the CSRF cookie) |
+| `GET` config endpoints (risk/universe/strategy: list/get/active) | `IsAuthenticated` |
+| `POST .../activate/` (risk/universe/strategy) | `IsAuthenticated` + `IsConfigurationOperator` |
+
+Anonymous requests to `IsAuthenticated` views receive `403` (DRF's own
+documented behavior — `SessionAuthentication` has no HTTP challenge
+scheme to justify a `401`); `401` is reserved for login failures and the
+new session-expiry signal.
+
+## Login / Logout / Current-User
+
+`POST /api/v1/auth/login/` — `authenticate()` + `login()` (session-key
+rotation, Django's session-fixation protection built in); a single
+generic `401 invalid_credentials` for every failure mode (unknown user,
+wrong password, inactive account) — verified identical by test
+(`test_login_unknown_user_returns_identical_response_to_wrong_password`).
+Throttled 5/min via DRF's `ScopedRateThrottle` (cache-backed, no new
+infrastructure). `POST /api/v1/auth/logout/` — `logout()` flushes the
+session store entry server-side, not merely the cookie (verified by
+`test_session_invalidated_after_logout`). `GET /api/v1/auth/session/` —
+always `200`, `{is_authenticated, username, capabilities}`, never `401`
+for an anonymous caller (that would force every consumer to special-case
+"not logged in" as an error); also the mechanism guaranteeing the CSRF
+cookie is set (`django.middleware.csrf.get_token(request)`, Django's own
+documented SPA/AJAX pattern).
+
+## Frontend Changes
+
+- **New**: `common/api/authApi.ts` (typed login/logout/fetchCurrentUser),
+  `common/auth/AuthContext.tsx` (`AuthProvider`/`useAuth` — single React
+  Context, not Redux, matching the existing "no heavy framework"
+  pattern), `features/auth/LoginScreen.tsx` (accessible username/password
+  form, loading/disabled state, safe error rendering), `src/test/testAuth.tsx`
+  (`renderWithAuth()` — fixed, network-free `AuthContext.Provider` for
+  tests).
+- **Modified**: `common/api/client.ts` gained `credentials: "include"` on
+  every request, `X-CSRFToken` header (read from the `csrftoken` cookie)
+  on every `POST`, and `setSessionExpiredHandler` (a single hook that
+  drops the frontend to the anonymous state on any `401` — minimal
+  session-expiry handling, no polling/refresh-token machinery);
+  `common/useConfigQuery.ts` untouched; `app/App.tsx` now routes between
+  `LoginScreen` (anonymous/loading) and the Configuration Viewer +
+  sign-out header (authenticated); `main.tsx` wraps the tree in
+  `AuthProvider`; `RiskConfigurationPanel.tsx`'s Activate control now
+  only renders when `useAuth().state.capabilities` includes
+  `configuration.activate` — a UX convenience, not the security boundary
+  (verified by both the backend's own direct-bypass test and this
+  checkpoint's `App.test.tsx`).
+
+## CSRF Architecture
+
+Django's `CsrfViewMiddleware` remains fully enabled, never
+`@csrf_exempt`. DRF's `SessionAuthentication.enforce_csrf()` performs the
+real check for every session-authenticated state-changing request
+(logout, all three `activate` endpoints) — verified by test
+(`test_csrf_protects_state_changing_requests_once_authenticated`, using
+`Client(enforce_csrf_checks=True)`): an authenticated POST without the
+header is rejected (403), the same request with a valid token succeeds.
+Login itself is not covered by this mechanism (no session user exists
+yet at `authenticate()` time — DRF's own standard behavior) — a known,
+documented, accepted limitation (login-CSRF), not a silently-introduced
+gap; its usual impact doesn't apply to a control plane with no per-user
+content to leak into an attacker's account.
+
+## Session / Cookie Security
+
+`SESSION_COOKIE_HTTPONLY` (Django default, `True`) and
+`SESSION_COOKIE_SAMESITE` (`"Lax"`) unchanged — sufficient since frontend
+and backend are same-site (differ only by port) in every environment
+considered. `SESSION_COOKIE_SECURE`/`CSRF_COOKIE_SECURE` remain `False`
+in development/testing (required for plain-HTTP local dev), `True` in
+production (unchanged from Checkpoint 4). New: `SESSION_COOKIE_AGE = 8
+hours` (not Django's 2-week default) — a deliberate, documented bound for
+a system that can trigger configuration state changes. Session rotation
+on login and store-side invalidation on logout are Django's own built-in
+behavior, both verified by test.
+
+## Password Security
+
+Django's `PBKDF2PasswordHasher` (framework default) — no custom hashing.
+Never logged, never returned in any response
+(`test_login_response_never_contains_password`), never in
+`.env.example`.
+
+## CORS / Development-Origin Configuration
+
+New dependency `django-cors-headers` (chosen over hand-writing CORS
+header logic — security-sensitive, mature library preferred).
+`CORS_ALLOWED_ORIGINS`/`CSRF_TRUSTED_ORIGINS` empty by default
+(`settings/base.py`); `development.py` explicitly lists the Vite dev
+server's two hostname forms; `production.py` reads a single
+`DJANGO_CORS_ALLOWED_ORIGINS` env var into both (empty/same-origin-only
+until a real deployment configures it — no hard-coded frontend URL,
+hosting remains deferred). `CORS_ALLOW_CREDENTIALS = True` is safe here
+specifically because the allowlist is never a wildcard.
+
+## Rate-Limiting Assessment
+
+**Implemented, basic.** DRF's built-in `ScopedRateThrottle` on login
+only, 5/min, cache-backed (reuses the existing per-environment `CACHES`
+backend — Redis in dev/prod, LocMemCache in testing). No new distributed
+rate-limiting infrastructure, per the brief's explicit "do not add an
+elaborate distributed security subsystem unnecessarily."
+
+## Backend Tests
+
+`tests/unit/infrastructure/api/test_auth_api.py` — 16 new tests, all
+`requires_postgres`-gated (real Django auth tables needed), covering the
+full brief-specified matrix: anonymous current-user, successful login,
+invalid password, unknown user (identical response to wrong password),
+logout, session invalidation after logout, current-user after logout,
+anonymous config read rejected, authenticated read user can read,
+authenticated read user cannot activate, operator can activate
+(permission-layer proof), unauthorized activation safe response,
+permission cannot be bypassed by a crafted direct request (spoofed
+headers/body fields), CSRF protection, no password leakage, no internal
+exception leakage. Honestly reported as **skipped** in this sandbox (no
+PostgreSQL) — not claimed as passed; the pre-existing Checkpoint 8
+activation tests remain part of the same honestly-skipped set.
+
+## Frontend Tests
+
+30/30 passing (18 pre-existing + 12 new): `AuthContext.test.tsx` (4 —
+initial load, anonymous state, logout, session-expiry-on-401),
+`LoginScreen.test.tsx` (4 — accessible fields, loading/disabled state,
+safe error, real `LoginRequest` shape submitted), `App.test.tsx` (4 — the
+full end-to-end security path: anonymous sees only the login screen;
+read-only session sees data but no activation control **and** a direct
+API-client call for that session is still rejected exactly as the
+backend's own bypass test proves; operator session sees the activation
+control; login/logout round-trips the UI). Pre-existing
+`RiskConfigurationPanel.test.tsx`/`RiskConfigurationPanel.activation.test.tsx`
+updated to render through the new `renderWithAuth()` helper (required
+once those components started calling `useAuth()`) — no test assertions
+changed, only the render wrapper.
+
+## Contract-Boundary / OpenAPI Validation
+
+`manage.py spectacular --fail-on-warn` ✅ (silent success). `npm run
+generate:api:types` regenerated `api-types.ts` with the three new
+`api_v1_auth_*` operations and `LoginRequest`/`CurrentUserResponse`
+schemas (confirmed present by direct inspection); a second regeneration
+after final formatting produced **zero further diff**, confirming
+determinism. CI's existing drift-detection step
+(`.github/workflows/ci.yml`, Checkpoint 9) requires no changes — it
+already regenerates+diffs the whole file.
+
+## Backend Regression Results
+
+Ruff format ✅ (139 files, 1 auto-formatted this checkpoint) · Ruff lint
+✅ · mypy strict ✅ (90 files) · pytest ✅ **114 passed, 50 skipped, 0
+failed** (up from 34 skipped — the 16 new auth tests, all honestly
+skipped, no regression) · import-linter ✅ **6/6 kept** (111 files, up
+from 106) · `manage.py check` ✅ · `spectacular --fail-on-warn` ✅ ·
+`pip-audit` ✅ (no new findings from `django-cors-headers`, same 6
+tracked/ignored exceptions as every prior checkpoint).
+`makemigrations --check --dry-run` **could not run** — requires a live
+PostgreSQL connection even to compare migration state, the same
+documented sandbox constraint as every prior checkpoint; not claimed as
+passed.
+
+## Frontend Validation Results
+
+`npm run typecheck` ✅ · `npm run build` ✅ (`tsc -b && vite build`, 46
+modules, 158.5 kB JS / 5.8 kB CSS) · `npm run test` ✅ **30 passed, 0
+failed**. No ESLint config exists (checked again, still none).
+
+## npm Audit Status
+
+Unchanged from Checkpoint 10: `esbuild`/`vite` dev-server-only
+advisories, documented, not force-fixed (no new frontend dependency was
+added this checkpoint).
+
+## Trading Safety Validation
+
+No file under `trading_engine/`, `control_plane/kill_switch`,
+`infrastructure/brokers/`, or any `TRADING_MODE`-resolution code was
+touched. `settings/trading_mode.py`'s `resolve_trading_mode()` logic and
+every environment module's call to it are byte-identical to Checkpoint
+10. No broker calls, order placement, or position-management code exists
+anywhere in the codebase to have been affected. Verified by diff review
+of every changed file (all are settings/URL/permission/auth-endpoint/
+frontend-auth files) and by the unchanged pytest pass count outside the
+new auth tests.
+
+## Auditability / Identity Readiness
+
+**Authentication identity: implemented** — every `activate` request that
+reaches a view body now executes under a real, identified `request.user`
+(permission classes already guarantee this). **Activation audit log:
+still deferred** — `ActiveRiskConfiguration.updated_at` records *when*,
+not *who*/*what changed from what*; no append-only log was built (not
+required for authentication to function, explicitly out of this
+checkpoint's scope per the brief). A future audit-log checkpoint can now
+record `request.user` directly with no further identity plumbing needed.
+
+## Security Hardening Review
+
+`DEBUG`/`ALLOWED_HOSTS`/`CSRF_TRUSTED_ORIGINS`/`SESSION_COOKIE_SECURE`/
+`CSRF_COOKIE_SECURE`/`SESSION_COOKIE_HTTPONLY`/
+`SECURE_CONTENT_TYPE_NOSNIFF`/`X_FRAME_OPTIONS`/`SECURE_REFERRER_POLICY`/
+HSTS reviewed per environment — full table in
+`AUTHENTICATION_AUTHORIZATION.md` §14. No production-only setting was
+blindly enabled in development; no development relaxation leaked into
+production. Most individual settings predate this checkpoint
+(Checkpoint 4) — this checkpoint adds the CORS/CSRF-trusted-origin
+allowlists and `SESSION_COOKIE_AGE`, and compiles the full picture into
+one current, security-focused reference table.
+
+## Known Limitations
+
+No login-CSRF protection (documented, accepted for this threat model);
+no activation audit log (deferred); no account lockout beyond the
+per-endpoint rate limit; no password-reset flow (explicitly out of
+brief's scope); no MFA. Full list:
+`AUTHENTICATION_AUTHORIZATION.md` §15.
+
+## Security Readiness Matrix
+
+| Security Area | Status |
+|---|---|
+| Authentication | YES |
+| Authorization | YES |
+| CSRF | YES (state-changing authenticated requests); login itself N/A per §CSRF above |
+| Session Security | YES |
+| Password Security | YES |
+| API Protection | YES |
+| UI Protection | YES (cosmetic layer only — backend is authoritative) |
+| Brute-force Protection | YES (basic, single-endpoint rate limit) |
+| Audit Identity | YES (identity available; audit log itself deferred) |
+| Production Security | NOT READY (see Known Limitations) |
+
+## Documentation Updated
+
+New: `docs/architecture/AUTHENTICATION_AUTHORIZATION.md` (full mechanism,
+CSRF, session security, hardening table, known limitations).
+Updated: `docs/api/CONFIGURATION_API.md` (§3 rewritten, §8 status codes,
+§11 security notes), `docs/api/FRONTEND_API_CONSUMPTION.md` (auth
+section, testing section), `frontend/README.md` (directory layout,
+Checkpoint 11 summary), `README.md` (status banner, Start Here link),
+`docs/architecture/ARCHITECTURE_DECISIONS.md` (decisions #44-49 +
+Checkpoint 11 notes), `app.bat` (no auto-admin, manual bootstrap
+instructions), this file.
+
+## Files Created
+
+`src/intraday/infrastructure/api/{permissions,auth_views,auth_urls}.py`,
+`src/intraday/application/contracts/auth.py`,
+`src/intraday/infrastructure/persistence/migrations/0002_seed_configuration_operators_group.py`,
+`tests/unit/infrastructure/api/test_auth_api.py`,
+`frontend/src/common/api/authApi.ts`,
+`frontend/src/common/auth/{AuthContext,AuthContext.test}.tsx`,
+`frontend/src/features/auth/{LoginScreen,LoginScreen.test}.tsx`,
+`frontend/src/app/App.test.tsx`, `frontend/src/test/testAuth.tsx`,
+`docs/architecture/AUTHENTICATION_AUTHORIZATION.md`.
+
+## Files Modified
+
+`src/intraday/settings/{base,development,production}.py`,
+`src/intraday/urls.py`,
+`src/intraday/infrastructure/api/{risk_views,universe_views,strategy_views,errors}.py`,
+`pyproject.toml`/`poetry.lock` (added `django-cors-headers`),
+`frontend/src/common/api/client.ts`,
+`frontend/src/common/useConfigQuery.ts` (unchanged behavior, confirmed),
+`frontend/src/app/{App,main}.tsx`, `frontend/src/app/styles.css`,
+`frontend/src/features/configuration/RiskConfigurationPanel.tsx`,
+`frontend/src/features/configuration/{RiskConfigurationPanel.test,RiskConfigurationPanel.activation.test}.tsx`
+(render wrapper only), `frontend/shared/generated_contracts/api-types.ts`
+(generated), `app.bat`, `docs/api/CONFIGURATION_API.md`,
+`docs/api/FRONTEND_API_CONSUMPTION.md`, `frontend/README.md`,
+`README.md`, `docs/architecture/ARCHITECTURE_DECISIONS.md`, this file.
+
+## Frontend UX Testing Readiness
+
+Unchanged from Checkpoint 10 (already YES) — this checkpoint protects the
+existing human workflow rather than adding a new one:
+
+| Criterion | Status |
+|---|---|
+| Persistence | ✅ YES |
+| Business API | ✅ YES |
+| Frontend | ✅ YES |
+| Human workflow | ✅ YES |
+| Overall | ✅ YES |
+
+`app.bat` remains present, updated (not recreated) to reflect the new
+authentication requirement and to explicitly avoid creating any default
+credential.
+
+## Git Status
+
+**Investigated per the checkpoint brief's explicit instruction.** `git
+fetch origin` (read-only, no push) showed `origin/main` at commit
+`3ff3416` (Checkpoint 9) — one commit behind local `HEAD` (`561e925`,
+Checkpoint 10) at the start of this checkpoint. This confirms
+`origin/main` was updated to include Checkpoint 9's commit by some
+mechanism outside this session (no `git push` was ever run in the
+Checkpoint 9 or Checkpoint 10 conversations — verified by reviewing this
+session's own command history, which contains no `push`). This is
+reported as an observed fact, not explained further (its cause is outside
+this repository's own history to determine) — the important verification
+is that this checkpoint's own work was committed **locally only**, same
+as every prior checkpoint.
+
+Committed locally to `main` as `Checkpoint 11: authentication and
+authorization boundary`. **Not pushed** (no `git push` run this session
+either).
+
+## Deferred Items
+
+Login-CSRF protection; activation audit log; account lockout beyond
+rate-limiting; password-reset flow; MFA; extending Group-based
+authorization to finer-grained roles if a real need emerges; extending
+the activation UI pattern to Universe/Strategy Version (unchanged from
+Checkpoint 10's deferral — `ConfirmDialog` remains reusable). Docker
+remains deferred.
+
+## Next Checkpoint
+
+Recommend either (a) an append-only activation audit log now that real
+authenticated identity exists on every activation request (closing the
+gap identified at Checkpoint 10 and formally deferred again here), or (b)
+extending the activation workflow to Universe and Strategy Version using
+the now-authenticated, now-reusable `ConfirmDialog` pattern.

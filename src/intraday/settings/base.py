@@ -35,12 +35,22 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "rest_framework",
     "drf_spectacular",
+    "corsheaders",
     "channels",
     "intraday.infrastructure.persistence",
 ]
 
+# `corsheaders` (Checkpoint 11): the Vite dev server (127.0.0.1:5173) and
+# the Django dev server (127.0.0.1:8000) are different origins, so
+# cookie-based session auth needs CORS to let the browser's fetch()
+# actually read the response and attach cookies. CorsMiddleware must sit
+# as early as possible — immediately after SecurityMiddleware, before
+# anything that can short-circuit or generate a response (per
+# django-cors-headers' own placement requirement) — and strictly before
+# CommonMiddleware.
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -48,6 +58,19 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
+
+# ---------------------------------------------------------------------------
+# CORS / CSRF cross-origin allowlist (Checkpoint 11). Empty by default —
+# no cross-origin access is permitted unless an environment module
+# explicitly opts in (development.py adds the Vite dev server origins;
+# production.py reads an explicit env var, never a wildcard). Never use
+# CORS_ALLOW_ALL_ORIGINS=True or "*" with credentials — both are
+# disallowed by browsers for credentialed requests anyway, and doing so
+# would defeat the same-origin protection CORS exists to provide.
+# ---------------------------------------------------------------------------
+CORS_ALLOWED_ORIGINS: list[str] = []
+CORS_ALLOW_CREDENTIALS = True
+CSRF_TRUSTED_ORIGINS: list[str] = []
 
 ROOT_URLCONF = "intraday.urls"
 ASGI_APPLICATION = "intraday.asgi.application"
@@ -146,20 +169,54 @@ REST_FRAMEWORK = {
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     "DEFAULT_RENDERER_CLASSES": ["rest_framework.renderers.JSONRenderer"],
     "COERCE_DECIMAL_TO_STRING": True,
+    # Checkpoint 11: session-cookie auth only — no BasicAuthentication (DRF's
+    # own default), which would invite sending credentials via an
+    # `Authorization` header the browser client never needs and that would
+    # be easy to misuse outside the browser. `DEFAULT_PERMISSION_CLASSES`
+    # is deliberately left at DRF's built-in `AllowAny` default rather than
+    # flipped to deny-by-default here: the existing infrastructure
+    # endpoints (/healthz, /readyz, /version) must stay open for
+    # orchestration probes with no code change, and every view that must
+    # be protected (the configuration API, logout) declares its own
+    # `permission_classes` explicitly instead of relying on a global
+    # default — see infrastructure/api/{risk,universe,strategy}_views.py
+    # and infrastructure/api/auth_views.py.
+    "DEFAULT_AUTHENTICATION_CLASSES": ["rest_framework.authentication.SessionAuthentication"],
+    # Login brute-force protection (Checkpoint 11 §26): DRF's own
+    # cache-backed ScopedRateThrottle, applied only to the login view
+    # (infrastructure/api/auth_views.py) via `throttle_scope = "login"`.
+    # No new dependency or distributed rate-limiting subsystem was added -
+    # this reuses the CACHES backend already configured per environment
+    # (Redis in production/development, LocMemCache in testing).
+    "DEFAULT_THROTTLE_RATES": {"login": "5/min"},
 }
 
 SPECTACULAR_SETTINGS = {
     "TITLE": "IntraDay API",
     "DESCRIPTION": (
         "Application-layer contracts for the IntraDay platform. Infrastructure "
-        "endpoints (/healthz, /readyz, /version) plus the Checkpoint 8 "
+        "endpoints (/healthz, /readyz, /version), the Checkpoint 8 "
         "configuration API (read + version-activate for risk configuration, "
-        "universe, and strategy version) under /api/v1/config/. No trading, "
-        "signal, broker, or market-data business logic exists yet."
+        "universe, and strategy version) under /api/v1/config/, and the "
+        "Checkpoint 11 session-based authentication API under /api/v1/auth/. "
+        "No trading, signal, broker, or market-data business logic exists yet."
     ),
-    "VERSION": "0.8.0",
+    "VERSION": "0.11.0",
     "SERVE_INCLUDE_SCHEMA": False,
 }
+
+# ---------------------------------------------------------------------------
+# Session cookie security (Checkpoint 11). `SESSION_COOKIE_HTTPONLY` (True)
+# and default `SESSION_COOKIE_SAMESITE` ("Lax") are Django's own secure
+# defaults and are left unchanged. `SESSION_COOKIE_SECURE`/
+# `CSRF_COOKIE_SECURE` are NOT set here (would break plain-HTTP local
+# development) - production.py already sets both True (Checkpoint 4).
+# `SESSION_COOKIE_AGE` bounds how long a control-plane session stays valid
+# without requiring the user to re-authenticate; 8 hours (one trading-day
+# shift) is a deliberate, documented choice, not Django's 2-week default,
+# for a system that can trigger configuration state changes.
+# ---------------------------------------------------------------------------
+SESSION_COOKIE_AGE = 60 * 60 * 8
 
 # ---------------------------------------------------------------------------
 # Logging (Checkpoint 3 §11): structlog-based structured JSON logging.

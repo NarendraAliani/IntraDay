@@ -1,24 +1,23 @@
 # IntraDay — Intraday Indian Cash-Equity Algorithmic Trading Platform
 
-> **Status: FIRST HUMAN WORKFLOW — UX GATE SATISFIED (Checkpoint 10).** The
+> **Status: AUTHENTICATION & AUTHORIZATION BOUNDARY (Checkpoint 11).** The
 > project installs and boots (Django, Celery, Channels, React/Vite), and is
 > protected by CI-enforced formatting, linting, strict typing, tests, and
 > mechanical architecture enforcement (import-linter). The first business
 > API exists — read + version-activate endpoints for risk configuration,
 > universe, and strategy version under `/api/v1/config/` — the frontend has
-> a read-only Configuration Viewer, and Checkpoint 10 added the first real,
-> state-changing human workflow: selecting a historical risk-configuration
-> version, confirming, activating it via the existing backend endpoint, and
-> seeing the refreshed active state (see
-> [docs/api/FRONTEND_API_CONSUMPTION.md](docs/api/FRONTEND_API_CONSUMPTION.md)).
+> a read-only Configuration Viewer with a real activation workflow
+> (Checkpoint 10), and **Checkpoint 11 added session-cookie authentication
+> and Group-based authorization**: every configuration-read endpoint now
+> requires an authenticated session, every activation endpoint requires the
+> `configuration-operators` Group (or superuser), and the frontend gained a
+> real login screen and authentication boundary (see
+> [docs/architecture/AUTHENTICATION_AUTHORIZATION.md](docs/architecture/AUTHENTICATION_AUTHORIZATION.md)).
 > No strategies, indicators, signals, risk engine, order management, broker
 > integration, market-data ingestion, backtesting, or live trading have
-> been implemented yet. **No authentication/authorization exists** —
-> this is a development/admin workflow, not a production-secure trading
-> control (see `docs/api/CONFIGURATION_API.md` §3). With all four Frontend
-> UX Testing Readiness Gate criteria now satisfied,
-> [app.bat](app.bat) was created — a development-mode launcher only
-> (no Docker, no secrets, no production hardening).
+> been implemented yet. Several limitations remain (no login-CSRF
+> protection, no activation audit log, no MFA — full list in that document)
+> — **not yet production-ready.**
 
 ## Scope
 
@@ -37,6 +36,7 @@ for market context and research — never as tradable instruments.
 - [docs/architecture/DOMAIN_CONTRACTS.md](docs/architecture/DOMAIN_CONTRACTS.md) — the 14 canonical domain contracts, field by field
 - [docs/architecture/CONFIGURATION_MANAGEMENT.md](docs/architecture/CONFIGURATION_MANAGEMENT.md) — how `config/*.yaml` validates against domain contracts
 - [docs/architecture/PERSISTENCE_ARCHITECTURE.md](docs/architecture/PERSISTENCE_ARCHITECTURE.md) — repository interfaces, Django models, versioning, PostgreSQL strategy
+- [docs/architecture/AUTHENTICATION_AUTHORIZATION.md](docs/architecture/AUTHENTICATION_AUTHORIZATION.md) — session auth, Group-based authorization, CSRF, session security, known limitations
 - [docs/api/CONFIGURATION_API.md](docs/api/CONFIGURATION_API.md) — the first business API: endpoints, contracts, errors, activation semantics
 - [docs/api/FRONTEND_API_CONSUMPTION.md](docs/api/FRONTEND_API_CONSUMPTION.md) — how the frontend consumes it: OpenAPI→TypeScript contract generation, API client, CI drift detection
 - [docs/development/LOCAL_DEVELOPMENT.md](docs/development/LOCAL_DEVELOPMENT.md) — developer commands (install, test, lint, Docker)

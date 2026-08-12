@@ -9,7 +9,8 @@ from __future__ import annotations
 import contextlib
 
 from drf_spectacular.utils import OpenApiResponse, extend_schema
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 
@@ -23,6 +24,7 @@ from intraday.application.services.errors import (
 )
 from intraday.application.services.risk import RiskConfigurationService
 from intraday.infrastructure.api.errors import duplicate_version, invalid_activation, not_found
+from intraday.infrastructure.api.permissions import IsConfigurationOperator
 from intraday.infrastructure.persistence.repositories import DjangoRiskConfigurationRepository
 
 
@@ -50,6 +52,7 @@ def _to_response_dict(record: RiskConfigurationRecord, *, is_active: bool) -> di
 
 @extend_schema(responses={200: RiskConfigurationResponseSerializer(many=True)})
 @api_view(["GET"])
+@permission_classes([IsAuthenticated])
 def list_versions(request: Request, configuration_id: str) -> Response:
     service = _service()
     versions = service.list_versions(configuration_id)
@@ -69,6 +72,7 @@ def list_versions(request: Request, configuration_id: str) -> Response:
     responses={200: RiskConfigurationResponseSerializer, 404: OpenApiResponse(ApiErrorSerializer)}
 )
 @api_view(["GET"])
+@permission_classes([IsAuthenticated])
 def get_active(request: Request, configuration_id: str) -> Response:
     service = _service()
     try:
@@ -82,6 +86,7 @@ def get_active(request: Request, configuration_id: str) -> Response:
     responses={200: RiskConfigurationResponseSerializer, 404: OpenApiResponse(ApiErrorSerializer)}
 )
 @api_view(["GET"])
+@permission_classes([IsAuthenticated])
 def get_version(request: Request, configuration_id: str, version: str) -> Response:
     service = _service()
     try:
@@ -103,6 +108,7 @@ def get_version(request: Request, configuration_id: str, version: str) -> Respon
     },
 )
 @api_view(["POST"])
+@permission_classes([IsAuthenticated, IsConfigurationOperator])
 def activate(request: Request, configuration_id: str, version: str) -> Response:
     service = _service()
     try:

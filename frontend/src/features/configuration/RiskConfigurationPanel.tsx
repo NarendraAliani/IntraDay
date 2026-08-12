@@ -9,10 +9,21 @@
 // never mutates `is_active` locally on success, it re-fetches the real
 // version list from the API (`refetch()`) and lets the fresh response
 // determine what's shown as active.
+//
+// Checkpoint 11: the Activate control is only rendered for a user whose
+// session carries the `configuration.activate` capability
+// (`useAuth().state.capabilities`, sourced from `GET /api/v1/auth/session/`
+// - never a locally-invented flag). This is a UX convenience only, NOT
+// the security boundary: the backend's `IsConfigurationOperator`
+// permission (infrastructure/api/permissions.py) rejects an activation
+// POST from a non-operator regardless of what the UI shows, which is
+// exactly what this file's own tests (and the backend's
+// test_authenticated_read_user_cannot_activate) verify.
 import { useState } from "react";
 
 import { activateRiskConfigurationVersion, listRiskConfigurationVersions } from "../../common/api/configApi";
 import { ApiNetworkError, ApiRequestError } from "../../common/api/client";
+import { useAuth } from "../../common/auth/AuthContext";
 import { ActiveBadge } from "../../common/components/ActiveBadge";
 import { ConfirmDialog } from "../../common/components/ConfirmDialog";
 import { EmptyState } from "../../common/components/EmptyState";
@@ -60,6 +71,9 @@ export function RiskConfigurationPanel(): JSX.Element {
   const [inputValue, setInputValue] = useState("default");
   const { state, refetch } = useConfigQuery(listRiskConfigurationVersions, configurationId);
   const [activation, setActivation] = useState<ActivationState>({ phase: "idle" });
+  const { state: authState } = useAuth();
+  const canActivate =
+    authState.status === "authenticated" && authState.capabilities.includes("configuration.activate");
 
   const activeRecord =
     state.status === "success" ? state.data.find((record) => record.is_active) : undefined;
@@ -142,7 +156,7 @@ export function RiskConfigurationPanel(): JSX.Element {
                 <dt>Max per-trade risk</dt>
                 <dd>{formatAmount(record.limits.max_per_trade_risk)}</dd>
               </dl>
-              {!record.is_active && (
+              {!record.is_active && canActivate && (
                 <button
                   type="button"
                   className="activate-button"

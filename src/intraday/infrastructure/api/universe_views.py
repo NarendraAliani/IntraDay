@@ -7,7 +7,8 @@ from __future__ import annotations
 import contextlib
 
 from drf_spectacular.utils import OpenApiResponse, extend_schema
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 
@@ -21,6 +22,7 @@ from intraday.application.services.errors import (
 )
 from intraday.application.services.universe import UniverseService
 from intraday.infrastructure.api.errors import duplicate_version, invalid_activation, not_found
+from intraday.infrastructure.api.permissions import IsConfigurationOperator
 from intraday.infrastructure.persistence.repositories import DjangoUniverseRepository
 
 
@@ -45,6 +47,7 @@ def _to_response_dict(record: UniverseRecord, *, is_active: bool) -> dict[str, o
 
 @extend_schema(responses={200: UniverseResponseSerializer(many=True)})
 @api_view(["GET"])
+@permission_classes([IsAuthenticated])
 def list_versions(request: Request, universe_id: str) -> Response:
     service = _service()
     versions = service.list_versions(universe_id)
@@ -64,6 +67,7 @@ def list_versions(request: Request, universe_id: str) -> Response:
     responses={200: UniverseResponseSerializer, 404: OpenApiResponse(ApiErrorSerializer)}
 )
 @api_view(["GET"])
+@permission_classes([IsAuthenticated])
 def get_active(request: Request, universe_id: str) -> Response:
     service = _service()
     try:
@@ -78,6 +82,7 @@ def get_active(request: Request, universe_id: str) -> Response:
     responses={200: UniverseResponseSerializer, 404: OpenApiResponse(ApiErrorSerializer)}
 )
 @api_view(["GET"])
+@permission_classes([IsAuthenticated])
 def get_version(request: Request, universe_id: str, version: str) -> Response:
     service = _service()
     try:
@@ -100,6 +105,7 @@ def get_version(request: Request, universe_id: str, version: str) -> Response:
     },
 )
 @api_view(["POST"])
+@permission_classes([IsAuthenticated, IsConfigurationOperator])
 def activate(request: Request, universe_id: str, version: str) -> Response:
     service = _service()
     try:

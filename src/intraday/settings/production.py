@@ -39,3 +39,18 @@ SECURE_HSTS_SECONDS = 31536000
 SECURE_HSTS_INCLUDE_SUBDOMAINS = True
 SECURE_HSTS_PRELOAD = True
 SECURE_CONTENT_TYPE_NOSNIFF = True
+
+# Checkpoint 11: unlike development.py, production does not hard-code a
+# frontend origin (there is no fixed "the production frontend URL" yet -
+# see docs/architecture/TECHNOLOGY_MAPPING.md §22, hosting deferred).
+# Both allowlists are read from a single comma-separated env var so a
+# real deployment can name its actual frontend origin(s) without a code
+# change; left empty (same-origin only) until that's configured. Never a
+# wildcard - see base.py's CORS_ALLOWED_ORIGINS comment.
+_cors_origins = [
+    origin.strip()
+    for origin in os.environ.get("DJANGO_CORS_ALLOWED_ORIGINS", "").split(",")
+    if origin.strip()
+]
+CORS_ALLOWED_ORIGINS = _cors_origins
+CSRF_TRUSTED_ORIGINS = _cors_origins

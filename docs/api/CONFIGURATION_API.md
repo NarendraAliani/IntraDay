@@ -52,26 +52,32 @@ planned until a breaking change is actually needed (Checkpoint 8 §14).
 
 ## 3. Authentication / Authorization
 
-**None implemented this checkpoint — deliberately.** All endpoints are
-currently open (development/infrastructure scope only), consistent with
-Checkpoint 3's decision to keep authentication out of scope until a
-dedicated checkpoint addresses it. **This must not be mistaken for
-"secure enough for production."** The future boundary (Checkpoint 3 §12,
-Checkpoint 2 §11): read endpoints will likely stay broadly accessible to
-authenticated users, while *activation* (a state-changing operation) must
-be gated behind the same operator-role authorization already specified for
-AI-proposal approval — not exposed to an anonymous or read-only role. No
-fake security (e.g. a no-op permission class) was added to give a false
-impression of protection.
+**Implemented as of Checkpoint 11.** Session-cookie authentication
+(Django's built-in session framework, DRF's `SessionAuthentication`) +
+Group-based authorization. Every read endpoint requires
+`IsAuthenticated`; every `activate` endpoint additionally requires
+`IsConfigurationOperator` (membership in the `configuration-operators`
+Group, or `is_superuser`). See
+[../architecture/AUTHENTICATION_AUTHORIZATION.md](../architecture/AUTHENTICATION_AUTHORIZATION.md)
+for the full mechanism decision, rejected alternatives, CSRF model,
+session security, and known limitations — this section only summarizes
+the resulting endpoint-level behavior.
 
-**Checkpoint 10** built the first frontend UI that calls this activation
-endpoint (see `frontend/src/features/configuration/RiskConfigurationPanel.tsx`).
-No login screen or authentication layer was added to the frontend either —
-doing so would only give a false impression of protection when the API
-underneath remains open. The activation UI is explicitly a
-development/admin workflow, not a production-secure trading control; see
-`docs/api/FRONTEND_API_CONSUMPTION.md` and this checkpoint's `taskReport.md`
-section for the full security review.
+**History (Checkpoints 3–10):** authentication was deliberately deferred
+— all endpoints were open (development/infrastructure scope only). That
+was an explicit, documented decision, never mistaken for "secure enough
+for production," and Checkpoint 10's activation UI was built with no
+login screen for exactly that reason (a fake login screen would have
+misrepresented the actual, still-open security posture at the time).
+Checkpoint 11 is the dedicated checkpoint Checkpoint 3 §12 named for
+resolving this.
+
+**Status now:** authentication and authorization are real and
+backend-enforced (verified by test — see
+`tests/unit/infrastructure/api/test_auth_api.py`), but several
+limitations remain (no login-CSRF protection, no activation audit log,
+no MFA/password-reset flow — full list in
+`AUTHENTICATION_AUTHORIZATION.md` §15). **Not yet production-ready.**
 
 ## 4. Endpoints
 
@@ -236,6 +242,15 @@ project convention distinguishes `422` from `400` yet, so it was not
 introduced without one (Checkpoint 8 §9: "do not invent status codes
 merely for theoretical purity").
 
+**Added at Checkpoint 11**: `401` (authentication failure — a bad login
+attempt, or any request whose session is no longer valid) and `403`
+(authenticated but lacking the required capability — including an
+entirely anonymous request against an `IsAuthenticated` view, since DRF's
+`SessionAuthentication` has no HTTP challenge scheme to return a `401`
+challenge for; this is DRF's own standard, documented behavior). See
+[../architecture/AUTHENTICATION_AUTHORIZATION.md](../architecture/AUTHENTICATION_AUTHORIZATION.md)
+§4 for the full endpoint-by-endpoint permission table.
+
 ## 9. Serialization Details
 
 - Decimal → JSON string (never float) — verified by test.
@@ -264,6 +279,11 @@ pipeline and the frontend API client that consumes it.
 
 ## 11. Security Notes
 
+- **Authentication/authorization (Checkpoint 11)**: see
+  [../architecture/AUTHENTICATION_AUTHORIZATION.md](../architecture/AUTHENTICATION_AUTHORIZATION.md)
+  for the full model. Summary: session-cookie auth, `IsAuthenticated` on
+  every read, `IsAuthenticated` + Group-based `IsConfigurationOperator`
+  on every `activate`.
 - No SQL injection surface: every query goes through the Django ORM via
   the repository layer; no raw SQL exists anywhere in this checkpoint.
 - No mass assignment: response bodies are hand-constructed dicts in the

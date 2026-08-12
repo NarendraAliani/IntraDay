@@ -26,7 +26,19 @@ TRADING_MODE = resolve_trading_mode(
     live_broker_credentials_present=False,
 )
 
-# NOTE: no CORS package is configured yet (none added to dependencies at
-# this checkpoint per "avoid unnecessary dependencies", Checkpoint 4 §5).
-# Add django-cors-headers explicitly, with reasoning, when the frontend
-# dev server actually needs cross-origin API access (Checkpoint 14+).
+# Checkpoint 11: the Vite dev server (127.0.0.1:5173 / localhost:5173) is a
+# different origin than the Django dev server (127.0.0.1:8000), so both
+# CORS (to let the browser read cross-origin fetch() responses) and
+# CSRF_TRUSTED_ORIGINS (Django 4+ requires the *referring* origin be
+# explicitly trusted for unsafe-method requests, even same-site) must
+# name it explicitly. Both hostnames are listed because browsers treat
+# "localhost" and "127.0.0.1" as distinct origins even though they
+# resolve to the same host.
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+CSRF_TRUSTED_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]

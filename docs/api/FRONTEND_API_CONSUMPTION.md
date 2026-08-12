@@ -158,6 +158,24 @@ concurrent activation requests safe at the database level; the frontend
 does not attempt any additional client-side locking and always trusts the
 post-activation refetch over any locally-held state.
 
+## Authentication (Checkpoint 11)
+
+`frontend/src/common/auth/AuthContext.tsx` (`AuthProvider`/`useAuth`) is
+the frontend's authentication boundary - see
+[../architecture/AUTHENTICATION_AUTHORIZATION.md](../architecture/AUTHENTICATION_AUTHORIZATION.md)
+for the full mechanism. In short: session-cookie auth via
+`credentials: "include"` on every request (added to `client.ts`'s
+`performRequest`), `X-CSRFToken` read from the `csrftoken` cookie and
+attached to every `POST`, and a `GET /api/v1/auth/session/` call on app
+load to establish the real (backend-confirmed) authentication state - the
+frontend never assumes it is logged in.
+
+`App.tsx` renders `LoginScreen` for an anonymous/loading visitor and the
+Configuration Viewer (with a sign-out control) only once authenticated -
+this is routing for UX, not the security boundary; every protected
+endpoint still enforces its own permission check server-side regardless
+of what the frontend renders.
+
 ## Testing
 
 `frontend/src/common/api/client.test.ts` and
@@ -172,6 +190,20 @@ content, cancel/Escape (no API call), confirm (real `POST` to the real
 path), double-submission protection, success (real refetch + fresh DOM
 state), backend rejection, and network failure — 10 tests, none of which
 mock the component's own logic.
+
+**Checkpoint 11** added `AuthContext.test.tsx` (real `AuthProvider`,
+mocked `fetch`: initial session load, anonymous state, logout, and
+session-expiry-on-401), `LoginScreen.test.tsx` (accessible fields,
+loading/disabled state, safe error rendering, real `LoginRequest` shape
+submitted), and `App.test.tsx` — the full end-to-end security path
+(anonymous sees login only; an authenticated read-only session sees data
+but no activation control, and a direct API-client call still gets
+rejected by the mocked backend exactly as the real backend's own
+permission test proves; an operator session sees the activation control;
+login/logout round-trips the UI between the two). 30/30 frontend tests
+pass. `src/test/testAuth.tsx` provides `renderWithAuth()`, a fixed
+`AuthContext.Provider` value for tests that need `useAuth()` satisfied
+without a real network round-trip.
 
 ## Known issues (dev-tooling only)
 

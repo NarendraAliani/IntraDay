@@ -6,10 +6,11 @@
 // `listRiskConfigurationVersions` API client function -> the real
 // `RiskConfigurationPanel` component. Only `global.fetch` (the network
 // edge) is mocked; nothing in between is a fake/stubbed interface.
-import { render, screen, waitFor } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { RiskConfigurationPanel } from "./RiskConfigurationPanel";
+import { renderWithAuth } from "../../test/testAuth";
 import type { components } from "@shared/generated_contracts/api-types";
 
 type RiskConfigurationResponse = components["schemas"]["RiskConfigurationResponse"];
@@ -32,7 +33,7 @@ describe("RiskConfigurationPanel", () => {
       vi.fn(() => new Promise<Response>(() => {})),
     );
 
-    render(<RiskConfigurationPanel />);
+    renderWithAuth(<RiskConfigurationPanel />);
 
     expect(screen.getByRole("status")).toHaveTextContent(/loading/i);
   });
@@ -67,7 +68,7 @@ describe("RiskConfigurationPanel", () => {
       vi.fn().mockResolvedValue(jsonResponse(body)),
     );
 
-    render(<RiskConfigurationPanel />);
+    renderWithAuth(<RiskConfigurationPanel />);
 
     await waitFor(() => expect(screen.getByText(/default — v1/)).toBeInTheDocument());
     expect(screen.getByText(/default — v2/)).toBeInTheDocument();
@@ -86,7 +87,7 @@ describe("RiskConfigurationPanel", () => {
       ),
     );
 
-    render(<RiskConfigurationPanel />);
+    renderWithAuth(<RiskConfigurationPanel />);
 
     await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
     expect(screen.getByRole("alert")).toHaveTextContent("No risk configuration versions found.");
@@ -95,7 +96,7 @@ describe("RiskConfigurationPanel", () => {
   it("renders an empty state without fabricating sample data", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse([])));
 
-    render(<RiskConfigurationPanel />);
+    renderWithAuth(<RiskConfigurationPanel />);
 
     await waitFor(() =>
       expect(screen.getByText(/No risk configuration versions found for "default"/)).toBeInTheDocument(),

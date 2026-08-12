@@ -9,24 +9,32 @@ Viewer under `src/features/configuration/`, consuming the Checkpoint 8
 business API via generated TypeScript contracts. **Checkpoint 10** added
 the first state-changing human workflow — activating a historical risk
 configuration version, with an explicit confirmation dialog, real backend
-state refresh, and double-submission protection. See
+state refresh, and double-submission protection. **Checkpoint 11** added
+the authentication boundary — a login screen, session-cookie-based
+`AuthProvider`, and per-capability UI gating (the activation control only
+renders for a session with the `configuration.activate` capability;
+enforcement remains backend-side regardless). See
 [../docs/api/FRONTEND_API_CONSUMPTION.md](../docs/api/FRONTEND_API_CONSUMPTION.md)
+and [../docs/architecture/AUTHENTICATION_AUTHORIZATION.md](../docs/architecture/AUTHENTICATION_AUTHORIZATION.md)
 for the full contract-generation pipeline, API client design, activation
-workflow, and dev workflow.
+workflow, authentication model, and dev workflow.
 
-### Directory layout (as of Checkpoint 10)
+### Directory layout (as of Checkpoint 11)
 
-- `src/app/` — application root (`App.tsx`) and global styles.
+- `src/app/` — application root (`App.tsx`, routing between `LoginScreen`
+  and the authenticated application shell) and global styles.
 - `src/common/` — app-local shared code: the API client
-  (`common/api/client.ts`, `common/api/configApi.ts`) and shared UI
-  components (`common/components/`: loading/error/empty states, active
-  badge, and — new in Checkpoint 10 — `ConfirmDialog`, a reusable
-  accessible confirmation dialog for state-changing actions). Deliberately
-  named `common/`, not `shared/`, to avoid confusion with the repo-level
-  `frontend/shared/` (generated contracts, `@shared` alias) below.
+  (`common/api/client.ts`, `common/api/configApi.ts`, `common/api/authApi.ts`),
+  the authentication boundary (`common/auth/AuthContext.tsx`), and shared
+  UI components (`common/components/`: loading/error/empty states, active
+  badge, `ConfirmDialog`). Deliberately named `common/`, not `shared/`, to
+  avoid confusion with the repo-level `frontend/shared/` (generated
+  contracts, `@shared` alias) below.
 - `src/features/configuration/` — the Configuration Viewer screen,
   including the risk-configuration activation workflow.
-- `src/test/` — Vitest setup (`setup.ts`).
+- `src/features/auth/` — `LoginScreen.tsx`.
+- `src/test/` — Vitest setup (`setup.ts`) and `testAuth.tsx` (renders a
+  component tree with a fixed, network-free `AuthContext` value).
 - `shared/` — repo-level, cross-cutting frontend architecture; currently
   only `shared/generated_contracts/` (see its own README). Imported via
   the `@shared/*` path alias.

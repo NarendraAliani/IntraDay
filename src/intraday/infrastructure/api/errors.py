@@ -52,6 +52,18 @@ def duplicate_version(exc: DuplicateVersionError) -> Response:
     )
 
 
+def invalid_credentials() -> Response:
+    """Checkpoint 11: a single generic message for every login failure
+    mode (unknown username, wrong password, inactive account) - never
+    distinguishes them, so a caller cannot use this endpoint to enumerate
+    which usernames exist (Checkpoint 11 §17)."""
+    return _error_response(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        error_code="invalid_credentials",
+        message="Invalid username or password.",
+    )
+
+
 def unexpected(exc: Exception) -> Response:
     """Catch-all for anything not explicitly handled above. Logs the real
     exception server-side (structured, no secrets) and returns a generic,

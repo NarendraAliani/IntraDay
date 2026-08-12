@@ -36,6 +36,92 @@ main {
   padding: 2rem 1.5rem 4rem;
 }
 
+.app-shell__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 1rem;
+  margin-bottom: 0.5rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.app-shell__header button {
+  padding: 0.4rem 0.9rem;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.login-screen {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.login-form {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 2rem;
+  width: 100%;
+  max-width: 360px;
+}
+
+.login-form h1 {
+  margin: 0 0 0.25rem;
+}
+
+.login-form__subtitle {
+  color: var(--color-text-muted);
+  margin-top: 0;
+}
+
+.login-form__field {
+  margin-top: 1rem;
+}
+
+.login-form__field label {
+  display: block;
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+  margin-bottom: 0.25rem;
+}
+
+.login-form__field input {
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  font-size: 0.95rem;
+}
+
+.login-form__error {
+  background: var(--color-error-bg);
+  border: 1px solid var(--color-error-border);
+  padding: 0.5rem 0.75rem;
+  border-radius: 4px;
+  margin-top: 1rem;
+}
+
+.login-form button[type="submit"] {
+  width: 100%;
+  margin-top: 1.25rem;
+  padding: 0.55rem 1rem;
+  border: 1px solid var(--color-active-border);
+  background: var(--color-active-border);
+  color: #fff;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.login-form button[type="submit"]:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .configuration-viewer h1 {
   margin-bottom: 0.25rem;
 }

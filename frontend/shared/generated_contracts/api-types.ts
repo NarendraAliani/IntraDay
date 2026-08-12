@@ -4,6 +4,88 @@
  */
 
 export interface paths {
+    "/api/v1/auth/login/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Authenticates a username/password pair and starts a session.
+         *
+         *     Brute-force protection: throttled to 5 requests/minute per client IP
+         *     (`DEFAULT_THROTTLE_RATES["login"]`, settings/base.py) via DRF's
+         *     cache-backed `ScopedRateThrottle` - see this view's `.cls.throttle_scope`
+         *     assignment below (function-based views can't set a class attribute
+         *     inline).
+         */
+        post: operations["api_v1_auth_login_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/logout/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Ends the current session. Requires an authenticated session (so an
+         *     anonymous POST is rejected by `IsAuthenticated`) and, because the
+         *     caller is session-authenticated, DRF's `SessionAuthentication` enforces
+         *     the CSRF header on this request - see docs/architecture/
+         *     AUTHENTICATION_AUTHORIZATION.md's CSRF section.
+         *
+         *     Django's `logout()` flushes the session store entry itself (not just
+         *     clearing the cookie), so the old session id is invalid server-side
+         *     immediately - a leaked/cached cookie from before logout cannot be
+         *     replayed.
+         */
+        post: operations["api_v1_auth_logout_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/session/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Reports the current authentication state. Deliberately returns
+         *     `200` for anonymous callers too (`is_authenticated: false`), not
+         *     `401` - this endpoint's entire purpose is "let the frontend safely
+         *     ask, with no prior assumption," so treating "not logged in" as a
+         *     request failure would force every caller to special-case it.
+         *
+         *     Also the frontend's mechanism for obtaining a CSRF cookie before its
+         *     first state-changing request: `get_token(request)` guarantees Django's
+         *     CSRF middleware sets the `csrftoken` cookie on this response, per
+         *     Django's own documented pattern for SPA/AJAX clients that never
+         *     render a `{% csrf_token %}` template tag.
+         */
+        get: operations["api_v1_auth_session_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/config/risk/{configuration_id}/": {
         parameters: {
             query?: never;
@@ -276,6 +358,18 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /**
+         * @description Response shape for `GET /api/v1/auth/session/` and the successful
+         *     result of `POST /api/v1/auth/login/`. Never includes a password,
+         *     session key, or any other credential material - only what the
+         *     frontend needs to answer "am I logged in, as whom, and what can I
+         *     do.
+         */
+        CurrentUserResponse: {
+            is_authenticated: boolean;
+            username: string | null;
+            capabilities: string[];
+        };
         HealthzResponse: {
             status: components["schemas"]["HealthzResponseStatusEnum"];
         };
@@ -284,6 +378,15 @@ export interface components {
          * @enum {string}
          */
         HealthzResponseStatusEnum: "alive";
+        /**
+         * @description Request body for `POST /api/v1/auth/login/`. `password` is
+         *     `write_only` purely for schema documentation purposes - the view
+         *     never echoes any request field back in a response body regardless.
+         */
+        LoginRequest: {
+            username: string;
+            password: string;
+        };
         ReadyzResponse: {
             status: components["schemas"]["ReadyzResponseStatusEnum"];
             checks: {
@@ -379,6 +482,77 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    api_v1_auth_login_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoginRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["LoginRequest"];
+                "multipart/form-data": components["schemas"]["LoginRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CurrentUserResponse"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+        };
+    };
+    api_v1_auth_logout_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CurrentUserResponse"];
+                };
+            };
+        };
+    };
+    api_v1_auth_session_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CurrentUserResponse"];
+                };
+            };
+        };
+    };
     api_v1_config_risk_list: {
         parameters: {
             query?: never;

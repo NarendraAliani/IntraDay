@@ -10,11 +10,17 @@ REM server so a human can exercise the Configuration Viewer's risk-
 REM activation workflow locally.
 REM
 REM THIS IS NOT A PRODUCTION LAUNCHER. It contains no Docker, no secrets,
-REM no production configuration, and starts unauthenticated development
-REM servers only (the API itself has no authentication yet — see
-REM docs/api/CONFIGURATION_API.md section 3). Docker deployment remains
-REM explicitly deferred to a future "Production Hardening/Deployment"
-REM checkpoint.
+REM no production configuration, and starts development servers only.
+REM Docker deployment remains explicitly deferred to a future "Production
+REM Hardening/Deployment" checkpoint.
+REM
+REM Checkpoint 11: the API is now authenticated (session-cookie based -
+REM see docs/architecture/AUTHENTICATION_AUTHORIZATION.md). This script
+REM deliberately does NOT create a default user or superuser - doing so
+REM silently would mean a fixed, guessable, hard-coded credential shipped
+REM in source control, defeating the point of adding authentication. If
+REM no user exists yet, create one manually (see the printed instructions
+REM below) after the backend server is running.
 REM
 REM Safe to re-run: it never overwrites an existing .env or
 REM frontend/.env.local, and re-installing already-installed dependencies
@@ -22,7 +28,7 @@ REM is a fast no-op for both Poetry and npm.
 
 echo ============================================================
 echo  IntraDay - DEVELOPMENT MODE launcher (app.bat)
-echo  Not for production use. No Docker. No authentication.
+echo  Not for production use. No Docker.
 echo ============================================================
 echo.
 
@@ -130,9 +136,22 @@ echo.
 echo  Both servers are running in their own windows. Close those
 echo  windows (or Ctrl+C inside them) to stop them.
 echo.
-echo  DEVELOPMENT MODE ONLY - no authentication, no Docker, not
-echo  production-hardened. See docs/api/CONFIGURATION_API.md
-echo  section 3 for the current security status.
+echo  No login user exists until you create one. In the backend
+echo  server window (or a new terminal, after "poetry install"),
+echo  run:
+echo.
+echo    poetry run python manage.py createsuperuser
+echo.
+echo  A superuser can both read and activate configuration. To
+echo  create a read-only user instead, omit --superuser and add
+echo  them to the "configuration-operators" group only if they
+echo  should also be able to activate:
+echo.
+echo    poetry run python manage.py shell -c "from django.contrib.auth.models import User, Group; u = User.objects.create_user('username', password='changeme'); u.groups.add(Group.objects.get(name='configuration-operators'))"
+echo.
+echo  DEVELOPMENT MODE ONLY - no Docker, not production-hardened.
+echo  See docs/architecture/AUTHENTICATION_AUTHORIZATION.md for the
+echo  full security model and its current limitations.
 echo ============================================================
 
 endlocal

@@ -11,11 +11,22 @@
 // Base URL comes from `VITE_API_BASE_URL` (see frontend/.env.example). A
 // safe local-dev default is used when the variable is not set; this is not
 // a secret and is always visible in the built JS bundle.
+//
+// Checkpoint 11: every request now sends `credentials: "include"` so the
+// browser attaches the session cookie set by the backend (see
+// docs/architecture/AUTHENTICATION_AUTHORIZATION.md) even though the Vite
+// dev server and the Django dev server are different origins. POST
+// requests attach the `X-CSRFToken` header read from the `csrftoken`
+// cookie, matching Django's own documented AJAX/SPA CSRF pattern - the
+// backend still enforces this server-side (see auth_views.py), this is
+// only the client-side half of that contract.
 import type { components } from "@shared/generated_contracts/api-types";
 
 export type ApiError = components["schemas"]["ApiError"];
 
 const DEFAULT_DEV_BASE_URL = "http://127.0.0.1:8000";
+const CSRF_COOKIE_NAME = "csrftoken";
+const CSRF_HEADER_NAME = "X-CSRFToken";
 
 function resolveBaseUrl(): string {
   const configured = import.meta.env.VITE_API_BASE_URL;
@@ -23,6 +34,16 @@ function resolveBaseUrl(): string {
     return configured.replace(/\/$/, "");
   }
   return DEFAULT_DEV_BASE_URL;
+}
+
+/** Reads the CSRF token Django's `CsrfViewMiddleware` sets as a
+ * (deliberately non-HttpOnly) cookie, so it can be echoed back as a
+ * request header - the CSRF cookie itself is not a secret an attacker
+ * could use alone (Django's protection relies on the *header* matching
+ * the *cookie*, which a cross-site attacker cannot read or set). */
+function readCsrfToken(): string | null {
+  const match = document.cookie.match(new RegExp(`(?:^|; )${CSRF_COOKIE_NAME}=([^;]*)`));
+  return match ? decodeURIComponent(match[1]) : null;
 }
 
 /**
@@ -64,19 +85,54 @@ function isApiErrorShape(value: unknown): value is ApiError {
   );
 }
 
-async function performRequest(url: string, method: "GET" | "POST"): Promise<Response> {
+async function performRequest(
+  url: string,
+  method: "GET" | "POST",
+  body?: unknown,
+): Promise<Response> {
+  const headers: Record<string, string> = { Accept: "application/json" };
+  let requestBody: string | undefined;
+  if (body !== undefined) {
+    headers["Content-Type"] = "application/json";
+    requestBody = JSON.stringify(body);
+  }
+  if (method === "POST") {
+    const csrfToken = readCsrfToken();
+    if (csrfToken) {
+      headers[CSRF_HEADER_NAME] = csrfToken;
+    }
+  }
+
   try {
     return await fetch(url, {
       method,
-      headers: { Accept: "application/json" },
+      headers,
+      credentials: "include",
+      body: requestBody,
     });
   } catch (cause) {
     throw new ApiNetworkError(cause);
   }
 }
 
+// Checkpoint 11: a single, optional hook the auth boundary can register to
+// learn "the backend just told us this session is no longer valid"
+// (a 401 from any endpoint, e.g. an expired/invalidated session cookie),
+// without every individual API-consuming component needing its own 401
+// handling. Deliberately narrow: no retry/refresh logic, no queuing of
+// in-flight requests - just a single notification hook, registered once
+// by AuthProvider (src/common/auth/AuthContext.tsx).
+let onSessionExpired: (() => void) | null = null;
+
+export function setSessionExpiredHandler(handler: (() => void) | null): void {
+  onSessionExpired = handler;
+}
+
 async function decodeResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
+    if (response.status === 401) {
+      onSessionExpired?.();
+    }
     let parsed: unknown;
     try {
       parsed = await response.json();
@@ -110,12 +166,13 @@ export async function apiGet<T>(path: string): Promise<T> {
 }
 
 /**
- * Perform a POST request with no request body (every current write
- * operation - activation - is a bare state-transition action identified
- * entirely by the URL path, matching the backend's `request=None`
- * `@extend_schema` declarations) and decode the JSON body as `T`.
+ * Perform a POST request and decode the JSON body as `T`. `body` is
+ * optional: activation endpoints send no request body (a bare
+ * state-transition identified entirely by the URL path, matching the
+ * backend's `request=None` `@extend_schema` declarations); the login
+ * endpoint passes its credentials as `body`.
  */
-export async function apiPost<T>(path: string): Promise<T> {
-  const response = await performRequest(`${resolveBaseUrl()}${path}`, "POST");
+export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
+  const response = await performRequest(`${resolveBaseUrl()}${path}`, "POST", body);
   return decodeResponse<T>(response);
 }

@@ -213,3 +213,37 @@ risk configuration, universe, and strategy version, under
 - Frontend UX Testing Readiness gate evaluated again: **Persistence YES,
   Business API YES (new this checkpoint), Frontend NO, Human workflow
   NO — overall gate NO.** `app.bat` was not created. See taskReport.md.
+
+## Checkpoint 11 — Authentication, Authorization & Control-Plane Access Boundary (2026-08-12)
+
+Establishes the first-generation authentication/authorization boundary
+protecting the Checkpoint 8 configuration API and the Checkpoint 9/10
+frontend. Full detail:
+[docs/architecture/AUTHENTICATION_AUTHORIZATION.md](AUTHENTICATION_AUTHORIZATION.md).
+
+| # | Decision | Reason | Alternatives Considered | Status |
+|---|---|---|---|---|
+| 44 | Authentication mechanism: Django session authentication (DRF `SessionAuthentication`) with secure, HttpOnly cookies, not JWT or DRF token auth. | Django's session framework was already installed (Checkpoint 4); HttpOnly cookies are immune to XSS-based token theft (unlike a JWT/token stored where JS can read it); Django's session store gives real, immediate server-side revocation on logout, which a bare JWT cannot provide without a denylist. No cross-service/stateless-token requirement exists yet to justify JWT's added complexity. | JWT (rejected — no demonstrated need for a stateless cross-service token; would require inventing frontend token storage and a refresh/revocation scheme Django sessions already provide); DRF Token auth (rejected — still requires JS-readable token storage, no built-in expiry); OAuth2/SSO (rejected — no external identity provider exists or is planned, explicitly out of scope). | LOCKED |
+| 45 | Authorization model: Django's built-in `Group` mechanism (a single `configuration-operators` group, seeded by data migration) plus `is_superuser`, not a bespoke permission table or Django's per-model custom-permission mechanism. | `configuration.activate` is a capability over an application-layer use case spanning three resource types (risk/universe/strategy) — no single Django model naturally owns it, so Django's per-model `Meta.permissions` mechanism doesn't fit. Groups are the standard, simplest Django mechanism for a capability not tied to one model and require zero new tables (reusing `django.contrib.auth`'s existing Group table). | Per-model custom permissions (rejected — no natural owning model); a new bespoke `Capability`/`Role` model (rejected — reinvents what Django's Group model already provides, no demonstrated need for anything Groups can't express yet). | LOCKED |
+| 46 | No custom Django user model was introduced — `django.contrib.auth.models.User`, unmodified, is the identity model. | No genuine domain requirement (e.g. email-only login, mandatory extra profile fields) exists yet to justify the migration cost and reduced flexibility of swapping Django's user model this late (Django strongly recommends deciding this before the first migration, and `auth.User` already existed since Checkpoint 4). | A custom `AUTH_USER_MODEL` (considered and rejected per the checkpoint brief's explicit instruction to stop and justify before doing this — no such justification exists yet). | LOCKED |
+| 47 | Login/logout/current-user live in `infrastructure/api/auth_views.py`, calling `django.contrib.auth`'s `authenticate()`/`login()`/`logout()` directly — no `application/services` use-case layer, unlike the risk/universe/strategy resources. | Authentication is inherently a framework concern here (Django's session/auth machinery), not a business use case with a repository Protocol to abstract over — there is nothing to swap out via dependency inversion the way a persistence backend is swapped in the configuration resources. Adding a service layer would be indirection with no corresponding architectural benefit. | Routing authentication through an `application/services/auth.py` use-case + repository Protocol, mirroring risk/universe/strategy (rejected — no second "authentication backend" implementation is anticipated or justified; would add ceremony without a real abstraction need). | LOCKED |
+| 48 | Added `django-cors-headers` as a new backend dependency, rather than hand-writing CORS header logic. | CORS is a security-sensitive concern (misconfiguration can silently defeat same-origin protection); a mature, minimal, widely-used library is preferable to hand-rolled header logic for something this easy to get subtly wrong. | Hand-written CORS middleware (rejected — reinvents a solved, security-sensitive problem for no benefit). | LOCKED |
+| 49 | Rate limiting: DRF's built-in, cache-backed `ScopedRateThrottle` on the login endpoint only (5/min), reusing the existing per-environment `CACHES` backend — no new distributed rate-limiting infrastructure. | Bounds brute-force login attempts without new infrastructure, consistent with "do not add an elaborate distributed security subsystem unnecessarily" (checkpoint brief §26). Sufficient for a single-instance/small-deployment control plane; revisit if the platform gains multiple backend instances needing a shared, IP-reputation-aware view. | A dedicated distributed rate-limiting service (rejected — unjustified infrastructure for current scale); no rate limiting at all (rejected — leaves login open to unbounded brute-force attempts). | LOCKED |
+
+## Notes (Checkpoint 11)
+
+- No backend business logic (risk/universe/strategy services, views'
+  response shapes) changed — only `permission_classes` were added to
+  existing views. The OpenAPI schema was regenerated and the generated
+  TypeScript contract was re-diffed; both changed only by the addition of
+  the three new `/api/v1/auth/*` operations, confirmed by direct
+  inspection.
+- `app.bat` was updated (not recreated) to stop implying "no
+  authentication" and to print manual `createsuperuser`/group-assignment
+  instructions instead of silently creating any default user — a fixed,
+  hard-coded credential in a launcher script would defeat the point of
+  adding authentication.
+- Frontend UX Testing Readiness gate: unaffected by this checkpoint
+  (already YES since Checkpoint 10); this checkpoint protects the
+  existing human workflow rather than adding a new one. See
+  taskReport.md's Checkpoint 11 section for the full gate re-evaluation.

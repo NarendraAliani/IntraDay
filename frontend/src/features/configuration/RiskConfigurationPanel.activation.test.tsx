@@ -8,10 +8,11 @@
 // real `RiskConfigurationPanel` component are exercised together - the
 // same real-boundary philosophy established in Checkpoint 9's
 // RiskConfigurationPanel.test.tsx.
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { RiskConfigurationPanel } from "./RiskConfigurationPanel";
+import { renderWithAuth } from "../../test/testAuth";
 import type { components } from "@shared/generated_contracts/api-types";
 
 type RiskConfigurationResponse = components["schemas"]["RiskConfigurationResponse"];
@@ -46,7 +47,7 @@ const AFTER_ACTIVATION_LIST: RiskConfigurationResponse[] = [record("v1", false),
 
 async function renderLoaded(fetchMock: ReturnType<typeof vi.fn>): Promise<void> {
   vi.stubGlobal("fetch", fetchMock);
-  render(<RiskConfigurationPanel />);
+  renderWithAuth(<RiskConfigurationPanel />);
   await waitFor(() => expect(screen.getByText(/default — v1/)).toBeInTheDocument());
 }
 
@@ -236,7 +237,7 @@ describe("RiskConfigurationPanel activation workflow", () => {
   it("shows the empty state with no activation affordance when there are no versions", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse([]));
     vi.stubGlobal("fetch", fetchMock);
-    render(<RiskConfigurationPanel />);
+    renderWithAuth(<RiskConfigurationPanel />);
 
     await waitFor(() =>
       expect(screen.getByText(/No risk configuration versions found for "default"/)).toBeInTheDocument(),
