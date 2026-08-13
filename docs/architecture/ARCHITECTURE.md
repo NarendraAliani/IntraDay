@@ -129,6 +129,15 @@ new abstraction beyond a single local accumulator. See
 [FEATURE_ENGINE_ARCHITECTURE.md](FEATURE_ENGINE_ARCHITECTURE.md#checkpoint-16--exponential-moving-average-recursivestateful-computation)
 for the EMA seed/initialization decision and its rationale.
 
+**Signal generation** (Checkpoint 18): the first real code in
+`signal_intelligence/signal_generation` — a deterministic
+`DirectionalIndication` (BULLISH/BEARISH/NEUTRAL) interpreted from
+SMA/EMA/ATR feature state, deliberately NOT `domain.signal.Signal`
+(which requires a `strategy_id` no strategy exists yet to supply). See
+[SIGNAL_GENERATION_ARCHITECTURE.md](SIGNAL_GENERATION_ARCHITECTURE.md)
+for the full contract, the reasoning behind not yet producing the
+canonical `Signal`, and the feature-alignment/no-look-ahead rules.
+
 ## 3. Layering
 
 ```

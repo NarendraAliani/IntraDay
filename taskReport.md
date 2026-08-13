@@ -4959,3 +4959,208 @@ All conditions for proceeding are genuinely met — recommend Checkpoint
 18: **Signal Generation — technology-neutral contract**, using the
 existing SMA + EMA + ATR as the first feature inputs. Not implemented —
 recommendation only.
+
+# Checkpoint 18 — Signal Generation Contract (2026-08-13)
+
+## Objective
+
+Establish the first real implementation inside
+`signal_intelligence/signal_generation`: a technology-neutral,
+deterministic interpretation of SMA/EMA/ATR feature state into a
+BULLISH/BEARISH/NEUTRAL directional read. Not a trading strategy, order
+system, broker integration, or live trading.
+
+## The Central Architectural Finding
+
+Re-reading `domain/signal/contracts.py` before writing any code revealed
+a real conflict: the existing, Checkpoint-5 `Signal` contract is
+strategy-level (`strategy_id`, `strategy_version`, `theoretical_entry`,
+`theoretical_stop_loss`, `theoretical_targets`) — fields this checkpoint
+has no authority to populate honestly, since no strategy exists yet and
+the brief explicitly forbids inventing stop-loss/target values. This
+bounded context's own Checkpoint-1 README confirms it: "converts
+**strategy output** into canonical Signal objects" — not yet meaningful.
+
+**Resolution**: a new, smaller contract, `DirectionalIndication`
+(`signal_intelligence/signal_generation/contracts.py`), deliberately NOT
+`domain.signal.Signal`. `domain/signal/contracts.py` itself is
+**completely unchanged**. Per the project's own minimum-viable-shared-
+kernel rule, `DirectionalIndication` lives in the bounded context, not
+`domain/`, since no second bounded context has a confirmed need for it
+yet — exactly mirroring why the feature-engine's own definition types
+(SMA/EMA/ATR) live in `feature_engine`, not `domain/feature`.
+
+## What Was Built
+
+- `signal_intelligence/signal_generation/contracts.py`:
+  `SignalDirection` (BULLISH/BEARISH/NEUTRAL enum, deliberately not a
+  boolean flag or the order-facing `Side`), `DirectionalIndication`
+  (frozen dataclass with full provenance - embeds the actual `sma`/
+  `ema`/`atr` `FeatureValue`s, not just references).
+- `signal_intelligence/signal_generation/errors.py`: 6 error types -
+  `MisalignedFeatureInstrumentError`, `MisalignedFeatureTimeframeError`,
+  `MisalignedFeatureTimestampError`, `WrongFeatureTypeError`,
+  `InvalidAtrValueError`, `DuplicateFeatureObservationError`,
+  `OutOfOrderFeatureObservationError`.
+- `signal_intelligence/signal_generation/directional.py`:
+  `generate_directional_indication()` (single, fully-aligned observation
+  → one indication) and `generate_directional_indications()` (series
+  alignment across bars + 3 feature series, skipping incompletely-
+  warmed-up timestamps). Imports ONLY `domain/feature`, `domain/
+  market_data`, `domain/shared_kernel` - never `feature_engine`.
+- `application/services/signal_generation.py`: `SignalGenerationService`
+  - composes `HistoricalMarketDataService` + `FeatureEngineService` +
+  the pure alignment function. No directional-rule math of its own.
+- `tests/unit/architecture/test_signal_generation_boundaries.py`: a
+  dedicated static-scan test (same technique as Checkpoint 4's
+  `test_narrow_dependency_exception.py`) independently re-verifying the
+  "feature engine owns computation, signal generation owns
+  interpretation" boundary by import inspection, not just assertion.
+
+## Signal Semantics
+
+```
+BULLISH  iff  EMA > SMA  AND  price > EMA  AND  ATR is valid
+BEARISH  iff  EMA < SMA  AND  price < EMA  AND  ATR is valid
+NEUTRAL  otherwise
+```
+
+Equality cases fall through to NEUTRAL by construction (`>`/`<` both
+false for equal Decimals) - no special-casing needed or added. `price`
+is the source bar's own `close`.
+
+## ATR's Role
+
+Deliberately structural, not directional, this checkpoint: no threshold
+(e.g. "ATR > 2%") was invented, since no existing architecture decision
+establishes one. ATR must exist, be non-negative
+(`InvalidAtrValueError` otherwise), and be aligned - proving Signal
+Generation can consume a non-close-only, non-directional feature without
+embedding its computation.
+
+## Feature Alignment Rule
+
+All four inputs (price bar, SMA, EMA, ATR) must share the exact same
+instrument/timeframe/timestamp - raises a specific error otherwise,
+never blends "the latest value we happen to have." Explicitly tested
+against the checkpoint brief's own illustrative misaligned example
+(SMA@10:15, EMA@10:16, ATR@10:14, Price@10:16) -
+`test_the_exact_diagram_example_is_rejected_for_timestamp_misalignment`.
+
+## Missing-Feature Policy
+
+Two layers, two deliberate policies: the single-observation function
+requires all three as non-optional (a caller with a genuinely missing
+value cannot call it for that timestamp at all); the series-level
+aligner skips timestamps missing one of SMA/EMA/ATR (the natural,
+expected shape of partial warm-up, not an error).
+
+## No-Look-Ahead
+
+Pure function of its own arguments only - no look-ahead possible by
+construction. Tested explicitly: future-observation-appended/modified
+tests at the series level, plus a Hypothesis property test generalizing
+across arbitrary series.
+
+## Test Matrix (41 new tests, all PASSED - none skipped)
+
+Definition identity (2), bullish (1), bearish (1), neutral incl. all
+brief-specified equality/disagreement/zero-ATR cases (6), ATR validity
+(2), feature-type sanity (2), alignment incl. the exact diagram example
+(5), Decimal precision (1), determinism (1), provenance (1),
+immutability (1), series-level alignment/warm-up-skip/mixed-instrument/
+duplicate/out-of-order (6), no-look-ahead incl. 1 Hypothesis property
+(3), directional-invariant + determinism Hypothesis properties (2),
+domain-contract defense-in-depth (1); application service - bullish/
+bearish generation on accelerating series, determinism, warm-up-never-
+completes, no-Django-static-check (5); architecture boundary (3).
+
+One genuine mathematical finding during test design: a perfectly
+LINEAR price ramp makes SMA(N)/EMA(N) converge to the exact same
+asymptotic value (provable: both are lagged linear predictors with
+identical steady-state lag under linear growth) - producing NEUTRAL, not
+BULLISH. The application-service bullish/bearish test fixtures were
+corrected to use accelerating (non-linear) price movement once this was
+discovered - documented as a real property of the rule, not a bug.
+
+## Architecture Enforcement
+
+`lint-imports`: 6/6 kept, 138 files (up from 132) - no new contract
+needed. New dedicated architecture test independently confirms
+`signal_generation` never imports `feature_engine` or infrastructure,
+and its only `domain.*` imports are `feature`/`market_data`/
+`shared_kernel`.
+
+## Regression
+
+- `ruff format --check` / `ruff check`: clean, 178 files.
+- `mypy --strict`: success, 112 source files.
+- `pytest`: **392 passed, 0 failed, 0 skipped** (up from Checkpoint
+  17.2's 351 - the +41 is entirely new signal-generation/architecture
+  tests; zero regressions, zero new skips).
+- `lint-imports`: 6/6 kept.
+- `manage.py check`: clean. `makemigrations --check --dry-run`: "No
+  changes detected."
+- `manage.py spectacular --fail-on-warn`: success; regenerated schema
+  confirmed to contain zero directional/signal-generation content.
+- `pip-audit`: 8 findings, unchanged from Checkpoints 16/17/17.1/17.2 -
+  no dependency file touched.
+- Frontend: typecheck/build clean, 32/32 tests passing (unchanged -
+  frontend source was not touched this checkpoint, per instruction).
+
+## PostgreSQL / Redis
+
+Both remained available throughout (installed/configured at Checkpoints
+17.1/17.2) - all 392 tests ran for real, none skipped. The core
+signal-generation code itself remains 100% DB-free by design (verified
+by the same static AST-based no-Django test pattern used for
+`FeatureEngineService`).
+
+## Security / Trading Safety
+
+No credentials, API keys, `.env`, or network calls introduced.
+`trading_engine/`, `risk_engine`, `order_management`,
+`position_management`, broker code, `kill_switch`, `TRADING_MODE`,
+`strategy_execution` - confirmed untouched. No order, broker call, or
+live configuration activation. `domain/signal/contracts.py` and
+`domain/strategy/contracts.py` both confirmed unchanged.
+
+## Documentation
+
+New `docs/architecture/SIGNAL_GENERATION_ARCHITECTURE.md` (full
+contract: semantics, ATR's role, alignment rule, identity/versioning,
+provenance, no-look-ahead, missing-feature policy, architecture
+enforcement). `docs/architecture/ARCHITECTURE.md` (one paragraph).
+`docs/architecture/ARCHITECTURE_DECISIONS.md` (decisions #82-#85 +
+Notes). `signal_intelligence/signal_generation/README.md` (updated from
+the Checkpoint-1 placeholder to reflect what's actually implemented and
+what remains deferred). This `taskReport.md` section.
+
+## Versioning
+
+`pyproject.toml`/`SPECTACULAR_SETTINGS["VERSION"]` unchanged - no API
+surface changed. New `DIRECTIONAL_INDICATION_DEFINITION_VERSION`
+("v1") reuses the existing `Version` primitive.
+
+## Deferred
+
+Signal persistence, signal API, frontend signal viewer, additional
+signal-generation rules (e.g. ATR-based volatility gating, RSI/MACD-
+based rules), signal verification/lifecycle, strategy execution
+(needed before `domain.signal.Signal` itself can honestly be produced),
+Dhan/live provider - all deliberately out of scope.
+
+## Recommended Checkpoint 19
+
+Recommend `signal_intelligence/signal_lifecycle` or
+`signal_intelligence/signal_verification` as the next logical step -
+`DirectionalIndication`s now exist as a real output a lifecycle/
+verification layer could track (e.g. "did the market actually move in
+the indicated direction over the next N bars?"), which would also be
+the first genuine second-consumer test of whether `DirectionalIndication`
+should be promoted toward `domain/`. An alternative, lower-priority
+option: a second signal-generation rule (e.g. an ATR-based volatility
+regime classifier) to pressure-test whether the current contract
+generalizes beyond one rule, mirroring how ATR itself pressure-tested
+the Feature Engine at Checkpoint 17. Not implemented - recommendation
+only.

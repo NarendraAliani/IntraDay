@@ -520,3 +520,41 @@ decisions).
 - Versioning: `pyproject.toml` and `SPECTACULAR_SETTINGS["VERSION"]`
   both checked and left unchanged - no new API surface, only a status-
   code correction on existing endpoints and a response-serialization fix.
+
+## Checkpoint 18 — Signal Generation Contract (2026-08-13)
+
+Establishes the first real code in `signal_intelligence/signal_generation`
+- a deterministic interpretation of SMA/EMA/ATR feature state into
+BULLISH/BEARISH/NEUTRAL. Full detail:
+[docs/architecture/SIGNAL_GENERATION_ARCHITECTURE.md](SIGNAL_GENERATION_ARCHITECTURE.md).
+
+| # | Decision | Reason | Alternatives Considered | Status |
+|---|---|---|---|---|
+| 82 | The Checkpoint 18 output is a new `DirectionalIndication` contract (`signal_intelligence/signal_generation/contracts.py`), NOT `domain.signal.Signal`. | `Signal` (Checkpoint 5) requires `strategy_id`/`strategy_version`/`theoretical_entry`/`theoretical_stop_loss`/`theoretical_targets` - fields this checkpoint has no authority to populate honestly (no strategy exists yet; the checkpoint brief explicitly forbids inventing stop-loss/target values). Confirmed by this bounded context's own Checkpoint-1 README, which already named the future responsibility as "converts strategy output into canonical Signal objects" - not yet meaningful. | Reusing `Signal` with fabricated `strategy_id`/price-level placeholders (rejected - dishonest, matches the exact class of placeholder this project has refused at every prior checkpoint); extending `Signal` with optional strategy fields to make it usable without a strategy (rejected - would weaken `Signal`'s own invariants for every other future caller that DOES have a real strategy, to accommodate one that doesn't yet). | LOCKED |
+| 83 | `DirectionalIndication` lives in `signal_intelligence/signal_generation`, not `domain/signal`. | The project's own minimum-viable-shared-kernel rule (Checkpoint 2 §3.1): `domain/` membership requires 2+ bounded contexts needing the identical contract today - only `signal_intelligence/signal_generation` needs this one right now. Exactly mirrors why `SimpleMovingAverageDefinition`/`ExponentialMovingAverageDefinition`/`AverageTrueRangeDefinition` (Checkpoints 15-17) live in `feature_engine`, not `domain/feature`. | Adding it to `domain/signal` speculatively, anticipating a future `signal_verification`/`research.backtesting` consumer (rejected - no confirmed second consumer exists yet; promotion is a natural future step once one does, not a decision to front-load). | LOCKED |
+| 84 | ATR does not participate in the BULLISH/BEARISH comparison itself - only EMA-vs-SMA and price-vs-EMA do. ATR must exist, be non-negative, and be aligned for an indication to be produced at all. | No existing architecture decision establishes an ATR threshold (e.g. "ATR > 2%"), and inventing one would be an arbitrary magic number the checkpoint brief explicitly forbade. Proves Signal Generation can consume a non-directional, non-close-only feature without embedding its computation - the same architectural point Checkpoint 17 proved for the Feature Engine itself. | Inventing a volatility threshold to gate signal validity (rejected - no mathematical/architectural basis given yet); ignoring ATR entirely this checkpoint (rejected - the brief explicitly required demonstrating multi-feature consumption). | LOCKED |
+| 85 | All four inputs (price bar, SMA, EMA, ATR) must share the exact same instrument/timeframe/timestamp - raises a specific `Misaligned*Error` otherwise, never silently blends "the latest value we happen to have" for each. | Mirrors `ensure_chronological()`'s own "reject, never silently paper over" policy (Checkpoint 14 §16); a trading-adjacent system must never form a directional read from a mix of different market states. | Joining on "most recent value at or before timestamp T" (a looser, `asof`-style join) (rejected - the checkpoint brief's own explicit warning against exactly this: "do not silently mix feature observations from different market states"; the exact SMA@10:15/EMA@10:16/ATR@10:14 example given in the brief is a rejected case, not a case to tolerate). | LOCKED |
+
+## Notes (Checkpoint 18)
+
+- `domain/feature/contracts.py`'s `FeatureValue`, `domain/market_data/contracts.py`'s
+  `Bar`, and `domain/signal/contracts.py`'s `Signal` all required ZERO
+  changes - `Signal` remains fully reserved, untouched, for a future
+  strategy-level output.
+- `import-linter` remains 6/6 kept (138 files analyzed, up from 132) -
+  no new contract needed; the existing generic infrastructure-isolation
+  contracts already cover the new package. A dedicated static-scan
+  architecture test (`tests/unit/architecture/test_signal_generation_boundaries.py`)
+  additionally, independently re-verifies that `signal_generation` never
+  imports `feature_engine` or infrastructure - only
+  `application/services/signal_generation.py` composes both.
+- 41 new backend tests (33 core + 5 application-service + 3 architecture)
+  pass genuinely (not skipped) - continuing the 100%-DB-free discipline
+  of every feature-engine checkpoint. Full suite: see regression section
+  of `taskReport.md`'s Checkpoint 18 entry.
+- No API/persistence/frontend surface was added - confirmed via a
+  regenerated, byte-unchanged-in-substance OpenAPI schema.
+- Versioning: `pyproject.toml` and `SPECTACULAR_SETTINGS["VERSION"]`
+  both checked and left unchanged - no API surface changed. A new
+  `DIRECTIONAL_INDICATION_DEFINITION_VERSION` ("v1") was introduced,
+  reusing the existing `Version` primitive - no second versioning system.
