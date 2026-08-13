@@ -15,6 +15,7 @@ from intraday.domain.instrument.contracts import make_instrument_id
 from intraday.domain.market_data.contracts import Bar
 from intraday.domain.shared_kernel.contracts import Exchange, InstrumentId, Timeframe
 from intraday.signal_intelligence.feature_engine.definitions import (
+    AverageTrueRangeDefinition,
     ExponentialMovingAverageDefinition,
     SimpleMovingAverageDefinition,
 )
@@ -57,6 +58,20 @@ class FakeHistoricalMarketDataRepository:
             and bar.timeframe == timeframe
             and start <= bar.timestamp <= end
         )
+
+
+def _flat_bar(price: str, offset_minutes: int) -> Bar:
+    value = Decimal(price)
+    return Bar(
+        instrument_id=RELIANCE,
+        timeframe=Timeframe.FIVE_MINUTE,
+        timestamp=START + timedelta(minutes=5 * offset_minutes),
+        open=value,
+        high=value,
+        low=value,
+        close=value,
+        volume=Decimal("1000"),
+    )
 
 
 def _service(bars: tuple[Bar, ...]) -> FeatureEngineService:
@@ -111,6 +126,35 @@ def test_exponential_moving_average_service_output_is_deterministic() -> None:
     second = service.exponential_moving_average(
         definition, RELIANCE, Timeframe.FIVE_MINUTE, START, END
     )
+
+    assert first == second
+
+
+def test_average_true_range_returns_expected_values_via_the_service() -> None:
+    """Constant-price flat bars -> True Range is 0 for every bar after the
+    first, so ATR is deterministically 0 throughout - a simple,
+    independently reasoned sanity check at the service layer (the full
+    hand-derived Wilder vector is verified in test_atr.py at the
+    calculation layer)."""
+    bars = tuple(_flat_bar("100", i) for i in range(6))
+    service = _service(bars)
+    definition = AverageTrueRangeDefinition(lookback=3)
+
+    values = service.average_true_range(definition, RELIANCE, Timeframe.FIVE_MINUTE, START, END)
+
+    # 6 bars, lookback=3 -> 6 - 3 = 3 ATR values (M - N, one fewer than
+    # SMA/EMA's M - N + 1 shape, per the first-bar policy).
+    assert len(values) == 3
+    assert all(v.value == Decimal("0") for v in values)
+
+
+def test_average_true_range_service_output_is_deterministic() -> None:
+    bars = tuple(_flat_bar(str(100 + i), i) for i in range(5))
+    service = _service(bars)
+    definition = AverageTrueRangeDefinition(lookback=2)
+
+    first = service.average_true_range(definition, RELIANCE, Timeframe.FIVE_MINUTE, START, END)
+    second = service.average_true_range(definition, RELIANCE, Timeframe.FIVE_MINUTE, START, END)
 
     assert first == second
 

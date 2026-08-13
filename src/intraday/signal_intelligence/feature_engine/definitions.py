@@ -19,6 +19,13 @@
 # identical, proven pattern — no registry was introduced even now that a
 # second feature exists, confirming the Checkpoint 15 prediction that this
 # one-off shape scales without a framework.
+#
+# Checkpoint 17 adds `AverageTrueRangeDefinition` — same pattern again, a
+# third confirmation. ATR's `lookback` means the Wilder smoothing period
+# `N`, distinct in meaning from SMA's fixed-window size or EMA's period,
+# but identical in *shape* (a single positive-integer parameter) — no
+# change to the identity pattern was needed to accommodate ATR's very
+# different calculation (OHLC + previous close, not close-only).
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -95,6 +102,32 @@ class ExponentialMovingAverageDefinition:
     @property
     def feature_name(self) -> str:
         return f"ema_{self.lookback}"
+
+    @property
+    def feature_version(self) -> Version:
+        return FEATURE_ENGINE_VERSION
+
+
+@dataclass(frozen=True, slots=True)
+class AverageTrueRangeDefinition:
+    """Identifies one parameterized ATR - `AverageTrueRangeDefinition(14)`
+    is the conventional "ATR(14)", `feature_name` "atr_14". Two
+    definitions with the same `lookback` are equal and produce the same
+    `feature_name` (Checkpoint 17, following Checkpoint 15 §4/Checkpoint
+    16's identical precedent).
+
+    `lookback` here means the Wilder smoothing period `N` - see
+    `signal_intelligence.feature_engine.atr` for the full True Range/
+    seed/recurrence/warm-up documentation."""
+
+    lookback: int
+
+    def __post_init__(self) -> None:
+        _validate_lookback(self.lookback, owner="AverageTrueRangeDefinition")
+
+    @property
+    def feature_name(self) -> str:
+        return f"atr_{self.lookback}"
 
     @property
     def feature_version(self) -> Version:

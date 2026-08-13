@@ -316,3 +316,114 @@ bounded context).
 
 Unchanged from Checkpoint 15's own deferral — none of the three was
 added; no live provider was introduced.
+
+---
+
+## Checkpoint 17 — Average True Range (the first non-close-only feature)
+
+SMA and EMA both consume `Bar.close` only. ATR is the deliberate
+architectural stress test: it needs `Bar.high`, `Bar.low`, `Bar.close`,
+**and** the previous bar's `close` — proving (or disproving) whether the
+Feature Engine's function-signature shape secretly assumed "every
+feature is close-only."
+
+**Result: the existing shape already generalizes.** `compute_*(definition,
+bars) -> tuple[FeatureValue, ...]` needed no change — `bars: tuple[Bar,
+...]` already carries every OHLC field a computation could need; nothing
+about the signature was close-specific. No new domain contract
+(`ATRBar`/`IndicatorBar`/`OHLCBar`) was required — the existing `Bar`
+(Checkpoint 5) was already sufficient.
+
+### True Range
+
+```
+TR_t = max(
+    High_t - Low_t,
+    abs(High_t - Close_(t-1)),
+    abs(Low_t - Close_(t-1)),
+)
+```
+
+### First-bar policy (explicit decision)
+
+The **first bar in any input series produces no True Range** — it has no
+previous close to compare against, and inventing one (e.g. treating the
+first bar's own close as its own "previous close," which would collapse
+the formula to `High_1 - Low_1`) would be a mathematically dishonest
+value presented as a real True Range. `bars[0]` is used **only** to
+supply `Close_(t-1)` for `bars[1]`'s True Range; it never produces a
+TR/ATR value itself. Verified by
+`test_single_bar_produces_no_values_because_it_has_no_previous_close`
+and the gap test (`test_true_range_captures_a_gap_not_just_high_minus_low`),
+which proves True Range is not simply `high - low`.
+
+### ATR convention: Wilder, not EMA-based
+
+Chosen: the canonical **Wilder ATR** —
+
+```
+ATR_N = mean(TR_1 .. TR_N)                       (seed)
+ATR_t = ((ATR_(t-1) * (N - 1)) + TR_t) / N         (t > N)
+```
+
+This is Wilder's own original 1978 formulation and the definition
+universally meant by "ATR" — not this project's own EMA convention
+(`alpha = 2/(N+1)`) applied to True Range instead of close, which is a
+different, less-conventional indicator some libraries also call "ATR."
+No architecture evidence in this codebase suggested otherwise (no ATR
+convention existed before this checkpoint), so the canonical definition
+was used, per the checkpoint brief's own preference. Wilder's smoothing
+weights (`(N-1)/N`, `1/N`) are numerically distinct from this project's
+EMA `alpha` despite the superficial "recursive blend" similarity — the
+two are different indicators, not the same formula reused.
+
+**Deliberately not coupled to EMA's own function** — same precedent as
+Checkpoint 16 decision #73 (EMA not calling SMA): `atr.py` implements
+its own recurrence inline rather than calling
+`compute_exponential_moving_average`, keeping every computation
+self-contained with no dependency edge between sibling calculations.
+
+### Warm-up semantics
+
+`lookback = N` True Range observations are required to seed ATR; since
+TR only exists from the second bar onward, this needs **N + 1 bars
+total** (`bars[0]` supplying only the initial previous close, plus
+`bars[1..N]` producing `TR_1..TR_N`). The seed's timestamp is `bars[N]`'s
+own timestamp. After the seed, one ATR value exists per subsequent bar:
+`M` bars in → `M - N` values out — **one fewer** than SMA/EMA's `M - N +
+1`, because ATR "loses" one bar to the first-bar policy that a close-only
+calculation does not need to lose. This distinction is deliberate, not
+copied mechanically from SMA/EMA, and is tested explicitly
+(`test_warm_up_boundary_is_deterministic`, a Hypothesis property test).
+
+### Decimal precision, no-look-ahead, complexity
+
+Identical guarantees to SMA/EMA: full `Decimal` arithmetic throughout
+(every True Range, the seed mean, every recursive step), no look-ahead
+by construction (proven by explicit future-bar-appended/modified tests
+plus a Hypothesis property), O(n) time / O(1) additional state (one
+running `previous_atr` accumulator).
+
+### Feature identity and versioning
+
+`AverageTrueRangeDefinition(lookback: int)` — the identical one-off
+pattern as `SimpleMovingAverageDefinition`/`ExponentialMovingAverageDefinition`,
+a third confirmation the pattern scales without a registry.
+`feature_name` is `atr_{lookback}` (`"atr_14"` for the conventional
+ATR(14)). Reuses `FEATURE_ENGINE_VERSION` ("v1") unchanged — ATR's
+introduction does not change SMA's or EMA's own semantics.
+
+### Architecture assessment
+
+**SMA (close/fixed-window) + EMA (close/recursive) + ATR (OHLC +
+previous close/recursive) together prove the current Feature Engine
+abstraction is sufficiently general.** No `IndicatorFramework`,
+`FeatureRegistry`, `GenericIndicatorEngine`, or `GenericStateMachine` was
+introduced — three structurally different calculations were
+accommodated by the same `compute_*(definition, bars) ->
+tuple[FeatureValue, ...]` shape and the same one-off definition-dataclass
+pattern, with zero changes to `domain/feature`, `domain/market_data`, or
+the application service's own shape (only new methods, mirroring
+existing ones). This is evidence, not merely intent — the smallest
+justified correction would have been made if any of the three had
+required one, and none did.

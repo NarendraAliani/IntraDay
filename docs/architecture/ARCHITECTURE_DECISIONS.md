@@ -430,3 +430,44 @@ calculation (SMA) to a recursive/stateful one (EMA). Full detail:
   checkpoint. `FEATURE_ENGINE_VERSION` ("v1") was reused as-is for EMA,
   not bumped - EMA's introduction does not change SMA's own computation
   semantics.
+
+## Checkpoint 17 — ATR Feature & Frontend UX Validation (2026-08-13)
+
+Adds Average True Range - the Feature Engine's first non-close-only
+computation, an explicit architectural stress test - and performs the
+project's first human-oriented (not merely automated) validation of the
+existing authentication/control-plane frontend. Full detail:
+[docs/architecture/FEATURE_ENGINE_ARCHITECTURE.md](FEATURE_ENGINE_ARCHITECTURE.md#checkpoint-17--average-true-range-the-first-non-close-only-feature)
+and `taskReport.md`'s Checkpoint 17 section for the UX findings.
+
+| # | Decision | Reason | Alternatives Considered | Status |
+|---|---|---|---|---|
+| 76 | ATR uses the canonical WILDER convention (`ATR_N = mean(TR_1..TR_N)` seed, then `ATR_t = ((ATR_(t-1)*(N-1)) + TR_t)/N`) - not an EMA-based ATR. | Wilder's own 1978 formulation is what "ATR" universally means across charting/quant platforms; no prior architecture decision in this codebase suggested an alternative, and the checkpoint brief explicitly named Wilder as the preferred convention absent contrary evidence. | An EMA-based ATR reusing this project's own `alpha=2/(N+1)` convention applied to True Range (rejected - a different, less-conventional indicator that only some libraries also label "ATR"; would silently redefine what "ATR" means in this codebase without justification). | LOCKED |
+| 77 | The first bar in any input series produces NO True Range/ATR value - it has no previous close. `bars[0]` is used only to supply `Close_(t-1)` for `bars[1]`'s TR. Warm-up requires `N+1` bars total (one more than SMA/EMA's `N`), output count is `M-N` (one fewer than SMA/EMA's `M-N+1`). | Inventing a previous close for the first bar (e.g. using its own close) would produce a mathematically dishonest TR (`High_1-Low_1`, not a real true range) presented as genuine - the checkpoint brief explicitly warned against exactly this. | Treating the first bar's own OHLC range as its "TR" (rejected - explicitly warned against as dishonest); requiring a caller to always supply an extra seed bar out-of-band (rejected - unnecessary complexity, the existing `bars` tuple already naturally provides this via the first-bar policy). | LOCKED |
+| 78 | ATR's recurrence is implemented independently inside `atr.py`, not by calling `compute_exponential_moving_average` despite superficial similarity between Wilder smoothing and EMA smoothing. | Wilder's `(N-1)/N`/`1/N` weights are numerically distinct from EMA's `alpha=2/(N+1)` - conflating them via a shared code path would either produce wrong ATR values or require a parameterized "generic recursive smoother" built speculatively for two data points. Following the exact precedent of decision #73 (EMA not calling SMA): each computation stays self-contained, no dependency edge between sibling calculations. | A shared `_wilder_smooth()`/generic exponential-smoothing helper parameterized by weight (rejected - two non-identical formulas do not yet justify a shared abstraction; the checkpoint brief explicitly warns against a `GenericRecursiveEngine`). | LOCKED |
+| 79 | No new domain contract or Feature Engine abstraction was introduced for ATR - `Bar` (unchanged), `compute_*(definition, bars) -> tuple[FeatureValue, ...]` (unchanged shape), and the one-off definition-dataclass pattern (unchanged) all accommodated ATR's OHLC+previous-close input without modification. | SMA (close/fixed-window) + EMA (close/recursive) + ATR (OHLC+previous-close/recursive) is direct evidence spanning three structurally different calculation shapes that the existing abstraction already generalizes - building a framework now would be solving a problem the evidence shows does not exist. | An `IndicatorFramework`/`FeatureRegistry`/`GenericIndicatorEngine` (rejected - the checkpoint brief's own instruction: only build one if actual evidence from three implementations requires it; it did not). | LOCKED |
+
+## Notes (Checkpoint 17)
+
+- `domain/feature/contracts.py`'s `FeatureValue` and
+  `domain/market_data/contracts.py`'s `Bar` (both Checkpoint 5) again
+  required ZERO changes for ATR - `Bar` already carried `high`/`low`
+  alongside `close`, confirming the domain layer's design absorbed a
+  materially different calculation shape without modification.
+- `import-linter` remains 6/6 kept (130 files analyzed, up from 129) -
+  `atr.py` and the extended `FeatureEngineService` respect the existing
+  layering; no new contract needed; no dependency edge introduced
+  between `atr.py` and `sma.py`/`ema.py`.
+- 42 new backend tests pass genuinely (not skipped) - continuing the
+  same 100%-DB-free discipline as Checkpoints 14-16. Full suite: 261
+  passed, 81 skipped, 0 failed (up from Checkpoint 16's 225 passed).
+- Frontend UX validation (Part B): the first checkpoint to explicitly
+  evaluate "can a real human actually use what has already been built,"
+  not merely re-run automated tests. Full findings, including the
+  concrete blocker encountered, are recorded in `taskReport.md`'s
+  Checkpoint 17 section rather than duplicated here.
+- No API/persistence/Dhan surface was added for ATR - confirmed via a
+  regenerated, byte-unchanged-in-substance OpenAPI schema.
+- Versioning: `pyproject.toml` and `SPECTACULAR_SETTINGS["VERSION"]`
+  both checked and left unchanged - no API surface changed this
+  checkpoint. `FEATURE_ENGINE_VERSION` ("v1") reused as-is for ATR.
