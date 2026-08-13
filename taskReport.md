@@ -3857,3 +3857,178 @@ than a second fixed-window average would be), or (b) beginning
 `signal_intelligence/signal_generation`'s first technology-neutral
 contract now that a real feature exists for a signal to eventually
 reference.
+
+# Checkpoint 16 — EMA Feature & Recursive/Stateful Feature Computation (2026-08-13)
+
+## Objective
+
+Add Exponential Moving Average (EMA) to the Feature Engine, proving the
+architecture established at Checkpoint 15 generalizes from a fixed-window
+calculation (SMA) to a recursive/stateful one. Output remains a feature,
+not a signal.
+
+## What Was Built
+
+- `ExponentialMovingAverageDefinition(lookback: int)` added to
+  `signal_intelligence/feature_engine/definitions.py`, following the
+  identical one-off, single-field dataclass pattern as
+  `SimpleMovingAverageDefinition` (a small shared `_validate_lookback()`
+  helper was extracted to avoid literal duplication, not a base class or
+  registry).
+- `compute_exponential_moving_average()` (new,
+  `signal_intelligence/feature_engine/ema.py`) — pure, `domain`-only
+  dependent, O(n) time / O(1) additional state via a single local
+  `Decimal | None` accumulator.
+- `FeatureEngineService.exponential_moving_average()` added to
+  `application/services/feature_engine.py`, mirroring
+  `simple_moving_average()`'s shape exactly.
+- 40 new tests: `tests/unit/signal_intelligence/feature_engine/test_ema.py`
+  (38) plus 2 new cases in
+  `tests/unit/application/services/test_feature_engine_service.py`.
+
+## The Central Design Decision — EMA Seed
+
+Evaluated Option A (seed = first close) vs. Option B (seed = SMA(N) of
+first N closes) vs. an unnamed Option C. Chose Option B — seed with the
+mean of the first N closes, then apply the recursive relationship for
+every bar after. Full rationale recorded in
+`docs/architecture/FEATURE_ENGINE_ARCHITECTURE.md` and
+`ARCHITECTURE_DECISIONS.md` decision #72: Option B is the standard,
+cross-checkable, widely-reproducible convention and gives EMA the
+identical warm-up length as SMA of the same period; Option A permanently
+biases the entire recursive series toward one noisy observation and
+mislabels a raw close as a "period-N" value at bar 1.
+
+Deliberately not coupled to SMA's own function (decision #73): the seed
+mean is computed locally inside `ema.py` via `sum(...)/lookback` over the
+seed window, never by calling `sma.compute_simple_moving_average`. This
+keeps `sma.py` and `ema.py` independent — no dependency edge between them
+— so a future change to either's internal semantics (e.g. a rounding
+policy) can never silently alter the other.
+
+## Stateful Computation Model
+
+No new abstraction was introduced. `compute_exponential_moving_average`
+keeps the exact `compute_*(definition, bars) -> tuple[FeatureValue, ...]`
+functional shape Checkpoint 15 established for SMA — "state" is a single
+local accumulator scoped to one function call, never a class, global, or
+framework. This directly answers the checkpoint's central question:
+Checkpoint 15's functional style is sufficient for recursive computation
+too; no FeatureStateMachine/IndicatorFramework/GenericRecursiveEngine was
+needed or built.
+
+## Test Vector (independently hand-derived, Checkpoint 16 §17)
+
+Period N=3, alpha = 2/(3+1) = 0.5. Closes: 10, 20, 30, 40, 50. Seed =
+mean(10,20,30) = 20 (at the 3rd bar). EMA_4 = 0.5x40 + 0.5x20 = 30.
+EMA_5 = 0.5x50 + 0.5x30 = 40. Expected series: 20, 30, 40 — derived by
+hand per the documented seed/recurrence rule, not by calling the function
+under test. Reproduced as `test_known_3_period_ema_manually_derived_vector`
+and the service-level equivalent. A second, independent vector (N=4,
+alpha=0.4) is used in `test_alpha_calculation_matches_canonical_formula`.
+
+## No-Look-Ahead
+
+Holds by construction (the accumulator only ever carries forward
+already-computed history) and tested explicitly: future-bar-appended and
+future-bar-modified tests, plus a Hypothesis property test generalizing
+across arbitrary series/lookbacks — identical rigor to Checkpoint 15's
+SMA tests.
+
+## Test Matrix (40 new tests, all PASSED — none skipped, none counted as
+passed while skipped)
+
+Identity (5), calculation incl. hand-derived vectors/alpha/lookback=1/
+lookback=2/recurrence (9), warm-up/seed (5), look-ahead safety (3, incl.
+1 Hypothesis), instrument/timeframe integrity (4), market-data integrity
+reuse (2), determinism (2), mathematical invariants incl. monotonic/
+constant-price/property-based recurrence/warm-up-point (5, incl. 2
+Hypothesis), application-layer service (2 new — the shared AST/no-Django
+test already covers both features since it inspects the whole module).
+
+## Regression
+
+- `ruff format --check`: initially 2 files needed reformatting (the two
+  new/modified test files) — reformatted, then clean, 165 files.
+- `ruff check`: initially 4 findings (3x B905 missing `zip(strict=...)`,
+  1x import-order) — fixed via `--fix` plus one manual line-length fix;
+  final run clean.
+- `mypy --strict`: success, 105 source files.
+- `pytest`: 225 passed, 81 skipped, 0 failed (up from Checkpoint 15's 187
+  passed — the +38 is the new EMA/service test count).
+- `lint-imports`: 6/6 kept, 129 files (up from 128) — `ema.py` and the
+  extended service respect the existing layering; no new contract
+  needed, and no dependency edge was introduced between `sma.py` and
+  `ema.py`.
+- `manage.py check`: no issues.
+- `manage.py spectacular --fail-on-warn`: success; regenerated schema
+  inspected for feature/EMA/SMA content — none found (the only "ema"
+  substring matches are inside the unrelated word "schema").
+- `pip-audit`: 8 findings reported this run (pytest 1, starlette 7,
+  transitive), up from Checkpoint 15's reported 6 — no dependency file
+  was touched this checkpoint (`git diff --stat pyproject.toml
+  poetry.lock` empty), so this is the vulnerability database itself
+  returning more/different advisories on a live query, not a regression
+  introduced by this checkpoint's code. Reported honestly as observed,
+  not suppressed or explained away.
+- Frontend: not touched — no `npm` command was run, no frontend
+  validation performed or invented.
+
+## PostgreSQL
+
+Still unavailable in this sandbox (unchanged, independently re-verified
+via the same skip messages). No DB-dependent code was introduced — EMA
+has zero persistence, identical to SMA. All 81 `requires_postgres`-gated
+tests: honestly skipped, same count as Checkpoint 15 (this checkpoint
+added zero DB-touching tests).
+
+## Trading Safety / Security
+
+`trading_engine/`, `risk_engine`, `order_management`, `position_management`,
+broker code, `kill_switch`, `TRADING_MODE` resolution — confirmed
+untouched. No credentials, API keys, `.env` values, broker secrets, or
+network calls introduced. No signal/strategy/order/risk/backtest/
+persistence/API/frontend/Dhan code exists anywhere in this checkpoint's
+diff.
+
+## Git State
+
+Before this checkpoint's changes: `main` at `ee981b4` (Checkpoint 15),
+4 ahead / 0 behind `origin/main`, clean. `origin/main` re-confirmed
+unchanged from its Checkpoint-11 position — no unexpected remote
+movement observed. Committed locally as Checkpoint 16; not pushed, per
+standing instruction.
+
+## Documentation Updated
+
+`docs/architecture/FEATURE_ENGINE_ARCHITECTURE.md` (new "Checkpoint 16 —
+Exponential Moving Average" section: seed decision, coupling note,
+stateful model, precision, no-look-ahead, timestamp alignment,
+complexity, identity, versioning), `ARCHITECTURE_DECISIONS.md` (decisions
+#72–#75 + Notes), `ARCHITECTURE.md` (one new paragraph). No unrelated
+documentation was modified.
+
+## Versioning
+
+`pyproject.toml` and `SPECTACULAR_SETTINGS["VERSION"]` both checked and
+left unchanged — no API surface changed. `FEATURE_ENGINE_VERSION` ("v1")
+was reused as-is for EMA — not bumped, since EMA's introduction does not
+change SMA's own computation semantics.
+
+## Deferred
+
+RSI/ATR/VWAP/Supertrend/Bollinger Bands and other indicators, feature
+persistence, feature API, frontend indicator viewer, Dhan/live provider
+adapter, signal generation consumer — all deliberately out of scope,
+pending future explicit authorization.
+
+## Recommended Checkpoint 17
+
+Recommend either (a) a third feature specifically chosen to pressure-test
+a different computation shape again (e.g. ATR, which needs both
+high/low/close, not just close — testing whether the "one close-price
+input" assumption embedded in both SMA and EMA's signatures actually
+generalizes), or (b) beginning `signal_intelligence/signal_generation`'s
+first technology-neutral contract now that two real, independently
+verified features exist for a signal to eventually reference. Not
+implemented — recommendation only.

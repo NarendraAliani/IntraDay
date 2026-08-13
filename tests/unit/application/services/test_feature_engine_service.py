@@ -15,6 +15,7 @@ from intraday.domain.instrument.contracts import make_instrument_id
 from intraday.domain.market_data.contracts import Bar
 from intraday.domain.shared_kernel.contracts import Exchange, InstrumentId, Timeframe
 from intraday.signal_intelligence.feature_engine.definitions import (
+    ExponentialMovingAverageDefinition,
     SimpleMovingAverageDefinition,
 )
 
@@ -80,6 +81,36 @@ def test_service_output_is_deterministic() -> None:
 
     first = service.simple_moving_average(definition, RELIANCE, Timeframe.FIVE_MINUTE, START, END)
     second = service.simple_moving_average(definition, RELIANCE, Timeframe.FIVE_MINUTE, START, END)
+
+    assert first == second
+
+
+def test_exponential_moving_average_returns_expected_values_via_the_service() -> None:
+    """Independently hand-derived vector (same one documented in
+    test_ema.py): closes 10,20,30,40,50, period 3, alpha=0.5 ->
+    seed=20, then 30, then 40."""
+    bars = tuple(_bar(c, i) for i, c in enumerate(["10", "20", "30", "40", "50"]))
+    service = _service(bars)
+    definition = ExponentialMovingAverageDefinition(lookback=3)
+
+    values = service.exponential_moving_average(
+        definition, RELIANCE, Timeframe.FIVE_MINUTE, START, END
+    )
+
+    assert [v.value for v in values] == [Decimal("20"), Decimal("30"), Decimal("40")]
+
+
+def test_exponential_moving_average_service_output_is_deterministic() -> None:
+    bars = tuple(_bar(c, i) for i, c in enumerate(["10", "20", "30", "40"]))
+    service = _service(bars)
+    definition = ExponentialMovingAverageDefinition(lookback=2)
+
+    first = service.exponential_moving_average(
+        definition, RELIANCE, Timeframe.FIVE_MINUTE, START, END
+    )
+    second = service.exponential_moving_average(
+        definition, RELIANCE, Timeframe.FIVE_MINUTE, START, END
+    )
 
     assert first == second
 

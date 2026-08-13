@@ -397,3 +397,36 @@ Bollinger Bands features will follow. Full detail:
 - Versioning: `pyproject.toml` (0.8.0) and `SPECTACULAR_SETTINGS["VERSION"]`
   (0.11.0) both checked and left unchanged - no API surface changed this
   checkpoint.
+
+## Checkpoint 16 — EMA Feature & Recursive/Stateful Feature Computation (2026-08-13)
+
+Proves the Feature Engine architecture generalizes from a fixed-window
+calculation (SMA) to a recursive/stateful one (EMA). Full detail:
+[docs/architecture/FEATURE_ENGINE_ARCHITECTURE.md](FEATURE_ENGINE_ARCHITECTURE.md#checkpoint-16--exponential-moving-average-recursivestateful-computation).
+
+| # | Decision | Reason | Alternatives Considered | Status |
+|---|---|---|---|---|
+| 72 | EMA is seeded with `SMA(N)` of the first `N` closes (`EMA_N = mean(close_1..close_N)`), then the standard recursive relationship applies for every bar after the seed. The first `N-1` bars produce no output; the `N`th bar's timestamp carries the seed value. | Gives stable, cross-checkable, widely reproducible results (the standard convention used by the overwhelming majority of charting/quant platforms), aligns naturally with this project's existing SMA foundation, and gives EMA the identical warm-up length as SMA of the same period - satisfying the checkpoint brief's explicit instruction to prefer the convention with these properties. | Seeding with the first close alone, `EMA_1 = close_1` (rejected - permanently biases the entire recursive series toward one noisy observation, and the "first EMA value" at bar 1 isn't meaningfully a period-N value, just a mislabeled raw close). | LOCKED |
+| 73 | The EMA seed (mean of the first `N` closes) is computed LOCALLY inside `ema.py`, not by calling `sma.compute_simple_moving_average`. `sma.py` and `ema.py` have no dependency edge on each other. | Calling the SMA function to derive EMA's seed would couple EMA's internal seed to SMA's own public output type and versioning - a future rounding-policy change to SMA would then silently change EMA's seed too (action-at-a-distance). Keeping the two computations independent, each depending only on `domain/feature`+`domain/market_data`, means a future removal or rewrite of either can never break the other. | Calling `compute_simple_moving_average` internally and discarding the `FeatureValue` wrapper to extract just the numeric mean (rejected - still creates a semantic coupling between two independently-versioned features, and adds an unnecessary intermediate `FeatureValue` construction/discard for a private internal computation). | LOCKED |
+| 74 | No new stateful abstraction (`FeatureStateMachine`/`IndicatorFramework`/`GenericRecursiveEngine`) was introduced. `compute_exponential_moving_average` keeps the identical `compute_*(definition, bars) -> tuple[FeatureValue, ...]` functional shape as SMA; "state" is a single local `Decimal \| None` accumulator scoped to one function call. | The checkpoint's own instruction was "minimum abstraction, maximum correctness" - a single scalar accumulator inside a pure function is sufficient to prove recursive computation works within the existing architecture; building a generic engine for a second data point would be speculative. | A `FeatureCalculator` protocol/class hierarchy generalizing "stateful" vs "stateless" features (rejected - no third calculation exists yet to prove that abstraction's shape is even correct; premature generalization from n=2). | LOCKED |
+| 75 | `ExponentialMovingAverageDefinition(lookback: int)` reuses the exact one-off, single-field dataclass pattern `SimpleMovingAverageDefinition` established at Checkpoint 15 - still no generic `FeatureDefinition` registry. | Confirms the Checkpoint 15 prediction that this pattern scales to a second feature without a framework; `feature_name` follows the identical `"ema_{lookback}"` convention `FeatureValue`'s own Checkpoint 5 docstring already specified as its worked example. | A shared `FeatureDefinition` base class for the now-two definitions (considered, rejected for now - two nearly-identical one-line classes do not yet justify inheritance machinery; a small shared `_validate_lookback()` helper function was extracted instead, the minimum de-duplication that doesn't build a framework). | LOCKED |
+
+## Notes (Checkpoint 16)
+
+- `domain/feature/contracts.py`'s `FeatureValue` (Checkpoint 5) again
+  required ZERO changes for EMA - the same OUTPUT-only contract serves
+  both a fixed-window and a recursive calculation without modification,
+  confirming its design generalizes as intended.
+- `import-linter` remains 6/6 kept - `ema.py` and the extended
+  `FeatureEngineService` respect the existing layering with no new
+  contract needed; no new dependency edge was introduced between
+  `sma.py` and `ema.py` (deliberately, decision #73).
+- All new tests pass genuinely (not skipped) - continuing the same
+  100%-DB-free discipline as Checkpoints 14 and 15.
+- No API/frontend/persistence/Dhan surface was added - confirmed via a
+  regenerated, byte-unchanged-in-substance OpenAPI schema.
+- Versioning: `pyproject.toml` and `SPECTACULAR_SETTINGS["VERSION"]`
+  both checked and left unchanged - no API surface changed this
+  checkpoint. `FEATURE_ENGINE_VERSION` ("v1") was reused as-is for EMA,
+  not bumped - EMA's introduction does not change SMA's own computation
+  semantics.

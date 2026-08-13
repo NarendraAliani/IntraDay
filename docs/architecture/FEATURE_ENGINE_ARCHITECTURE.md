@@ -196,3 +196,123 @@ research) calls it — verified by
 `test_repeated_calculation_produces_identical_decimal_values`. No
 consumer exists yet; the guarantee is proven now so it doesn't need to
 be re-verified once one does.
+
+---
+
+## Checkpoint 16 — Exponential Moving Average (recursive/stateful computation)
+
+Checkpoint 15 proved the Feature Engine architecture for a **fixed-window**
+calculation (SMA). Checkpoint 16 exists specifically to prove it for a
+**recursive/stateful** one — EMA, where each output depends on the
+previous output, not on re-summing a fixed window of raw inputs.
+
+### EMA definition
+
+`EMA_t = alpha * close_t + (1 - alpha) * EMA_(t-1)`, where
+`alpha = 2 / (N + 1)` for period `N` — the canonical formula. Uses
+`Bar.close` only, exactly like SMA.
+
+### Seed / initialization decision — the central design question
+
+**Chosen: seed with `SMA(N)` of the first `N` closes** (`EMA_N =
+mean(close_1..close_N)`), then apply the recursive relationship for every
+bar after the seed.
+
+The two standard alternatives and why the seed choice was made,
+recorded here in full (also in `ARCHITECTURE_DECISIONS.md` #72):
+
+- **Rejected — seed with the first close (`EMA_1 = close_1`)**: makes
+  the entire infinite recursive series permanently sensitive to one
+  comparatively noisy observation; the bias decays but never
+  structurally vanishes. It also produces a "first EMA value" at bar 1
+  that isn't meaningfully a period-`N` value at all — just the raw
+  close under a misleading label.
+- **Chosen — seed with `SMA(N)`**: the convention used by the
+  overwhelming majority of charting platforms and quant libraries,
+  giving stable, cross-checkable, widely reproducible results (the
+  checkpoint brief's own instruction to prefer this). It also aligns
+  naturally with this project's existing SMA foundation (Checkpoint 15)
+  and gives EMA the *identical* warm-up length as SMA of the same
+  period — a caller who already understands SMA's warm-up rule needs no
+  second, different rule for EMA.
+
+**First valid timestamp**: the `N`th bar's own timestamp (the same bar
+whose close completes the seed window) — not the first bar's timestamp.
+**Warm-up behavior**: identical shape to SMA — the first `N - 1` bars
+produce no output at all (not `None`, not a partial average); the `N`th
+bar produces the seed value; every bar after that produces one
+recursively-computed value. `N` bars in → exactly `N - lookback + 1`
+values out, same as SMA.
+
+**Relationship with SMA — deliberately NOT a call dependency.** The seed
+*value* (mean of the first `N` closes) is conceptually identical to what
+`compute_simple_moving_average` would produce for that window, but
+`ema.py` computes it **locally** (`sum(...) / lookback` over the seed
+window) rather than calling `sma.compute_simple_moving_average`. Calling
+it would couple EMA's seed to SMA's own public output type/versioning —
+a future rounding-policy change to SMA would then silently change EMA's
+seed too, an action-at-a-distance bug this checkpoint refuses to
+introduce. `sma.py` and `ema.py` have no dependency edge on each other;
+both depend only on `domain/feature` + `domain/market_data`.
+
+### Stateful computation model
+
+No new abstraction was introduced (no `FeatureStateMachine`, no
+`IndicatorFramework`, no `GenericRecursiveEngine`) — the existing
+`compute_*(definition, bars) -> tuple[FeatureValue, ...]` functional
+shape from Checkpoint 15 was sufficient. The "state" is a single local
+`Decimal | None` accumulator (`previous_ema`) carried across one `for`
+loop inside a single pure function call — O(1) additional state, O(n)
+time, never a global, never persisted between calls. Checkpoint 16
+confirms the Checkpoint 15 functional style generalizes to recursive
+calculations without needing a stateful class or engine.
+
+### Numeric precision
+
+`alpha` is computed as `Decimal(2) / Decimal(N + 1)` — full `Decimal`
+arithmetic throughout (alpha, the seed mean, and every recursive step),
+no `float` conversion anywhere, no explicit rounding.
+
+### No-look-ahead guarantee
+
+Holds by construction (the accumulator only ever carries forward
+already-computed history) and is tested explicitly, exactly like SMA:
+`test_future_bar_does_not_influence_earlier_output`,
+`test_modifying_a_future_bar_does_not_change_earlier_ema_values`, and a
+Hypothesis property (`test_no_output_uses_future_observations`)
+generalizing across arbitrary series/lookbacks.
+
+### Timestamp alignment
+
+Unchanged convention: `FeatureValue.timestamp` equals its source bar's
+own timestamp (the bar's CLOSE time). No second timestamp rule was
+introduced for EMA.
+
+### Complexity
+
+O(n) in the number of input bars, O(1) additional calculation state —
+never a repeated full-window recalculation, never an unnecessary data
+structure (a single scalar accumulator, unlike SMA's fixed-size
+`deque`).
+
+### Feature identity
+
+`ExponentialMovingAverageDefinition(lookback: int)` — the identical
+one-off, single-field pattern as `SimpleMovingAverageDefinition`
+(Checkpoint 15 §4), confirming that pattern scales to a second feature
+without needing a registry. `feature_name` is `ema_{lookback}` (`"ema_5"`,
+`"ema_10"`, ...) — the exact worked example `FeatureValue`'s own
+Checkpoint 5 docstring already gave.
+
+### Feature version
+
+Reuses the existing `FEATURE_ENGINE_VERSION` ("v1") — no second
+versioning system was introduced. It is still the feature-engine
+implementation's own version, unrelated to `pyproject.toml`'s package
+version or the OpenAPI schema version (no API surface exists in this
+bounded context).
+
+### No persistence, no API, no frontend, no Dhan
+
+Unchanged from Checkpoint 15's own deferral — none of the three was
+added; no live provider was introduced.

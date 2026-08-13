@@ -122,6 +122,13 @@ it together with the Checkpoint 14 market-data service. See
 feature identity, warm-up semantics, the no-look-ahead guarantee, and how
 the bounded-context/application layering was reconciled.
 
+**EMA / recursive feature computation** (Checkpoint 16): adds Exponential
+Moving Average, proving the Feature Engine architecture generalizes from
+a fixed-window calculation (SMA) to a recursive/stateful one, without any
+new abstraction beyond a single local accumulator. See
+[FEATURE_ENGINE_ARCHITECTURE.md](FEATURE_ENGINE_ARCHITECTURE.md#checkpoint-16--exponential-moving-average-recursivestateful-computation)
+for the EMA seed/initialization decision and its rationale.
+
 ## 3. Layering
 
 ```

@@ -9,6 +9,12 @@
 # domain layering") - it never bypasses `HistoricalMarketDataService` to
 # reach a concrete repository/fixture/Dhan adapter directly (Checkpoint
 # 15 §15).
+#
+# Checkpoint 16 adds `exponential_moving_average()` following the exact
+# same shape as `simple_moving_average()` - no new abstraction was needed
+# to expose a second, recursively-computed feature through this service;
+# it retrieves bars via `HistoricalMarketDataService` and delegates to
+# `signal_intelligence.feature_engine.ema.compute_exponential_moving_average`.
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -18,8 +24,10 @@ from intraday.application.services.market_data import HistoricalMarketDataServic
 from intraday.domain.feature.contracts import FeatureValue
 from intraday.domain.shared_kernel.contracts import InstrumentId, Timeframe
 from intraday.signal_intelligence.feature_engine.definitions import (
+    ExponentialMovingAverageDefinition,
     SimpleMovingAverageDefinition,
 )
+from intraday.signal_intelligence.feature_engine.ema import compute_exponential_moving_average
 from intraday.signal_intelligence.feature_engine.sma import compute_simple_moving_average
 
 
@@ -45,3 +53,14 @@ class FeatureEngineService:
     ) -> tuple[FeatureValue, ...]:
         bars = self.market_data.get_bars(instrument_id, timeframe, start, end)
         return compute_simple_moving_average(definition, bars)
+
+    def exponential_moving_average(
+        self,
+        definition: ExponentialMovingAverageDefinition,
+        instrument_id: InstrumentId,
+        timeframe: Timeframe,
+        start: datetime,
+        end: datetime,
+    ) -> tuple[FeatureValue, ...]:
+        bars = self.market_data.get_bars(instrument_id, timeframe, start, end)
+        return compute_exponential_moving_average(definition, bars)
