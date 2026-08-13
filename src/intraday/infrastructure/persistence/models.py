@@ -19,7 +19,10 @@
 # a backstop against it ever being bypassed.
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 from django.db import models
+from django.db.models.base import ModelBase
 
 
 class RiskConfigurationVersion(models.Model):
@@ -174,3 +177,126 @@ class ActiveStrategyVersion(models.Model):
 
     class Meta:
         app_label = "persistence"
+
+
+class AuditLogEntry(models.Model):
+    """Durable, append-only control-plane audit record (Checkpoint 12).
+    Scope: risk-configuration activation only — see
+    `control_plane.audit.events` for why the field names are already
+    generic (`resource_type`/`resource_id`) rather than
+    `risk_configuration_id`-specific, without building out
+    universe/strategy auditing this checkpoint.
+
+    Field-by-field:
+
+    - `occurred_at`: UTC, set explicitly by the writer (never
+      `auto_now_add`) so it matches the moment the state change itself
+      was computed, not "whenever the INSERT statement ran" — same
+      convention as `RiskConfigurationVersion.created_at`. Indexed:
+      audit queries are chronological by nature.
+    - `actor_username`: a plain string SNAPSHOT of `User.get_username()`,
+      NOT a ForeignKey to `auth.User`. A ForeignKey would either cascade-
+      delete audit history if the user is later deleted (destroying the
+      historical record an audit trail exists to preserve) or require
+      `on_delete=PROTECT` (blocking user deletion forever, an operational
+      trap). A plain string survives both deletion and username reuse
+      concerns are the same trade-off `git blame` makes with historical
+      author names — acceptable and standard for an append-only log.
+    - `actor_user_id`: the numeric primary key at the time of the
+      action, stored as a plain integer (NOT a ForeignKey, same
+      reasoning as `actor_username`) — lets a query correlate multiple
+      audit rows to "the same account" even across a username change,
+      without creating any cascade/deletion coupling. Nullable is not
+      needed: every write path requires a real authenticated actor (see
+      `DjangoRiskConfigurationRepository.activate()`) — there is no code
+      path that creates a row without one.
+    - `action`: a stable string token, e.g. `"configuration.activate"` —
+      mirrors the `configuration.activate`/`configuration.read`
+      capability vocabulary already established in
+      `infrastructure/api/permissions.py` (Checkpoint 11), not a new,
+      separate naming scheme.
+    - `resource_type`/`resource_id`: which control-plane resource was
+      acted on (`"risk_configuration"`, the configuration id) — generic
+      enough to extend to universe/strategy without a schema change.
+    - `version_identifier`: the version that was the target of the
+      activation request.
+    - `previous_version`: the version that was active immediately before
+      this event (nullable — `None` when there was no prior active
+      version, e.g. the very first activation for a configuration id).
+      Answers "what changed from what," the minimum context needed for
+      the record to be meaningful on its own.
+    - `outcome`: one of `ActivationOutcome`'s three values — never a
+      free-text field, so queries can group/filter reliably.
+    - `request_id`: a UUID4 string minted once per HTTP request in
+      `infrastructure/api/risk_views.py` (no pre-existing
+      request/correlation-id infrastructure was found in this codebase —
+      see docs/architecture/AUDITABILITY.md — a full observability
+      system was judged out of scope for this checkpoint; this is the
+      smallest useful addition, generated inline, not a new middleware).
+
+    Never stored: passwords, session ids, CSRF tokens, cookies, request
+    headers, or the raw request body — see docs/architecture/
+    AUDITABILITY.md's Sensitive Data Policy.
+    """
+
+    occurred_at = models.DateTimeField(db_index=True)
+    actor_username = models.CharField(max_length=150)
+    actor_user_id = models.PositiveIntegerField()
+    action = models.CharField(max_length=100)
+    resource_type = models.CharField(max_length=50)
+    resource_id = models.CharField(max_length=100)
+    version_identifier = models.CharField(max_length=100)
+    previous_version = models.CharField(max_length=100, null=True, blank=True)
+    outcome = models.CharField(
+        max_length=20,
+        choices=[
+            ("activated", "activated"),
+            ("already_active", "already_active"),
+            ("rejected", "rejected"),
+        ],
+    )
+    request_id = models.CharField(max_length=36)
+
+    class Meta:
+        app_label = "persistence"
+        indexes = [
+            models.Index(fields=["resource_type", "resource_id", "occurred_at"]),
+        ]
+
+    def save(
+        self,
+        *,
+        force_insert: bool | tuple[ModelBase, ...] = False,
+        force_update: bool = False,
+        using: str | None = None,
+        update_fields: Iterable[str] | None = None,
+    ) -> None:
+        """Application-level append-only enforcement (Checkpoint 12 §7):
+        a row may only ever be INSERTed, never UPDATEd. `self._state.adding`
+        is Django's own marker for "this instance has not been saved
+        before" — False on any subsequent `.save()` call against an
+        already-persisted row (e.g. `existing_row.outcome = "activated";
+        existing_row.save()`), which this method refuses. True database-
+        level immutability (revoking UPDATE/DELETE at the SQL grant
+        level, or a rejecting trigger) is a stronger guarantee than this
+        and was judged out of scope for this checkpoint — see
+        docs/architecture/AUDITABILITY.md's Append-Only Enforcement
+        section for the explicit limitation."""
+        if not self._state.adding:
+            raise RuntimeError(
+                "AuditLogEntry rows are append-only and cannot be updated after creation."
+            )
+        super().save(
+            force_insert=force_insert,
+            force_update=force_update,
+            using=using,
+            update_fields=update_fields,
+        )
+
+    def delete(
+        self, using: str | None = None, keep_parents: bool = False
+    ) -> tuple[int, dict[str, int]]:
+        """No normal application code path calls this, and it is refused
+        outright — an audit trail with a working delete method is not an
+        audit trail."""
+        raise RuntimeError("AuditLogEntry rows cannot be deleted through the application.")

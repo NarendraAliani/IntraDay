@@ -120,6 +120,19 @@ inventing one now would be exactly the kind of premature endpoint
 proliferation Checkpoint 8 §7 warns against. Add it when a second named
 configuration family actually exists.
 
+### Audit (Checkpoint 12, risk configuration only)
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/v1/audit/risk-configuration/{configuration_id}/` | List every recorded activation attempt for this configuration id, newest first |
+
+Read-only — no write/update/delete audit operation exists. Requires
+`IsAuthenticated` + `IsConfigurationOperator` (the same gate as
+activation itself, not the plain-read `configuration.read` capability).
+Universe/strategy-version activation are not audited yet — see
+[../architecture/AUDITABILITY.md](../architecture/AUDITABILITY.md) for
+the full model and the documented scope boundary.
+
 ## 5. Request / Response Contracts
 
 ### Risk configuration response
@@ -203,7 +216,9 @@ the error body never contains `traceback`, `django.db`, `select `, or
 
 - Activation is **idempotent**: activating an already-active version
   returns the same 200 response as the first call (backed by
-  `update_or_create` on the active-pointer table — Checkpoint 7).
+  `get_or_create`/explicit-update on the active-pointer table —
+  Checkpoint 7, refined at Checkpoint 12 to also distinguish this case
+  in the audit trail as `already_active`, not `activated`).
 - Activation **never mutates historical version rows** — only the
   separate active-pointer table changes (Checkpoint 7 §6).
 - Activating an unknown version returns `404 invalid_activation`, never a
@@ -221,14 +236,16 @@ the error body never contains `traceback`, `django.db`, `select `, or
   activation requests. No additional locking was added because the
   existing design already provides this guarantee; see Checkpoint 10's
   Concurrency Review in `taskReport.md`.
-- **Auditability: partially available.** `ActiveRiskConfiguration.
-  updated_at` (`auto_now=True`) records *when* the active pointer last
-  changed, but there is no append-only log of *who* activated *which*
-  version and *when* each transition happened — only the current state
-  is retrievable, not the activation history. This is a documented gap,
-  not built out in Checkpoint 10 (no existing architecture component
-  requires it yet); a dedicated audit trail is a candidate for a future
-  checkpoint if/when authentication introduces a real "who."
+- **Auditability: implemented as of Checkpoint 12** (risk configuration
+  only). Every activation attempt — successful, no-op, or rejected — is
+  recorded in a durable, append-only `AuditLogEntry` row, in the SAME
+  database transaction as the state change it describes (so a
+  successful activation cannot exist without its audit record — verified
+  by test). See
+  [../architecture/AUDITABILITY.md](../architecture/AUDITABILITY.md) for
+  the full model, and `GET /api/v1/audit/risk-configuration/{id}/` above
+  for the read API. Universe/strategy-version activation remain
+  unaudited (documented scope boundary).
 
 ## 8. HTTP Status Codes Used
 
@@ -279,11 +296,16 @@ pipeline and the frontend API client that consumes it.
 
 ## 11. Security Notes
 
-- **Authentication/authorization (Checkpoint 11)**: see
+- **Authentication/authorization (Checkpoint 11, login-CSRF closed at
+  Checkpoint 12)**: see
   [../architecture/AUTHENTICATION_AUTHORIZATION.md](../architecture/AUTHENTICATION_AUTHORIZATION.md)
   for the full model. Summary: session-cookie auth, `IsAuthenticated` on
   every read, `IsAuthenticated` + Group-based `IsConfigurationOperator`
   on every `activate`.
+- **Auditability (Checkpoint 12)**: see
+  [../architecture/AUDITABILITY.md](../architecture/AUDITABILITY.md).
+  Never stores passwords, session ids, CSRF tokens, or any request
+  header/body content — verified by test.
 - No SQL injection surface: every query goes through the Django ORM via
   the repository layer; no raw SQL exists anywhere in this checkpoint.
 - No mass assignment: response bodies are hand-constructed dicts in the

@@ -2417,3 +2417,422 @@ authenticated identity exists on every activation request (closing the
 gap identified at Checkpoint 10 and formally deferred again here), or (b)
 extending the activation workflow to Universe and Strategy Version using
 the now-authenticated, now-reusable `ConfirmDialog` pattern.
+
+# Checkpoint 12 — Control-Plane Auditability & Authentication Security Completion (2026-08-13)
+
+## Objective
+
+Add authenticated identity + a durable, append-only audit trail for
+risk-configuration activation, and close the login-CSRF gap Checkpoint
+11 deliberately deferred — governance and security depth, not a new
+human workflow or business feature.
+
+## Login-CSRF Review and Fix
+
+Inspected the real request path rather than assuming
+`SessionAuthentication` + `CsrfViewMiddleware` already covered login.
+Confirmed the real gap: DRF's `APIView.as_view()` wraps every view in
+Django's `csrf_exempt()` by default; `SessionAuthentication.enforce_csrf()`
+only performs a CSRF check once a session user is already resolved —
+which is never true for an anonymous login POST. A cross-site `<form>`
+on an attacker's page can still fire a genuine POST to `/api/v1/auth/login/`
+(CORS restricts *reading* a cross-origin response via JS, not *sending*
+a form submission), a real (if secondary) login-CSRF risk.
+
+**Fixed**: `infrastructure/api/auth_views.py`'s
+`login_view.csrf_exempt = False` re-enables Django's real
+`CsrfViewMiddleware` for this one view — the same real mechanism
+protecting every other state-changing endpoint, never `@csrf_exempt`,
+never a hand-rolled scheme. No frontend change was required: the
+frontend already fetches the CSRF cookie via `GET /api/v1/auth/session/`
+on load and already attaches `X-CSRFToken` to every `POST`, login
+included. Verified by two new tests:
+`test_login_is_rejected_without_a_csrf_token` (cross-site attempt, 403)
+and `test_legitimate_login_succeeds_with_a_valid_csrf_token` (real flow:
+fetch cookie, then submit with header, 200).
+
+## Audit Architecture Decision
+
+Durable PostgreSQL storage (`AuditLogEntry`, a new Django model), not
+operational structured logs — the architecture already distinguishes
+these (Checkpoint 3 §11); a log line is not durable/queryable/joinable
+the way a governance record must be. Owned by `control_plane/audit`
+(the first real code in that bounded context — previously an
+architecture placeholder since Checkpoint 1): `ActivationOutcome` +
+`AuditEvent` are the technology-neutral vocabulary;
+`application/repositories.AuditRepository` is the read-only Protocol;
+`infrastructure/persistence` implements both the read path
+(`DjangoAuditRepository`) and the write path (embedded inside
+`DjangoRiskConfigurationRepository.activate()`, for transactional
+coupling — see below). Full rationale: decision-log entries #50-56,
+`docs/architecture/AUDITABILITY.md`.
+
+**Scope**: risk-configuration activation only, per the checkpoint
+brief's explicit instruction not to expand into universe/strategy this
+checkpoint. The vocabulary (`resource_type`/`resource_id`, generic, not
+`risk_configuration_id`-specific) is already shaped to extend later
+without a redesign.
+
+## Audit Data Model
+
+`AuditLogEntry`: `occurred_at` (UTC, explicit, indexed), `actor_username`
++ `actor_user_id` (plain snapshot columns, NOT ForeignKeys — see Actor
+Identity below), `action` (`"configuration.activate"`, matching the
+Checkpoint 11 capability vocabulary), `resource_type`/`resource_id`,
+`version_identifier`, `previous_version` (nullable — context: what
+changed *from*), `outcome` (one of three closed values), `request_id`
+(UUID4). A composite index on `(resource_type, resource_id, occurred_at)`
+supports the read API's query pattern. No speculative fields — every
+column answers WHO/WHAT/WHICH RESOURCE/WHEN/RESULT or is the minimum
+context (`previous_version`) needed for a row to be meaningful alone.
+
+## Append-Only Enforcement
+
+Application-level: `AuditLogEntry.save()` raises `RuntimeError` on any
+attempt to save an already-persisted row (checked via Django's own
+`self._state.adding` marker); `.delete()` unconditionally raises.
+Verified by test, not merely "no edit button in the UI" —
+`test_audit_record_cannot_be_updated_through_normal_api`,
+`test_audit_record_cannot_be_deleted_through_normal_api`. **Explicit,
+documented limitation**: this is not database-level immutability — no
+`REVOKE`/trigger was added (a raw SQL statement or a QuerySet
+`.update()` bypassing `.save()` could still mutate a row). Judged out of
+scope for a first implementation; documented as a real gap, not silently
+implied to be stronger than it is.
+
+## Actor Identity
+
+Plain `actor_username`/`actor_user_id` columns, not
+`ForeignKey(auth.User)` — a ForeignKey would either cascade-delete audit
+history on user deletion (destroying exactly what the trail exists to
+preserve) or `on_delete=PROTECT` (blocking user deletion permanently, an
+operational trap discovered too late). Every write path requires a real
+authenticated actor — `IsAuthenticated`/`IsConfigurationOperator`
+(Checkpoint 11) already reject the request before the repository is
+reached, so there is no anonymous/placeholder code path; verified by
+test that `actor_username` is never `"admin"`/`"system"`/`"unknown"`/
+empty, and always matches the real logged-in user.
+
+## Transactional Coupling
+
+**The critical guarantee, verified against a real transaction, not a
+mocked service.** `DjangoRiskConfigurationRepository.activate()` wraps
+the `ActiveRiskConfiguration` write and the `AuditLogEntry.objects.create()`
+call in one `transaction.atomic()` block. `test_activation_rolls_back_if_audit_write_fails`
+forces the audit `INSERT` to fail via `unittest.mock.patch` (a real
+`DatabaseError`, raised after the state-change write already executed
+inside the same block) and asserts **neither** the active pointer
+**nor** the audit row survive — run with
+`@pytest.mark.django_db(transaction=True)` against a real PostgreSQL
+connection specifically so the rollback is real, not simulated. A failed
+activation (invalid target) is the one deliberate exception: its
+`REJECTED` audit row is written in its own, independently-committed
+statement before the `ValueError` is raised, since there is no
+successful state change to couple it to and the attempt must survive on
+its own.
+
+## Activation Outcome Semantics
+
+`ActivationOutcome`: `activated` (pointer created/changed),
+`already_active` (Checkpoint 10's idempotent no-op — recorded as such,
+never falsely as `activated`), `rejected` (invalid target, no state
+change). Verified by test: two activations of the same version record
+`["activated", "already_active"]` in order; an unknown-version attempt
+records `rejected` with no pointer created.
+
+## Authorization / Security Events
+
+**Documented boundary decision**: HTTP 403 (authorization-denied)
+attempts are NOT written to the durable audit table — only requests
+that reach an authenticated, authorized principal are recorded (success,
+no-op, or invalid-target rejection). DRF's permission classes reject the
+request before the write path (inside the repository) is ever reached;
+writing from a permission class would mix an authorization check with a
+persistence side effect and add write I/O to every rejected request
+including anonymous scans/bots. Weighed against the brief's own "do not
+create an audit record for every anonymous rejected HTTP request" and
+judged not worth the added complexity this checkpoint — a documented,
+deferred (not rejected) boundary, revisitable if a future threat model
+specifically needs it.
+
+## Request / Correlation Identity
+
+No pre-existing request/correlation-ID infrastructure was found anywhere
+in this codebase (no middleware, no `structlog.contextvars` binding,
+despite `merge_contextvars` already being configured). Building a full
+observability system was out of scope. Smallest useful addition: a
+UUID4 minted inline per activation HTTP request
+(`infrastructure/api/risk_views.py`), threaded through the service and
+repository, stored on the audit row — no new middleware, no competing ID
+scheme.
+
+## Audit Repository / Service Architecture
+
+```
+API (risk_views.py: activate) -> Application Service
+  (RiskConfigurationService.activate) -> Persistence
+  (DjangoRiskConfigurationRepository.activate: state change + audit
+  append) -> commit (one transaction.atomic() block)
+```
+
+`AuditRepository` (Protocol) exposes only `list_for_resource()` — no
+write method, deliberately, so nothing can invoke an audit write
+independently of the state change it must accompany. Not generalized
+into a reusable "event sourcing" framework — scoped tightly to
+risk-configuration activation, extensible later by repeating the pattern
+for universe/strategy, not by building a speculative abstraction now.
+
+## Audit API
+
+**Implemented**, minimal: `GET /api/v1/audit/risk-configuration/{configuration_id}/`,
+read-only, newest-first. Gated by `IsAuthenticated` +
+`IsConfigurationOperator` — the same gate as activation itself, not a
+separate `audit.read` capability, since audit visibility is treated as
+operator-level governance, not ordinary `configuration.read` access.
+No write/update/delete audit operation exists anywhere in the API.
+
+## Audit Frontend
+
+**Deferred**, as explicitly permitted by the checkpoint brief. No Audit
+History screen was built. The generated TypeScript contract was still
+regenerated (real `AuditEventResponse` type + operation, matching the
+real implemented endpoint — not speculative/hand-invented types), since
+a real audit API now exists; nothing consumes it yet.
+
+- Audit persistence: **implemented**.
+- Audit API: **implemented** (read-only, minimal).
+- Audit UI: **deferred**.
+
+## Sensitive Data Review
+
+Never stored on `AuditLogEntry` or returned by the audit API: passwords,
+session ids, CSRF tokens, cookies, access tokens, broker credentials,
+database passwords, secret keys, raw request body/headers. Verified by
+test (`test_audit_response_never_contains_sensitive_fields`). No generic
+"metadata"/"details" JSON field exists that could accumulate sensitive
+data over time — only the explicit, whitelisted column list.
+
+## Retention Policy
+
+**Deferred, deliberately** — no automatic deletion/TTL/cron/Celery
+purge was added. Audit records are governance records; retention must be
+a deliberate future decision (regulatory/compliance/storage-growth
+analysis), not implied by the checkpoint that built the write path.
+
+## A Real Regression Found and Fixed
+
+`tests/unit/infrastructure/api/{test_risk_api,test_universe_api,test_strategy_api}.py`
+never authenticated their test `Client` before calling endpoints
+Checkpoint 11 protected with `IsAuthenticated`/`IsConfigurationOperator`.
+Because these tests are always `requires_postgres`-skipped in this
+sandbox (and every sandbox this project has been validated in), the
+regression was never actually exercised — it would have made every one
+of these tests fail (403 instead of 200) the first time they ran against
+real PostgreSQL. Found by direct code inspection while building this
+checkpoint's audit tests (which needed the same authenticated-client
+pattern), not by running them. Fixed by adding `client.login(...)`
+(reader or operator, per test) before every protected-endpoint call in
+all three files — no test assertions changed, only how each client
+authenticates first.
+
+## Backend Tests
+
+**PASSED**: 114 (unchanged core suite, plus all newly-added tests that
+don't require PostgreSQL — none of the new Checkpoint 12 tests fall in
+that category, so this number matches Checkpoint 11's baseline exactly).
+
+**SKIPPED** (PostgreSQL not reachable in this sandbox — honestly
+reported, never claimed as passed): 64 total (up from 50), comprising:
+- 2 new login-CSRF tests (`test_login_is_rejected_without_a_csrf_token`,
+  `test_legitimate_login_succeeds_with_a_valid_csrf_token`).
+- 12 new audit tests (`tests/unit/infrastructure/api/test_audit_api.py`):
+  successful-activation-creates-row, integrity-matches-activation,
+  actor-identity-real-not-placeholder, already-active-outcome,
+  failed-activation-rejected-outcome, transaction-rollback-on-audit-failure,
+  cannot-update-through-API, cannot-delete-through-API,
+  read-requires-operator-not-plain-read, read-accessible-to-operator,
+  read-rejects-anonymous, response-never-contains-sensitive-fields.
+- All pre-existing risk/universe/strategy/health/persistence
+  `requires_postgres` tests, unchanged in count.
+
+**FAILED**: 0.
+
+## Transaction Failure Test
+
+`test_activation_rolls_back_if_audit_write_fails` — see Transactional
+Coupling above. Run with `@pytest.mark.django_db(transaction=True)`
+(real transactional behavior, not the default test-wrapping rollback)
+against a real PostgreSQL connection; patches only
+`AuditLogEntry.objects.create` (the single ORM call), not the
+application service or repository method under test.
+
+## Audit Integrity Test
+
+`test_audit_integrity_matches_the_activation_that_produced_it` —
+activates v1 then v2, asserts the resulting audit row's `actor_username`,
+`actor_user_id`, `action`, `resource_type`, `resource_id`,
+`version_identifier`, `previous_version` (`"v1"`, correctly the version
+just replaced), `outcome`, and `request_id` shape all match the exact
+operation performed — not merely "a row exists."
+
+## OpenAPI / TypeScript Contract Validation
+
+`spectacular --fail-on-warn` ✅ (silent success). `npm run
+generate:api:types` picked up `AuditEventResponse` + the new
+`api_v1_audit_risk_configuration_list` operation (confirmed by direct
+inspection); a second regeneration produced the identical diff against
+the last commit (deterministic). CI's existing drift-detection step
+requires no changes.
+
+## Architecture Enforcement
+
+`lint-imports` ✅ **6/6 kept** (119 files analyzed, up from 111) —
+`control_plane/audit`'s new code sits cleanly inside the existing
+Application -> bounded contexts -> domain layering (contract #3);
+`application/repositories`'s new `AuditRepository`/extended
+`RiskConfigurationRepository.activate()` signature still imports nothing
+from `infrastructure` (contract #6). No new dependency direction was
+introduced; audit did not become a "generic utility dumping ground" —
+it has exactly one write path (embedded in the one repository method
+that needs it) and one read Protocol method.
+
+## Trading Safety Validation
+
+No file under `trading_engine/`, `control_plane/kill_switch`,
+`infrastructure/brokers/`, or any `TRADING_MODE`-resolution code was
+touched — confirmed by reviewing the full changed-file list (all are
+`control_plane/audit`, `application/{repositories,services,contracts}`,
+`infrastructure/{api,persistence}`, `docs/`, and test files). No broker
+API call, order placement, position-management, or strategy-execution
+code exists anywhere these changes reach. RESEARCH/PAPER/LIVE mode
+resolution logic (`settings/trading_mode.py`) is byte-identical to
+Checkpoint 11.
+
+## Backend Regression Results
+
+Ruff format ✅ (144 files) · Ruff lint ✅ · mypy strict ✅ (95 files,
+up from 90) · pytest ✅ **114 passed, 64 skipped, 0 failed** ·
+import-linter ✅ **6/6 kept** (119 files) · `manage.py check` ✅ ·
+`spectacular --fail-on-warn` ✅ · `pip-audit` ✅ (no new findings — no
+new dependency was added this checkpoint). `makemigrations --check
+--dry-run` **could not run** — requires a live PostgreSQL connection
+even to compare migration state, the same documented sandbox constraint
+as every prior checkpoint; the new `0003_auditlogentry.py` migration was
+instead hand-verified against the model definition (field-by-field) and
+confirmed to load cleanly via `manage.py check`, since `makemigrations`
+itself also requires DB connectivity in this Django version (checks
+migration-history consistency before generating).
+
+## Frontend Validation Results
+
+`npm run typecheck` ✅ · `npm run build` ✅ (46 modules, 158.6 kB JS,
+unchanged from Checkpoint 11 — no frontend source change) · `npm run
+test` ✅ **30 passed, 0 failed** (unchanged — no frontend functional
+change was needed or made this checkpoint).
+
+## Security Readiness Matrix
+
+| Security Area | Status |
+|---|---|
+| Authentication | PASS |
+| Login-CSRF | PASS (fixed this checkpoint) |
+| Authorization | PASS |
+| Activation Protection | PASS |
+| Audit Identity | PASS |
+| Append-only Audit | PASS (application-level; DB-level immutability deferred, documented) |
+| Transactional Audit | PASS |
+| Sensitive Data Protection | PASS |
+| Audit Read Access | PASS (implemented, operator-gated) |
+| Brute-force Protection | PASS (basic, unchanged from Checkpoint 11) |
+| Production Security | NOT READY (see Known Limitations) |
+
+## Documentation Updated
+
+New: `docs/architecture/AUDITABILITY.md`. Updated:
+`docs/architecture/ARCHITECTURE.md` (pointer),
+`docs/architecture/AUTHENTICATION_AUTHORIZATION.md` (§8 CSRF rewritten,
+§15 limitations updated), `docs/architecture/ARCHITECTURE_DECISIONS.md`
+(decisions #50-56 + Checkpoint 12 notes), `docs/api/CONFIGURATION_API.md`
+(§4 audit endpoint, §7 outcome/audit semantics, §11 security notes),
+`docs/api/FRONTEND_API_CONSUMPTION.md` (audit contract note),
+`control_plane/audit/README.md` (repo-root placeholder, updated to
+reflect real implementation), `README.md` (status banner, Start Here
+link), `app.bat` (added the missing `manage.py migrate` step — a
+separate, real, pre-existing gap found while touching this file), this
+file.
+
+## Files Created
+
+`src/intraday/control_plane/audit/{__init__,events}.py`,
+`src/intraday/application/contracts/audit.py`,
+`src/intraday/infrastructure/api/{audit_views,audit_urls}.py`,
+`src/intraday/infrastructure/persistence/migrations/0003_auditlogentry.py`,
+`tests/unit/infrastructure/api/test_audit_api.py`,
+`docs/architecture/AUDITABILITY.md`.
+
+## Files Modified
+
+`src/intraday/application/repositories/__init__.py` (`AuditRepository`
+Protocol, extended `RiskConfigurationRepository.activate()` signature),
+`src/intraday/application/services/risk.py` (`activate()` threads
+actor/actor_user_id/request_id), `src/intraday/infrastructure/api/{risk_views,auth_views}.py`
+(actor/request_id capture; login-CSRF fix), `src/intraday/infrastructure/persistence/{models,repositories}.py`
+(`AuditLogEntry` model; `DjangoRiskConfigurationRepository.activate()`
+rewritten for atomic audit append; `DjangoAuditRepository` read path),
+`src/intraday/urls.py` (mounted `/api/v1/audit/`),
+`tests/unit/application/services/test_risk_service.py` (fake repository
+updated to match the new `activate()` signature),
+`tests/unit/architecture/test_persistence_boundaries.py` (unaffected —
+re-verified, not modified),
+`tests/unit/infrastructure/api/{test_auth_api,test_risk_api,test_universe_api,test_strategy_api}.py`
+(login-CSRF tests added; authentication added to every protected-endpoint
+test — the regression fix above),
+`frontend/shared/generated_contracts/api-types.ts` (generated - new
+audit types), `app.bat`, all documentation files listed above.
+
+## Frontend UX Testing Readiness
+
+Unchanged from Checkpoint 10/11 (already YES) — this checkpoint adds
+governance/security depth to the existing workflow, not a new one:
+
+| Criterion | Status |
+|---|---|
+| Persistence | ✅ YES |
+| Business API | ✅ YES |
+| Frontend | ✅ YES |
+| Human workflow | ✅ YES |
+| Overall | ✅ YES |
+
+## Git Status
+
+Per the checkpoint brief's explicit instruction, re-investigated rather
+than assuming the prior report's numbers still held:
+
+- `git rev-parse HEAD` (before this checkpoint's commit): `4d1f94d`
+  (Checkpoint 11).
+- `git branch --show-current`: `main`.
+- `git rev-list --left-right --count HEAD...origin/main` (before this
+  checkpoint's commit): `2  0` — 2 ahead, 0 behind, confirming
+  `origin/main` remained at `3ff3416` (Checkpoint 9) exactly as reported
+  at the end of Checkpoint 11, with no further external change this
+  session. No `git push` was run.
+- Working tree was clean before this checkpoint's changes.
+
+Committed locally to `main` as `Checkpoint 12: control-plane
+auditability and security completion`. **Not pushed.**
+
+## Deferred Items
+
+Universe/strategy-version activation auditing (documented scope
+boundary — write-path pattern is directly reusable when that work
+happens). Authorization-denial (403) audit events (documented boundary
+decision). Database-level audit immutability (documented limitation).
+Audit History frontend screen. Audit retention policy. Account lockout
+beyond rate-limiting. Password-reset flow. MFA. Docker remains deferred.
+
+## Recommended Checkpoint 13
+
+Extend the write-side activation-audit pattern to Universe and
+Strategy Version (the domain vocabulary is already generic enough),
+and/or build the minimal read-only Audit History frontend screen now
+that a real, tested audit API exists to consume.

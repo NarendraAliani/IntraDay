@@ -187,23 +187,29 @@ endpoints). The frontend obtains the CSRF cookie via `GET
 `client.ts`'s `performRequest()` reads it from `document.cookie` and
 attaches it as `X-CSRFToken` on every `POST`.
 
-**Login itself is not CSRF-protected** by this mechanism, because no
-session user exists yet at the point `SessionAuthentication.authenticate()`
-runs for an anonymous request - this is DRF's standard, documented
-behavior, not a gap introduced here. This is a known, accepted
-limitation (`login-CSRF`): forcing a victim to authenticate into an
-attacker-controlled account. Its usual impact (tricking a victim into
-saving data into an attacker's account) does not apply to this
-control-plane, which has no per-user generated content to leak that way,
-so a bespoke CSRF-on-login mechanism was judged not worth the added
-complexity for this checkpoint - documented here rather than silently
-left unstated.
+**Login is now CSRF-protected too, as of Checkpoint 12.** The gap
+described immediately above (no session user exists yet at the point
+`SessionAuthentication.authenticate()` runs for an anonymous request, so
+DRF's session-based CSRF check never applied to `login`) was real and is
+now closed: `infrastructure/api/auth_views.py`'s
+`login_view.csrf_exempt = False` re-enables Django's real
+`CsrfViewMiddleware` for this one view specifically, independent of
+DRF's session-resolution timing. This is the same, real,
+framework-provided CSRF mechanism used everywhere else - not a
+hand-rolled scheme, and `@csrf_exempt` was never used (quite the
+opposite - this *removes* an exemption). No frontend change was needed:
+the frontend already obtains the CSRF cookie via `GET
+/api/v1/auth/session/` before a user can submit the login form, and
+already attaches `X-CSRFToken` to every `POST`, login included.
 
 Verified by test: `test_csrf_protects_state_changing_requests_once_authenticated`
 (`tests/unit/infrastructure/api/test_auth_api.py`) uses
 `Client(enforce_csrf_checks=True)` to prove an authenticated POST without
 the CSRF header is rejected (403) and the same request succeeds with a
-valid token.
+valid token; `test_login_is_rejected_without_a_csrf_token` and
+`test_legitimate_login_succeeds_with_a_valid_csrf_token` (Checkpoint 12)
+prove the same for the login endpoint itself. See
+[AUDITABILITY.md](AUDITABILITY.md) for the full writeup of this fix.
 
 ## 9. Session / cookie security
 
@@ -326,9 +332,13 @@ listed here for a single, current, security-focused reference.
 
 ## 15. Known limitations / not production-ready
 
-- No login-CSRF protection (§8) - documented, accepted risk for this
-  control-plane's threat model.
-- No append-only activation audit log (§13) - deferred.
+- ~~No login-CSRF protection~~ **Fixed at Checkpoint 12** (§8 above) -
+  login is now protected by Django's real `CsrfViewMiddleware`.
+- ~~No append-only activation audit log~~ **Implemented at Checkpoint
+  12** for risk-configuration activation (§13's identity groundwork is
+  now used) - see [AUDITABILITY.md](AUDITABILITY.md). Universe/
+  strategy-version activation remain unaudited (documented scope
+  boundary, not an oversight).
 - No account lockout beyond the login rate limit (§12) - a sustained
   low-and-slow attack across many IPs is not mitigated by a single-IP
   rate limit; acceptable for a first-generation internal control plane,

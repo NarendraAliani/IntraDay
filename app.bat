@@ -121,6 +121,22 @@ if not exist "%PROJECT_ROOT%frontend\.env.local" (
     echo [ OK ] frontend\.env.local already present - leaving it untouched.
 )
 
+REM --- Backend: apply database migrations ---------------------------------
+REM Checkpoint 12: a real gap found while touching this file - app.bat never
+REM ran migrations at all, so a fresh database would be missing every table
+REM (including this checkpoint's new AuditLogEntry). Safe to re-run:
+REM `manage.py migrate` is itself idempotent - already-applied migrations
+REM are skipped. Requires PostgreSQL to be reachable (POSTGRES_* in .env);
+REM if it isn't, this fails with a clear Django error rather than silently
+REM leaving the schema out of date.
+echo [ .. ] Applying database migrations...
+call poetry run python manage.py migrate --no-input
+if errorlevel 1 (
+    echo [FAIL] "manage.py migrate" failed. Check PostgreSQL is running and
+    echo        POSTGRES_* variables in .env are correct, then re-run.
+    exit /b 1
+)
+
 echo.
 echo [ .. ] Starting the Django dev server (http://127.0.0.1:8000) in a new window...
 start "IntraDay backend (Django dev server)" cmd /k "cd /d "%PROJECT_ROOT%" && poetry run python manage.py runserver"

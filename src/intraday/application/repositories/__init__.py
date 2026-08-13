@@ -22,6 +22,7 @@ from intraday.application.config_schema.records import (
     StrategyVersionSnapshot,
     UniverseRecord,
 )
+from intraday.control_plane.audit.events import ActivationOutcome, AuditEvent
 from intraday.domain.strategy.contracts import StrategyVersion
 from intraday.domain.universe.contracts import Universe
 
@@ -37,7 +38,15 @@ class DuplicateVersionError(RuntimeError):
 class RiskConfigurationRepository(Protocol):
     """Persists and retrieves versioned `RiskConfigurationRecord`
     instances. Historical versions are immutable — `save()` only ever
-    inserts a new version; there is no `update()`."""
+    inserts a new version; there is no `update()`.
+
+    `activate()`'s `actor`/`actor_user_id`/`request_id` (Checkpoint 12)
+    are required, not optional — every activation is audited, so there
+    is no code path that can change the active version without recording
+    who did it and in which request. The concrete implementation appends
+    the audit record in the SAME transaction as the state change (see
+    `DjangoRiskConfigurationRepository.activate()`), never as a separate,
+    independently-committable step."""
 
     def save(self, record: RiskConfigurationRecord) -> None: ...
 
@@ -49,7 +58,15 @@ class RiskConfigurationRepository(Protocol):
 
     def list_versions(self, risk_configuration_id: str) -> tuple[RiskConfigurationRecord, ...]: ...
 
-    def activate(self, risk_configuration_id: str, version: str) -> None: ...
+    def activate(
+        self,
+        risk_configuration_id: str,
+        version: str,
+        *,
+        actor: str,
+        actor_user_id: int,
+        request_id: str,
+    ) -> ActivationOutcome: ...
 
 
 class UniverseRepository(Protocol):
@@ -98,3 +115,18 @@ class StrategyVersionRepository(Protocol):
         code_version: str,
         configuration_version: str,
     ) -> None: ...
+
+
+class AuditRepository(Protocol):
+    """Read-only access to durable control-plane audit events
+    (Checkpoint 12). Deliberately has no `save`/`update`/`delete` method
+    — the write path is not exposed through this Protocol at all,
+    because the write must happen inside the SAME transaction as the
+    state change it records (see `RiskConfigurationRepository.activate()`
+    above), which only the concrete resource repository can guarantee.
+    This Protocol exists solely so the read side (an audit-listing API)
+    can depend on an abstraction instead of importing
+    `infrastructure.persistence` directly, matching every other
+    read path in this codebase."""
+
+    def list_for_resource(self, resource_type: str, resource_id: str) -> tuple[AuditEvent, ...]: ...

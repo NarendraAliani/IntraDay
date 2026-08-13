@@ -7,7 +7,9 @@
 # Checkpoint 11 adds the authentication API — login/logout/session —
 # mounted under /api/v1/auth/, delegating to
 # infrastructure/api/auth_urls.py. Mounted before /api/v1/config/ since
-# it is the boundary that now protects it.
+# it is the boundary that now protects it. Checkpoint 12 adds the
+# read-only audit API under /api/v1/audit/, delegating to
+# infrastructure/api/audit_urls.py.
 from __future__ import annotations
 
 from django.contrib import admin
@@ -22,4 +24,5 @@ urlpatterns = [
     path("version", version, name="version"),
     path("api/v1/auth/", include("intraday.infrastructure.api.auth_urls")),
     path("api/v1/config/", include("intraday.infrastructure.api.urls")),
+    path("api/v1/audit/", include("intraday.infrastructure.api.audit_urls")),
 ]

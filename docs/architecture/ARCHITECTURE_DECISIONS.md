@@ -247,3 +247,42 @@ frontend. Full detail:
   (already YES since Checkpoint 10); this checkpoint protects the
   existing human workflow rather than adding a new one. See
   taskReport.md's Checkpoint 11 section for the full gate re-evaluation.
+
+## Checkpoint 12 — Control-Plane Auditability & Authentication Security Completion (2026-08-13)
+
+Establishes a durable, append-only PostgreSQL audit trail for
+risk-configuration activation and closes the login-CSRF gap Checkpoint
+11 deliberately deferred. Full detail:
+[docs/architecture/AUDITABILITY.md](AUDITABILITY.md).
+
+| # | Decision | Reason | Alternatives Considered | Status |
+|---|---|---|---|---|
+| 50 | Durable audit storage: a new PostgreSQL table (`AuditLogEntry`, `infrastructure/persistence`), not operational structured logs (`structlog`) and not a new/second database technology. | The architecture already distinguishes operational logs from durable audit records (Checkpoint 3 §11 observability decision); log lines are not queryable/joinable/durable in the way a governance record needs to be. Reuses the existing PostgreSQL system-of-record rather than introducing a new storage technology for one table. | Writing audit events only to structured logs (rejected — not durable/queryable in the sense an audit trail requires); a separate audit-specific database (rejected — unjustified operational complexity for one table). | LOCKED |
+| 51 | Append-only enforcement at the Django model layer (`AuditLogEntry.save()`/`.delete()` override, checked via `self._state.adding`), not a database-level trigger or `REVOKE` grant. | Achieves real, test-verified enforcement (not merely "no edit button in the UI") with no new database-administration surface (grants/triggers) for a first implementation. Explicitly documented as a weaker guarantee than DB-level immutability — a raw SQL statement or a QuerySet `.update()` could still bypass it. | Database-level `REVOKE UPDATE, DELETE` / a rejecting trigger (deferred, not rejected — a stronger guarantee worth adding if the threat model, e.g. a compromised application DB credential, later justifies the added operational complexity). | LOCKED, WITH A DOCUMENTED LIMITATION |
+| 52 | Actor identity stored as plain `actor_username`/`actor_user_id` columns, not `ForeignKey(auth.User)`. | A ForeignKey forces cascade-deleting audit history on user deletion (destroying exactly what an audit trail exists to preserve) or `on_delete=PROTECT` (blocking user deletion permanently, an operational trap). A snapshot survives both user deletion and username reuse — the standard trade-off for append-only logs (the same one `git blame` makes with historical author names). | `ForeignKey(User, on_delete=CASCADE)` (rejected — destroys historical accountability, the opposite of the checkpoint's goal); `ForeignKey(User, on_delete=PROTECT)` (rejected — makes user deletion operationally impossible, discovered too late by an administrator). | LOCKED |
+| 53 | State change + audit append committed in ONE `transaction.atomic()` block inside `DjangoRiskConfigurationRepository.activate()` — the write path is not exposed through a separate `AuditRepository` Protocol method at all. | The checkpoint's core requirement ("a successful activation cannot exist without its audit record") can only be guaranteed if both writes share one transaction; exposing a generic, independently-callable `AuditRepository.append()` would make that coupling optional rather than structural. Verified by a real-transaction rollback test (`test_activation_rolls_back_if_audit_write_fails`), not a mocked service. | A generic, callable `AuditRepository.write()` used by the service after a separate `repository.activate()` call (rejected — two independent writes cannot be atomically guaranteed from the application layer, which cannot depend on `django.db.transaction`, an infrastructure API, per contract #6). | LOCKED |
+| 54 | `ActivationOutcome` has exactly three values (`activated`/`already_active`/`rejected`), and a rejected (invalid-target) attempt is recorded in its own, independently-committed write — deliberately NOT inside the same atomic block as a successful activation (there is no successful state change to couple it to). | Checkpoint 10 already established idempotent activation as a real "no state change occurred" case; recording it as `activated` would be a false claim. A rejected attempt must survive its own request even though nothing changed, which requires it to commit independently of the (never-attempted) state-change transaction. | A single generic "attempted" outcome with no further distinction (rejected — loses exactly the "did this actually change anything" signal the brief asks the audit trail to answer honestly). | LOCKED |
+| 55 | Authorization-denied (HTTP 403) activation attempts are NOT written to the durable audit table — only requests that reach an authenticated, authorized principal are recorded (success, no-op, or invalid-target rejection). | DRF's permission classes reject the request before the view body — and therefore the write path — ever runs; writing audit rows from inside a permission class would mix an authorization check with a persistence side effect and add write I/O to every rejected request, including anonymous scans. Judged not worth the complexity/cost for this checkpoint against the brief's own "do not create an audit record for every anonymous rejected HTTP request." | Writing a 403 audit event from a permission class or a global exception handler (deferred, not rejected outright — revisit if a future checkpoint's threat model specifically requires visibility into authorization-denial attempts). | LOCKED, DOCUMENTED BOUNDARY |
+| 56 | Login-CSRF fixed by resetting `login_view.csrf_exempt = False` (re-enabling Django's real `CsrfViewMiddleware` for that one view), not a hand-rolled token scheme. | DRF's `APIView.as_view()` wraps every view in `csrf_exempt()` by default, delegating CSRF enforcement to `SessionAuthentication.enforce_csrf()` - which only checks once a session user is already resolved, so `login` (necessarily anonymous) was never checked. Un-exempting the one view re-enables the SAME real, framework-provided middleware protecting every other endpoint - no new mechanism, no `@csrf_exempt` used (the opposite - an exemption is removed), no frontend change needed (the CSRF cookie/header flow already existed). | A custom "login token" issued out-of-band (rejected — reinvents CSRF protection Django already provides); leaving login unprotected with a documented risk-acceptance note only (rejected once a real, low-cost fix — one attribute flip — was found; risk-acceptance is for cases with no cheap fix, not this one). | LOCKED |
+
+## Notes (Checkpoint 12)
+
+- Real regression found and fixed: `tests/unit/infrastructure/api/{test_risk_api,test_universe_api,test_strategy_api}.py`
+  never authenticated their test `Client` before calling endpoints that
+  Checkpoint 11 protected with `IsAuthenticated`/`IsConfigurationOperator`.
+  Because these tests are always `requires_postgres`-skipped in every
+  sandbox this project has been validated in, the regression was never
+  actually exercised or caught until this checkpoint's audit-focused
+  review inspected them directly (not merely re-run). Fixed by adding
+  `client.login(...)` (reader or operator, as each test needs) before
+  every protected-endpoint call.
+- `app.bat` gained a `manage.py migrate` step — a separate, real,
+  pre-existing gap found while touching this file: it never applied
+  database migrations at all, so a fresh checkout's first run would be
+  missing every table, including this checkpoint's new `AuditLogEntry`.
+  Idempotent, safe to re-run, consistent with the rest of the script.
+- Frontend UX Testing Readiness gate: unaffected by this checkpoint
+  (already YES since Checkpoint 10) — this checkpoint adds governance/
+  security depth to the existing workflow rather than a new one. No
+  frontend functional change was required; only the generated contract
+  was regenerated (new audit types, unconsumed by any screen yet).

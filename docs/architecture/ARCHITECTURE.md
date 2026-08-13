@@ -97,6 +97,13 @@ See [DOMAIN_BOUNDARIES.md](DOMAIN_BOUNDARIES.md) for the full domain map and
 dependency-direction rules, and [ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md)
 for the decision log.
 
+**Auditability** (Checkpoint 12): `control_plane/audit` holds the first
+real control-plane governance code — a durable, append-only PostgreSQL
+audit trail for state-changing control-plane actions, currently scoped to
+risk-configuration activation. See
+[AUDITABILITY.md](AUDITABILITY.md) for the full model (schema, actor
+identity, transactional coupling, outcome semantics, retention policy).
+
 ## 3. Layering
 
 ```

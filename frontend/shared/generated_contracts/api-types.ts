@@ -4,6 +4,26 @@
  */
 
 export interface paths {
+    "/api/v1/audit/risk-configuration/{configuration_id}/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Every recorded activation attempt (activated/already_active/
+         *     rejected) for one risk-configuration id, newest first.
+         */
+        get: operations["api_v1_audit_risk_configuration_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/login/": {
         parameters: {
             query?: never;
@@ -21,6 +41,22 @@ export interface paths {
          *     cache-backed `ScopedRateThrottle` - see this view's `.cls.throttle_scope`
          *     assignment below (function-based views can't set a class attribute
          *     inline).
+         *
+         *     Login-CSRF protection (Checkpoint 12 - closes the gap Checkpoint 11
+         *     deliberately deferred): DRF's `APIView.as_view()` wraps every view in
+         *     Django's `csrf_exempt()` by default, delegating CSRF enforcement to
+         *     `SessionAuthentication.enforce_csrf()` - which only runs once a
+         *     session user is already resolved, so an anonymous login POST was
+         *     never checked. This view's `.csrf_exempt` attribute is explicitly
+         *     reset to `False` below (see after the function), re-enabling Django's
+         *     real `CsrfViewMiddleware` for this one view - the same, real,
+         *     framework-provided CSRF mechanism used everywhere else, not a
+         *     hand-rolled scheme and never `@csrf_exempt`. This requires no
+         *     frontend change: the frontend already calls `GET
+         *     /api/v1/auth/session/` on load (which sets the `csrftoken` cookie via
+         *     `get_token()`, see `session_view` below) before a user can submit the
+         *     login form, and `client.ts` already attaches `X-CSRFToken` to every
+         *     `POST`, login included.
          */
         post: operations["api_v1_auth_login_create"];
         delete?: never;
@@ -359,6 +395,23 @@ export interface components {
             };
         };
         /**
+         * @description Response shape for one durable audit record. Read-only by
+         *     construction - this serializer is never used to validate/deserialize
+         *     a request body; there is no write endpoint for audit events.
+         */
+        AuditEventResponse: {
+            actor: string;
+            action: string;
+            resource_type: string;
+            resource_id: string;
+            version: string;
+            previous_version: string | null;
+            outcome: components["schemas"]["OutcomeEnum"];
+            /** Format: date-time */
+            occurred_at: string;
+            request_id: string;
+        };
+        /**
          * @description Response shape for `GET /api/v1/auth/session/` and the successful
          *     result of `POST /api/v1/auth/login/`. Never includes a password,
          *     session key, or any other credential material - only what the
@@ -387,6 +440,13 @@ export interface components {
             username: string;
             password: string;
         };
+        /**
+         * @description * `activated` - activated
+         *     * `already_active` - already_active
+         *     * `rejected` - rejected
+         * @enum {string}
+         */
+        OutcomeEnum: "activated" | "already_active" | "rejected";
         ReadyzResponse: {
             status: components["schemas"]["ReadyzResponseStatusEnum"];
             checks: {
@@ -482,6 +542,27 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    api_v1_audit_risk_configuration_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                configuration_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditEventResponse"][];
+                };
+            };
+        };
+    };
     api_v1_auth_login_create: {
         parameters: {
             query?: never;
@@ -506,6 +587,14 @@ export interface operations {
                 };
             };
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

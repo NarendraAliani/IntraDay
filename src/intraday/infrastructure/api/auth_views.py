@@ -42,6 +42,7 @@ def _current_user_body(user: AbstractBaseUser | AnonymousUser) -> dict[str, obje
     responses={
         200: CurrentUserResponseSerializer,
         401: OpenApiResponse(ApiErrorSerializer),
+        403: OpenApiResponse(ApiErrorSerializer),
     },
 )
 @api_view(["POST"])
@@ -55,6 +56,22 @@ def login_view(request: Request) -> Response:
     cache-backed `ScopedRateThrottle` - see this view's `.cls.throttle_scope`
     assignment below (function-based views can't set a class attribute
     inline).
+
+    Login-CSRF protection (Checkpoint 12 - closes the gap Checkpoint 11
+    deliberately deferred): DRF's `APIView.as_view()` wraps every view in
+    Django's `csrf_exempt()` by default, delegating CSRF enforcement to
+    `SessionAuthentication.enforce_csrf()` - which only runs once a
+    session user is already resolved, so an anonymous login POST was
+    never checked. This view's `.csrf_exempt` attribute is explicitly
+    reset to `False` below (see after the function), re-enabling Django's
+    real `CsrfViewMiddleware` for this one view - the same, real,
+    framework-provided CSRF mechanism used everywhere else, not a
+    hand-rolled scheme and never `@csrf_exempt`. This requires no
+    frontend change: the frontend already calls `GET
+    /api/v1/auth/session/` on load (which sets the `csrftoken` cookie via
+    `get_token()`, see `session_view` below) before a user can submit the
+    login form, and `client.ts` already attaches `X-CSRFToken` to every
+    `POST`, login included.
     """
     serializer = LoginRequestSerializer(data=request.data)
     if not serializer.is_valid():
@@ -81,6 +98,11 @@ def login_view(request: Request) -> Response:
 
 
 login_view.cls.throttle_scope = "login"  # type: ignore[attr-defined]
+# Re-enable real Django CSRF enforcement for this specific view (see the
+# docstring above) - `@api_view`/`APIView.as_view()` set this attribute
+# to True by default; flipping it back to False is the documented way to
+# opt a single DRF view back into CsrfViewMiddleware's normal check.
+login_view.csrf_exempt = False
 
 
 @extend_schema(request=None, responses={200: CurrentUserResponseSerializer})

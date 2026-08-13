@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import contextlib
+import uuid
 
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework.decorators import api_view, permission_classes
@@ -111,8 +112,27 @@ def get_version(request: Request, configuration_id: str, version: str) -> Respon
 @permission_classes([IsAuthenticated, IsConfigurationOperator])
 def activate(request: Request, configuration_id: str, version: str) -> Response:
     service = _service()
+    # Checkpoint 12: the authenticated actor and a per-request UUID are
+    # minted here, at the one HTTP boundary that knows both - the actor
+    # from `IsAuthenticated`/`IsConfigurationOperator` having already
+    # guaranteed `request.user` is a real, identified account, and the
+    # request id fresh per call (no pre-existing request/correlation-id
+    # infrastructure exists in this codebase - see
+    # docs/architecture/AUDITABILITY.md).
+    request_id = str(uuid.uuid4())
+    # `IsAuthenticated` already guarantees a real, persisted user - `pk`
+    # is only optionally-typed because Django's base `Model.pk` is `Any`
+    # for an unsaved instance, which can never be the case for
+    # `request.user` once authentication has succeeded.
+    assert request.user.pk is not None  # noqa: S101 - narrows for mypy, not a runtime guard
     try:
-        record = service.activate(configuration_id, version)
+        record = service.activate(
+            configuration_id,
+            version,
+            actor=request.user.get_username(),
+            actor_user_id=request.user.pk,
+            request_id=request_id,
+        )
     except InvalidActivationRequestError as exc:
         return invalid_activation(exc)
     except DuplicateVersionError as exc:  # pragma: no cover - not reachable via activate() today

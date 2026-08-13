@@ -47,13 +47,35 @@ class RiskConfigurationService:
             )
         return record
 
-    def activate(self, configuration_id: str, version: str) -> RiskConfigurationRecord:
+    def activate(
+        self,
+        configuration_id: str,
+        version: str,
+        *,
+        actor: str,
+        actor_user_id: int,
+        request_id: str,
+    ) -> RiskConfigurationRecord:
         """Idempotent: activating an already-active version simply
         re-confirms it (Checkpoint 8 §8) — `repository.activate()`'s
-        `update_or_create` makes this naturally idempotent at the
-        database level."""
+        `get_or_create` makes this naturally idempotent at the database
+        level.
+
+        `actor`/`actor_user_id`/`request_id` (Checkpoint 12) are required,
+        never optional or defaulted to a placeholder like `"system"` -
+        this service has no anonymous code path (the API view rejects an
+        unauthenticated request before this method is ever called), so a
+        real caller identity is always available. The repository records
+        the resulting audit event atomically with the state change - see
+        `RiskConfigurationRepository.activate()`."""
         try:
-            self.repository.activate(configuration_id, version)
+            self.repository.activate(
+                configuration_id,
+                version,
+                actor=actor,
+                actor_user_id=actor_user_id,
+                request_id=request_id,
+            )
         except ValueError as exc:
             raise InvalidActivationRequestError(str(exc)) from exc
         return self.get_version(configuration_id, version)

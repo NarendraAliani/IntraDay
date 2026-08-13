@@ -6,21 +6,35 @@
 # exercised through real Django/DRF integration (Django's test Client
 # against the actual URLconf), not mocks. Gated by requires_postgres
 # since it needs the real Django-ORM-backed repository.
+#
+# Checkpoint 12 fix: every endpoint here has required `IsAuthenticated`
+# (and, for `activate`, `IsConfigurationOperator`) since Checkpoint 11 -
+# but because these tests are always `requires_postgres`-skipped in
+# every sandbox this project has been validated in, that regression was
+# never actually exercised and caught until now. Every test that hits a
+# protected endpoint now logs in first (`client.login()` - Django's
+# direct auth-backend login, not an HTTP round-trip to /api/v1/auth/
+# login/, which is what test_auth_api.py exists to test).
 from __future__ import annotations
 
 from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
+from django.contrib.auth.models import Group, User
 from django.test import Client
 
 from intraday.application.config_schema.records import RiskConfigurationRecord
 from intraday.domain.risk.contracts import RiskLimits
 from intraday.domain.shared_kernel.contracts import Version
+from intraday.infrastructure.api.permissions import CONFIGURATION_OPERATOR_GROUP
 from intraday.infrastructure.persistence.repositories import DjangoRiskConfigurationRepository
 from tests.postgres_utils import requires_postgres
 
 NOW = datetime(2026, 1, 1, 9, 20, tzinfo=UTC)
+READER_USERNAME = "reader"  # noqa: S105 - test fixture username, not a secret
+OPERATOR_USERNAME = "operator"  # noqa: S105 - test fixture username, not a secret
+PASSWORD = "correct-horse-battery-staple"  # noqa: S105 - test-only fixture credential
 
 
 def _seed(version: str = "v1") -> None:
@@ -38,12 +52,28 @@ def _seed(version: str = "v1") -> None:
     )
 
 
+def _client_as_reader() -> Client:
+    User.objects.create_user(username=READER_USERNAME, password=PASSWORD)
+    client = Client()
+    assert client.login(username=READER_USERNAME, password=PASSWORD)
+    return client
+
+
+def _client_as_operator() -> Client:
+    user = User.objects.create_user(username=OPERATOR_USERNAME, password=PASSWORD)
+    group, _ = Group.objects.get_or_create(name=CONFIGURATION_OPERATOR_GROUP)
+    user.groups.add(group)
+    client = Client()
+    assert client.login(username=OPERATOR_USERNAME, password=PASSWORD)
+    return client
+
+
 @requires_postgres
 @pytest.mark.django_db
 def test_full_vertical_slice_get_version() -> None:
     """persisted -> repository -> service -> endpoint -> stable JSON."""
     _seed("v1")
-    client = Client()
+    client = _client_as_reader()
 
     response = client.get("/api/v1/config/risk/default/v1/")
 
@@ -66,7 +96,7 @@ def test_full_vertical_slice_get_version() -> None:
 def test_list_versions_returns_all_saved_versions() -> None:
     _seed("v1")
     _seed("v2")
-    client = Client()
+    client = _client_as_reader()
 
     response = client.get("/api/v1/config/risk/default/")
 
@@ -79,7 +109,7 @@ def test_list_versions_returns_all_saved_versions() -> None:
 @pytest.mark.django_db
 def test_get_active_returns_404_when_nothing_activated() -> None:
     _seed("v1")
-    client = Client()
+    client = _client_as_reader()
 
     response = client.get("/api/v1/config/risk/default/active/")
 
@@ -96,7 +126,7 @@ def test_get_active_returns_404_when_nothing_activated() -> None:
 @requires_postgres
 @pytest.mark.django_db
 def test_unknown_configuration_id_returns_404() -> None:
-    client = Client()
+    client = _client_as_reader()
 
     response = client.get("/api/v1/config/risk/does-not-exist/v1/")
 
@@ -109,7 +139,7 @@ def test_unknown_configuration_id_returns_404() -> None:
 def test_activate_then_get_active_reflects_new_active_version() -> None:
     _seed("v1")
     _seed("v2")
-    client = Client()
+    client = _client_as_operator()
 
     activate_response = client.post("/api/v1/config/risk/default/v2/activate/")
     assert activate_response.status_code == 200
@@ -129,7 +159,7 @@ def test_activate_then_get_active_reflects_new_active_version() -> None:
 @pytest.mark.django_db
 def test_activate_is_idempotent() -> None:
     _seed("v1")
-    client = Client()
+    client = _client_as_operator()
 
     first = client.post("/api/v1/config/risk/default/v1/activate/")
     second = client.post("/api/v1/config/risk/default/v1/activate/")
@@ -143,7 +173,7 @@ def test_activate_is_idempotent() -> None:
 @pytest.mark.django_db
 def test_activate_unknown_version_returns_404() -> None:
     _seed("v1")
-    client = Client()
+    client = _client_as_operator()
 
     response = client.post("/api/v1/config/risk/default/nonexistent/activate/")
 

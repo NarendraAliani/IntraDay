@@ -276,3 +276,51 @@ def test_login_failure_never_leaks_internal_details() -> None:
     serialized = str(response.content).lower()
     for forbidden in ("traceback", "django.db", "select ", "integrityerror", "operationalerror"):
         assert forbidden not in serialized
+
+
+# ---------------------------------------------------------------------------
+# Login-CSRF (Checkpoint 12 - closes the gap Checkpoint 11 deliberately
+# deferred: DRF's default CSRF exemption for API views only enforces CSRF
+# once a session user is already resolved, so a POST /login/ was never
+# checked. `login_view.csrf_exempt = False` (auth_views.py) re-enables
+# Django's real CsrfViewMiddleware for this one view.
+# ---------------------------------------------------------------------------
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_login_is_rejected_without_a_csrf_token() -> None:
+    """A cross-site login attempt - a POST with no CSRF cookie/header
+    pair at all - must be rejected by Django's real CSRF middleware, not
+    merely "would have failed authentication anyway". This is checked
+    BEFORE `authenticate()` runs (middleware runs ahead of the view), so
+    it fails the same way regardless of whether the submitted credentials
+    are valid."""
+    _create_user()
+    client = Client(enforce_csrf_checks=True)
+
+    response = client.post("/api/v1/auth/login/", {"username": USERNAME, "password": PASSWORD})
+
+    assert response.status_code == 403
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_legitimate_login_succeeds_with_a_valid_csrf_token() -> None:
+    """The real, intended flow: fetch the CSRF cookie first (exactly what
+    the frontend's AuthProvider does on every page load via
+    `GET /api/v1/auth/session/`), then submit login with the matching
+    `X-CSRFToken` header - succeeds even under strict CSRF enforcement."""
+    _create_user()
+    client = Client(enforce_csrf_checks=True)
+    session_response = client.get("/api/v1/auth/session/")
+    csrf_token = session_response.cookies["csrftoken"].value
+
+    response = client.post(
+        "/api/v1/auth/login/",
+        {"username": USERNAME, "password": PASSWORD},
+        HTTP_X_CSRFTOKEN=csrf_token,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["is_authenticated"] is True

@@ -18,10 +18,14 @@ from intraday.application.services.errors import (
     ResourceNotFoundError,
 )
 from intraday.application.services.risk import RiskConfigurationService
+from intraday.control_plane.audit.events import ActivationOutcome
 from intraday.domain.risk.contracts import RiskLimits
 from intraday.domain.shared_kernel.contracts import Version
 
 NOW = datetime(2026, 1, 1, 9, 20, tzinfo=UTC)
+ACTOR = "test-actor"
+ACTOR_USER_ID = 1
+REQUEST_ID = "11111111-1111-1111-1111-111111111111"
 
 
 class FakeRiskConfigurationRepository:
@@ -54,10 +58,20 @@ class FakeRiskConfigurationRepository:
             if config_id == risk_configuration_id
         )
 
-    def activate(self, risk_configuration_id: str, version: str) -> None:
+    def activate(
+        self,
+        risk_configuration_id: str,
+        version: str,
+        *,
+        actor: str,
+        actor_user_id: int,
+        request_id: str,
+    ) -> ActivationOutcome:
         if (risk_configuration_id, version) not in self._versions:
             raise ValueError(f"cannot activate unknown version {version!r}")
+        already_active = self._active.get(risk_configuration_id) == version
         self._active[risk_configuration_id] = version
+        return ActivationOutcome.ALREADY_ACTIVE if already_active else ActivationOutcome.ACTIVATED
 
 
 def _record(version: str) -> RiskConfigurationRecord:
@@ -100,7 +114,9 @@ def test_activate_then_get_active_returns_activated_version() -> None:
     repo.save(_record("v2"))
     service = RiskConfigurationService(repository=repo)
 
-    activated = service.activate("default", "v2")
+    activated = service.activate(
+        "default", "v2", actor=ACTOR, actor_user_id=ACTOR_USER_ID, request_id=REQUEST_ID
+    )
 
     assert activated.version.value == "v2"
     assert service.get_active("default").version.value == "v2"
@@ -109,7 +125,13 @@ def test_activate_then_get_active_returns_activated_version() -> None:
 def test_activate_unknown_version_raises_invalid_activation_request() -> None:
     service = RiskConfigurationService(repository=FakeRiskConfigurationRepository())
     with pytest.raises(InvalidActivationRequestError):
-        service.activate("default", "nonexistent")
+        service.activate(
+            "default",
+            "nonexistent",
+            actor=ACTOR,
+            actor_user_id=ACTOR_USER_ID,
+            request_id=REQUEST_ID,
+        )
 
 
 def test_activate_is_idempotent() -> None:
@@ -117,8 +139,12 @@ def test_activate_is_idempotent() -> None:
     repo.save(_record("v1"))
     service = RiskConfigurationService(repository=repo)
 
-    first = service.activate("default", "v1")
-    second = service.activate("default", "v1")
+    first = service.activate(
+        "default", "v1", actor=ACTOR, actor_user_id=ACTOR_USER_ID, request_id=REQUEST_ID
+    )
+    second = service.activate(
+        "default", "v1", actor=ACTOR, actor_user_id=ACTOR_USER_ID, request_id=REQUEST_ID
+    )
 
     assert first == second
 

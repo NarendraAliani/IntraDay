@@ -176,6 +176,19 @@ this is routing for UX, not the security boundary; every protected
 endpoint still enforces its own permission check server-side regardless
 of what the frontend renders.
 
+## Audit contract (Checkpoint 12, no UI yet)
+
+The generated contract now includes `AuditEventResponse` and the
+`GET /api/v1/audit/risk-configuration/{configuration_id}/` operation -
+the schema was regenerated because a real backend endpoint exists (see
+[../architecture/AUDITABILITY.md](../architecture/AUDITABILITY.md)), even
+though no frontend screen consumes it yet. No audit API client function
+or screen was built this checkpoint - deliberately deferred, not an
+oversight; the checkpoint brief explicitly permits deferring the UI as
+long as the underlying persistence/API work doesn't wait on it. These
+are real generated types matching a real, implemented endpoint, not
+speculative/hand-invented frontend types.
+
 ## Testing
 
 `frontend/src/common/api/client.test.ts` and
