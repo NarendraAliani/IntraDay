@@ -113,6 +113,15 @@ deterministic fixture adapter (no live provider, no Dhan code yet). See
 identity, bar/timeframe/timezone semantics, raw-vs-adjusted pricing, and
 the deliberately-deferred persistence/API boundaries.
 
+**Feature engine** (Checkpoint 15): the first technology-neutral feature
+computation (Simple Moving Average), populating `signal_intelligence/
+feature_engine` (a Checkpoint-1-era placeholder bounded context) for the
+first time, with `application/services/feature_engine.py` orchestrating
+it together with the Checkpoint 14 market-data service. See
+[FEATURE_ENGINE_ARCHITECTURE.md](FEATURE_ENGINE_ARCHITECTURE.md) for
+feature identity, warm-up semantics, the no-look-ahead guarantee, and how
+the bounded-context/application layering was reconciled.
+
 ## 3. Layering
 
 ```

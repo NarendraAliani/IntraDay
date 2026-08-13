@@ -3552,3 +3552,308 @@ simple moving average over `Bar` series, consuming
 `HistoricalMarketDataService` exactly as designed), or (b) a first real
 provider adapter (Dhan) implementing `HistoricalMarketDataRepository`
 against sandbox/paper credentials only, kept strictly read-only.
+
+# Checkpoint 15 — Feature Engine Foundation (2026-08-13)
+
+## Objective
+
+Build the first technology-neutral Feature Engine capability — Simple
+Moving Average (SMA) — establishing the architecture future EMA/RSI/ATR/
+VWAP/Supertrend/Bollinger Bands/momentum/volatility features will follow,
+without implementing any of them yet. Output is FEATURES, not signals.
+
+## Existing Feature Architecture Review
+
+Read `domain/feature/contracts.py` before writing anything and found
+Checkpoint 5 had already built exactly the right OUTPUT-only contract:
+`FeatureValue` (`feature_name: str`, `feature_version: Version`,
+`instrument_id`, `timeframe`, `timestamp`, `value: Decimal`) — its own
+docstring already gave `"ema_20"` as the worked identity example and
+explicitly deferred computation itself to "signal_intelligence/
+feature_engine in a later checkpoint." Also read
+`signal_intelligence/feature_engine/README.md` (Checkpoint 1 placeholder)
+— "Depends On: domain/feature, domain/market_data" — which turned out to
+matter a great deal (see the architectural reconciliation below).
+`FeatureValue` required zero changes this checkpoint.
+
+## A Genuine Architectural Finding: Reconciling Two Instructions
+
+The checkpoint brief's explicit dependency chain ("Feature Engine ->
+HistoricalMarketDataService -> Repository -> Infrastructure") and this
+project's own pre-existing, locked architecture
+(`signal_intelligence/feature_engine`'s README explicitly excluding
+`application` from its allowed dependencies, and `.importlinter`
+contract #3's `layers` type placing `application` ABOVE
+`signal_intelligence` — meaning a bounded context can never import
+`application`) appear to conflict on first read. Resolved by recognizing
+"Feature Engine" names two different responsibilities: the calculation
+(pure, belongs in `signal_intelligence/feature_engine`, per its own
+README) and the orchestration (belongs in `application/services/`,
+which is explicitly allowed to depend on both `HistoricalMarketDataService`
+and the bounded context). Built as two files accordingly — see Feature
+Engine Application Service below. `lint-imports` (6/6 kept) is the first
+real exercise of contract #3's `signal_intelligence` layer in this
+codebase (no prior checkpoint had put any code there) — this checkpoint
+both populates it and proves the boundary holds.
+
+## Feature Definition Model
+
+`SimpleMovingAverageDefinition(lookback: int)` —
+`signal_intelligence/feature_engine/definitions.py`, a single-field
+frozen dataclass with `feature_name`/`feature_version` properties. No
+generic `FeatureDefinition` registry/framework was built — the
+checkpoint brief explicitly warned against automatically creating every
+possible abstraction, and no second concrete feature exists yet to prove
+a generic shape correct.
+
+## Feature Identity
+
+`lookback=5` and `lookback=10` produce distinct `feature_name`s
+(`"sma_5"`/`"sma_10"`); two definitions with the same `lookback` are
+equal (dataclass structural equality) and produce identical
+`feature_name`/`feature_version`. `lookback` validated as a real `int`
+(not `float`, not `bool` — `bool` is a Python `int` subclass, explicitly
+rejected so `lookback=True` can never silently mean `lookback=1`),
+strictly positive.
+
+## FeatureValue Model
+
+Unchanged from Checkpoint 5. `instrument_id`/`timeframe` on each output
+are derived from the input bars themselves (`bars[0].instrument_id`/
+`bars[0].timeframe`), never independently supplied parameters that could
+disagree with what the bars actually contain.
+
+## SMA Specification
+
+`SMA(t) = mean(close[t-N+1..t])`, `Bar.close` only (never open/high/low/
+volume). Verified against the checkpoint brief's own hand-worked example
+as a literal test: closes 100/102/104/106/108 → `SMA(3)` = 102/104/106,
+matched exactly.
+
+## Warm-up / Insufficient Data Semantics
+
+**Explicit decision, documented**: the first `lookback - 1` bars produce
+NO output — not `None`, not a shorter-period average. Exactly `lookback`
+real observations are required before the first `FeatureValue` is ever
+emitted. Verified: 0 bars → `()`; fewer than N bars → `()`; exactly N
+bars → exactly 1 value; N+1 bars → exactly 2 values.
+
+## Timestamp Alignment
+
+`FeatureValue.timestamp` = the source bar's own `timestamp` (itself the
+bar's CLOSE time, Checkpoint 14's convention) — no second timestamp
+convention introduced.
+
+## No-Lookahead Validation
+
+Tested explicitly, not merely assumed from the implementation's shape
+(Checkpoint 15 §7's explicit requirement):
+`test_future_bar_does_not_influence_earlier_output` and
+`test_modifying_a_future_bar_does_not_change_earlier_sma_values` compute
+the same bar prefix twice (alone, and with an extra/altered future bar
+appended) and assert the earlier outputs are byte-identical either way.
+Generalized across arbitrary generated series/lookbacks by a Hypothesis
+property test, `test_no_output_uses_future_observations`.
+
+## Decimal Precision
+
+Full `Decimal` division (`window_sum / lookback`), zero `float`
+conversion anywhere in the calculation path. Verified by
+`test_decimal_precision_preserved_not_float` and
+`test_repeated_calculation_produces_identical_decimal_values`. No
+explicit rounding is applied — a future consumer needing a specific
+display precision rounds at its own boundary; inventing a rounding
+policy wasn't required by anything in this checkpoint's scope.
+
+## Instrument Consistency
+
+`compute_simple_moving_average` defensively validates all input bars
+share one `instrument_id`, raising `MixedInstrumentSeriesError`
+otherwise — even though `HistoricalMarketDataService.get_bars()` already
+filters to one instrument by its own query parameter, this is defense in
+depth for any caller constructing a bar tuple directly. Output
+`FeatureValue.instrument_id` verified to match the input bars' actual
+instrument.
+
+## Timeframe Consistency
+
+Same pattern: `MixedTimeframeSeriesError` on a mixed-timeframe input
+series; output `FeatureValue.timeframe` verified retained correctly.
+
+## Feature Engine Application Service
+
+`application/services/feature_engine.py`'s `FeatureEngineService` —
+depends on `HistoricalMarketDataService` (Checkpoint 14) and
+`signal_intelligence.feature_engine.sma.compute_simple_moving_average`;
+never Django, PostgreSQL, Redis, Celery, HTTP, or Dhan. Tested with an
+in-memory fake market-data repository — deliberately NOT
+`FixtureHistoricalMarketDataRepository` — to prove the service depends
+on the Protocol boundary alone, not any one concrete adapter (Checkpoint
+15 §15's explicit instruction: never bypass `HistoricalMarketDataService`
+to reach a fixture/Dhan adapter directly). A static AST-based test
+(`test_service_works_without_django_postgresql_or_dhan`) confirms the
+module itself imports no `django`, no `intraday.infrastructure`, and no
+Dhan-named module.
+
+## Market Data Integration
+
+`compute_simple_moving_average` calls Checkpoint 14's
+`domain.market_data.quality.ensure_chronological()` as its first step —
+duplicate/out-of-order input bars are rejected before any SMA arithmetic
+runs. Reused verbatim, not reimplemented, exactly per instruction.
+
+## Deterministic Fixture Validation
+
+Reused Checkpoint 14's hand-authored fixture conventions (small,
+deterministic, no `random` generation) for the test suite's own bar
+construction; the checkpoint brief's own hand-worked SMA(3) example
+(100/102/104/106/108 → 102/104/106) is encoded as a literal test, not
+merely asserted informally.
+
+## Property-Based Testing
+
+Two Hypothesis tests: every produced SMA value equals the exact
+arithmetic mean of exactly `lookback` preceding closes (generalizing the
+hand-worked example across arbitrary generated series), and no output
+ever uses a future observation (generalizing the look-ahead safety
+tests). Not added elsewhere merely for test-count inflation — targeted
+example-based tests already adequately cover identity/warm-up/instrument/
+timeframe/error-path behavior.
+
+## Test Matrix
+
+**PASSED**: 31 new tests, all genuinely passing — zero require
+PostgreSQL:
+- Feature identity (5): SMA(5)/SMA(10) distinct, equal definitions equal
+  identity, invalid/non-integer/bool lookback rejected.
+- SMA calculation (6): known 3-period and 5-period SMA, Decimal
+  precision, warm-up timing, chronological output.
+- Insufficient data (4): zero bars, fewer-than-N, exactly-N,
+  N-plus-one.
+- Look-ahead safety (2): future bar doesn't influence earlier output,
+  modifying a future bar doesn't change earlier values.
+- Instrument integrity (2): mixed instruments rejected, output retains
+  correct instrument.
+- Timeframe integrity (2): output retains timeframe, mixed timeframes
+  rejected.
+- Market-data integrity (2): duplicate/out-of-order bars rejected
+  (reusing Checkpoint 14's functions).
+- Determinism (2): identical repeated output, identical repeated
+  Decimal values.
+- Property-based (2): mean-of-exactly-N-preceding-observations,
+  no-future-observations-used.
+- Application service (3): expected values via the service, deterministic
+  output, static no-Django/infrastructure/Dhan-import proof.
+- (1 additional: bool-lookback rejection, listed under identity above.)
+
+**SKIPPED**: 81 (unchanged — no new PostgreSQL-dependent test was added
+or needed).
+
+**FAILED**: 0 (two property-based tests initially failed during
+development due to a test-fixture bug — Hypothesis-generated close
+prices near the fixture helper's flat `±1` high/low offset could produce
+a non-positive `low`; fixed by raising the generated price floor before
+any test was reported as passing).
+
+## PostgreSQL Validation Status
+
+Still unreachable — zero impact again this checkpoint, continuing
+Checkpoint 14's discipline: everything new (bounded-context calculation,
+application service) is deliberately DB-free.
+
+## Architecture Enforcement
+
+`lint-imports` ✅ **6/6 kept** (128 files, up from 123) — the first real
+exercise of contract #3's `signal_intelligence` layer (see the
+architectural reconciliation above). No new contract was needed;
+`domain/feature` has no infrastructure imports (unchanged, verified by
+the existing domain-purity architecture test which globs the whole
+`domain/` package), `application/services` has no infrastructure imports
+(verified by the new static AST test plus contract #6), and no Dhan
+dependency was introduced anywhere (verified by direct search).
+
+## Security Review
+
+No credentials, API keys, `.env` files, network calls, broker calls, or
+Dhan SDK anywhere in the new code. No live trading path exists or was
+touched.
+
+## Trading Safety Validation
+
+No `trading_engine/`, `control_plane/kill_switch/`, `infrastructure/
+brokers/`, or `TRADING_MODE`-resolution code touched — confirmed by
+reviewing the full changed-file list (all are
+`signal_intelligence/feature_engine/`, `application/services/`, `docs/`,
+and test files). The platform remains structurally incapable of placing
+a live order as a consequence of this checkpoint.
+
+## Regression Results
+
+Ruff format ✅ (163 files) · Ruff lint ✅ · mypy strict ✅ (104 files, up
+from 99) · pytest ✅ **187 passed, 81 skipped, 0 failed** (up from 156
+passed — 31 new genuinely-passing tests, 0 new skips) · import-linter ✅
+**6/6 kept** (128 files) · `manage.py check` ✅ · `spectacular
+--fail-on-warn` ✅ (regenerated schema confirmed to contain zero new
+feature/SMA content) · `pip-audit` ✅ (no new findings — no new
+dependency added). Checkpoints 1-14 (auth, authorization, activation,
+audit, market data) all re-verified passing unchanged.
+
+**Frontend was not touched this checkpoint** — no frontend validation
+was run or needed; none is invented here.
+
+## Documentation Updated
+
+New: `docs/architecture/FEATURE_ENGINE_ARCHITECTURE.md` (feature vs.
+raw-data vs. signal distinction, the architectural reconciliation,
+feature identity, warm-up semantics, timestamp alignment, no-look-ahead
+guarantee, Decimal precision, instrument/timeframe consistency,
+deliberately-absent persistence/API/frontend, research/backtest parity).
+Updated: `docs/architecture/ARCHITECTURE_DECISIONS.md` (decisions
+#68-71 + Checkpoint 15 notes), `docs/architecture/ARCHITECTURE.md`
+(pointer), `docs/architecture/DOMAIN_CONTRACTS.md` (§5 `feature`'s
+"must not know HOW" line updated to name the now-real SMA computation
+and its location), this file. `docs/architecture/MARKET_DATA_ARCHITECTURE.md`
+needed no changes — nothing about market data itself changed.
+
+## Versioning
+
+Checked before changing: `pyproject.toml` (`0.8.0`) and
+`SPECTACULAR_SETTINGS["VERSION"]` (`0.11.0`) both left unchanged — no API
+surface changed this checkpoint, consistent with the pattern established
+since Checkpoint 9.
+
+## Git Status
+
+- `git fetch origin` (read-only): `origin/main` unchanged at `4d1f94d`
+  (Checkpoint 11) — no anomaly this session, consistent with Checkpoints
+  13/14's own reports.
+- `git rev-parse HEAD` (before this checkpoint's commit): `3175c7a`
+  (Checkpoint 14).
+- `git branch --show-current`: `main`.
+- `git rev-list --left-right --count HEAD...origin/main` (before this
+  checkpoint's commit): `3  0` — 3 ahead, 0 behind.
+- Working tree was clean before this checkpoint's changes.
+
+Committed locally to `main` as `Checkpoint 15: establish deterministic
+feature engine foundation`. **Not pushed.**
+
+## Deferred Items
+
+Every other indicator (EMA, RSI, ATR, VWAP, Supertrend, Bollinger Bands,
+momentum/volatility features). Signal generation/scoring/lifecycle.
+Strategies. Backtesting. Risk engine. Order/position management. Broker
+integration (including Dhan). Live/websocket market data. Feature-value
+persistence (TimescaleDB, on ingestion authorization — unchanged from
+Checkpoint 14). Any API/frontend surface for features. Docker remains
+deferred.
+
+## Recommended Checkpoint 16
+
+With two features' worth of infrastructure now proven (market data +
+one real computation), recommend either (a) a second, differently-shaped
+feature (e.g. EMA, which needs a recursive/stateful calculation rather
+than SMA's fixed window — a genuinely different test of the architecture
+than a second fixed-window average would be), or (b) beginning
+`signal_intelligence/signal_generation`'s first technology-neutral
+contract now that a real feature exists for a signal to eventually
+reference.

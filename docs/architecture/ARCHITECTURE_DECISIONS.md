@@ -361,3 +361,39 @@ Full detail: [docs/architecture/MARKET_DATA_ARCHITECTURE.md](MARKET_DATA_ARCHITE
   human to interact with via the control plane. Gate remains YES from
   Checkpoint 10 for the existing configuration workflow; market data
   itself has no UI/API boundary to evaluate against the gate yet.
+
+## Checkpoint 15 — Feature Engine Foundation (2026-08-13)
+
+Establishes the first technology-neutral feature computation (Simple
+Moving Average) and the architecture future EMA/RSI/ATR/VWAP/Supertrend/
+Bollinger Bands features will follow. Full detail:
+[docs/architecture/FEATURE_ENGINE_ARCHITECTURE.md](FEATURE_ENGINE_ARCHITECTURE.md).
+
+| # | Decision | Reason | Alternatives Considered | Status |
+|---|---|---|---|---|
+| 68 | The actual feature computation (`compute_simple_moving_average`) lives in `signal_intelligence/feature_engine` (a bounded context), depending only on `domain/feature`+`domain/market_data`; a separate `application/services/feature_engine.py` (`FeatureEngineService`) orchestrates it together with `HistoricalMarketDataService`. | Reconciles the checkpoint brief's instruction ("Feature Engine -> HistoricalMarketDataService -> Repository -> Infrastructure") with this project's own pre-existing, locked architecture (`signal_intelligence/feature_engine/README.md`, Checkpoint 1: "Depends On: domain/feature, domain/market_data" - not `application`) and `.importlinter` contract #3's `layers` type (`application` above `signal_intelligence` above `domain` - a bounded context may never import `application`). Splitting calculation (bounded context) from orchestration (application) satisfies both simultaneously; verified by `lint-imports` 6/6 kept - the first real exercise of contract #3's `signal_intelligence` layer in this codebase. | Putting the whole Feature Engine (calculation + orchestration) inside `application/services/` (rejected - would leave `signal_intelligence/feature_engine`'s already-decided-at-Checkpoint-1 responsibility unfulfilled, and contradicts its own README's dependency list); putting the whole thing inside `signal_intelligence/feature_engine` including the `HistoricalMarketDataService` call (rejected - `.importlinter` contract #3 forbids a bounded context from importing `application` at all). | LOCKED |
+| 69 | Feature identity (`SimpleMovingAverageDefinition`) is a single-field frozen dataclass (`lookback: int`) with `feature_name`/`feature_version` properties, deriving `"sma_{lookback}"` - not a generic `FeatureDefinition` registry/framework. | SMA has exactly one parameter; a registry/generic-definition framework would be built for a "someday" second feature that doesn't exist yet in this checkpoint's scope. Follows `FeatureValue`'s own Checkpoint 5 docstring convention (`"ema_20"` as the worked example of a name baking its parameter in) rather than inventing a new identity scheme. | A generic `FeatureDefinition(name: str, parameters: dict)` framework (rejected - the checkpoint brief explicitly warns against this; no second feature exists yet to prove the framework's shape is even correct). | LOCKED |
+| 70 | Warm-up semantics: the first `lookback - 1` bars produce NO output (not `None`, not a shorter-period average) - exactly `lookback` observations are required before the first `FeatureValue` is emitted. | Matches the checkpoint brief's own explicit recommendation and the standard, unambiguous convention for a fixed-window indicator - a shorter-period average during warm-up would be a silently different (and silently degrading) calculation being presented as the same one. | Emitting a shorter-period average during warm-up (rejected - explicitly warned against, "do not silently calculate a shorter-period average"); emitting `None`/a zero value during warm-up (rejected - `FeatureValue.value` is typed `Decimal`, not optional; inventing a sentinel would contradict the existing Checkpoint 5 contract). | LOCKED |
+| 71 | `FeatureValue.timestamp` for SMA equals the source bar's own timestamp (itself the bar's CLOSE time, per Checkpoint 14) - no second timestamp convention. | The checkpoint brief required an explicit, non-ambiguous timestamp-alignment decision; reusing the bar's own already-decided CLOSE-time convention is the only choice that doesn't introduce a second, potentially-conflicting notion of "when" a value belongs to. | A feature-specific timestamp offset (e.g. "N bars after the window start") (rejected - unnecessary complexity, and would make aligning multiple simultaneous features to the same instant harder for a future consumer, not easier). | LOCKED |
+
+## Notes (Checkpoint 15)
+
+- `domain/feature/contracts.py`'s `FeatureValue` (Checkpoint 5) required
+  ZERO changes - already exactly the right shape. Confirms Checkpoint 5's
+  own forward-looking design (an OUTPUT-only contract, explicitly
+  deferring computation to "a later checkpoint") was correct in practice,
+  not just in intent.
+- `import-linter` remains 6/6 kept (128 files analyzed, up from 123) -
+  `signal_intelligence/feature_engine`'s new code and
+  `application/services/feature_engine.py` both respect the existing
+  layering with no new contract needed.
+- All 31 new tests pass genuinely (not skipped) - continuing Checkpoint
+  14's discipline of keeping new functionality 100% testable without
+  PostgreSQL.
+- No API/frontend surface was added - confirmed via a regenerated,
+  byte-unchanged-in-substance OpenAPI schema (zero feature/SMA
+  references). Frontend UX Testing Readiness gate unaffected (already
+  YES since Checkpoint 10; nothing new for a human to interact with).
+- Versioning: `pyproject.toml` (0.8.0) and `SPECTACULAR_SETTINGS["VERSION"]`
+  (0.11.0) both checked and left unchanged - no API surface changed this
+  checkpoint.

@@ -111,7 +111,12 @@ size approved at Checkpoint 2/3.
 - **Identity**: `(feature_name, feature_version, instrument_id, timeframe, timestamp)`.
 - **Required fields**: all of the above plus `value`.
 - **Invariants**: non-empty `feature_name`; UTC timestamp; `value` must be `Decimal`.
-- **Must NOT know**: HOW the feature was computed (EMA/RSI/MACD/etc. — none implemented).
+- **Must NOT know**: HOW the feature was computed — the computation
+  itself lives in `signal_intelligence/feature_engine`
+  (`compute_simple_moving_average`, Checkpoint 15), never in this
+  contract. As of Checkpoint 15, one computation exists (Simple Moving
+  Average, identity `sma_{lookback}`); EMA/RSI/MACD/ATR/etc. remain
+  unimplemented.
 - **Future consumers**: `signal_intelligence/signal_generation`, `research/eda`.
 
 ### 6. `strategy` — `src/intraday/domain/strategy/contracts.py`
