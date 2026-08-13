@@ -5164,3 +5164,213 @@ regime classifier) to pressure-test whether the current contract
 generalizes beyond one rule, mirroring how ATR itself pressure-tested
 the Feature Engine at Checkpoint 17. Not implemented - recommendation
 only.
+
+# Checkpoint 19 — Signal Verification Foundation (2026-08-13)
+
+## Objective
+
+Establish the first real implementation in
+`signal_intelligence/signal_verification`: a deterministic evaluation of
+whether an already-generated `DirectionalIndication` (Checkpoint 18) was
+subsequently supported by actual market-price movement. Observation and
+outcome evaluation only — no strategy, no order system, no broker
+integration, no live trading.
+
+## What Was Built
+
+- `signal_intelligence/signal_verification/contracts.py`:
+  `VerificationOutcome` (SUPPORTED/NOT_SUPPORTED/INCONCLUSIVE —
+  deliberately not BUY/SELL/PROFIT/LOSS), `VerificationResult` (frozen
+  dataclass, full provenance via an embedded `DirectionalIndication`).
+- `signal_intelligence/signal_verification/errors.py`: `InvalidHorizonError`,
+  `MismatchedInstrumentError`, `MismatchedTimeframeError`,
+  `NonFutureObservationError`.
+- `signal_intelligence/signal_verification/verification.py`:
+  `verify_directional_indication()` (single signal, explicit horizon)
+  and `verify_directional_indications()` (multiple signals against one
+  shared bar series, independently verified). Imports only
+  `domain/market_data`, `domain/shared_kernel`, and
+  `signal_intelligence.signal_generation` (for `DirectionalIndication`
+  itself) — never `feature_engine`, `trading_engine`, or infrastructure.
+- `application/services/signal_verification.py`: `SignalVerificationService`
+  — composes `HistoricalMarketDataService` + the pure evaluation
+  function, no outcome-determination math of its own.
+- `tests/unit/architecture/test_signal_verification_boundaries.py` —
+  dedicated static-scan architecture test, mirroring Checkpoint 18's own
+  pattern.
+
+## Outcome Semantics
+
+```
+BULLISH + observed > reference   -> SUPPORTED
+BULLISH + observed <= reference  -> NOT_SUPPORTED
+BEARISH + observed < reference   -> SUPPORTED
+BEARISH + observed >= reference  -> NOT_SUPPORTED
+NEUTRAL (any observed)           -> INCONCLUSIVE
+```
+
+Equal prices for BULLISH/BEARISH are `NOT_SUPPORTED` (a completed,
+conclusive, but negative observation) — not `INCONCLUSIVE` (reserved for
+genuinely incomplete data) and not `SUPPORTED` (no net movement cannot
+honestly confirm a directional call).
+
+## Evaluation Horizon
+
+`horizon_bars: int` — explicit, required, no magic default. Evaluates
+exactly one future observation (the bar `horizon_bars` bars after the
+signal), not a path/MFE/MAE analysis — explicitly the smallest
+deterministic implementation, with MFE/MAE/path analysis deferred to
+`signal_intelligence/theoretical_outcome` (a distinct, not-yet-built
+bounded context, confirmed via its own Checkpoint-1 README).
+
+## Reference Price / Future Boundary
+
+Reference price is `indication.price` (the signal-time close, already
+on `DirectionalIndication`). A bar's timestamp must be strictly after
+the signal's timestamp — same-timestamp and past bars are rejected
+(`NonFutureObservationError`), never silently reordered.
+`ensure_chronological()` (Checkpoint 14) reused verbatim for the future-
+bar series, not reimplemented.
+
+## Neutral / Incomplete-Horizon Semantics
+
+NEUTRAL → always `INCONCLUSIVE`, never `NOT_SUPPORTED` (no directional
+prediction existed to support or refute). Fewer than `horizon_bars`
+future bars available → `INCONCLUSIVE`, never `NOT_SUPPORTED` (end-of-
+day/holiday/missing-data are legitimate, not evidence of failure).
+
+## DirectionalIndication Promotion Assessment (§23)
+
+**Not promoted to `domain/` this checkpoint.** `signal_verification` is
+now a second real consumer of `DirectionalIndication` within
+`signal_intelligence` — genuine new evidence, but the project's
+minimum-viable-shared-kernel rule requires a second **bounded context**
+(one of the five major divisions), not a second submodule within the
+same one. `signal_generation` and `signal_verification` are both under
+`signal_intelligence`, so this is intra-context reuse, not cross-context
+evidence. No consumer outside `signal_intelligence` exists yet.
+Documented explicitly in `SIGNAL_VERIFICATION_ARCHITECTURE.md` rather
+than silently promoted or silently ignored — recommend revisiting the
+moment a bounded context outside `signal_intelligence` needs the
+identical shape (e.g. `research/backtesting` replay or `control_plane/
+audit`).
+
+## No-Look-Ahead / No-Leakage
+
+Pure functions throughout — no look-ahead possible by construction.
+Explicitly tested: `DirectionalIndication` unchanged after verification
+(frozen-dataclass equality proof), verifying one indication does not
+affect another's result even when structurally identical but given
+different futures, re-verifying a signal after a different signal was
+verified produces an identical result to before (no cross-signal
+leakage), and — critically — verification never flows back into signal
+generation (`generate_directional_indication`/`generate_directional_indications`
+were not modified this checkpoint; no import from `signal_verification`
+back into `signal_generation` exists, confirmed by the architecture
+test's own directionality).
+
+## Test Matrix (39 new tests, all PASSED — 0 skipped)
+
+Outcome: bullish supported/not-supported/unchanged (3), bearish
+supported/not-supported/unchanged (3), neutral always inconclusive (1).
+Temporal: same-timestamp rejected, past rejected, correct future
+accepted (3). Instrument/timeframe alignment (2). Horizon: invalid/
+negative horizon rejected, no bars, insufficient bars, exactly
+sufficient, extra bars ignored (6). Precision (1). Determinism (1).
+Immutability/no-leakage (2). Provenance (1). Series-level: multiple
+signals independent, order preserved, mismatched instrument rejected,
+duplicate/out-of-order bars rejected (4). Cross-signal no-leakage (1).
+Contract validation (1). Property-based (2). Application service (4).
+Architecture boundary (3).
+
+## Property-Based Testing
+
+Two Hypothesis tests: the outcome rule holds for arbitrary reference/
+observed price/direction combinations (generalizes every hand-picked
+case across the full input space), and observations beyond the
+requested horizon never affect the result (proves the "single-point,
+not path analysis" design decision holds for arbitrary series lengths,
+not just the hand-picked examples).
+
+## Architecture Enforcement
+
+`lint-imports`: **6/6 kept**, 143 files (up from 138). New dedicated
+architecture test independently confirms `signal_verification` never
+imports `trading_engine`/`feature_engine`/infrastructure, and its only
+`signal_intelligence.*` import is `signal_generation` — the documented,
+deliberate exception (decision #89).
+
+## Full Regression
+
+- `pytest`: **431 passed, 0 failed, 0 skipped** (up from Checkpoint 18's
+  392 — the +39 is entirely new signal-verification/architecture tests;
+  zero regressions, zero new skips).
+- `ruff format --check` / `ruff check`: clean, 187 files.
+- `mypy --strict`: success, 117 source files.
+- `lint-imports`: 6/6 kept.
+- `manage.py check`: clean. `makemigrations --check --dry-run`: "No
+  changes detected."
+- `manage.py spectacular --fail-on-warn`: success; regenerated schema
+  confirmed to contain zero verification-related content.
+- `pip-audit`: 8 findings, unchanged from Checkpoints 16-18 — no
+  dependency file touched; verified, not assumed.
+
+## Frontend Regression
+
+Untouched this checkpoint, per instruction. `typecheck`/`build`: clean.
+`test -- --run`: 32 passed, unchanged.
+
+## PostgreSQL / Redis
+
+Both remained available throughout — all 431 tests ran for real, none
+skipped. The core signal-verification code itself remains 100% DB-free
+by design (verified by the same static AST-based no-Django test pattern
+used for every other application service in this codebase).
+
+## Security / Trading Safety
+
+No credentials, API keys, `.env`, or network calls introduced.
+`trading_engine/`, `risk_engine`, `order_management`,
+`position_management`, `execution_management`, broker abstraction,
+`Dhan`, `kill_switch`, `TRADING_MODE`, `strategy_execution` — confirmed
+untouched. No order, broker call, or live configuration activation.
+`domain/signal/contracts.py` and `domain/strategy/contracts.py` both
+confirmed unchanged (verified by the new architecture test's own
+domain-import allowlist, which permits only `domain.market_data`/
+`domain.shared_kernel`).
+
+## Documentation
+
+New `docs/architecture/SIGNAL_VERIFICATION_ARCHITECTURE.md` (full
+contract: outcome semantics, horizon, reference price, future
+boundary, neutral/incomplete-horizon semantics, identity/versioning,
+provenance, promotion assessment, architecture enforcement).
+`docs/architecture/ARCHITECTURE.md` (one paragraph).
+`docs/architecture/ARCHITECTURE_DECISIONS.md` (decisions #86-#89 +
+Notes). `signal_intelligence/signal_verification/README.md` (updated
+from the Checkpoint-1 placeholder). This `taskReport.md` section.
+
+## Versioning
+
+`pyproject.toml`/`SPECTACULAR_SETTINGS["VERSION"]` unchanged — no API
+surface changed. New `VERIFICATION_DEFINITION_VERSION` ("v1") reuses
+the existing `Version` primitive, kept explicitly distinct from
+`DirectionalIndication`'s own `definition_name`/`definition_version`.
+
+## Deferred
+
+Signal persistence, verification API, frontend verification viewer,
+`theoretical_outcome`/MFE/MAE/path analysis, signal lifecycle/expiry,
+strategy execution, threshold-based verification (e.g. minimum-move
+significance), Dhan/live provider — all deliberately out of scope.
+
+## Recommended Checkpoint 20
+
+Recommend `signal_intelligence/signal_lifecycle` (state transitions/
+expiry for indications, now that both generation and verification
+exist) as the next logical step — a natural, small extension that would
+also be the first place `VerificationResult`s and `DirectionalIndication`s
+are correlated over time per instrument. A lower-priority alternative:
+begin `signal_intelligence/theoretical_outcome` (MFE/MAE) now that the
+single-point verification baseline exists to compare a richer metric
+against. Not implemented — recommendation only.

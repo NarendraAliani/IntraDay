@@ -558,3 +558,45 @@ BULLISH/BEARISH/NEUTRAL. Full detail:
   both checked and left unchanged - no API surface changed. A new
   `DIRECTIONAL_INDICATION_DEFINITION_VERSION` ("v1") was introduced,
   reusing the existing `Version` primitive - no second versioning system.
+
+## Checkpoint 19 — Signal Verification Foundation (2026-08-13)
+
+Establishes the first real code in `signal_intelligence/signal_verification`
+- a deterministic evaluation of whether a `DirectionalIndication`
+(Checkpoint 18) was subsequently supported by actual price movement.
+Full detail:
+[docs/architecture/SIGNAL_VERIFICATION_ARCHITECTURE.md](SIGNAL_VERIFICATION_ARCHITECTURE.md).
+
+| # | Decision | Reason | Alternatives Considered | Status |
+|---|---|---|---|---|
+| 86 | Verification outcome is `SUPPORTED`/`NOT_SUPPORTED`/`INCONCLUSIVE`, evaluated by a single price observation at an explicit, required `horizon_bars` bars after the signal - not a path/MFE/MAE analysis across the whole horizon. | The checkpoint brief explicitly prefers the smallest deterministic implementation and explicitly excludes MFE/MAE/drawdown/path analysis this checkpoint (reserved for `signal_intelligence/theoretical_outcome`, a distinct, not-yet-built bounded context per its own Checkpoint-1 README). | Evaluating every bar across the horizon and computing MFE/MAE (rejected - explicitly out of scope, a materially larger and different contract belonging to `theoretical_outcome`); a hard-coded horizon default like "5 bars" (rejected - the brief explicitly forbids an unjustified magic number; `horizon_bars` is a required, explicit parameter instead). | LOCKED |
+| 87 | A `NEUTRAL` indication verifies to `INCONCLUSIVE`, never `NOT_SUPPORTED`, regardless of subsequent price movement. Equal prices (`observed == reference`) for BULLISH/BEARISH verify to `NOT_SUPPORTED`, not `SUPPORTED` or `INCONCLUSIVE`. | A NEUTRAL indication made no directional prediction to support or refute - collapsing it into NOT_SUPPORTED would fabricate a claim the indication never made. "No net movement," by contrast, is a real, known observation that cannot honestly support a call that specifically predicted movement - mirrors `generate_directional_indication`'s own equality-is-not-a-directional-signal treatment. | Treating NEUTRAL as NOT_SUPPORTED (rejected - the checkpoint brief's own explicit warning); treating equal-price BULLISH/BEARISH as INCONCLUSIVE rather than NOT_SUPPORTED (considered - rejected because the observation IS complete and conclusive, just not supportive; INCONCLUSIVE is reserved for genuinely incomplete data, not a completed-but-negative result). | LOCKED |
+| 88 | An incomplete horizon (fewer than `horizon_bars` future bars available) verifies to `INCONCLUSIVE`, never `NOT_SUPPORTED`. | End-of-day signals, holidays, missing data, and interrupted feeds are legitimate, expected situations, not evidence the market moved against the call - conflating "we don't yet know" with "we know it failed" would be dishonest. | Raising an exception for an incomplete horizon (rejected - this is expected, ordinary data shape, not a caller error, unlike a genuinely misaligned instrument/timeframe/timestamp, which still raises). | LOCKED |
+| 89 | `DirectionalIndication` is NOT promoted to `domain/` this checkpoint, despite `signal_verification` becoming a second real consumer. | The project's minimum-viable-shared-kernel rule sets the bar at two BOUNDED CONTEXTS (the five major divisions) - `signal_generation` and `signal_verification` are both submodules of the same bounded context (`signal_intelligence`), so this is intra-context reuse, not cross-context evidence. No consumer outside `signal_intelligence` exists yet. | Promoting now, anticipating a future `research/backtesting` or `control_plane` consumer (rejected - no confirmed need exists yet; this is exactly the speculative promotion the checkpoint brief explicitly forbade); leaving the finding undocumented (rejected - the checkpoint brief explicitly required documenting the finding even when promotion is deferred). | LOCKED |
+
+## Notes (Checkpoint 19)
+
+- `domain/market_data/contracts.py`'s `Bar` required ZERO changes.
+  `domain/signal/contracts.py` was not touched at all this checkpoint -
+  confirmed by the new architecture test's own domain-import allowlist
+  (only `domain.market_data`/`domain.shared_kernel` permitted).
+- `import-linter` remains 6/6 kept (143 files analyzed, up from 138) -
+  no new contract needed. A dedicated static-scan architecture test
+  (`tests/unit/architecture/test_signal_verification_boundaries.py`)
+  independently re-verifies that `signal_verification` never imports
+  `trading_engine`/`feature_engine`/infrastructure, and that its only
+  `signal_intelligence.*` import is `signal_generation` (documented,
+  deliberate, intra-context reuse - see decision #89).
+- 39 new backend tests (32 core + 4 application-service + 3
+  architecture) pass genuinely (not skipped) - continuing the
+  100%-DB-free discipline of every prior signal-intelligence checkpoint.
+  Full suite: 431 passed / 0 failed / 0 skipped (up from Checkpoint 18's
+  392).
+- No API/persistence/frontend surface was added - confirmed via a
+  regenerated, byte-unchanged-in-substance OpenAPI schema.
+- Versioning: `pyproject.toml` and `SPECTACULAR_SETTINGS["VERSION"]`
+  both checked and left unchanged - no API surface changed. A new
+  `VERIFICATION_DEFINITION_VERSION` ("v1") reuses the existing `Version`
+  primitive - no second versioning system, and deliberately distinct
+  from (never confused with) `DirectionalIndication`'s own
+  `definition_name`/`definition_version`.

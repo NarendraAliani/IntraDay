@@ -138,6 +138,18 @@ SMA/EMA/ATR feature state, deliberately NOT `domain.signal.Signal`
 for the full contract, the reasoning behind not yet producing the
 canonical `Signal`, and the feature-alignment/no-look-ahead rules.
 
+**Signal verification** (Checkpoint 19): the first real code in
+`signal_intelligence/signal_verification` — evaluates whether a
+`DirectionalIndication` was subsequently supported by actual price
+movement (SUPPORTED/NOT_SUPPORTED/INCONCLUSIVE), at an explicit
+evaluation horizon. A second real consumer of `DirectionalIndication`
+within `signal_intelligence` — evaluated for `domain/` promotion and
+found not yet justified (no consumer outside `signal_intelligence`
+yet). See
+[SIGNAL_VERIFICATION_ARCHITECTURE.md](SIGNAL_VERIFICATION_ARCHITECTURE.md)
+for outcome semantics, horizon/incomplete-horizon rules, and the
+promotion assessment.
+
 ## 3. Layering
 
 ```
