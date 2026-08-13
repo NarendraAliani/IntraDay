@@ -120,18 +120,23 @@ inventing one now would be exactly the kind of premature endpoint
 proliferation Checkpoint 8 §7 warns against. Add it when a second named
 configuration family actually exists.
 
-### Audit (Checkpoint 12, risk configuration only)
+### Audit (Checkpoint 12 risk configuration; Checkpoint 13 all three resources)
 
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/v1/audit/risk-configuration/{configuration_id}/` | List every recorded activation attempt for this configuration id, newest first |
+| GET | `/api/v1/audit/universe/{universe_id}/` | List every recorded activation attempt for this universe id, newest first |
+| GET | `/api/v1/audit/strategy/{strategy_id}/` | List every recorded activation attempt for this strategy id, newest first |
 
-Read-only — no write/update/delete audit operation exists. Requires
-`IsAuthenticated` + `IsConfigurationOperator` (the same gate as
-activation itself, not the plain-read `configuration.read` capability).
-Universe/strategy-version activation are not audited yet — see
+Read-only — no write/update/delete audit operation exists, for any
+resource. Requires `IsAuthenticated` + `IsConfigurationOperator` (the
+same gate as activation itself, not the plain-read `configuration.read`
+capability) — identical across all three. Each strategy audit event's
+`version` field is the flattened `"{specification_version}:{code_version}:
+{configuration_version}"` identifier, not three separate fields — see
 [../architecture/AUDITABILITY.md](../architecture/AUDITABILITY.md) for
-the full model and the documented scope boundary.
+the full model, the flattening rationale, and the documented boundary
+decisions (403s not audited, application-level append-only enforcement).
 
 ## 5. Request / Response Contracts
 
@@ -236,16 +241,22 @@ the error body never contains `traceback`, `django.db`, `select `, or
   activation requests. No additional locking was added because the
   existing design already provides this guarantee; see Checkpoint 10's
   Concurrency Review in `taskReport.md`.
-- **Auditability: implemented as of Checkpoint 12** (risk configuration
-  only). Every activation attempt — successful, no-op, or rejected — is
-  recorded in a durable, append-only `AuditLogEntry` row, in the SAME
-  database transaction as the state change it describes (so a
-  successful activation cannot exist without its audit record — verified
-  by test). See
+- **Auditability: implemented for all three resources as of Checkpoint
+  13** (risk configuration since Checkpoint 12; universe and
+  strategy-version added at Checkpoint 13, identical pattern). Every
+  activation attempt — successful, no-op, or rejected — is recorded in a
+  durable, append-only `AuditLogEntry` row, in the SAME database
+  transaction as the state change it describes (so a successful
+  activation cannot exist without its audit record — verified by test,
+  once per resource). See
   [../architecture/AUDITABILITY.md](../architecture/AUDITABILITY.md) for
-  the full model, and `GET /api/v1/audit/risk-configuration/{id}/` above
-  for the read API. Universe/strategy-version activation remain
-  unaudited (documented scope boundary).
+  the full model, and §4's Audit table above for the three read
+  endpoints.
+- Universe and strategy-version activation share the SAME transactional/
+  concurrency-safety design as risk configuration (`transaction.atomic()`
+  + a database-level `unique=True` constraint on the respective
+  active-pointer table) — not newly built at Checkpoint 13, only
+  extended with the audit append inside the same block.
 
 ## 8. HTTP Status Codes Used
 

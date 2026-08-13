@@ -176,18 +176,23 @@ this is routing for UX, not the security boundary; every protected
 endpoint still enforces its own permission check server-side regardless
 of what the frontend renders.
 
-## Audit contract (Checkpoint 12, no UI yet)
+## Audit contract (Checkpoints 12-13, no UI yet)
 
-The generated contract now includes `AuditEventResponse` and the
-`GET /api/v1/audit/risk-configuration/{configuration_id}/` operation -
-the schema was regenerated because a real backend endpoint exists (see
-[../architecture/AUDITABILITY.md](../architecture/AUDITABILITY.md)), even
-though no frontend screen consumes it yet. No audit API client function
-or screen was built this checkpoint - deliberately deferred, not an
-oversight; the checkpoint brief explicitly permits deferring the UI as
+The generated contract includes `AuditEventResponse` and three read
+operations - `GET /api/v1/audit/risk-configuration/{configuration_id}/`
+(Checkpoint 12), `GET /api/v1/audit/universe/{universe_id}/`, and
+`GET /api/v1/audit/strategy/{strategy_id}/` (both Checkpoint 13) - the
+schema was regenerated each time because a real backend endpoint exists
+(see [../architecture/AUDITABILITY.md](../architecture/AUDITABILITY.md)),
+even though no frontend screen consumes any of them yet. No audit API
+client function or screen was built - deliberately deferred, not an
+oversight; both checkpoint briefs explicitly permit deferring the UI as
 long as the underlying persistence/API work doesn't wait on it. These
-are real generated types matching a real, implemented endpoint, not
-speculative/hand-invented frontend types.
+are real generated types matching real, implemented endpoints, not
+speculative/hand-invented frontend types. The existing Configuration
+Viewer's activation workflow was re-verified unchanged (all 30
+pre-existing frontend tests still pass) - no functional frontend change
+was required by extending the audit API to two more resources.
 
 ## Testing
 

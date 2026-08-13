@@ -1,10 +1,13 @@
 # Auditability
 
-Checkpoint 12. Establishes the durable, append-only control-plane audit
+Checkpoint 12 established the durable, append-only control-plane audit
 trail — the first real code in `control_plane/audit` (previously an
-architecture placeholder since Checkpoint 1). Scope: **risk-configuration
-activation only**. Universe/strategy-version activation are intentionally
-NOT audited this checkpoint — see [Scope](#scope) below.
+architecture placeholder since Checkpoint 1) — scoped to risk-
+configuration activation only. **Checkpoint 13 extended the identical
+pattern to Universe and Strategy Version activation**, so all three
+configuration resources now share one audit vocabulary, one
+transactional-coupling guarantee, and one authorization boundary. See
+[Scope](#scope) below.
 
 ## Login-CSRF (closing Checkpoint 11's deferred gap)
 
@@ -48,15 +51,56 @@ pattern was introduced.
 
 ## Scope
 
-Only `POST /api/v1/config/risk/{id}/{version}/activate/` writes audit
-events this checkpoint. Universe and strategy-version activation remain
-unaudited, per the checkpoint brief's explicit instruction not to expand
-scope. The domain vocabulary (`resource_type`/`resource_id`, not
-`risk_configuration_id`-specific) and the model's `resource_type` field
-are already generic enough to extend to them later without a redesign —
-extending write-side coverage would mean repeating the same
-`activate()`-method change made here for
-`DjangoUniverseRepository`/`DjangoStrategyVersionRepository`.
+As of Checkpoint 13, all three configuration-activation endpoints write
+audit events, using the identical pattern:
+
+- `POST /api/v1/config/risk/{configuration_id}/{version}/activate/` —
+  `resource_type="risk_configuration"`, `resource_id` = configuration id
+  (Checkpoint 12).
+- `POST /api/v1/config/universe/{universe_id}/{version}/activate/` —
+  `resource_type="universe"`, `resource_id` = universe id
+  (Checkpoint 13).
+- `POST /api/v1/config/strategy/{strategy_id}/{spec}/{code}/{config}/activate/`
+  — `resource_type="strategy_version"`, `resource_id` = strategy id
+  (Checkpoint 13). The 3-tuple identity
+  (`specification_version`/`code_version`/`configuration_version`) is
+  flattened into the audit row's single `version_identifier` column as
+  `"{specification_version}:{code_version}:{configuration_version}"` —
+  see [Strategy Version identity](#strategy-version-identity-flattening)
+  below. This flattening exists **only** in the audit row; the
+  domain/application identity itself (the 3-tuple passed to and from
+  `StrategyVersionRepository.activate()`) is never altered.
+
+`resource_type`/`resource_id` were already generic (not
+`risk_configuration_id`-specific) at Checkpoint 12 specifically so this
+extension would need no redesign — confirmed true: Checkpoint 13 added
+no new field, no new table, no schema migration. Extending
+`DjangoUniverseRepository.activate()`/`DjangoStrategyVersionRepository.activate()`
+was a direct repeat of the pattern already proven for
+`DjangoRiskConfigurationRepository.activate()`.
+
+No further control-plane action beyond activation is audited (no
+`save()`/creation events, no read events) — unchanged from Checkpoint
+12's scope boundary.
+
+### Strategy Version identity flattening
+
+`AuditLogEntry.version_identifier` is a single `CharField`, not three
+columns — adding three additional nullable columns just for this one
+resource type's compound identity was judged unjustified schema
+complexity for what only needs to be a human/machine-readable audit
+label, not a structured, independently-queryable key. **Known,
+documented limitation**: `domain.shared_kernel.contracts.Version` only
+requires a non-empty, non-whitespace string — it does not forbid a `:`
+character, so a pathological version value containing `:` could in
+theory make the flattened string ambiguous to parse back into its three
+parts. This has never occurred in practice (every seeded/tested version
+value follows a conventional `vN`/`specN`-style scheme with no `:`), and
+parsing the flattened string back into parts is not needed for anything
+this checkpoint does (the read API returns the resource id and the
+flattened string as-is; no code ever splits it). If a future need arises
+to parse it reliably, the fix is a stricter delimiter or a real
+structured field — not attempted speculatively here.
 
 ## Audit data model
 
@@ -99,31 +143,38 @@ required, non-nullable field with no anonymous/placeholder default.
 
 ## Transactional coupling
 
-The state change and its audit record commit together, or not at all.
-`DjangoRiskConfigurationRepository.activate()` wraps the
-`ActiveRiskConfiguration` write and the `AuditLogEntry.objects.create()`
-call inside one `transaction.atomic()` block — if the audit insert fails
-for any reason, Django rolls back the configuration-state change too.
-This is the **only** place a risk configuration's active pointer is
-written, so there is no code path that can change it without an
-accompanying audit row landing in the same commit.
+The state change and its audit record commit together, or not at all —
+true for **all three** resources as of Checkpoint 13.
+`DjangoRiskConfigurationRepository.activate()`,
+`DjangoUniverseRepository.activate()`, and
+`DjangoStrategyVersionRepository.activate()` each wrap their own
+active-pointer write and the `AuditLogEntry.objects.create()` call
+inside one `transaction.atomic()` block — if the audit insert fails for
+any reason, Django rolls back the configuration-state change too. Each
+is the **only** place its resource's active pointer is written, so there
+is no code path that can change any of the three without an accompanying
+audit row landing in the same commit.
 
-Verified by `test_activation_rolls_back_if_audit_write_fails`
-(`tests/unit/infrastructure/api/test_audit_api.py`): forces the audit
-`INSERT` to fail via `unittest.mock.patch` on
-`AuditLogEntry.objects.create` (a real `DatabaseError`, not a mocked
-service), then asserts **neither** the `ActiveRiskConfiguration` pointer
-**nor** the audit row exist afterward. This exercises the real
-`transaction.atomic()` boundary against a real PostgreSQL connection
-(`@pytest.mark.django_db(transaction=True)`), not a fully-mocked
-application service.
+Verified by three parallel tests
+(`tests/unit/infrastructure/api/test_audit_api.py`):
+`test_activation_rolls_back_if_audit_write_fails` (risk configuration,
+Checkpoint 12), `test_universe_activation_rolls_back_if_audit_write_fails`,
+`test_strategy_activation_rolls_back_if_audit_write_fails` (both
+Checkpoint 13). Each forces the audit `INSERT` to fail via
+`unittest.mock.patch` on `AuditLogEntry.objects.create` (a real
+`DatabaseError`, not a mocked service), then asserts **neither** the
+resource's active pointer **nor** the audit row exist afterward. All
+three exercise the real `transaction.atomic()` boundary against a real
+PostgreSQL connection (`@pytest.mark.django_db(transaction=True)`), not
+a fully-mocked application service.
 
-**Failed activation (unknown version) is the one deliberate exception**:
-a `REJECTED` audit row is written in its own, independently-committed
-statement, *before* the `ValueError` is raised — it must survive even
-though the activation itself did not happen, per the checkpoint brief's
-"the system must not claim success when activation failed," which cuts
-both ways: a failed attempt is not silently unrecorded either.
+**Failed activation (unknown/invalid target) is the one deliberate
+exception, for all three resources**: a `REJECTED` audit row is written
+in its own, independently-committed statement, *before* the `ValueError`
+is raised — it must survive even though the activation itself did not
+happen, per the checkpoint brief's "the system must not claim success
+when activation failed," which cuts both ways: a failed attempt is not
+silently unrecorded either.
 
 ## Outcome semantics
 
@@ -167,6 +218,17 @@ audited at all (would be pure noise from unauthenticated probes and bots,
 per the brief's own "do not create an audit record for every anonymous
 rejected HTTP request").
 
+**Re-reviewed at Checkpoint 13, unchanged.** The brief for that
+checkpoint explicitly required either retaining this boundary with
+justification or stopping to document a reason to change it before
+implementing anything different. No new justification for auditing 403s
+emerged from extending the pattern to Universe/Strategy Version — the
+same cost/value tradeoff applies identically to all three resources.
+Retained as-is, now verified to apply consistently across all three by
+`test_universe_unauthorized_activation_rejected_and_not_audited` and
+`test_strategy_unauthorized_activation_rejected_and_not_audited`
+(`tests/unit/infrastructure/api/test_audit_api.py`).
+
 ## Request / correlation identity
 
 No request/correlation-ID infrastructure existed anywhere in this
@@ -176,24 +238,41 @@ codebase before this checkpoint (searched: no middleware, no
 `settings/base.py` for a future such use). Building a full
 request-tracing/observability system was judged out of scope for this
 checkpoint. The smallest useful addition was made instead: a UUID4 is
-minted inline, once per activation HTTP request, in
-`infrastructure/api/risk_views.py`'s `activate` view
-(`request_id = str(uuid.uuid4())`), threaded through the service and
-repository, and stored on the audit row. This lets a single request be
-correlated across audit events (relevant once other actions are audited
-in a future checkpoint) without introducing new middleware or a
-competing ID scheme.
+minted inline, once per activation HTTP request, in each resource's
+`activate` view (`infrastructure/api/{risk,universe,strategy}_views.py`,
+`request_id = str(uuid.uuid4())`), threaded through the service and
+repository, and stored on the audit row. **Checkpoint 13 reused this
+exact mechanism verbatim for Universe and Strategy Version** — no new
+middleware, no second correlation-ID scheme, no change to the approach
+itself, exactly per instruction.
 
 ## Audit repository / service architecture
 
 ```
-API (infrastructure/api/risk_views.py: activate)
-  -> Application Service (RiskConfigurationService.activate)
-    -> Persistence (DjangoRiskConfigurationRepository.activate)
-        - state change (ActiveRiskConfiguration)
+API (infrastructure/api/{risk,universe,strategy}_views.py: activate)
+  -> Application Service ({RiskConfiguration,Universe,StrategyVersion}Service.activate)
+    -> Persistence (Django{RiskConfiguration,Universe,StrategyVersion}Repository.activate)
+        - state change (Active{RiskConfiguration,Universe,StrategyVersion})
         - audit append (AuditLogEntry)
       -> commit (one transaction.atomic() block)
 ```
+
+The same shape, once per resource — Checkpoint 13 did not introduce a
+`GenericActivationService<T>` or any shared abstraction beyond what
+already existed (`ActivationOutcome`/`AuditEvent`/`AuditLogEntry`/
+`AuditRepository`). Each resource's service/repository still has its own
+explicit `activate()` method with its own resource-specific parameters
+(a bare `version` for risk/universe, a 3-tuple for strategy) — the
+duplication between the three `activate()` method bodies (existence
+check → `get_or_create` → outcome determination → audit append, all
+inside one `transaction.atomic()`) is real but was judged not worth
+abstracting away: the three methods differ in their identity shape
+(single version vs. 3-tuple) and their pointer model (`ActiveUniverse`
+vs. `ActiveStrategyVersion`'s three columns), so a generic version would
+need type parameters or a callback-based extraction step that would
+cost more in indirection than the ~15 duplicated lines it would save —
+explicitness over premature abstraction, per the checkpoint brief's own
+instruction.
 
 The write path is intentionally **not** exposed through a Protocol —
 `AuditRepository` (in `application/repositories`) has only
@@ -202,20 +281,46 @@ The write path is intentionally **not** exposed through a Protocol —
 it independently of a real state change, breaking the transactional
 coupling guarantee above; the write only exists inside the one
 repository method that also performs the state change it records. This
-is deliberately not generalized into a reusable "event sourcing" or
-"generic audit-any-action" framework — it is scoped tightly to
-risk-configuration activation, extensible later by repeating the same
-pattern, not by building an abstraction layer speculatively now.
+remains deliberately not generalized into a reusable "event sourcing" or
+"generic audit-any-action" framework — Checkpoint 13 extended its
+*reach* (three resources instead of one) without changing this shape at
+all.
 
 ## Audit API
 
-**Implemented**, minimal: `GET /api/v1/audit/risk-configuration/{configuration_id}/`
-returns every recorded event for that configuration id, newest first.
+**Implemented**, minimal, one endpoint per resource — NOT a single
+generic `GET /api/v1/audit/{resource_type}/{resource_id}/` route:
+
+- `GET /api/v1/audit/risk-configuration/{configuration_id}/` (Checkpoint 12)
+- `GET /api/v1/audit/universe/{universe_id}/` (Checkpoint 13)
+- `GET /api/v1/audit/strategy/{strategy_id}/` (Checkpoint 13)
+
+**Why resource-specific routes, not a generic one** (evaluated
+explicitly per the checkpoint brief's instruction, not defaulted to):
+a fully-generic `{resource_type}` path parameter would accept an
+arbitrary string with no OpenAPI-level documentation of which values are
+actually valid, weakening schema clarity for API consumers and codegen
+alike. It would also be inconsistent with this API's own existing
+convention — the configuration endpoints themselves are resource-specific
+(`/api/v1/config/risk/...`, `/api/v1/config/universe/...`,
+`/api/v1/config/strategy/...`), never `/api/v1/config/{resource_type}/...`
+(Checkpoint 8 §7's "no premature endpoint proliferation, but also no
+premature genericization" applies equally here). The three view
+functions share one private helper (`_list_audit()` in
+`infrastructure/api/audit_views.py`) so there is no duplicated
+response-shaping logic — the genericization that *was* worth doing (DRY
+within the implementation) without the genericization that wasn't worth
+doing (a loosely-typed public URL contract).
+
 No `POST`/`PUT`/`PATCH`/`DELETE` audit operation exists anywhere in the
-API surface.
+API surface, for any of the three resources.
 
 Permission: `IsAuthenticated` + `IsConfigurationOperator` — the **same**
-gate as activation itself, not a separate `audit.read` Group/capability.
+gate as activation itself, not a separate `audit.read` Group/capability,
+identically for all three resources (verified by a dedicated,
+DB-free test —
+`tests/unit/architecture/test_activation_authorization_wiring.py`'s
+`test_activate_and_audit_permission_sets_are_identical_across_all_three_resources`).
 Audit visibility is treated as an operator-level governance capability:
 an ordinary `configuration.read` user can see the current configuration
 state but not who changed it, when, or from what — a deliberate,
@@ -225,19 +330,19 @@ than broadening it to every authenticated user by default.
 
 ## Audit frontend
 
-**Deferred.** No Audit History screen was built this checkpoint — the
-checkpoint brief explicitly permits deferring this ("Do NOT build a full
-Audit History screen unless it is genuinely required to validate the
-architecture... If deferred, document..."). The generated TypeScript
-contract (`frontend/shared/generated_contracts/api-types.ts`) was still
-regenerated to include `AuditEventResponse` and the new operation (the
-brief requires this whenever a real audit API is implemented, regardless
-of whether a UI consumes it yet) — these are real, generated types
-matching a real, implemented endpoint, not speculative/hand-invented
-frontend types.
+**Still deferred at Checkpoint 13**, again explicitly permitted by the
+checkpoint brief ("Do NOT build Audit History UI"). No frontend
+functional change was made or needed — the existing Configuration
+Viewer's activation workflow continues to work unchanged (verified: all
+30 pre-existing frontend tests still pass). The generated TypeScript
+contract was regenerated to include the two new operations
+(`api_v1_audit_universe_list`, `api_v1_audit_strategy_list`) alongside
+the existing risk-configuration one — real, generated types matching
+real, implemented endpoints, not speculative/hand-invented frontend
+types; nothing consumes any of them yet.
 
-- **Audit persistence: implemented.**
-- **Audit API: implemented** (read-only, minimal).
+- **Audit persistence: implemented** (all three resources).
+- **Audit API: implemented** (read-only, minimal, all three resources).
 - **Audit UI: deferred.**
 
 ## Sensitive data policy
@@ -272,6 +377,19 @@ checkpoint — a documented gap, not a false claim of stronger guarantees
 than exist. A future checkpoint could add a `REVOKE`/trigger-based
 guarantee if the threat model (e.g. a compromised application credential)
 justifies it.
+
+**Re-reviewed at Checkpoint 13** (now covering three resources' worth of
+audit rows instead of one, weighed against whether that changes the
+calculus): it does not. The threat model is unchanged — a compromised
+application-level DB credential can still bypass `.save()`/`.delete()`
+regardless of how many resource types write to the same table — and
+adding `REVOKE`/trigger-based enforcement now would mean taking on
+migration-safety, PostgreSQL-specific-portability, and
+database-administration-access complexity for a threat that hasn't
+materialized or been specifically called for. Kept as application-level
+enforcement, same documented limitation, not escalated into a
+database-security redesign per the checkpoint brief's explicit
+instruction not to do so without justification.
 
 ## Retention policy
 

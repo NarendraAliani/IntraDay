@@ -213,17 +213,61 @@ class DjangoUniverseRepository:
         rows = UniverseVersion.objects.filter(universe_id=universe_id).order_by("created_at")
         return tuple(_universe_row_to_record(row) for row in rows)
 
-    def activate(self, universe_id: str, version: str) -> None:
+    def activate(
+        self, universe_id: str, version: str, *, actor: str, actor_user_id: int, request_id: str
+    ) -> ActivationOutcome:
+        """Checkpoint 13: mirrors `DjangoRiskConfigurationRepository.activate()`
+        exactly — state change + audit append in one `transaction.atomic()`
+        block; a rejected (invalid-target) attempt is audited in its own
+        independently-committed write, since there is no successful state
+        change to couple it to."""
+        if not UniverseVersion.objects.filter(universe_id=universe_id, version=version).exists():
+            AuditLogEntry.objects.create(
+                occurred_at=_dt.datetime.now(tz=_dt.UTC),
+                actor_username=actor,
+                actor_user_id=actor_user_id,
+                action="configuration.activate",
+                resource_type="universe",
+                resource_id=universe_id,
+                version_identifier=version,
+                previous_version=None,
+                outcome=ActivationOutcome.REJECTED.value,
+                request_id=request_id,
+            )
+            raise ValueError(
+                f"cannot activate unknown version {version!r} of universe {universe_id!r}"
+            )
+
         with transaction.atomic():
-            if not UniverseVersion.objects.filter(
-                universe_id=universe_id, version=version
-            ).exists():
-                raise ValueError(
-                    f"cannot activate unknown version {version!r} of universe {universe_id!r}"
-                )
-            ActiveUniverse.objects.update_or_create(
+            pointer, created = ActiveUniverse.objects.select_for_update().get_or_create(
                 universe_id=universe_id, defaults={"active_version": version}
             )
+            previous_version: str | None
+            if created:
+                outcome = ActivationOutcome.ACTIVATED
+                previous_version = None
+            elif pointer.active_version == version:
+                outcome = ActivationOutcome.ALREADY_ACTIVE
+                previous_version = version
+            else:
+                previous_version = pointer.active_version
+                pointer.active_version = version
+                pointer.save(update_fields=["active_version"])
+                outcome = ActivationOutcome.ACTIVATED
+
+            AuditLogEntry.objects.create(
+                occurred_at=_dt.datetime.now(tz=_dt.UTC),
+                actor_username=actor,
+                actor_user_id=actor_user_id,
+                action="configuration.activate",
+                resource_type="universe",
+                resource_id=universe_id,
+                version_identifier=version,
+                previous_version=previous_version,
+                outcome=outcome.value,
+                request_id=request_id,
+            )
+        return outcome
 
 
 def _universe_row_to_record(row: UniverseVersion) -> UniverseRecord:
@@ -304,18 +348,41 @@ class DjangoStrategyVersionRepository:
         specification_version: str,
         code_version: str,
         configuration_version: str,
-    ) -> None:
+        *,
+        actor: str,
+        actor_user_id: int,
+        request_id: str,
+    ) -> ActivationOutcome:
+        """Checkpoint 13: mirrors `DjangoRiskConfigurationRepository.activate()`.
+        `AuditLogEntry.version_identifier` is a single string column, so
+        the 3-tuple identity is flattened to `"{spec}:{code}:{config}"`
+        for the audit row only — the domain/application identity itself
+        (the 3-tuple passed to/from this method) is never flattened."""
+        target_identifier = f"{specification_version}:{code_version}:{configuration_version}"
+        if not StrategyVersionRecord.objects.filter(
+            strategy_id=strategy_id,
+            specification_version=specification_version,
+            code_version=code_version,
+            configuration_version=configuration_version,
+        ).exists():
+            AuditLogEntry.objects.create(
+                occurred_at=_dt.datetime.now(tz=_dt.UTC),
+                actor_username=actor,
+                actor_user_id=actor_user_id,
+                action="configuration.activate",
+                resource_type="strategy_version",
+                resource_id=strategy_id,
+                version_identifier=target_identifier,
+                previous_version=None,
+                outcome=ActivationOutcome.REJECTED.value,
+                request_id=request_id,
+            )
+            raise ValueError(
+                f"cannot activate unknown strategy version identity for {strategy_id!r}"
+            )
+
         with transaction.atomic():
-            if not StrategyVersionRecord.objects.filter(
-                strategy_id=strategy_id,
-                specification_version=specification_version,
-                code_version=code_version,
-                configuration_version=configuration_version,
-            ).exists():
-                raise ValueError(
-                    f"cannot activate unknown strategy version identity for {strategy_id!r}"
-                )
-            ActiveStrategyVersion.objects.update_or_create(
+            pointer, created = ActiveStrategyVersion.objects.select_for_update().get_or_create(
                 strategy_id=strategy_id,
                 defaults={
                     "active_specification_version": specification_version,
@@ -323,6 +390,45 @@ class DjangoStrategyVersionRepository:
                     "active_configuration_version": configuration_version,
                 },
             )
+            previous_identifier: str | None
+            if created:
+                outcome = ActivationOutcome.ACTIVATED
+                previous_identifier = None
+            else:
+                current_identifier = (
+                    f"{pointer.active_specification_version}:"
+                    f"{pointer.active_code_version}:{pointer.active_configuration_version}"
+                )
+                if current_identifier == target_identifier:
+                    outcome = ActivationOutcome.ALREADY_ACTIVE
+                    previous_identifier = current_identifier
+                else:
+                    previous_identifier = current_identifier
+                    pointer.active_specification_version = specification_version
+                    pointer.active_code_version = code_version
+                    pointer.active_configuration_version = configuration_version
+                    pointer.save(
+                        update_fields=[
+                            "active_specification_version",
+                            "active_code_version",
+                            "active_configuration_version",
+                        ]
+                    )
+                    outcome = ActivationOutcome.ACTIVATED
+
+            AuditLogEntry.objects.create(
+                occurred_at=_dt.datetime.now(tz=_dt.UTC),
+                actor_username=actor,
+                actor_user_id=actor_user_id,
+                action="configuration.activate",
+                resource_type="strategy_version",
+                resource_id=strategy_id,
+                version_identifier=target_identifier,
+                previous_version=previous_identifier,
+                outcome=outcome.value,
+                request_id=request_id,
+            )
+        return outcome
 
 
 def _strategy_row_to_snapshot(row: StrategyVersionRecord) -> StrategyVersionSnapshot:

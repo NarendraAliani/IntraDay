@@ -24,6 +24,45 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/audit/strategy/{strategy_id}/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Every recorded activation attempt for one strategy id, newest
+         *     first. `version` on each event is the flattened
+         *     `"{specification_version}:{code_version}:{configuration_version}"`
+         *     identifier (see `DjangoStrategyVersionRepository.activate()`).
+         */
+        get: operations["api_v1_audit_strategy_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/audit/universe/{universe_id}/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Every recorded activation attempt for one universe id, newest first. */
+        get: operations["api_v1_audit_universe_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/login/": {
         parameters: {
             query?: never;
@@ -548,6 +587,48 @@ export interface operations {
             header?: never;
             path: {
                 configuration_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditEventResponse"][];
+                };
+            };
+        };
+    };
+    api_v1_audit_strategy_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                strategy_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditEventResponse"][];
+                };
+            };
+        };
+    };
+    api_v1_audit_universe_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                universe_id: string;
             };
             cookie?: never;
         };

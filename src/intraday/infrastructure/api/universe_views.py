@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import contextlib
+import uuid
 
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework.decorators import api_view, permission_classes
@@ -108,8 +109,19 @@ def get_version(request: Request, universe_id: str, version: str) -> Response:
 @permission_classes([IsAuthenticated, IsConfigurationOperator])
 def activate(request: Request, universe_id: str, version: str) -> Response:
     service = _service()
+    # Checkpoint 13: same pattern as risk_views.py's activate (Checkpoint
+    # 12) - actor + a fresh per-request UUID, minted here where
+    # `request.user` is already guaranteed real and identified.
+    request_id = str(uuid.uuid4())
+    assert request.user.pk is not None  # noqa: S101 - narrows for mypy, not a runtime guard
     try:
-        record = service.activate(universe_id, version)
+        record = service.activate(
+            universe_id,
+            version,
+            actor=request.user.get_username(),
+            actor_user_id=request.user.pk,
+            request_id=request_id,
+        )
     except InvalidActivationRequestError as exc:
         return invalid_activation(exc)
     except DuplicateVersionError as exc:  # pragma: no cover - not reachable via activate() today

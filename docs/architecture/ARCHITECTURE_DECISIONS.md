@@ -286,3 +286,36 @@ risk-configuration activation and closes the login-CSRF gap Checkpoint
   security depth to the existing workflow rather than a new one. No
   frontend functional change was required; only the generated contract
   was regenerated (new audit types, unconsumed by any screen yet).
+
+## Checkpoint 13 — Complete Configuration Control-Plane Governance (2026-08-13)
+
+Extends the Checkpoint 12 authenticated-actor + authorization + durable-
+audit pattern, established for risk-configuration activation, to Universe
+and Strategy Version activation. Full detail:
+[docs/architecture/AUDITABILITY.md](AUDITABILITY.md).
+
+| # | Decision | Reason | Alternatives Considered | Status |
+|---|---|---|---|---|
+| 57 | `AuditLogEntry`/`ActivationOutcome`/`AuditEvent` (Checkpoint 12) reused verbatim for Universe and Strategy Version — no new model, no new enum values, no schema migration. `resource_type`/`resource_id` (already generic) absorb the new resource types directly. | Checkpoint 12's vocabulary was deliberately kept generic for exactly this extension. Confirming it required zero schema change validates that design decision rather than requiring a new one. | A per-resource `RiskAuditEvent`/`UniverseAuditEvent`/`StrategyAuditEvent` model hierarchy (rejected — the checkpoint brief explicitly warns against this, and no field genuinely differs by resource type). | LOCKED |
+| 58 | Strategy Version's 3-tuple identity (`specification_version`, `code_version`, `configuration_version`) is flattened into `AuditLogEntry.version_identifier` as `"{spec}:{code}:{config}"` for the audit row only — the domain/application identity itself is never flattened. | `version_identifier` is a single `CharField`; adding three additional nullable columns for one resource type's compound identity was judged unjustified schema complexity for what only needs to be a readable audit label, not an independently structured/queryable key. | Three additional nullable columns on `AuditLogEntry` used only by strategy-version rows (rejected — schema complexity for a single resource type, when a lossy-in-theory-only string label is sufficient for every actual current use). A separate `StrategyActivationAuditEntry` model (rejected — reintroduces the per-resource-model duplication decision #57 explicitly avoided). | LOCKED, WITH A DOCUMENTED LIMITATION (a version value containing `:` could make the flattened string ambiguous to parse back — not currently exercised or required) |
+| 59 | Audit read API: three resource-specific endpoints (`/api/v1/audit/risk-configuration/{id}/`, `/api/v1/audit/universe/{id}/`, `/api/v1/audit/strategy/{id}/`), not one generic `/api/v1/audit/{resource_type}/{resource_id}/` route. | Evaluated explicitly per the checkpoint brief's instruction. A generic route would accept an arbitrary `resource_type` string with no OpenAPI-level documentation of valid values, and would be inconsistent with the configuration API's own existing resource-specific convention (`/api/v1/config/risk/...`, never `/api/v1/config/{resource_type}/...`). The three views share one private helper to avoid duplicating response-shaping logic. | A single generic `/api/v1/audit/{resource_type}/{resource_id}/` route (rejected — weaker OpenAPI schema clarity, inconsistent with the existing configuration-API convention). | LOCKED |
+| 60 | The three `DjangoXRepository.activate()` method bodies (existence check → `get_or_create` → outcome determination → audit append, all in one `transaction.atomic()`) remain independently written per resource, not factored into a shared/generic activation helper. | The three methods differ in identity shape (single version vs. 3-tuple) and pointer model (`ActiveUniverse` vs. `ActiveStrategyVersion`'s three columns); a generic version would need type parameters or a callback-based extraction step costing more in indirection than the ~15 duplicated lines it would save. Explicitness over premature abstraction, per the checkpoint brief's own instruction. | A `GenericActivationService<T>`/shared activation-with-audit helper (rejected — the brief explicitly warns against this; the actual duplication is small and the resource-specific differences are real, not incidental). | LOCKED |
+| 61 | The Checkpoint 12 decision not to audit HTTP 403 (authorization-denied) attempts, and to keep audit append-only enforcement at the application level (not database-level), were both re-reviewed for this checkpoint and explicitly retained unchanged. | Extending the pattern to two more resources introduced no new information that would change either tradeoff — the same cost/value analysis (I/O-on-every-403; migration/portability/admin-access complexity for DB-level triggers) applies identically across all three resources. Documented as a deliberate re-affirmation, not a default carry-over. | Auditing 403s now that three resources are covered (rejected — no new justification emerged); adding DB-level immutability now (rejected — same reasoning as Checkpoint 12, re-verified not newly required). | LOCKED (re-affirmed) |
+
+## Notes (Checkpoint 13)
+
+- A second, independent, DB-free regression guard was added:
+  `tests/unit/architecture/test_activation_authorization_wiring.py`
+  introspects every read/activate/audit view's DRF `permission_classes`
+  directly (no database, no Django test client) - runs unconditionally
+  in every environment, unlike the `requires_postgres`-gated integration
+  tests that hid the Checkpoint 12 regression. Confirms all three
+  resources' activate/audit permission sets are identical.
+- No schema migration was required this checkpoint - `AuditLogEntry`
+  and its indexes, created at Checkpoint 12, needed no changes to serve
+  Universe and Strategy Version as well.
+- Frontend UX Testing Readiness gate: unaffected (already YES since
+  Checkpoint 10) - no frontend functional change was made; only the
+  generated contract was regenerated (two new audit read operations,
+  unconsumed by any screen yet). All 30 pre-existing frontend tests
+  re-verified passing, unchanged.

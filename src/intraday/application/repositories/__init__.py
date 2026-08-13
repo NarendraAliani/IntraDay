@@ -73,7 +73,14 @@ class UniverseRepository(Protocol):
     """Persists and retrieves versioned `Universe` instances, returned
     wrapped in `UniverseRecord` (adds `created_at` — Checkpoint 8).
     Historical versions are immutable — `save()` only ever inserts a new
-    version."""
+    version.
+
+    `activate()`'s `actor`/`actor_user_id`/`request_id` (Checkpoint 13,
+    extending the Checkpoint 12 pattern established for
+    `RiskConfigurationRepository`) are required, not optional — every
+    activation is audited. The concrete implementation appends the audit
+    record in the SAME transaction as the state change, never as a
+    separate, independently-committable step."""
 
     def save(self, universe: Universe) -> None: ...
 
@@ -83,7 +90,9 @@ class UniverseRepository(Protocol):
 
     def list_versions(self, universe_id: str) -> tuple[UniverseRecord, ...]: ...
 
-    def activate(self, universe_id: str, version: str) -> None: ...
+    def activate(
+        self, universe_id: str, version: str, *, actor: str, actor_user_id: int, request_id: str
+    ) -> ActivationOutcome: ...
 
 
 class StrategyVersionRepository(Protocol):
@@ -92,7 +101,16 @@ class StrategyVersionRepository(Protocol):
     version is identified by the tuple (strategy_id, specification_version,
     code_version, configuration_version) — `universe_version` may differ
     across otherwise-identical records without creating a new identity,
-    per how `domain.strategy.StrategyVersion` itself is shaped."""
+    per how `domain.strategy.StrategyVersion` itself is shaped.
+
+    `activate()`'s `actor`/`actor_user_id`/`request_id` (Checkpoint 13,
+    same pattern as `RiskConfigurationRepository`/`UniverseRepository`)
+    are required — every activation is audited. `AuditLogEntry.
+    version_identifier` is a single string column, so the 3-tuple
+    identity is encoded as `"{specification_version}:{code_version}:
+    {configuration_version}"` (see `DjangoStrategyVersionRepository.
+    activate()`) — the domain/application identity itself is NOT
+    flattened; only its audit-row representation is."""
 
     def save(self, strategy_version: StrategyVersion) -> None: ...
 
@@ -114,7 +132,11 @@ class StrategyVersionRepository(Protocol):
         specification_version: str,
         code_version: str,
         configuration_version: str,
-    ) -> None: ...
+        *,
+        actor: str,
+        actor_user_id: int,
+        request_id: str,
+    ) -> ActivationOutcome: ...
 
 
 class AuditRepository(Protocol):

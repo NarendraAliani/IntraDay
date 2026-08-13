@@ -1,25 +1,27 @@
 # IntraDay — Intraday Indian Cash-Equity Algorithmic Trading Platform
 
-> **Status: CONTROL-PLANE AUDITABILITY (Checkpoint 12).** The project
-> installs and boots (Django, Celery, Channels, React/Vite), and is
-> protected by CI-enforced formatting, linting, strict typing, tests, and
-> mechanical architecture enforcement (import-linter). The first business
-> API exists — read + version-activate endpoints for risk configuration,
-> universe, and strategy version under `/api/v1/config/` — the frontend has
-> a read-only Configuration Viewer with a real activation workflow
-> (Checkpoint 10), protected by session-cookie authentication and
-> Group-based authorization (Checkpoint 11). **Checkpoint 12 closed the
-> login-CSRF gap Checkpoint 11 had deliberately deferred, and added a
-> durable, append-only audit trail** for risk-configuration activation:
-> every activation attempt (success, no-op, or rejected) is recorded
-> atomically with the state change it describes, with a real authenticated
-> actor, never a placeholder (see
+> **Status: COMPLETE CONFIGURATION CONTROL-PLANE GOVERNANCE (Checkpoint
+> 13).** The project installs and boots (Django, Celery, Channels,
+> React/Vite), and is protected by CI-enforced formatting, linting, strict
+> typing, tests, and mechanical architecture enforcement (import-linter).
+> The first business API exists — read + version-activate endpoints for
+> risk configuration, universe, and strategy version under
+> `/api/v1/config/` — the frontend has a read-only Configuration Viewer
+> with a real activation workflow (Checkpoint 10), protected by
+> session-cookie authentication and Group-based authorization (Checkpoint
+> 11), with login-CSRF closed and a durable, append-only audit trail added
+> for risk-configuration activation (Checkpoint 12). **Checkpoint 13
+> extended the identical governance pattern — authenticated actor →
+> authorization → activation → durable audit event, all transactionally
+> coupled — to Universe and Strategy Version**, so all three configuration
+> resources now share one consistent control-plane model (see
 > [docs/architecture/AUDITABILITY.md](docs/architecture/AUDITABILITY.md)).
 > No strategies, indicators, signals, risk engine, order management, broker
 > integration, market-data ingestion, backtesting, or live trading have
 > been implemented yet. Several limitations remain (no audit UI yet, no
-> account lockout beyond rate-limiting, no MFA, universe/strategy
-> activation still unaudited — full list in that document and
+> account lockout beyond rate-limiting, no MFA, 403s still not audited,
+> database-level audit immutability still deferred — full list in that
+> document and
 > [docs/architecture/AUTHENTICATION_AUTHORIZATION.md](docs/architecture/AUTHENTICATION_AUTHORIZATION.md))
 > — **not yet production-ready.**
 

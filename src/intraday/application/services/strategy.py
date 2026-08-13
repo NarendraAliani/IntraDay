@@ -52,10 +52,24 @@ class StrategyVersionService:
         specification_version: str,
         code_version: str,
         configuration_version: str,
+        *,
+        actor: str,
+        actor_user_id: int,
+        request_id: str,
     ) -> StrategyVersionSnapshot:
+        """`actor`/`actor_user_id`/`request_id` (Checkpoint 13) are
+        required, never optional or defaulted — see
+        `RiskConfigurationService.activate()`'s docstring for the
+        rationale this mirrors."""
         try:
             self.repository.activate(
-                strategy_id, specification_version, code_version, configuration_version
+                strategy_id,
+                specification_version,
+                code_version,
+                configuration_version,
+                actor=actor,
+                actor_user_id=actor_user_id,
+                request_id=request_id,
             )
         except ValueError as exc:
             raise InvalidActivationRequestError(str(exc)) from exc
