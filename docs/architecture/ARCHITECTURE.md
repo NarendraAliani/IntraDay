@@ -104,6 +104,15 @@ risk-configuration activation. See
 [AUDITABILITY.md](AUDITABILITY.md) for the full model (schema, actor
 identity, transactional coupling, outcome semantics, retention policy).
 
+**Market data & instrument foundation** (Checkpoint 14): the platform's
+first trading-domain capability, deliberately data-only — a provider-
+neutral historical-bar contract (`application/repositories.
+HistoricalMarketDataRepository`) and application service, backed by a
+deterministic fixture adapter (no live provider, no Dhan code yet). See
+[MARKET_DATA_ARCHITECTURE.md](MARKET_DATA_ARCHITECTURE.md) for instrument
+identity, bar/timeframe/timezone semantics, raw-vs-adjusted pricing, and
+the deliberately-deferred persistence/API boundaries.
+
 ## 3. Layering
 
 ```

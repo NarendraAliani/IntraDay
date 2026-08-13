@@ -15,6 +15,7 @@
 # into the domain/application dataclasses these Protocols reference.
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Protocol
 
 from intraday.application.config_schema.records import (
@@ -23,6 +24,8 @@ from intraday.application.config_schema.records import (
     UniverseRecord,
 )
 from intraday.control_plane.audit.events import ActivationOutcome, AuditEvent
+from intraday.domain.market_data.contracts import Bar
+from intraday.domain.shared_kernel.contracts import InstrumentId, Timeframe
 from intraday.domain.strategy.contracts import StrategyVersion
 from intraday.domain.universe.contracts import Universe
 
@@ -152,3 +155,32 @@ class AuditRepository(Protocol):
     read path in this codebase."""
 
     def list_for_resource(self, resource_type: str, resource_id: str) -> tuple[AuditEvent, ...]: ...
+
+
+class HistoricalMarketDataRepository(Protocol):
+    """Checkpoint 14: provider-neutral access to historical OHLCV bars.
+    Read-only — this platform never writes market data through this
+    Protocol; ingestion (a future checkpoint) is a separate concern. No
+    provider name, request/response shape, SDK type, or HTTP detail
+    appears here — a Dhan-backed implementation and a deterministic
+    fixture implementation (`infrastructure/market_data_providers/`)
+    satisfy this Protocol identically, and `feature_engine`/
+    `signal_generation`/`research.backtesting` (future consumers) never
+    know or care which one is behind it.
+
+    `get_bars()` returns every bar for `instrument_id`/`timeframe` with
+    `start <= timestamp <= end` (both UTC, both required — an unbounded
+    query is not a use case this checkpoint defines), in whatever order
+    the concrete adapter naturally produces them. Ordering and integrity
+    validation is the caller's/application-service's job
+    (`domain.market_data.quality.ensure_chronological`), not this
+    Protocol's — a read-only data-access interface should not also be a
+    validation gate that silently reorders results."""
+
+    def get_bars(
+        self,
+        instrument_id: InstrumentId,
+        timeframe: Timeframe,
+        start: datetime,
+        end: datetime,
+    ) -> tuple[Bar, ...]: ...

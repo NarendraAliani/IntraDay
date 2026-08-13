@@ -38,6 +38,27 @@ def test_make_instrument_id_is_deterministic() -> None:
     assert a == b == "NSE:RELIANCE"
 
 
+def test_same_symbol_on_different_exchanges_is_a_distinct_identity() -> None:
+    """Checkpoint 14 §3: the identity must distinguish an NSE listing from
+    a BSE listing of the same symbol — they are not the same instrument."""
+    nse = make_instrument_id(Exchange.NSE, "RELIANCE")
+    bse = make_instrument_id(Exchange.BSE, "RELIANCE")
+    assert nse != bse
+    assert nse == "NSE:RELIANCE"
+    assert bse == "BSE:RELIANCE"
+
+
+def test_symbol_and_instrument_id_are_not_interchangeable() -> None:
+    """Checkpoint 14 §3: `Instrument.symbol` (the exchange-traded ticker)
+    and `Instrument.instrument_id` (the domain-owned, broker-neutral
+    identity derived from exchange+symbol) are distinct fields with
+    distinct values — a caller must never treat one as the other."""
+    instrument = _make()
+    assert instrument.symbol == "RELIANCE"
+    assert instrument.instrument_id == "NSE:RELIANCE"
+    assert instrument.symbol != instrument.instrument_id
+
+
 def test_active_equity_is_tradable() -> None:
     assert _make().is_tradable is True
 

@@ -5,6 +5,15 @@
 # or broker-specific fields exist here. No provider adapter, WebSocket
 # ingestion, or Dhan market-data call is implemented at this checkpoint
 # (Checkpoint 5 Section 7).
+#
+# Checkpoint 14 extends `Bar` with `adjustment` (raw vs. corporate-action-
+# adjusted prices — see `PriceAdjustment` below) — a genuine, justified
+# extension of a locked Checkpoint 5 contract (same precedent as
+# Checkpoint 7 extending `RiskLimits`): every bar's prices ARE either raw
+# or adjusted, so this is a property of the bar itself, not a wrapper
+# concern layered on top by application/infrastructure. No corporate-
+# action ADJUSTMENT ENGINE is introduced — only the explicit label a
+# future one will need to set correctly (Checkpoint 14 §10).
 from __future__ import annotations
 
 import enum
@@ -25,6 +34,19 @@ class MarketDataQuality(enum.Enum):
     SUSPECT = "SUSPECT"
 
 
+class PriceAdjustment(enum.Enum):
+    """Whether a Bar's OHLC prices are exchange-raw or corporate-action-
+    adjusted (splits/bonuses/dividends). Checkpoint 14 §10: prices are
+    NEVER silently adjusted — this label must be set explicitly and
+    truthfully by whatever produced the bar (a provider adapter for RAW,
+    a future corporate-action processor for ADJUSTED). No adjustment
+    computation exists anywhere in this codebase yet; `ADJUSTED` is not
+    reachable until that future component exists and sets it."""
+
+    RAW = "RAW"
+    ADJUSTED = "ADJUSTED"
+
+
 @dataclass(frozen=True, slots=True)
 class Bar:
     """A single OHLCV bar for one instrument, one timeframe, one instant.
@@ -33,6 +55,16 @@ class Bar:
     archive) and `data/market_data` (live) instances share — only their
     storage lifecycle differs (Checkpoint 2 §6 data-ownership model),
     never this schema.
+
+    `timestamp` is the bar's CLOSE time, UTC (Checkpoint 5's own original
+    decision, re-confirmed at Checkpoint 14 §6 rather than left
+    ambiguous): a 09:15-09:20 IST five-minute bar is stamped 09:20 IST
+    (03:50 UTC), matching how OHLCV data is conventionally reported by
+    Indian market-data vendors and how a strategy consuming "the bar that
+    just closed" naturally reasons about it — the bar is not actionable
+    until its close instant. `ensure_utc` (shared_kernel) enforces that no
+    naive or non-UTC datetime can reach this field; IST wall-clock
+    conversion happens only at the presentation boundary, never here.
     """
 
     instrument_id: InstrumentId
@@ -44,6 +76,7 @@ class Bar:
     close: Decimal
     volume: Decimal
     quality: MarketDataQuality = MarketDataQuality.OK
+    adjustment: PriceAdjustment = PriceAdjustment.RAW
 
     def __post_init__(self) -> None:
         ensure_utc(self.timestamp, field_name="Bar.timestamp")

@@ -49,3 +49,42 @@ def test_square_off_deadline_must_fall_within_session() -> None:
             square_off_deadline=after_close,
             status=SessionStatus.OPEN,
         )
+
+
+def _session() -> TradingSession:
+    return TradingSession(
+        session_date=date(2026, 1, 1),
+        exchange=Exchange.NSE,
+        market_open=OPEN,
+        market_close=CLOSE,
+        square_off_deadline=CLOSE,
+        status=SessionStatus.OPEN,
+    )
+
+
+def test_contains_true_for_timestamp_inside_session() -> None:
+    mid_session = datetime(2026, 1, 1, 6, 0, tzinfo=UTC)  # 11:30 IST
+    assert _session().contains(mid_session) is True
+
+
+def test_contains_true_at_market_open_boundary() -> None:
+    assert _session().contains(OPEN) is True
+
+
+def test_contains_true_at_market_close_boundary() -> None:
+    assert _session().contains(CLOSE) is True
+
+
+def test_contains_false_before_market_open() -> None:
+    before_open = datetime(2026, 1, 1, 3, 0, tzinfo=UTC)  # 08:30 IST
+    assert _session().contains(before_open) is False
+
+
+def test_contains_false_after_market_close() -> None:
+    after_close = datetime(2026, 1, 1, 11, 0, tzinfo=UTC)  # 16:30 IST
+    assert _session().contains(after_close) is False
+
+
+def test_contains_rejects_naive_timestamp() -> None:
+    with pytest.raises(ValueError):
+        _session().contains(datetime(2026, 1, 1, 6, 0))

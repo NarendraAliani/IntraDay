@@ -47,3 +47,15 @@ class TradingSession:
             raise ValueError(
                 "TradingSession.square_off_deadline must fall within " "[market_open, market_close]"
             )
+
+    def contains(self, timestamp: datetime) -> bool:
+        """Checkpoint 14: whether `timestamp` (UTC) falls within this
+        already-determined session's [market_open, market_close] bounds
+        (inclusive) — the deterministic building block future market-data
+        completeness/gap checks need ("does this bar's timestamp belong
+        to this session?"), without this contract computing exchange
+        calendars or session boundaries itself (Checkpoint 5 Section 19,
+        unchanged: this remains the shape of one already-determined
+        session, not a calendar service)."""
+        ensure_utc(timestamp, field_name="timestamp")
+        return self.market_open <= timestamp <= self.market_close

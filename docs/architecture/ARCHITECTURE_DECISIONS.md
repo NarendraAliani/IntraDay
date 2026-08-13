@@ -319,3 +319,45 @@ and Strategy Version activation. Full detail:
   generated contract was regenerated (two new audit read operations,
   unconsumed by any screen yet). All 30 pre-existing frontend tests
   re-verified passing, unchanged.
+
+## Checkpoint 14 — Market Data & Instrument Foundation (2026-08-13)
+
+Establishes the provider-neutral historical market-data foundation
+future indicator/signal/backtesting/strategy checkpoints will consume.
+Full detail: [docs/architecture/MARKET_DATA_ARCHITECTURE.md](MARKET_DATA_ARCHITECTURE.md).
+
+| # | Decision | Reason | Alternatives Considered | Status |
+|---|---|---|---|---|
+| 62 | `Bar` (Checkpoint 5) extended with `adjustment: PriceAdjustment` (`RAW`/`ADJUSTED`, default `RAW`) — a genuine extension of a locked domain contract, same precedent as Checkpoint 7's `RiskLimits` extension. | Whether a bar's prices are raw or corporate-action-adjusted is intrinsic to the bar itself, not a wrapper-layer concern — and the checkpoint brief explicitly requires an "explicit contract/field/decision" rather than silent adjustment. No adjustment computation exists anywhere; `ADJUSTED` is not reachable from any code path yet. | A wrapper type (`AdjustedBar`) instead of extending `Bar` directly (rejected — every consumer would need to know two Bar-like types instead of one, for a property every bar genuinely has). | LOCKED |
+| 63 | `Bar.timestamp`'s existing Checkpoint 5 meaning (bar CLOSE time) is re-confirmed explicitly, not re-decided, and pinned with a dedicated regression test. | The checkpoint brief required the semantics not be left ambiguous; inspection showed Checkpoint 5 had already made and documented this decision correctly — re-litigating it would be pointless, but leaving it undocumented at THIS checkpoint (which builds arithmetic directly on it, in `expected_bar_timestamps()`) would risk a future silent drift. | Redefining timestamp as bar OPEN time (rejected — would contradict Checkpoint 5's existing, working contract and the convention Indian market-data vendors already use). | LOCKED (re-affirmed) |
+| 64 | Market-data integrity functions (`ensure_chronological`, `timeframe_to_timedelta`, `expected_bar_timestamps`, `missing_bar_timestamps`) live in `domain/market_data/quality.py` — domain layer, not application layer. | These rules are intrinsic to what a valid Bar *series* means (parallel to `Bar.__post_init__` validating what a valid single Bar means) and must be identically true for every future consumer (research, live, backtesting) per Rule 5.5 parity — the same reason single-bar validation already lived in the domain layer. | Putting series validation in `application/services/market_data.py` instead (rejected — would let a different bounded context reimplement slightly different ordering rules, breaking parity). | LOCKED |
+| 65 | Series-ordering violations (out-of-order, duplicate timestamps) are REJECTED (raise), never silently reordered or flagged-and-kept — but series *completeness* (missing intervals) is reported as a value, not rejected. | Ordering/duplication has no legitimate reason to occur and silently tolerating it would let corrupted data reach a future strategy calculation undetected. Incompleteness, by contrast, can be legitimate (a session in progress, data not yet ingested) — the domain layer cannot judge whether that's an error for a given caller's use case, so it reports the gap and lets the caller decide. | Rejecting incomplete series too (rejected — over-broad; a live, in-progress session is never "complete" by definition, and treating that as an error would make the function unusable for its main purpose). | LOCKED |
+| 66 | Historical market-data persistence (a real TimescaleDB-backed table) is deliberately NOT built this checkpoint — only an in-memory/fixture-backed path exists. | No real ingestion pipeline exists yet to populate a persistence table; building schema for zero real data would be premature relative to the existing TimescaleDB decision (#19), which this checkpoint does not redesign. The fixture adapter already makes the domain->application->infrastructure path fully testable without a database. | Building the hypertable now, ahead of ingestion (rejected — the checkpoint brief explicitly warns against "production-scale partitioning" and "ingesting large historical datasets" this checkpoint; premature schema with no real consumer). | LOCKED, WITH A MANDATORY FOLLOW-UP when real ingestion is authorized |
+| 67 | No API view, URL, or OpenAPI/frontend surface was added for market data this checkpoint. | No real consumer (feature engine, backtester, dashboard) exists yet to justify one; the checkpoint brief explicitly warns against building UI/API merely to prove a capability works. Confirmed by diffing the regenerated OpenAPI schema — byte-identical to before this checkpoint. | Adding a minimal read-only market-data endpoint anyway "for completeness" (rejected — no consumer, and Checkpoint 8's own precedent already established endpoints are added only when a real API boundary is genuinely needed). | LOCKED |
+
+## Notes (Checkpoint 14)
+
+- Instrument identity (Checkpoint 5's `Instrument`/`make_instrument_id`)
+  needed NO changes — already correctly distinguishes NSE from BSE
+  listings of the same symbol and already keeps `symbol` distinct from
+  `instrument_id`. No ISIN, segment, or provider-token field was added
+  speculatively; confirmed nothing in this checkpoint's scope requires
+  one.
+- `TradingSession` gained one method (`.contains()`) but no new fields
+  and no calendar/holiday logic — it remains "the shape of one already-
+  determined session" exactly as Checkpoint 5 defined it.
+- `import-linter` remains 6/6 kept (123 files analyzed, up from 119) —
+  the new `domain/market_data/quality.py`,
+  `application/services/market_data.py`, and
+  `infrastructure/market_data_providers/fixtures.py` all respect the
+  existing layering with no new contract needed.
+- All 38 new tests pass genuinely (not skipped) - none require
+  PostgreSQL, since this checkpoint's entire scope (domain contracts,
+  application service, fixture adapter) is deliberately DB-free. This is
+  the first checkpoint since Checkpoint 6 where new functionality is
+  100% testable without PostgreSQL.
+- Frontend UX Testing Readiness gate: unaffected - no frontend or API
+  surface exists for market data yet, so there is nothing new for a
+  human to interact with via the control plane. Gate remains YES from
+  Checkpoint 10 for the existing configuration workflow; market data
+  itself has no UI/API boundary to evaluate against the gate yet.

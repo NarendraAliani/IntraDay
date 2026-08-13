@@ -3214,3 +3214,341 @@ audit API now exists to consume), or (b) beginning the first genuinely
 new business-logic domain now that the control-plane foundation
 (persistence, API, frontend, auth, audit) is complete and consistent
 across every existing resource.
+
+# Checkpoint 14 — Market Data & Instrument Foundation (2026-08-13)
+
+## Objective
+
+Strategic pivot: stop expanding control-plane governance and establish
+the first trading-domain capability — a provider-neutral historical
+market-data foundation future indicators/signals/backtesting/strategies
+can consume, without implementing any of those features yet. Output is
+DATA, not signals.
+
+## Existing Architecture Review
+
+Read `domain/market_data`, `domain/instrument`, `domain/session`,
+`domain/shared_kernel` before writing anything. Found that Checkpoint 5
+had already built comprehensive, correct canonical contracts:
+`Instrument`/`InstrumentType`/`TradingStatus`/`make_instrument_id`
+(NSE/BSE-distinguishing, symbol-vs-identity-distinguishing, F&O-excluded
+by construction), `Bar`/`Quote`/`MarketDataQuality` (Decimal-based,
+UTC-enforced, OHLC-validated, `timestamp` already documented as bar
+CLOSE time), `TradingSession`/`SessionStatus` ("the shape of one
+already-determined session," no calendar logic), and `Exchange`/
+`Timeframe`/`ensure_utc` in the shared kernel. This checkpoint's real
+scope turned out to be narrower than it might have looked: extend, not
+rebuild, plus the provider-neutral *access* layer (Protocol + service +
+fixture adapter) that never existed.
+
+## Instrument Identity Model
+
+No change. `Instrument.instrument_id` (from `make_instrument_id`) already
+correctly distinguishes `NSE:RELIANCE` from `BSE:RELIANCE`, and `symbol`
+is already a distinct field from `instrument_id`. Added two tests
+(`test_same_symbol_on_different_exchanges_is_a_distinct_identity`,
+`test_symbol_and_instrument_id_are_not_interchangeable`) confirming this
+by direct assertion rather than by inspection alone. No ISIN/segment/
+provider-token field was added — nothing in this checkpoint's scope
+requires one; provider-token mapping remains an infrastructure concern,
+unbuilt.
+
+## Market Data Contract
+
+New: `application/repositories.HistoricalMarketDataRepository` — a
+read-only Protocol, `get_bars(instrument_id, timeframe, start, end) ->
+tuple[Bar, ...]`. No provider name, request/response shape, or SDK type
+anywhere in it. Ordering/integrity validation is explicitly NOT this
+Protocol's job (a data-access interface should not also silently reorder
+results) — that's `HistoricalMarketDataService`'s job, layered on top.
+
+## Bar / Candle Model
+
+`Bar` extended with one new field: `adjustment: PriceAdjustment` (`RAW`/
+`ADJUSTED`, default `RAW`) — see Raw vs. Adjusted below. `timestamp`
+semantics (bar CLOSE time) re-confirmed explicitly, not re-decided —
+Checkpoint 5 had already made this decision correctly; this checkpoint
+pins it with a dedicated test and derives new arithmetic
+(`expected_bar_timestamps()`) directly from it. `high >= max(open,
+close)`/`low <= min(open, close)` were already enforced (Checkpoint 5);
+added explicit tests naming these two invariants directly rather than
+relying only on the existing close-outside-range test to imply them.
+
+## Timeframe Model
+
+Reused Checkpoint 5's `Timeframe` enum unchanged. New:
+`domain.market_data.quality.timeframe_to_timedelta()` — maps each
+fixed-duration timeframe to its `timedelta`; `TICK` has no entry and
+raises, since a tick has no fixed duration by definition.
+
+## Timezone Semantics
+
+Unchanged, re-confirmed: UTC is the sole internal representation
+(`ensure_utc()`, Checkpoint 3/5), IST conversion is a presentation-
+boundary concern this checkpoint's logic never performs (nothing it
+builds renders anything for a human). No naive datetime, no second
+independently-computed time source anywhere in the new code.
+
+## Trading Session Model
+
+`TradingSession` gained one method, `.contains(timestamp) -> bool` — a
+deterministic range check against the session's own already-known
+bounds. No calendar/holiday logic was added; the contract remains "the
+shape of one already-determined session" exactly as Checkpoint 5 defined
+it.
+
+## Raw vs. Adjusted Data Semantics
+
+New `PriceAdjustment` enum (`RAW`/`ADJUSTED`) on `Bar.adjustment`
+(default `RAW`) — a genuine, justified extension of a locked Checkpoint 5
+contract (same precedent as Checkpoint 7's `RiskLimits` extension).
+**No corporate-action adjustment engine exists anywhere in this
+codebase.** Prices are never silently adjusted; `ADJUSTED` is not
+reachable from any current code path — it is the explicit label a future
+corporate-action processor must set correctly when it exists.
+
+## Data Quality Model
+
+Two deliberately separate mechanisms: the existing per-bar
+`MarketDataQuality` flag (unchanged) for one bar's own trustworthiness,
+and new series-level functions (`domain/market_data/quality.py`) —
+`ensure_chronological()` (ordering/duplicates) and
+`missing_bar_timestamps()` (completeness against an expected, session-
+bounded schedule) — for properties of a *collection* of bars. No
+provenance/`received_at` metadata was added; nothing in scope needs it
+yet (no live ingestion exists), and adding it speculatively would be the
+"huge data-quality framework" the brief warns against.
+
+## Application Layer
+
+New: `application/services/market_data.py`'s `HistoricalMarketDataService`
+— depends only on the `HistoricalMarketDataRepository` Protocol, never a
+concrete implementation. `get_bars()` retrieves + validates ordering
+(raises on violation); `completeness()` retrieves + reports gaps against
+a session. Tested with an in-memory fake repository
+(`FakeHistoricalMarketDataRepository` in the test file), proving the
+service works with zero Django/PostgreSQL/provider dependency — including
+a dedicated AST-based test
+(`test_service_has_no_infrastructure_import`) statically confirming the
+service module itself never imports Django or `intraday.infrastructure`.
+
+## Infrastructure Adapter
+
+New: `infrastructure/market_data_providers/fixtures.py`'s
+`FixtureHistoricalMarketDataRepository` — deterministic, in-memory, zero
+network calls, zero credentials. **No Dhan code was written.**
+`infrastructure/brokers/dhan/` was not touched; no Dhan SDK dependency
+was added to `pyproject.toml`. Eight hand-authored (not randomly
+generated) bars for a clearly synthetic instrument (`NSE:FIXTURE01`)
+cover only the first 40 minutes of a session — deliberately incomplete
+against a full trading day, so `completeness()` has a real, non-empty,
+deterministic gap to report in tests.
+
+## Dhan Boundary
+
+No Dhan adapter exists yet, so there is nothing to write a "Dhan depends
+on the canonical contract, not vice versa" test against. `import-linter`
+contracts #1/#2 (domain/application must not depend on infrastructure)
+already mechanically forbid a future `infrastructure/market_data_providers/
+dhan/` from being imported by `domain`/`application` — no new contract
+was needed to express this; the existing generic infrastructure-
+isolation rule already covers it, verified by `lint-imports` (6/6 kept).
+
+## Persistence
+
+**Deliberately deferred, documented, not built.** No new Django model, no
+migration. The existing TimescaleDB/Parquet decision (#19) is unchanged
+and was not redesigned. Building a hypertable now, before any real
+ingestion pipeline exists to populate it, would be schema for zero real
+data — explicitly warned against by the checkpoint brief ("do NOT ingest
+large historical datasets," "do NOT create production-scale
+partitioning unless required"). The fixture adapter already makes the
+full path testable without a database — relevant since PostgreSQL
+remains unreachable in this sandbox regardless. Flagged as a mandatory
+follow-up when real ingestion is authorized (decision #66).
+
+## Deterministic Fixture Data
+
+Eight hand-authored `Bar` instances (not `random`-generated, even with a
+fixed seed, per the brief's explicit preference), for synthetic
+instrument `NSE:FIXTURE01`, five-minute timeframe, covering 09:20-09:55
+IST on a synthetic session date. Chronologically ordered, valid OHLC,
+positive volume, all `RAW`/`OK` by default. Used to test ordering,
+completeness/gap detection (against the fixture's own deliberate
+incompleteness relative to a full session), and the real Protocol
+boundary end-to-end.
+
+## Validation Rules
+
+`high >= max(open, close)`/`low <= min(open, close)`/`volume >= 0`/UTC
+timestamps: already enforced at `Bar` construction (Checkpoint 5,
+re-verified, not re-implemented). New: strict ordering/no-duplicates is
+a hard REJECTION (raises `OutOfOrderBarError`/`DuplicateBarTimestampError`)
+— data is never silently reordered or dropped. Completeness (missing
+intervals) is a REPORT, not a rejection — a session in progress or
+partially ingested is not necessarily an error, and the domain layer
+cannot judge that for every caller, so it returns the gap list and lets
+the caller decide.
+
+## Test Matrix
+
+**PASSED**: 38 new tests, all genuinely passing — none require
+PostgreSQL, since this checkpoint's entire scope (domain contracts,
+application service, fixture adapter) is deliberately DB-free:
+- Instrument (2 new, plus pre-existing): exchange distinction,
+  symbol-vs-identity distinction.
+- Bar (8 new, plus pre-existing): high/low invariants named explicitly,
+  zero-volume accepted, close-time semantics pinned, RAW default,
+  ADJUSTED settable.
+- Market-data quality (17 new): chronological acceptance (empty/single/
+  many, plus a Hypothesis property test over arbitrary strictly-
+  increasing offsets), duplicate rejection, out-of-order rejection,
+  timeframe-duration mapping (including TICK rejection), expected-
+  timestamp determinism, gap detection (empty for complete series, exact
+  gap for a real one, deterministic across repeated calls).
+- Session (6 new, plus pre-existing): `contains()` true inside/at both
+  boundaries, false before/after, naive-timestamp rejection.
+- Application service (7 new): ordered retrieval, duplicate/out-of-order
+  rejection propagated from the domain layer, deterministic output,
+  completeness with/without gaps, static no-infrastructure-import proof.
+- Fixture adapter + real contract-boundary test (5 new): deterministic
+  output, already-chronological, time-window filtering, unknown-
+  instrument empty result, and one test proving the REAL
+  `HistoricalMarketDataService` + REAL `FixtureHistoricalMarketDataRepository`
+  work together with nothing mocked.
+
+**SKIPPED**: 81 (unchanged — no new PostgreSQL-dependent test was added
+or needed this checkpoint; every pre-existing skip is honestly reported
+as before, not claimed as passed).
+
+**FAILED**: 0.
+
+## Property-Based Testing
+
+One Hypothesis test added:
+`test_ensure_chronological_accepts_any_strictly_increasing_offsets` —
+generates arbitrary unique integer minute-offsets, sorts them, and
+verifies `ensure_chronological` accepts the resulting series for any
+such generated ordering. Not added elsewhere merely for test-count
+inflation — the OHLC invariant already had a Hypothesis test from
+Checkpoint 5 (`test_bar_ohlc_invariant_holds_for_generated_ranges`,
+unchanged), and the other new rules (duplicate/out-of-order rejection,
+gap detection) are adequately covered by targeted example-based tests
+without needing property generation.
+
+## PostgreSQL Validation Status
+
+Still unreachable in this sandbox (documented, unchanged constraint).
+Uniquely for this checkpoint, that limitation has **zero impact** on
+what could be validated: every new capability (domain contracts,
+application service, fixture adapter) is deliberately DB-free, so
+nothing new was skipped. `manage.py makemigrations --check --dry-run`
+was not run against a missing database for a new migration, because no
+migration was created this checkpoint (Persistence section above).
+
+## Architecture Enforcement
+
+`lint-imports` ✅ **6/6 kept** (123 files, up from 119). No new contract
+was needed — the existing domain/application/infrastructure isolation
+contracts already cover the new `market_data_providers` boundary. The
+pre-existing domain-purity architecture test
+(`tests/unit/architecture/test_persistence_boundaries.py`) automatically
+covers the new `domain/market_data/quality.py` file too, since it globs
+the whole `domain/` package rather than naming files explicitly.
+
+## OpenAPI / Contract Validation
+
+`spectacular --fail-on-warn` ✅ (silent success). Regenerated schema
+confirmed byte-equivalent in substance to before this checkpoint (no new
+paths/schemas — checked directly by grepping the regenerated output for
+market-data-related content, finding only pre-existing, unrelated
+`instrument_id` references in the universe contract). No frontend
+contract regeneration was needed or run, since nothing changed for it to
+pick up.
+
+## Security Review
+
+No credentials, API tokens, `.env` files, or broker secrets were added
+or touched. No network call occurs anywhere in the new test suite — the
+fixture adapter is pure in-memory Python. No Dhan credential requirement
+was introduced (none exists). No authentication/authorization change was
+made this checkpoint (out of scope, correctly untouched).
+
+## Trading Safety Validation
+
+No file under `trading_engine/`, `control_plane/kill_switch`,
+`infrastructure/brokers/`, or any `TRADING_MODE`-resolution code was
+touched — confirmed by reviewing the full changed-file list (all are
+`domain/{market_data,session}`, `application/{repositories,services}`,
+`infrastructure/market_data_providers/`, `docs/`, and test files). No
+order placement, position management, or broker API call exists anywhere
+in the new code. The platform remains structurally incapable of placing
+a live order as a consequence of this checkpoint.
+
+## Regression Results
+
+Ruff format ✅ (154 files) · Ruff lint ✅ · mypy strict ✅ (99 files, up
+from 95) · pytest ✅ **156 passed, 81 skipped, 0 failed** (up from 118
+passed — 38 new genuinely-passing tests, 0 new skips) · import-linter ✅
+**6/6 kept** (123 files) · `manage.py check` ✅ · `spectacular
+--fail-on-warn` ✅ · `pip-audit` ✅ (no new findings — no new
+dependency added). Authentication, authorization, configuration
+activation, audit, and architecture-boundary tests all re-verified
+passing unchanged — Checkpoints 1-13 undisturbed.
+
+## Documentation Updated
+
+New: `docs/architecture/MARKET_DATA_ARCHITECTURE.md` (instrument
+identity, market-data contract, Bar/timeframe/timezone/session
+semantics, raw-vs-adjusted, data quality, validation rules, application/
+infrastructure layers, persistence/API deferral, provider boundary).
+Updated: `docs/architecture/ARCHITECTURE_DECISIONS.md` (decisions
+#62-67 + Checkpoint 14 notes), `docs/architecture/ARCHITECTURE.md`
+(pointer), this file. `DOMAIN_BOUNDARIES.md`/`TECHNOLOGY_MAPPING.md`
+needed no changes — no bounded-context boundary or technology decision
+changed (the existing TimescaleDB/Parquet mapping was reused, not
+redesigned).
+
+## Versioning
+
+Checked before changing: `pyproject.toml` (`0.8.0`, unchanged since
+Checkpoint 8) and `SPECTACULAR_SETTINGS["VERSION"]` (`0.11.0`, unchanged
+since Checkpoint 11) were both left as-is. Established pattern since
+Checkpoint 9: the backend package version tracks meaningful API-surface
+changes, not every checkpoint; this checkpoint introduced no API
+surface, so bumping either would be exactly the mechanical version bump
+the brief warns against.
+
+## Git Status
+
+- `git fetch origin` (read-only): `origin/main` unchanged at `4d1f94d`
+  (Checkpoint 11) — no anomaly this session, consistent with Checkpoint
+  13's own report.
+- `git rev-parse HEAD` (before this checkpoint's commit): `51b2af3`
+  (Checkpoint 13).
+- `git branch --show-current`: `main`.
+- `git rev-list --left-right --count HEAD...origin/main` (before this
+  checkpoint's commit): `2  0` — 2 ahead, 0 behind.
+- Working tree was clean before this checkpoint's changes.
+
+Committed locally to `main` as `Checkpoint 14: establish market data and
+instrument foundation`. **Not pushed.**
+
+## Deferred Items
+
+Real historical-data persistence (TimescaleDB hypertable, when real
+ingestion is authorized). Any provider adapter, including Dhan. Any API/
+frontend surface for market data. Corporate-action adjustment
+processing. Exchange-calendar/holiday service. All indicator, feature,
+signal, strategy, backtesting, order-management, and broker-integration
+code — none of it exists, by design. Docker remains deferred.
+
+## Recommended Checkpoint 15
+
+With a tested, provider-neutral market-data foundation now in place,
+recommend either (a) `feature_engine`'s first technology-neutral feature/
+indicator contract (still data transformation, not signals — e.g. a
+simple moving average over `Bar` series, consuming
+`HistoricalMarketDataService` exactly as designed), or (b) a first real
+provider adapter (Dhan) implementing `HistoricalMarketDataRepository`
+against sandbox/paper credentials only, kept strictly read-only.
