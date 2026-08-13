@@ -17,6 +17,7 @@ from intraday.domain.risk.contracts import RiskLimits
 from intraday.domain.shared_kernel.contracts import Exchange, Timeframe, Version
 from intraday.domain.strategy.contracts import StrategyMaturityState, StrategyVersion
 from intraday.domain.universe.contracts import Universe, UniverseMember, UniverseMembershipStatus
+from intraday.infrastructure.persistence.models import AuditLogEntry
 from intraday.infrastructure.persistence.repositories import (
     DjangoRiskConfigurationRepository,
     DjangoStrategyVersionRepository,
@@ -70,21 +71,50 @@ def test_risk_repository_duplicate_save_raises_duplicate_version_error() -> None
 @requires_postgres
 @pytest.mark.django_db
 def test_risk_repository_activate_then_get_active() -> None:
+    """Checkpoint 17.2: `activate()` gained keyword-only `actor`/
+    `actor_user_id`/`request_id` at Checkpoint 12 (the append-only audit
+    trail - see docs/architecture/AUDITABILITY.md) - this test was never
+    updated to pass them and was silently never running (PostgreSQL was
+    unreachable in every prior checkpoint's sandbox). Fixed to supply
+    them AND to verify the actual intended behavior those parameters
+    exist for: a matching, correctly-populated `AuditLogEntry` row is
+    created in the same transaction as the activation - not just that
+    the call no longer raises `TypeError`."""
     repo = DjangoRiskConfigurationRepository()
     repo.save(_risk_record("v1"))
     repo.save(_risk_record("v2"))
-    repo.activate("default", "v2")
+
+    repo.activate("default", "v2", actor="ux_test_operator", actor_user_id=7, request_id="req-1")
+
     active = repo.get_active("default")
     assert active is not None
     assert active.version.value == "v2"
+
+    entry = AuditLogEntry.objects.get(resource_id="default", version_identifier="v2")
+    assert entry.actor_username == "ux_test_operator"
+    assert entry.actor_user_id == 7
+    assert entry.request_id == "req-1"
+    assert entry.action == "configuration.activate"
+    assert entry.resource_type == "risk_configuration"
+    assert entry.outcome == "activated"
 
 
 @requires_postgres
 @pytest.mark.django_db
 def test_risk_repository_activate_unknown_version_raises() -> None:
+    """Checkpoint 17.2: same signature fix as above, plus verification
+    that a REJECTED activation attempt is still durably recorded
+    (Checkpoint 12 §9: a failed attempt must not be silently unrecorded)."""
     repo = DjangoRiskConfigurationRepository()
+
     with pytest.raises(ValueError, match="unknown version"):
-        repo.activate("default", "nonexistent")
+        repo.activate(
+            "default", "nonexistent", actor="ux_test_operator", actor_user_id=7, request_id="req-2"
+        )
+
+    entry = AuditLogEntry.objects.get(resource_id="default", version_identifier="nonexistent")
+    assert entry.outcome == "rejected"
+    assert entry.request_id == "req-2"
 
 
 @requires_postgres
@@ -121,6 +151,9 @@ def test_universe_repository_round_trips_members() -> None:
 @requires_postgres
 @pytest.mark.django_db
 def test_strategy_version_repository_identity_and_activation() -> None:
+    """Checkpoint 17.2: same stale-signature fix as the risk repository
+    tests above - `activate()` gained `actor`/`actor_user_id`/
+    `request_id` at Checkpoint 13, never reflected here."""
     repo = DjangoStrategyVersionRepository()
     version = StrategyVersion(
         strategy_id="example-strategy",
@@ -136,7 +169,22 @@ def test_strategy_version_repository_identity_and_activation() -> None:
     assert fetched is not None
     assert fetched.strategy_version.maturity_state is StrategyMaturityState.IDEA
 
-    repo.activate("example-strategy", "spec-v1", "code-v1", "cfg-v1")
+    repo.activate(
+        "example-strategy",
+        "spec-v1",
+        "code-v1",
+        "cfg-v1",
+        actor="ux_test_operator",
+        actor_user_id=7,
+        request_id="req-3",
+    )
     active = repo.get_active("example-strategy")
     assert active is not None
     assert active.strategy_version.specification_version.value == "spec-v1"
+
+    entry = AuditLogEntry.objects.get(
+        resource_id="example-strategy", version_identifier="spec-v1:code-v1:cfg-v1"
+    )
+    assert entry.actor_username == "ux_test_operator"
+    assert entry.resource_type == "strategy_version"
+    assert entry.outcome == "activated"

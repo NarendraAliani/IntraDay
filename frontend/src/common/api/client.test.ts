@@ -6,7 +6,7 @@
 // error body.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { apiGet, ApiNetworkError, ApiRequestError } from "./client";
+import { apiGet, apiPost, ApiNetworkError, ApiRequestError, setSessionExpiredHandler } from "./client";
 import type { components } from "@shared/generated_contracts/api-types";
 
 type RiskConfigurationResponse = components["schemas"]["RiskConfigurationResponse"];
@@ -92,5 +92,69 @@ describe("apiGet", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(apiGet("/api/v1/config/risk/default/")).rejects.toBeInstanceOf(ApiNetworkError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Checkpoint 17.2 (Defect 1): the authentication-vs-authorization status-
+// code contract. A 401 means "you are not authenticated" (session
+// expired/absent) - the ONLY case that should trigger the session-expiry
+// handler and drop the user back to the login screen. A 403 means "you
+// are authenticated but not permitted to do this" - it must NEVER be
+// treated as a session-expiry event, or a legitimate permission denial
+// would incorrectly log the user out.
+// ---------------------------------------------------------------------------
+describe("session-expiry vs. authorization-denial distinction", () => {
+  afterEach(() => {
+    setSessionExpiredHandler(null);
+  });
+
+  it("triggers the session-expiry handler on a 401 (authentication failure)", async () => {
+    const handler = vi.fn();
+    setSessionExpiredHandler(handler);
+    const errorBody: components["schemas"]["ApiError"] = {
+      error_code: "not_authenticated",
+      message: "Authentication credentials were not provided.",
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify(errorBody), {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+
+    await expect(apiGet("/api/v1/config/risk/default/")).rejects.toMatchObject({ status: 401 });
+
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT trigger the session-expiry handler on a 403 (authorization failure)", async () => {
+    const handler = vi.fn();
+    setSessionExpiredHandler(handler);
+    const errorBody: components["schemas"]["ApiError"] = {
+      error_code: "forbidden",
+      message: "You do not have permission to activate configuration.",
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify(errorBody), {
+          status: 403,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+
+    await expect(apiPost("/api/v1/config/risk/default/v1/activate/")).rejects.toMatchObject({
+      status: 403,
+      errorCode: "forbidden",
+    });
+
+    // The critical assertion: a real permission denial must never be
+    // mistaken for a session expiry - the handler must not fire.
+    expect(handler).not.toHaveBeenCalled();
   });
 });

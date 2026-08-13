@@ -141,11 +141,31 @@ def test_current_user_after_logout_reports_anonymous() -> None:
 @requires_postgres
 @pytest.mark.django_db
 def test_anonymous_configuration_read_rejected() -> None:
+    """Checkpoint 17.2: tightened from `in (401, 403)` to exactly 401 now
+    that `Http401SessionAuthentication` (infrastructure/api/authentication.py)
+    fixes DRF's default 403-downgrade for unauthenticated requests - see
+    `test_authentication_vs_authorization_status_codes_are_distinct`
+    below for the full contract this enforces."""
     client = Client()
 
     response = client.get("/api/v1/config/risk/default/")
 
-    assert response.status_code in (401, 403)
+    assert response.status_code == 401
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_anonymous_activation_attempt_rejected_with_401_not_403() -> None:
+    """An anonymous (no session at all) activation attempt is an
+    AUTHENTICATION failure, not an authorization one - must be 401, the
+    same status a real expired/invalidated session produces, so the
+    frontend's session-expiry handler (401-only, by design - see
+    frontend/src/common/api/client.ts) can react to it."""
+    client = Client()
+
+    response = client.post("/api/v1/config/risk/default/v1/activate/")
+
+    assert response.status_code == 401
 
 
 @requires_postgres
@@ -232,13 +252,20 @@ def test_permission_cannot_be_bypassed_by_direct_api_request() -> None:
 @requires_postgres
 @pytest.mark.django_db
 def test_csrf_protects_state_changing_requests_once_authenticated() -> None:
+    """Checkpoint 17.2: this test's own prior comment ("Login itself is
+    exempt from CSRF enforcement") was stale and factually wrong -
+    `login_view.csrf_exempt = False` (Checkpoint 12 re-enabled real CSRF
+    enforcement on login specifically). Login requires a CSRF cookie
+    fetched first, exactly like every other login test in this file
+    (`test_legitimate_login_succeeds_with_a_valid_csrf_token`) - fixed to
+    match the real, documented flow instead of an incorrect assumption."""
     client = Client(enforce_csrf_checks=True)
     _create_operator()
-    # Login itself is exempt from CSRF enforcement (no session user exists
-    # yet at authenticate() time - see auth_views.py's login_view
-    # docstring / docs/architecture/AUTHENTICATION_AUTHORIZATION.md).
+    csrf_token = client.get("/api/v1/auth/session/").cookies["csrftoken"].value
     login_response = client.post(
-        "/api/v1/auth/login/", {"username": OPERATOR_USERNAME, "password": PASSWORD}
+        "/api/v1/auth/login/",
+        {"username": OPERATOR_USERNAME, "password": PASSWORD},
+        HTTP_X_CSRFTOKEN=csrf_token,
     )
     assert login_response.status_code == 200
 
@@ -324,3 +351,89 @@ def test_legitimate_login_succeeds_with_a_valid_csrf_token() -> None:
 
     assert response.status_code == 200
     assert response.json()["is_authenticated"] is True
+
+
+# ---------------------------------------------------------------------------
+# Authentication vs. authorization status-code contract (Checkpoint 17.2)
+#
+# Root cause of the Checkpoint 17.1 finding: DRF's stock
+# `SessionAuthentication.authenticate_header()` returns `None`, which
+# makes `APIView.handle_exception()` downgrade an unauthenticated
+# request's `NotAuthenticated` (401) to 403 - indistinguishable from a
+# genuine `PermissionDenied` (also 403). This silently broke the
+# frontend's session-expiry contract (`setSessionExpiredHandler` fires
+# only on 401). Fixed by `Http401SessionAuthentication`
+# (infrastructure/api/authentication.py). These tests prove the fix
+# without weakening authorization: a real permission denial must remain
+# 403, never become a false session-expiry signal.
+# ---------------------------------------------------------------------------
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_authentication_vs_authorization_status_codes_are_distinct() -> None:
+    """The single test that proves the whole point of the fix: an
+    AUTHENTICATION failure (no session at all) and an AUTHORIZATION
+    failure (real session, insufficient capability) must produce
+    DIFFERENT status codes - 401 vs 403 - never the same one. Before
+    Checkpoint 17.2 both cases returned 403, making them
+    indistinguishable to any client."""
+    anonymous_client = Client()
+    unauthenticated_response = anonymous_client.post("/api/v1/config/risk/default/v1/activate/")
+    assert unauthenticated_response.status_code == 401
+
+    _create_user()
+    reader_client = Client()
+    reader_client.post("/api/v1/auth/login/", {"username": USERNAME, "password": PASSWORD})
+    unauthorized_response = reader_client.post("/api/v1/config/risk/default/v1/activate/")
+    assert unauthorized_response.status_code == 403
+
+    assert unauthenticated_response.status_code != unauthorized_response.status_code
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_session_expiry_produces_401_not_403() -> None:
+    """Simulates a real expired/invalidated session (the exact scenario
+    `setSessionExpiredHandler` exists for): a previously-valid,
+    authenticated session whose server-side Session row no longer
+    exists (evicted/expired) must still produce 401 on the next
+    protected request - not 403, which the frontend would not treat as
+    a session-expiry signal."""
+    from django.contrib.sessions.models import Session
+
+    _create_user()
+    client = Client()
+    client.post("/api/v1/auth/login/", {"username": USERNAME, "password": PASSWORD})
+
+    # Confirm the session really is authenticated first.
+    assert client.get("/api/v1/auth/session/").json()["is_authenticated"] is True
+
+    # Simulate expiry: delete every server-side session row directly,
+    # exactly what happens when Django's session-cleanup or a natural
+    # SESSION_COOKIE_AGE expiry removes the row but the browser still
+    # holds the (now-invalid) cookie.
+    Session.objects.all().delete()
+
+    response = client.get("/api/v1/config/risk/default/")
+
+    assert response.status_code == 401
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_operator_permission_denial_still_returns_403_after_the_fix() -> None:
+    """Regression guard for the fix itself: a real, authenticated,
+    insufficiently-privileged request must NOT be affected by the 401
+    fix - it must remain exactly 403, never accidentally become 401
+    (which would incorrectly look like a session-expiry event to the
+    frontend and log the user out for what is actually a permission
+    problem, not an authentication one)."""
+    _create_user()
+    client = Client()
+    client.post("/api/v1/auth/login/", {"username": USERNAME, "password": PASSWORD})
+
+    response = client.post("/api/v1/config/risk/default/v1/activate/")
+
+    assert response.status_code == 403
+    assert response.status_code != 401

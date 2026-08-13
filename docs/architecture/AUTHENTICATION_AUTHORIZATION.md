@@ -95,18 +95,31 @@ authorization decision can never independently drift.
 | `/api/v1/config/strategy/...` (list/get/active) | GET | `IsAuthenticated` |
 | `/api/v1/config/strategy/.../activate/` | POST | `IsAuthenticated` + `IsConfigurationOperator` |
 
-HTTP status behavior: DRF's `SessionAuthentication` does not implement
+HTTP status behavior (**corrected at Checkpoint 17.2** - see that
+checkpoint's report in `taskReport.md` for the full root-cause
+narrative): DRF's stock `SessionAuthentication` does not implement
 `authenticate_header()` (there is no HTTP challenge scheme to advertise
-for a browser session), so an anonymous request to an `IsAuthenticated`
-view receives **403 Forbidden**, not 401 - this is DRF's own documented,
-standard behavior, not a custom choice. **401** is reserved for
-authentication *failure* (a bad login attempt) and for the "session no
-longer valid" signal the frontend's `setSessionExpiredHandler` listens
-for. **403** covers both "not authenticated at all" and "authenticated
-but lacking the `configuration.activate` capability" - the response body
-(`error_code`) does not further distinguish these to avoid adding a new
-information-disclosure surface; the frontend does not need to distinguish
-them either (both cases show the same "you can't do that" UI outcome).
+for a browser session), which is DRF's own documented, standard reason
+it downgrades an anonymous request's `401` to **403 Forbidden** by
+default. This project no longer inherits that default - `infrastructure/
+api/authentication.Http401SessionAuthentication` (a thin
+`SessionAuthentication` subclass supplying a real, if arbitrary,
+`authenticate_header`) is used instead, so the two conditions are
+genuinely distinct:
+
+- **401** - authentication failure: no session at all, a bad login
+  attempt, or a session that is no longer valid (the "session expired"
+  signal `frontend/src/common/api/client.ts`'s `setSessionExpiredHandler`
+  reacts to - see §6).
+- **403** - authorization failure: a real, valid, authenticated session
+  that lacks the `configuration.activate` capability. Never a
+  session-expiry signal - the frontend must not (and, per
+  `setSessionExpiredHandler`'s 401-only trigger, does not) treat a 403
+  as a reason to log the user out.
+
+Session/cookie/CSRF handling is otherwise byte-for-byte identical to
+DRF's stock `SessionAuthentication` - only the HTTP status code on an
+unauthenticated request changed.
 
 ## 5. Login / logout / current-user flow
 

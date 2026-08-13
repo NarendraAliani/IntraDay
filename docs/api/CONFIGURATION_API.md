@@ -270,18 +270,43 @@ project convention distinguishes `422` from `400` yet, so it was not
 introduced without one (Checkpoint 8 §9: "do not invent status codes
 merely for theoretical purity").
 
-**Added at Checkpoint 11**: `401` (authentication failure — a bad login
-attempt, or any request whose session is no longer valid) and `403`
-(authenticated but lacking the required capability — including an
-entirely anonymous request against an `IsAuthenticated` view, since DRF's
-`SessionAuthentication` has no HTTP challenge scheme to return a `401`
-challenge for; this is DRF's own standard, documented behavior). See
+**Added at Checkpoint 11, corrected at Checkpoint 17.2**: `401`
+(authentication failure — no session at all, or a session that is no
+longer valid) and `403` (authenticated but lacking the required
+capability) are now genuinely distinct, never the same status for two
+different real conditions. Checkpoint 17.2 found (via real end-to-end
+HTTP testing against a live PostgreSQL+Redis backend, not visible from
+either side's own unit tests in isolation) that DRF's stock
+`SessionAuthentication` has no HTTP challenge scheme, which makes DRF
+downgrade an unauthenticated request's `401` to `403` by default — this
+silently made every anonymous request indistinguishable from a real
+permission denial, breaking the frontend's session-expiry contract
+(`AuthContext`'s `setSessionExpiredHandler`, which reacts only to `401`
+by design). Fixed with `infrastructure/api/authentication.
+Http401SessionAuthentication` (a thin `SessionAuthentication` subclass
+supplying a real `authenticate_header`) — session/cookie/CSRF behavior
+is otherwise byte-for-byte unchanged. See
 [../architecture/AUTHENTICATION_AUTHORIZATION.md](../architecture/AUTHENTICATION_AUTHORIZATION.md)
 §4 for the full endpoint-by-endpoint permission table.
 
 ## 9. Serialization Details
 
 - Decimal → JSON string (never float) — verified by test.
+  **Checkpoint 17.2 correction**: this was the *declared* contract from
+  Checkpoint 8 onward (`RiskLimitsSerializer`'s `DecimalField`s,
+  `REST_FRAMEWORK["COERCE_DECIMAL_TO_STRING"]`), but the risk-
+  configuration views built and returned a raw Python dict directly,
+  bypassing that serializer entirely — DRF's `Response()` then rendered
+  the un-serialized `Decimal` via its own `JSONEncoder`, which converts
+  to `float` (`float(Decimal("0.10"))` → `0.1`, silently losing both
+  precision and the trailing zero). This was invisible because the one
+  test that would have caught it was always `requires_postgres`-skipped
+  until Checkpoint 17.1 restored a reachable database. Fixed by actually
+  routing the response dict through `RiskConfigurationResponseSerializer(...).data`
+  before returning it (`infrastructure/api/risk_views.py`) — no field,
+  name, or shape changed, only that the already-declared serializer is
+  now genuinely used. Regression-tested against classic binary-float
+  traps (`0.10`, `1.01`, `99.99`, `10000.00`, `0.01`).
 - `datetime` → ISO-8601 UTC string — verified by test.
 - Enum values (`Exchange`, `UniverseMembershipStatus`, `Timeframe`,
   `StrategyMaturityState`) → their string `.value` (e.g. `"NSE"`,

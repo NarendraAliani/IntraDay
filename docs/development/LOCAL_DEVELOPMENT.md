@@ -125,6 +125,16 @@ user.groups.add(Group.objects.get(name="configuration-operators"))
 Never commit a generated password anywhere in this repository — it
 exists only in your local PostgreSQL instance.
 
+## Test isolation notes
+
+`tests/conftest.py` (Checkpoint 17.2) clears Django's cache before and
+after every test automatically. This matters if you add a test touching
+anything cache-backed (rate-limit throttling, `CACHES["default"]`) —
+without it, `LocMemCache`'s in-process state persists across tests
+within a single `pytest` run (e.g. the login view's `5/min` throttle),
+which previously caused unrelated, order-dependent test failures. You
+should not need to do anything extra; this is automatic (`autouse=True`).
+
 ## CI
 
 `.github/workflows/ci.yml` runs on every PR and on push to `main`: Ruff

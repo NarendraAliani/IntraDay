@@ -4660,3 +4660,302 @@ infrastructure — a strong secondary recommendation is a short, focused
 "test-debt and session-expiry correctness" checkpoint before Checkpoint
 18, so these do not silently persist now that they are known rather than
 hidden behind a skip marker. Not implemented — recommendation only.
+
+# Checkpoint 17.2 — Test-Debt Cleanup & Session-Expiry Contract Correction (2026-08-13)
+
+## Objective
+
+Fix, properly and with tests, the four concrete defects Checkpoint 17.1
+found once real PostgreSQL+Redis execution became available: (1) the
+401/403 session-expiry contract mismatch, (2) Decimal-as-float API
+serialization, (3) 3 stale repository tests, (4) throttle-cache test
+pollution. No business features touched.
+
+## Baseline (reproduced first, matched exactly)
+
+`pytest`: 334 passed, 8 failed, 0 skipped. `ruff`/`mypy`: clean.
+`lint-imports`: 6/6 kept. `manage.py check`: clean. Frontend: typecheck/
+build clean, 30/30 tests passing. Identical to Checkpoint 17.1's
+reported numbers — no unexplained drift.
+
+## Defect 1 — Session Expiry (HIGH)
+
+**Root cause**, precisely traced (not re-assumed): DRF's stock
+`SessionAuthentication.authenticate_header()` returns `None` by design
+(documented DRF behavior, meant to stop a *browser* popping its native
+Basic-Auth dialog on a top-level navigation). `APIView.handle_exception()`
+checks this: if no authenticator provides a challenge header, it
+downgrades an unauthenticated request's `NotAuthenticated` (401) to
+`PermissionDenied` (403) — **before** any authorization/permission logic
+even runs. This concern is irrelevant here (every consumer is a JSON
+`fetch()` from the SPA or a test client, never a full-page browser
+navigation), and it silently broke `AuthContext`'s session-expiry
+handler, which only fires on exactly `401`.
+
+**Decision** (Option A, backend fix — chosen over B/C per the
+checkpoint's own preference list): supply a real `authenticate_header`
+so DRF stops downgrading. This is the smallest possible change — it
+does not touch `IsConfigurationOperator`, does not touch CSRF, does not
+touch session/cookie handling, and does not introduce JWT/refresh-token
+infrastructure. Authorization denials remain 403 because that branch of
+`permission_denied()` is decided entirely by whether
+`request.successful_authenticator` is set — unaffected by this class.
+
+**Implementation**: new `infrastructure/api/authentication.
+Http401SessionAuthentication` (a `SessionAuthentication` subclass
+returning `"Session"` from `authenticate_header`), wired in as
+`REST_FRAMEWORK["DEFAULT_AUTHENTICATION_CLASSES"]`. Also required a new
+`drf_spectacular.extensions.OpenApiAuthenticationExtension` registration
+(`Http401SessionAuthenticationScheme`) — drf-spectacular does not
+auto-recognize custom `SessionAuthentication` subclasses, so without it
+`manage.py spectacular --fail-on-warn` fails on 21 "could not resolve
+authenticator" warnings across every protected endpoint.
+
+**Tests**: backend — `test_anonymous_configuration_read_rejected`
+tightened from `in (401, 403)` to exactly `401`;
+`test_anonymous_activation_attempt_rejected_with_401_not_403`,
+`test_authentication_vs_authorization_status_codes_are_distinct` (the
+single test proving the whole point: unauthenticated → 401,
+authenticated-but-forbidden → 403, and they must differ),
+`test_session_expiry_produces_401_not_403` (simulates a real expired
+session by deleting the server-side `Session` row directly),
+`test_operator_permission_denial_still_returns_403_after_the_fix`
+(regression guard: the fix must never turn a real 403 into a 401).
+Frontend — `client.test.ts`: `"triggers the session-expiry handler on a
+401"` and `"does NOT trigger the session-expiry handler on a 403"` (the
+critical negative assertion the checkpoint brief specifically warned
+about — a legitimate permission denial must never cause a logout).
+
+## Defect 2 — Decimal Serialization (MEDIUM)
+
+**Root cause**, traced through the full stack per the checkpoint's own
+instruction (model → serializer → response → OpenAPI → frontend type):
+`RiskLimitsSerializer`/`RiskConfigurationResponseSerializer`
+(`application/contracts/risk.py`, Checkpoint 8) correctly declared
+`DecimalField(max_digits=14, decimal_places=2)` for every money field —
+but `infrastructure/api/risk_views.py`'s `_to_response_dict()` built a
+raw Python dict and passed it **directly** to `Response(...)`, never
+actually instantiating the serializer. DRF's `Response()` renders an
+un-serialized dict via its own `rest_framework.utils.encoders.JSONEncoder`,
+which converts `Decimal` → Python `float` (`float(Decimal("0.10"))` →
+`0.1`) — the classic binary-floating-point trap, silently reintroducing
+exactly the failure mode `COERCE_DECIMAL_TO_STRING` exists to prevent.
+The declared serializer classes were correct; they were simply
+decorative (`@extend_schema`-only), a pattern every *other* serializer
+in this codebase still follows today (none of the others carry Decimal
+fields, so none of them are affected by this specific bug).
+
+**Decision**: enforce the already-established Decimal→string contract
+by actually using the serializer — `RiskConfigurationResponseSerializer(raw).data`
+— rather than manually `str()`-formatting each field in the hand-built
+dict (which would duplicate the precision/scale rule the `DecimalField`
+declarations already encode correctly, in a second, independently-
+maintained place).
+
+**Implementation**: `_to_response_dict()` now routes its raw dict
+through the serializer before returning. Required widening
+`RiskLimitsSerializer`/`RiskConfigurationResponseSerializer`'s generic
+type parameter from `serializers.Serializer[None]` (this codebase's
+universal "schema-only" convention) to `serializers.Serializer[dict[str,
+object]]`, documented explicitly as a deliberate exception to that
+convention.
+
+**Tests**: `test_full_vertical_slice_get_version` (now passes without
+modification to its own assertions — the fix, not the test, was wrong);
+new `test_decimal_limits_serialize_as_exact_strings_not_floats`,
+parametrized over 5 classic float traps (`0.10`, `1.01`, `99.99`,
+`10000.00`, `0.01`), asserting both the parsed JSON value AND the exact
+substring in the raw response bytes (so a float that happens to
+re-stringify to the same value can't hide behind a `json.loads()`-only
+assertion).
+
+**API representation**: verified live over real HTTP against the
+running dev server (not just pytest) — a seeded risk configuration with
+`0.10`/`1.01`/`99.99` limits returns exactly
+`{"max_intraday_loss":"0.10","max_position_size":"1.01","max_per_trade_risk":"99.99"}`.
+OpenAPI schema regenerated twice — byte-identical both times (no schema
+shape changed, since the serializer's declared fields never changed,
+only whether they're actually used). Frontend generated types
+regenerated twice — byte-identical both times; `npm run typecheck`
+clean against them.
+
+## Defect 3 — Stale Activation Tests (MEDIUM)
+
+**Root cause**: `DjangoRiskConfigurationRepository.activate()`/
+`DjangoStrategyVersionRepository.activate()` gained required keyword-
+only `actor`/`actor_user_id`/`request_id` parameters at Checkpoints
+12/13 (the append-only audit-trail governance). Three repository-level
+tests in `test_repositories.py` were never updated — invisible because
+`requires_postgres`-skipped in every sandbox until Checkpoint 17.1.
+
+**Files affected**: `tests/unit/infrastructure/persistence/test_repositories.py`
+— `test_risk_repository_activate_then_get_active`,
+`test_risk_repository_activate_unknown_version_raises`,
+`test_strategy_version_repository_identity_and_activation`.
+
+**Correction**: not a blind kwargs bolt-on. Read `activate()`'s real
+implementation and the audit-trail requirements first (per instruction),
+then fixed each test to both supply the required arguments AND verify
+the actual behavior those arguments exist for: a matching `AuditLogEntry`
+row (correct `actor_username`, `actor_user_id`, `request_id`, `action`,
+`resource_type`, `outcome`) is created in the same transaction — not
+merely that the call no longer raises `TypeError`. The
+unknown-version test additionally verifies a REJECTED attempt is still
+durably recorded (Checkpoint 12 §9's own requirement).
+Repository-wide search (`grep -rn "\.activate("`) confirmed zero other
+stale callers — every application service and every other test already
+used the correct kwarg-based signature.
+
+**Tests**: all 3 fixed; `test_repositories.py` now 8/8 passing.
+
+## Defect 4 — Test Cache Isolation (LOW)
+
+**Root cause**: `intraday.settings.testing`'s `CACHES["default"]` is
+Django's real `LocMemCache`, reused as the same process-wide instance
+across every test in a `pytest` run — Django never tears it down
+between tests on its own. DRF's login-view `ScopedRateThrottle`
+("login": "5/min") stores its per-IP counters in exactly this cache, so
+once 5 logins occurred anywhere earlier in a test-file run, every later
+login-flow test received a real `429`.
+
+**Correction**: new `tests/conftest.py` — a project-wide, `autouse=True`
+fixture that calls `cache.clear()` before and after every test. This is
+test-isolation only: it does not touch, weaken, or bypass the throttle
+itself (still "5/min", still backed by the real cache backend each
+environment actually uses — Redis in development/production,
+`LocMemCache` in testing); it only ensures each test starts clean,
+exactly as a fresh production request window eventually would once the
+rate-limit naturally expired. Global rather than per-test-file, since
+any future cache-backed feature (not just this throttle) would hit the
+identical cross-test-pollution problem.
+
+**Tests**: no dedicated new test for the fixture itself (it's
+infrastructure, not behavior) — its effect is proven by
+`test_auth_api.py`'s full file now passing deterministically regardless
+of test execution order (previously order-dependent: passed alone,
+failed as part of the full file).
+
+## A Fifth, Newly-Discovered Issue — Migration Drift (found and fixed)
+
+Running `manage.py makemigrations --check --dry-run` for the first time
+against reachable PostgreSQL (Part 12's own explicit success criterion)
+surfaced one more previously-invisible issue: `AuditLogEntry`'s unnamed
+composite `models.Index` had a stale auto-generated name (Django's
+index-naming hash algorithm produces a slightly different name today
+than what migration `0003_auditlogentry.py` recorded — a Django-version
+artifact, unrelated to any Checkpoint 17.2 change). Fixed with a
+no-op `RenameIndex` migration (`0004_...`), documented in-file. Not one
+of the four listed defects, but directly blocked the checkpoint's own
+"migration check: clean" success criterion, so it was fixed rather than
+left as a fifth unresolved item.
+
+## Authentication Contract
+
+`401` = not authenticated (no session, bad login, or an
+expired/invalidated session) → frontend drops to anonymous/login.
+`403` = authenticated but lacking `configuration.activate` → frontend
+shows the error, stays on the current screen, never logs the user out.
+The two are now produced by genuinely different code paths (DRF's own
+`permission_denied()` authenticator check) and verified never to
+collide, at both the backend (5 new/updated tests) and frontend (2 new
+tests) layers.
+
+## Authorization Contract
+
+Unchanged in substance — `IsConfigurationOperator` (Group membership or
+`is_superuser`) still gates `configuration.activate`; `IsAuthenticated`
+alone still gates read access. What changed is only that a *failure* to
+even authenticate no longer masquerades as an authorization failure.
+
+## Backend Regression
+
+`ruff format --check` / `ruff check`: clean. `mypy --strict`: clean, 107
+source files (two new typing items resolved: a generic-parameter
+widening for the now-really-used risk serializers, and one narrow
+`# type: ignore[no-untyped-call]` for drf-spectacular's own untyped
+`OpenApiAuthenticationExtension.__init_subclass__`, matching this
+codebase's existing narrow-ignore precedent). **`pytest`: 351 passed, 0
+failed, 0 skipped** (up from 334 passed/8 failed — the 8 real failures
+are gone, plus 9 new regression tests). `lint-imports`: 6/6 kept, 132
+files. `manage.py check`: clean. `makemigrations --check --dry-run`:
+"No changes detected" (after the migration-drift fix above).
+`spectacular --fail-on-warn`: clean (after the new authentication-scheme
+extension). `pip-audit`: 8 findings, unchanged from Checkpoints 16/17/
+17.1 — no dependency file touched.
+
+## Frontend Regression
+
+`typecheck`: clean. `build`: succeeds (46 modules, 158.59 kB JS,
+unchanged). `test -- --run`: **32 passed**, 0 failed (up from 30 — the 2
+new session-expiry/authorization-distinction tests). ESLint: still not
+configured — reported honestly, not added.
+
+## OpenAPI / Contract Validation
+
+Schema regenerated twice via `manage.py spectacular --fail-on-warn`:
+byte-identical both times (deterministic). Frontend types regenerated
+twice via `npm run generate:api`: byte-identical both times. `npm run
+typecheck` clean against the regenerated types. No shape/field changed
+in the schema — only that a previously-undeclared custom authenticator
+now has a security-scheme definition, and that Decimal fields now
+actually serialize per their already-declared type.
+
+## Security Review
+
+No credentials committed. No authentication bypass introduced — the fix
+narrows a status-code discrepancy, changes no actual auth/session/CSRF
+logic. No permission bypass — `IsConfigurationOperator` untouched, and
+`test_operator_permission_denial_still_returns_403_after_the_fix`
+explicitly guards against the fix accidentally weakening authorization.
+No 403→logout vulnerability — the opposite was fixed (403 now correctly
+never triggers logout, verified by a dedicated negative test). No
+Decimal→float regression remains — fixed and regression-tested. No
+production behavior weakened for test convenience — the cache-isolation
+fix only clears state between tests, the throttle's real rate/backend
+are untouched.
+
+## Trading Safety Review
+
+`trading_engine/`, `risk_engine` business logic, `order_management`,
+`position_management`, broker adapters, `Dhan`, `kill_switch`,
+`TRADING_MODE`, `signal_generation`, `strategy_execution` — confirmed
+untouched. No real configuration was activated (the "reader" test in
+Defect 3 targets version identifiers within an isolated,
+transaction-rolled-back test database, not any real environment). No
+order or broker call introduced.
+
+## Documentation Changes
+
+`docs/api/CONFIGURATION_API.md` (§8 status-code contract corrected, §9
+Decimal-serialization note added), `docs/architecture/
+AUTHENTICATION_AUTHORIZATION.md` (§4 status-code behavior corrected to
+describe the actual, now-fixed contract), `docs/architecture/
+ARCHITECTURE_DECISIONS.md` (decisions #80-#81 + Notes),
+`docs/development/LOCAL_DEVELOPMENT.md` (short test-isolation note about
+the new `conftest.py` fixture). This `taskReport.md` section. No
+implementation-detail-only change was promoted to an architectural
+decision (the 3 stale-test fixes and the migration-drift fix are
+documented here, not in `ARCHITECTURE_DECISIONS.md`).
+
+## Git Status
+
+Committed locally as Checkpoint 17.2 (see commit log for hash); not
+pushed, per standing instruction. Working tree clean after commit.
+`.env`, credentials, temporary scripts, logs, build artifacts, and
+database files all verified absent from `git status --short` before
+staging.
+
+## Remaining Issues
+
+**NONE** of the four assigned defects remain. All success criteria met:
+`pytest` 0 failed / 0 skipped; frontend 0 failed; import-linter 6/6;
+mypy clean; OpenAPI clean; migration check clean; session-expiry
+semantics correct (401 only); authorization 403 remains distinct from
+authentication 401 (explicitly regression-tested in both directions).
+
+## Recommended Checkpoint 18
+
+All conditions for proceeding are genuinely met — recommend Checkpoint
+18: **Signal Generation — technology-neutral contract**, using the
+existing SMA + EMA + ATR as the first feature inputs. Not implemented —
+recommendation only.

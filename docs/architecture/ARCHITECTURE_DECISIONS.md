@@ -471,3 +471,52 @@ and `taskReport.md`'s Checkpoint 17 section for the UX findings.
 - Versioning: `pyproject.toml` and `SPECTACULAR_SETTINGS["VERSION"]`
   both checked and left unchanged - no API surface changed this
   checkpoint. `FEATURE_ENGINE_VERSION` ("v1") reused as-is for ATR.
+
+## Checkpoint 17.2 — Authentication Status-Code Contract Correction (2026-08-13)
+
+Closes the four defects Checkpoint 17.1 found once real PostgreSQL+Redis
+execution became available for the first time. Full detail:
+[docs/api/CONFIGURATION_API.md](../api/CONFIGURATION_API.md) §8-9,
+[docs/architecture/AUTHENTICATION_AUTHORIZATION.md](AUTHENTICATION_AUTHORIZATION.md)
+§4, and `taskReport.md`'s Checkpoint 17.2 section (test-debt fixes,
+which are implementation-detail corrections, not separate architectural
+decisions).
+
+| # | Decision | Reason | Alternatives Considered | Status |
+|---|---|---|---|---|
+| 80 | Unauthenticated requests to a protected endpoint now return a genuine 401, not DRF's default 403-downgrade - via `infrastructure/api/authentication.Http401SessionAuthentication`, a thin `SessionAuthentication` subclass supplying a real `authenticate_header`. Authorization denials (authenticated, insufficient capability) remain 403, completely unaffected. | Restores the distinction the frontend's session-expiry contract (`setSessionExpiredHandler`, 401-only by design, Checkpoint 11) always assumed but never actually got - DRF's stock behavior silently made both conditions indistinguishable. The smallest correct fix: authentication-vs-authorization is decided entirely by DRF's own `APIView.permission_denied()` before this class is even relevant (`if request.authenticators and not request.successful_authenticator: raise NotAuthenticated() else: raise PermissionDenied()`) - supplying a non-`None` `authenticate_header` only stops DRF's *separate* `handle_exception()` step from downgrading the already-correct `NotAuthenticated` (401) to 403. | (B) Have the frontend treat 403 as a possible session-expiry signal too (rejected - the checkpoint's own explicit warning: this would convert every legitimate permission denial into an incorrect logout, which is a worse outcome, not a fix); (C) introduce JWT/refresh-token infrastructure (rejected - explicitly out of scope, solves a different problem, and this project's session-cookie model is otherwise working correctly). | LOCKED |
+| 81 | Risk-configuration API responses are now serialized through `RiskConfigurationResponseSerializer(...).data` instead of being returned as a raw, un-serialized dict. | The raw-dict `Response(...)` path bypassed `DecimalField`/`COERCE_DECIMAL_TO_STRING` entirely, letting DRF's own `JSONEncoder` silently convert `Decimal` to `float` - a financial-precision regression in the one place this project has repeatedly promised it would never happen. The already-declared serializer (Checkpoint 8) was correct; it was simply never used for real serialization, only for `@extend_schema` documentation (a pattern every *other* serializer in this codebase still follows, since none of them carry Decimal fields and are therefore unaffected by this bug). | Manually `str()`-formatting each Decimal field in the hand-built dict (rejected - duplicates precision/scale rules the `DecimalField` declarations already encode correctly; two independently-maintained sources of the same rounding/precision policy is exactly the drift risk a serializer exists to prevent). | LOCKED |
+
+## Notes (Checkpoint 17.2)
+
+- All 8 real test failures Checkpoint 17.1 surfaced are now fixed: 3
+  stale repository-test signatures (updated to the Checkpoint 12/13
+  `activate()` contract, with new assertions on the actual `AuditLogEntry`
+  row created - not just that the call no longer raises), 4 auth-flow
+  tests that were failing due to throttle-cache state leaking between
+  tests (fixed via a new `tests/conftest.py` autouse fixture that clears
+  the cache before every test - production throttle behavior itself is
+  completely unchanged), and 1 Decimal-serialization test (see decision
+  #81).
+- A ninth, previously-unknown issue was found and fixed while re-running
+  `manage.py makemigrations --check --dry-run` for the first time against
+  reachable PostgreSQL: a stale auto-generated index name on
+  `AuditLogEntry` (Django's index-name hash for an unnamed
+  `models.Index` differs slightly across Django versions) - a no-op
+  `RenameIndex` migration (`0004_...`) resolves it. Purely a naming
+  drift; no column, constraint, or data changed.
+- `import-linter` remains 6/6 kept (132 files analyzed, up from 130).
+- Full regression, first time ever at "genuinely clean" rather than
+  "skipped": `pytest` 351 passed / 0 failed / 0 skipped;
+  `makemigrations --check --dry-run` reports "No changes detected";
+  `manage.py spectacular --fail-on-warn` succeeds cleanly (a new
+  `OpenApiAuthenticationExtension` was required for
+  `Http401SessionAuthentication` - drf-spectacular does not auto-detect
+  custom `SessionAuthentication` subclasses); frontend `typecheck`/
+  `build`/`test -- --run` all clean, 32 tests passing (up from 30 - two
+  new tests proving the 401/403 distinction at the client layer).
+- OpenAPI schema and generated frontend types verified deterministic:
+  regenerated twice, byte-identical both times.
+- Versioning: `pyproject.toml` and `SPECTACULAR_SETTINGS["VERSION"]`
+  both checked and left unchanged - no new API surface, only a status-
+  code correction on existing endpoints and a response-serialization fix.

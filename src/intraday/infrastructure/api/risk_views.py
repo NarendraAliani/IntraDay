@@ -38,7 +38,27 @@ def _service() -> RiskConfigurationService:
 
 
 def _to_response_dict(record: RiskConfigurationRecord, *, is_active: bool) -> dict[str, object]:
-    return {
+    """Builds the raw (still-Decimal) representation, then routes it
+    through `RiskConfigurationResponseSerializer` so the declared
+    contract (`@extend_schema`'s `responses=`) is the SAME object that
+    actually serializes the HTTP body.
+
+    Checkpoint 17.2 fix: every call site here previously returned this
+    dict directly to `Response(...)`, bypassing
+    `RiskConfigurationResponseSerializer`/`RiskLimitsSerializer` (and
+    therefore `DecimalField`/`REST_FRAMEWORK["COERCE_DECIMAL_TO_STRING"]`)
+    entirely - the serializer classes existed and were correctly
+    declared for OpenAPI schema generation, but were never actually used
+    to serialize a real response. DRF's `Response()` renders an
+    unserialized dict via its own `JSONEncoder`, which converts
+    `Decimal` to Python `float` (`float(obj)`) - silently reintroducing
+    binary floating-point into a financial-precision API contract this
+    project has repeatedly promised would never happen (Checkpoint 3
+    §18, Checkpoint 5). Routing through `.data` here is the smallest fix:
+    it changes no field, no name, no shape - `RiskLimitsSerializer`
+    already declared the correct `DecimalField`s at Checkpoint 8, they
+    were simply never exercised."""
+    raw = {
         "risk_configuration_id": record.risk_configuration_id,
         "version": record.version.value,
         "limits": {
@@ -49,6 +69,8 @@ def _to_response_dict(record: RiskConfigurationRecord, *, is_active: bool) -> di
         "created_at": record.created_at,
         "is_active": is_active,
     }
+    data: dict[str, object] = RiskConfigurationResponseSerializer(raw).data
+    return data
 
 
 @extend_schema(responses={200: RiskConfigurationResponseSerializer(many=True)})

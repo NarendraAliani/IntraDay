@@ -199,7 +199,16 @@ REST_FRAMEWORK = {
     # `permission_classes` explicitly instead of relying on a global
     # default — see infrastructure/api/{risk,universe,strategy}_views.py
     # and infrastructure/api/auth_views.py.
-    "DEFAULT_AUTHENTICATION_CLASSES": ["rest_framework.authentication.SessionAuthentication"],
+    # Checkpoint 17.2: a thin subclass of DRF's own SessionAuthentication
+    # that returns a real `authenticate_header`, so an unauthenticated
+    # request gets a genuine 401 instead of DRF's default 403-downgrade
+    # (see infrastructure/api/authentication.py for the full root-cause
+    # explanation) - this is what lets the frontend's session-expiry
+    # handler (401-only, by design) distinguish "not authenticated" from
+    # a real authorization denial (403, unaffected by this change).
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "intraday.infrastructure.api.authentication.Http401SessionAuthentication"
+    ],
     # Login brute-force protection (Checkpoint 11 §26): DRF's own
     # cache-backed ScopedRateThrottle, applied only to the login view
     # (infrastructure/api/auth_views.py) via `throttle_scope = "login"`.

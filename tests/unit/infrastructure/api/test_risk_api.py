@@ -93,6 +93,55 @@ def test_full_vertical_slice_get_version() -> None:
 
 @requires_postgres
 @pytest.mark.django_db
+@pytest.mark.parametrize(
+    "raw_value",
+    [
+        "0.10",  # float trap: float(Decimal("0.10")) reprs as "0.1", losing the trailing zero
+        "1.01",  # a value with no exact binary-floating-point representation
+        "99.99",
+        "10000.00",
+        "0.01",  # smallest representable unit at 2 decimal places
+    ],
+)
+def test_decimal_limits_serialize_as_exact_strings_not_floats(raw_value: str) -> None:
+    """Checkpoint 17.2 (Defect 2): proves the fix at the API boundary
+    directly - every value here has historically been a classic
+    binary-floating-point trap (`float("0.10")` reprs as `"0.1"`,
+    `float("1.01")` is not exactly representable in IEEE-754 double).
+    The response must contain the exact original string, never a
+    float-rounded or truncated variant - the whole point of `Decimal`
+    fields is that this string is contractually stable regardless of
+    which language/runtime happens to parse it next."""
+    DjangoRiskConfigurationRepository().save(
+        RiskConfigurationRecord(
+            risk_configuration_id="default",
+            version=Version(value="v1"),
+            limits=RiskLimits(
+                max_intraday_loss=Decimal(raw_value),
+                max_position_size=Decimal(raw_value),
+                max_per_trade_risk=Decimal(raw_value),
+            ),
+            created_at=NOW,
+        )
+    )
+    client = _client_as_reader()
+
+    response = client.get("/api/v1/config/risk/default/v1/")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["limits"]["max_intraday_loss"] == raw_value
+    assert body["limits"]["max_position_size"] == raw_value
+    assert body["limits"]["max_per_trade_risk"] == raw_value
+    # Also assert at the raw-bytes level, not just after json.loads() -
+    # proves no float ever appeared in the wire representation (a float
+    # artifact could otherwise coincidentally re-parse back to the same
+    # Decimal string and hide behind the assertion above).
+    assert f'"{raw_value}"' in response.content.decode()
+
+
+@requires_postgres
+@pytest.mark.django_db
 def test_list_versions_returns_all_saved_versions() -> None:
     _seed("v1")
     _seed("v2")
