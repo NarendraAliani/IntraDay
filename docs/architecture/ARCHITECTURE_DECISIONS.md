@@ -600,3 +600,50 @@ Full detail:
   primitive - no second versioning system, and deliberately distinct
   from (never confused with) `DirectionalIndication`'s own
   `definition_name`/`definition_version`.
+
+## Checkpoint 20 — Signal Lifecycle Foundation (2026-08-13)
+
+Establishes the first real code in `signal_intelligence/signal_lifecycle`
+- a two-state (ACTIVE/EXPIRED) temporal-validity model for a
+`DirectionalIndication`. Full detail:
+[docs/architecture/SIGNAL_LIFECYCLE_ARCHITECTURE.md](SIGNAL_LIFECYCLE_ARCHITECTURE.md).
+
+| # | Decision | Reason | Alternatives Considered | Status |
+|---|---|---|---|---|
+| 90 | State model is exactly `ACTIVE`/`EXPIRED` - no `CREATED` state. | `DirectionalIndication` already carries its own creation instant (`timestamp`); a separate `CREATED` lifecycle state would duplicate it or imply a staging/approval gate this system has no mechanism for yet (unlike a future `Order`'s genuine risk-approval gate). The lifecycle begins directly `ACTIVE`, computed purely from `(expires_at, as_of)`. | A 3-state `CREATED -> ACTIVE -> EXPIRED` model (rejected - no real-world condition distinguishes CREATED from ACTIVE in this system's current scope; would be state invented for its own sake). | LOCKED |
+| 91 | `VERIFIED` is NOT a lifecycle state. `signal_lifecycle` does not import `signal_verification` at all - mechanically enforced by a dedicated architecture test. | Lifecycle (temporal validity) and verification (outcome correctness) are orthogonal, independently-answerable questions - an indication can be EXPIRED and never verified, or ACTIVE and already SUPPORTED. Collapsing them would force every lifecycle consumer to also depend on verification even when it has no reason to, and vice versa. | Adding `VERIFIED`/`SUPPORTED`/`NOT_SUPPORTED` as lifecycle states once a `VerificationResult` exists (rejected - the checkpoint brief's own explicit warning: "do not assume correlation equals dependency"; no architectural proof requires this coupling). | LOCKED |
+| 92 | State is a pure function of `(expires_at, as_of)`: `as_of >= expires_at -> EXPIRED`, else `ACTIVE` (half-open interval). The only illegal transition is passing an earlier `as_of` than a lifecycle's own last-evaluated `as_of` (`NonMonotonicTimeError`) - not a hand-written state-transition table. | Because state is a pure function of monotonically-comparable inputs, `EXPIRED -> ACTIVE` is structurally impossible through forward-moving time alone - enforcing "time may only move forward" is a strictly stronger, more general guarantee than enumerating individual forbidden state pairs, and naturally extends to any future third state without needing a new transition rule. | An explicit state-transition table (e.g. `{ACTIVE: {EXPIRED}, EXPIRED: {}}`) (rejected - more machinery than the pure-function model needs, and doesn't generalize as cleanly if a third state is ever added). | LOCKED |
+| 93 | `expires_at` is a required, explicit argument to `create_lifecycle()` - no default expiry constant exists. `compute_expiry_from_bars()` is an optional, explicit-opt-in helper only. | No existing architecture decision establishes a universal "how long should a directional read stay meaningful" policy - that is a strategy-level/research decision this checkpoint has no authority to invent, exactly matching the brief's explicit prohibition on a magic default. | A `DEFAULT_EXPIRY_BARS`/`DEFAULT_EXPIRY_MINUTES` constant (rejected - explicitly forbidden by the checkpoint brief; no research/strategy evidence yet justifies any particular number). | LOCKED |
+| 94 | No `application/services/signal_lifecycle.py` was created. | Every prior application service existed to compose a bounded-context's pure function with `HistoricalMarketDataService` (real retrieval). Lifecycle's only external input is "the current instant," which a caller already has - there is nothing genuine to orchestrate. | Building one anyway for consistency with Checkpoints 18/19 (rejected - the checkpoint brief's own explicit warning against creating an application service "merely because previous checkpoints have one"). | LOCKED |
+
+## Notes (Checkpoint 20)
+
+- `domain/market_data/contracts.py`'s `Bar` (via `timeframe_to_timedelta`
+  reuse) required ZERO changes. `domain/signal/contracts.py` was not
+  touched at all - confirmed by the new architecture test's own
+  domain-import allowlist (only `domain.market_data`/`domain.shared_kernel`
+  permitted).
+- `import-linter` remains 6/6 kept (147 files analyzed, up from 143) -
+  no new contract needed. A dedicated static-scan architecture test
+  (`tests/unit/architecture/test_signal_lifecycle_boundaries.py`)
+  independently re-verifies that `signal_lifecycle` never imports
+  `signal_verification`, `trading_engine`, `feature_engine`, or
+  infrastructure, and that its only `signal_intelligence.*` import is
+  `signal_generation`.
+- 33 new backend tests (30 core + 3 architecture) pass genuinely (not
+  skipped) - continuing the 100%-DB-free discipline of every prior
+  signal-intelligence checkpoint. Full suite: see regression section of
+  `taskReport.md`'s Checkpoint 20 entry.
+- Domain promotion re-assessed (§27): `signal_lifecycle` is now a THIRD
+  intra-context consumer of `DirectionalIndication` - stronger
+  intra-context evidence, but still not a second bounded context, so
+  still not promoted. See decision context in
+  SIGNAL_LIFECYCLE_ARCHITECTURE.md.
+- No API/persistence/frontend surface was added - confirmed via a
+  regenerated, byte-unchanged-in-substance OpenAPI schema.
+- Versioning: `pyproject.toml` and `SPECTACULAR_SETTINGS["VERSION"]`
+  both checked and left unchanged - no API surface changed. A new
+  `LIFECYCLE_DEFINITION_VERSION` ("v1") reuses the existing `Version`
+  primitive - no second versioning system, kept explicitly distinct from
+  `DirectionalIndication`'s and `VerificationResult`'s own definition
+  fields.

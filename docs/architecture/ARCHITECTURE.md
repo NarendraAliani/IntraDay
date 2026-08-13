@@ -150,6 +150,18 @@ yet). See
 for outcome semantics, horizon/incomplete-horizon rules, and the
 promotion assessment.
 
+**Signal lifecycle** (Checkpoint 20): the first real code in
+`signal_intelligence/signal_lifecycle` — a two-state (ACTIVE/EXPIRED)
+temporal-validity model for a `DirectionalIndication`, with explicit
+expiry (no magic default) and deterministic, immutable transitions.
+Deliberately independent of `signal_verification` — validity and
+outcome-correctness are orthogonal questions, evaluated separately. A
+third intra-context consumer of `DirectionalIndication`; `domain/`
+promotion re-evaluated and still not yet justified. See
+[SIGNAL_LIFECYCLE_ARCHITECTURE.md](SIGNAL_LIFECYCLE_ARCHITECTURE.md)
+for the full state model, expiry semantics, and the
+verification-independence rationale.
+
 ## 3. Layering
 
 ```

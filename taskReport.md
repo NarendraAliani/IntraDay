@@ -5374,3 +5374,253 @@ are correlated over time per instrument. A lower-priority alternative:
 begin `signal_intelligence/theoretical_outcome` (MFE/MAE) now that the
 single-point verification baseline exists to compare a richer metric
 against. Not implemented — recommendation only.
+
+# Checkpoint 20 — Signal Lifecycle Foundation (2026-08-13)
+
+## Objective
+
+Establish the first real implementation in
+`signal_intelligence/signal_lifecycle`: the temporal-validity state of a
+`DirectionalIndication` (Checkpoint 18) as time progresses. Strictly
+state/transition/expiry — no strategy, no execution, no live trading,
+kept intentionally small per instruction.
+
+## What Was Built
+
+- `signal_intelligence/signal_lifecycle/contracts.py`:
+  `SignalLifecycleState` (ACTIVE/EXPIRED — two states, not three or
+  four, both deliberate omissions explained below), `SignalLifecycle`
+  (frozen dataclass, full provenance via an embedded
+  `DirectionalIndication`).
+- `signal_intelligence/signal_lifecycle/errors.py`: `InvalidExpiryError`,
+  `NonMonotonicTimeError`.
+- `signal_intelligence/signal_lifecycle/lifecycle.py`:
+  `create_lifecycle()`, `advance_lifecycle()`, `advance_lifecycles()`
+  (collection-level), `compute_expiry_from_bars()` (optional
+  convenience helper). Imports only `domain/market_data`,
+  `domain/shared_kernel`, and `signal_intelligence.signal_generation` —
+  never `signal_verification`.
+- `tests/unit/architecture/test_signal_lifecycle_boundaries.py` —
+  dedicated static-scan architecture test, mirroring Checkpoints 18/19's
+  own pattern, additionally proving the explicit absence of any
+  `signal_verification` import.
+- **No `application/services/signal_lifecycle.py`** — deliberately not
+  built (see §11/decision #94 below).
+
+## State Model — Why ACTIVE/EXPIRED, Not Three or Four States
+
+**`CREATED` rejected**: `DirectionalIndication` already carries its own
+creation instant (`timestamp`); a separate `CREATED` lifecycle state
+would duplicate it or imply a staging/approval gate this system has no
+mechanism for yet. A lifecycle begins directly `ACTIVE`.
+
+**`VERIFIED` rejected**: see §11 below — lifecycle and verification
+answer genuinely independent questions.
+
+## State Transition Rules
+
+State is a pure function of `(expires_at, as_of)`:
+`as_of >= expires_at -> EXPIRED`, else `ACTIVE` — a half-open interval
+`[signal_timestamp, expires_at)`. `create_lifecycle()` begins a
+lifecycle; `advance_lifecycle()` re-evaluates an existing one at a later
+instant, always returning a new, immutable object.
+
+## Illegal Transitions
+
+Because state is a pure function of monotonically-comparable inputs,
+`EXPIRED -> ACTIVE` is structurally impossible through forward-moving
+time alone — no hand-written transition table needed. The one
+illegitimate case is a caller passing an earlier `as_of` than the
+lifecycle's own last-evaluated `as_of` (rewinding time) —
+`advance_lifecycle()` rejects this with `NonMonotonicTimeError`. This
+unifies "illegal transition" with "no time-travel," a stronger, more
+general guarantee than an enumerated forbidden-pairs table.
+
+## Idempotency
+
+`as_of == lifecycle.as_of` is explicitly allowed and idempotent.
+`ACTIVE -> ACTIVE` / `EXPIRED -> EXPIRED` (advancing without crossing
+the boundary) are ordinary allowed no-ops, falling out naturally from
+the pure state function rather than being special-cased.
+
+## Expiry Semantics — No Magic Default
+
+`expires_at: datetime` is a required, explicit argument to
+`create_lifecycle()` — no default constant exists anywhere.
+`compute_expiry_from_bars(indication, lifetime_bars)` is an optional,
+explicit-opt-in convenience helper (bar-count-relative, reusing
+`timeframe_to_timedelta()` from Checkpoint 14 — same reasoning as
+Checkpoint 19's own `horizon_bars`), never called implicitly. Creating a
+lifecycle where `as_of` is already past `expires_at` (e.g. replaying
+historical data) is explicitly legitimate, not an error.
+
+Market-session-aware expiry (e.g. "expires at session close") was
+explicitly evaluated and deferred — `domain.session.TradingSession`
+exists but this checkpoint does not reach for it, since doing so
+correctly would require deciding how session boundaries interact with
+expiry, a decision with no existing architectural precedent to build
+from honestly. Deferred, not faked.
+
+## Temporal / Timezone Semantics
+
+Every lifecycle timestamp validated by `ensure_utc()` (Checkpoint 3/5's
+established convention) — naive/non-UTC datetimes rejected outright.
+
+## DirectionalIndication Relationship
+
+`SignalLifecycle` embeds the full source `indication` plus flat
+`instrument_id`/`timeframe`/`signal_timestamp` fields, validated at
+construction to always match the embedded indication (tested
+explicitly via a deliberate mismatch construction test).
+
+## VerificationResult Relationship — Explicitly Orthogonal
+
+**`VERIFIED` is not a lifecycle state, and `signal_lifecycle` imports
+nothing from `signal_verification` at all** (mechanically enforced).
+`VerificationResult` answers "was the call subsequently supported?" —
+an outcome fact. `SignalLifecycle` answers "is this still temporally
+valid?" — a validity fact. Independently answerable: an indication can
+be EXPIRED and never verified, or ACTIVE and already SUPPORTED (the two
+horizons are independently chosen parameters). Coupling them would
+force every consumer of one to depend on the other even when it has no
+reason to. Documented at length in the architecture doc, per the
+checkpoint's own explicit demand not to assume correlation implies
+dependency.
+
+## Identity & Versioning
+
+Structural identity — `(lifecycle_definition_name,
+lifecycle_definition_version, instrument_id, timeframe, signal_timestamp,
+expires_at)`, mirroring the established convention. Name
+`"time_bounded_validity"`, version `"v1"`, reusing `Version`, kept
+distinct from `DirectionalIndication`'s and `VerificationResult`'s own
+definition fields.
+
+## Immutability
+
+Frozen dataclass throughout; transitions always return new instances.
+
+## Application Layer — Deliberately Not Built
+
+Every prior signal-intelligence application service composed a pure
+function with `HistoricalMarketDataService` (real bar/feature
+retrieval). Lifecycle's only external input is "the current instant,"
+which a caller already has — nothing genuine to orchestrate. Building
+one anyway "for consistency" would be exactly the pattern the checkpoint
+brief explicitly warned against.
+
+## Test Matrix (33 new tests, all PASSED — 0 skipped)
+
+State creation (5), expiry boundary incl. exact microsecond cases (3),
+transitions (3), illegal transitions (2), idempotency (2), timezone (3),
+`compute_expiry_from_bars` helper (3), identity preservation (2),
+immutability (2), determinism (1), multi-lifecycle collection (2),
+property-based (2); architecture boundary (3).
+
+## Property-Based Testing
+
+Two Hypothesis tests: the ACTIVE/EXPIRED boundary rule holds for
+arbitrary offsets around `expires_at` (generalizes the hand-picked
+boundary cases across the full range); once EXPIRED, any forward-moving
+`as_of` sequence never rewinds to ACTIVE (generalizes the structural
+"time only moves forward" guarantee, not just the single hand-picked
+example).
+
+## Architecture Enforcement
+
+`lint-imports`: **6/6 kept**, 147 files (up from 143). New dedicated
+architecture test independently confirms `signal_lifecycle` never
+imports `signal_verification`/`trading_engine`/`feature_engine`/
+infrastructure, and its only `signal_intelligence.*` import is
+`signal_generation`.
+
+## Domain Promotion Re-Assessment
+
+**Still not promoted.** `signal_lifecycle` is now a *third* intra-context
+consumer of `DirectionalIndication` (after `signal_generation`, which
+produces it, and `signal_verification`). This strengthens the
+intra-context reuse pattern but doesn't change the underlying
+conclusion: the project's rule requires a second bounded context, not a
+third submodule within the same one. No consumer outside
+`signal_intelligence` exists yet — documented, not silently promoted or
+silently ignored, exactly per instruction.
+
+## Full Regression
+
+- `pytest`: **464 passed, 0 failed, 0 skipped** (up from Checkpoint 19's
+  431 — the +33 is entirely new signal-lifecycle/architecture tests;
+  zero regressions, zero new skips).
+- `ruff format --check` / `ruff check`: clean, 194 files.
+- `mypy --strict`: success, 121 source files.
+- `lint-imports`: 6/6 kept.
+- `manage.py check`: clean. `makemigrations --check --dry-run`: "No
+  changes detected."
+- `manage.py spectacular --fail-on-warn`: success; regenerated schema
+  inspected — all "active"/"expired" substring matches confirmed to be
+  pre-existing, unrelated config-API content (`is_active`, `activated`),
+  zero lifecycle-specific content.
+- `pip-audit`: 8 findings, unchanged from Checkpoints 16-19 — no
+  dependency file touched; verified, not assumed.
+
+## Frontend Regression
+
+Untouched this checkpoint, per instruction. `typecheck`/`build`: clean.
+`test -- --run`: 32 passed, unchanged.
+
+## PostgreSQL / Redis
+
+Both remained available throughout — all 464 tests ran for real, none
+skipped. The core signal-lifecycle code itself remains 100% DB-free by
+design (pure functions, no repository/service dependency at all — no
+application service exists to even need testing for DB-freedom this
+checkpoint).
+
+## Security / Trading Safety
+
+No credentials, API keys, `.env`, or network calls introduced.
+`trading_engine/`, `risk_engine`, `order_management`,
+`position_management`, `execution_management`, broker abstraction,
+`Dhan`, `kill_switch`, `TRADING_MODE`, `strategy_execution` — confirmed
+untouched. No order, broker call, or live configuration activation.
+`domain/signal/contracts.py` and `domain/strategy/contracts.py` both
+confirmed unchanged (verified by the new architecture test's own
+domain-import allowlist).
+
+## Documentation
+
+New `docs/architecture/SIGNAL_LIFECYCLE_ARCHITECTURE.md` (full contract:
+state model, transition rules, illegal transitions, idempotency, expiry
+semantics incl. market-time deferral, temporal/timezone rules,
+DirectionalIndication/VerificationResult relationships, identity/
+versioning, immutability, promotion re-assessment, architecture
+enforcement). `docs/architecture/ARCHITECTURE.md` (one paragraph).
+`docs/architecture/ARCHITECTURE_DECISIONS.md` (decisions #90-#94 +
+Notes). `signal_intelligence/signal_lifecycle/README.md` (updated from
+the Checkpoint-1 placeholder). This `taskReport.md` section.
+
+## Versioning
+
+`pyproject.toml`/`SPECTACULAR_SETTINGS["VERSION"]` unchanged — no API
+surface changed. New `LIFECYCLE_DEFINITION_VERSION` ("v1") reuses the
+existing `Version` primitive.
+
+## Deferred
+
+Session-aware expiry, signal persistence, lifecycle API, frontend
+lifecycle viewer, transition-reason taxonomy (deferred until a second
+expiry mechanism exists), `theoretical_outcome`/MFE/MAE, strategy
+execution, Dhan/live provider — all deliberately out of scope.
+
+## Recommended Checkpoint 21
+
+Recommend `signal_intelligence/theoretical_outcome` (MFE/MAE/conditional
+expectancy) as the next step — the last remaining piece of the
+signal_intelligence bounded context's own originally-scoped
+responsibilities before `domain.signal.Signal`/strategy execution
+becomes reachable, and a natural place to reuse both `VerificationResult`
+(as a simpler baseline to compare against) and `SignalLifecycle` (to
+bound the analysis window). Lower-priority alternative: revisit whether
+a fourth `DirectionalIndication` consumer (e.g. a small
+research/backtesting replay harness) finally crosses the domain-
+promotion threshold this and the prior two checkpoints have each
+confirmed is not yet met. Not implemented — recommendation only.
