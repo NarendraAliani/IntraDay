@@ -4326,3 +4326,337 @@ in an environment with PostgreSQL+Redis reachable and a browser-
 automation tool available, since this checkpoint's Part B was
 functionally and statically thorough but could not perform genuine live
 interactive/visual validation. Not implemented — recommendation only.
+
+# Checkpoint 17.1 — Local Environment Restoration & Real Frontend UX Validation (2026-08-13)
+
+## Objective
+
+Close the one material gap Checkpoint 17 identified: real, human-facing
+login/authorization/logout validation was blocked by unreachable
+PostgreSQL and Redis. This checkpoint restores a real local runtime
+(PostgreSQL + Redis + backend + frontend) and performs the actual
+authentication workflow against it. No business features (SMA/EMA/ATR/
+signals/strategies/broker/trading logic) were touched.
+
+## Environment Restoration
+
+- **Docker**: confirmed unavailable (`docker`/`docker compose` not
+  found). Not installed, per instruction.
+- **Redis**: already installed and running as a native Windows service
+  (`Redis`, `Running`), reachable at `127.0.0.1:6379` — no action
+  needed.
+- **PostgreSQL**: not installed anywhere on the machine (no service, no
+  binaries on PATH). Installing system software on the user's real
+  machine is an outward-facing, hard-to-reverse action, so this was
+  explicitly confirmed with the user before proceeding (choco was tried
+  first but requires an elevated shell unavailable here; `winget
+  install -e --id PostgreSQL.PostgreSQL.16` succeeded, installing
+  PostgreSQL 16 as a Windows service). Created the `intraday`
+  role/database matching `.env`'s existing placeholder values
+  (`POSTGRES_DB=intraday`, `POSTGRES_USER=intraday`,
+  `POSTGRES_PASSWORD=changeme`), granted `CREATEDB` (required for
+  pytest-django's test-database lifecycle).
+
+## A Real, Previously-Invisible Defect Found and Fixed
+
+`.env.example`'s own header comment claimed "`manage.py`... read `.env`
+via python-dotenv" — but no code anywhere ever called `load_dotenv()`.
+`python-dotenv` was a declared dependency, silently unused. This meant
+`manage.py runserver`/every management command NEVER actually read a
+developer's local `.env` (only `docker compose`'s own unrelated
+`env_file:` directive worked) — the exact reason Checkpoint 17's
+`/readyz` check failed even with a populated `.env` sitting right there.
+
+**Fixed**: added a single `load_dotenv(BASE_DIR / ".env")` call at the
+top of `settings/base.py`, before any `os.environ.get()` read.
+`override=False` (dotenv's default) means real process/OS environment
+variables still always win — CI (sets env vars directly) and production
+(must never read a stray `.env`) are both unaffected; this only fills
+gaps for local development, exactly matching what the codebase already
+claimed to do. Verified: `/readyz` went from a 500
+(`ImproperlyConfigured`) to `{"status":"ready","checks":{"database":"ok","cache":"ok"}}`.
+
+## Development Login Credentials
+
+Repeated Checkpoint 17's search (migrations, management commands,
+`.env.example`, fixtures) — confirmed again: no seeded development user
+exists anywhere in the repository. With PostgreSQL now reachable, two
+local-only development users were created via a one-off script run
+through `manage.py`'s own Django setup (not committed to source,
+passwords generated with `secrets.choice`, 20 characters):
+
+```python
+# One-time local setup (not a committed script; run via `manage.py shell`
+# or an equivalent one-off invocation):
+from django.contrib.auth.models import User, Group
+import secrets, string
+def gen_password():
+    alphabet = string.ascii_letters + string.digits
+    return "".join(secrets.choice(alphabet) for _ in range(20))
+
+group, _ = Group.objects.get_or_create(name="configuration-operators")
+User.objects.create_user(username="ux_test_operator", password=gen_password()).groups.add(group)
+User.objects.create_user(username="ux_test_reader", password=gen_password())
+```
+
+- **`ux_test_operator`** / `v08zPdWEN8NJKztVmOe4` — member of
+  `configuration-operators`; session capabilities:
+  `["configuration.read", "configuration.activate"]`.
+- **`ux_test_reader`** / `XMI5vXLioFYFSibC2YqK` — no group; session
+  capabilities: `["configuration.read"]`.
+
+Both exist **only** as rows in the local PostgreSQL `auth_user` table on
+this machine — neither username, password, nor any script containing
+them was committed. These are local-development-only credentials, not
+usable against any other environment, and must not be reused anywhere.
+
+## Real Login/Authorization/Logout/Session-Expiry Validation
+
+No browser-automation tool is available in this environment (unchanged
+from Checkpoint 17). Performed the strongest available alternative: real
+HTTP requests against the actually-running backend
+(`127.0.0.1:8000`/`localhost:5173`, both started on their documented
+default ports so CORS/CSRF trust — configured for `:5173` specifically —
+actually applies), replicating exactly the request sequence the
+frontend's own `AuthContext`/`authApi` issues (CSRF-cookie fetch →
+session check → login POST), all now succeeding against a real database
+and cache instead of failing on infrastructure:
+
+- **Anonymous session check**: `GET /api/v1/auth/session/` → 200,
+  correct anonymous shape.
+- **CSRF enforcement**: login POST without a CSRF token → 403 ("CSRF
+  cookie not set"), before any credential check. PASS.
+- **Invalid login**: wrong username/password (with a valid CSRF token)
+  → clean **401**, generic `{"error_code":"invalid_credentials","message":"Invalid username or password."}`
+  — no stack trace, no user-existence leak, no raw Django exception.
+  PASS.
+- **Valid login (read-only user)**: `ux_test_reader` → 200, session
+  correctly reports `capabilities: ["configuration.read"]`.
+- **Read-only authorization**: reader can read config endpoints (200 /
+  404-no-data-yet, never 403) and is correctly **rejected (403,
+  "You do not have permission to activate configuration.")** attempting
+  activation. Backend is confirmed as the real enforcement boundary, not
+  just the UI.
+- **Valid login (operator user)**: `ux_test_operator` → 200, session
+  correctly reports `capabilities: ["configuration.read",
+  "configuration.activate"]`. Activation attempt reaches the
+  application layer (404 "cannot activate unknown version" — a
+  data-level error, proving the *permission* check passed, distinct
+  from the reader's 403). **No configuration was actually activated**
+  (no real version exists to activate against, and none was created,
+  per instruction not to activate real trading configuration).
+- **Logout**: session correctly invalidated (`is_authenticated: false`
+  immediately after), and a protected call with the (now-invalid)
+  cookie is correctly rejected.
+- **Session expiry**: simulated by deleting the session row directly in
+  PostgreSQL (the real mechanism an expired/evicted session would hit).
+  `GET /api/v1/auth/session/` correctly reports anonymous again.
+
+## A Second Real, Previously-Invisible Defect Found (Not Fixed)
+
+Testing session expiry against a protected endpoint (not just the
+always-200 session-check endpoint) surfaced a genuine frontend/backend
+mismatch: an unauthenticated request to a protected endpoint (e.g.
+`GET /api/v1/config/risk/default/`) returns **403** ("Authentication
+credentials were not provided"), **not 401** — a well-known DRF
+behavior: `SessionAuthentication` sets no `WWW-Authenticate` header, so
+DRF's exception handling falls back to `PermissionDenied` (403) instead
+of `NotAuthenticated` (401) for the unauthenticated case.
+
+`frontend/src/common/api/client.ts`'s session-expiry handler
+(`setSessionExpiredHandler`) fires **only** on `response.status === 401`
+— meaning it can **never actually trigger** against this real backend
+for the exact scenario it exists to handle (a session that expires or
+is invalidated while the user has a protected screen open making
+requests). The existing frontend test
+(`AuthContext.test.tsx::"drops back to anonymous when any request comes
+back 401"`) mocks a `401` response directly, which is why this was never
+caught — it never exercised the real backend's actual status-code
+choice. This is a genuine functional gap, found only by testing the
+real integration end-to-end rather than each side's own unit tests in
+isolation — exactly what this checkpoint exists to surface. **Not fixed
+this checkpoint** (out of the explicit "no new business features"
+scope, and the correct fix — likely overriding
+`SessionAuthentication.authenticate_header()` to return a value so DRF
+raises 401 instead, or having the frontend also treat 403 as a possible
+session-expiry signal — deserves its own deliberate decision, not a
+reflexive patch). Flagged as a High-severity finding below.
+
+## A Third Set of Real, Previously-Invisible Defects Found (Not Fixed)
+
+Running the full backend suite with PostgreSQL genuinely reachable for
+the first time (previously every one of these tests was honestly
+reported as *skipped*, never claimed as passed) revealed **8 real test
+failures** that had been invisible for multiple checkpoints:
+
+1. **`test_repositories.py` (3 failures)** — `DjangoRiskConfigurationRepository.activate()`/
+   `DjangoStrategyVersionRepository.activate()` now require keyword-only
+   `actor`, `actor_user_id`, `request_id` arguments (added when the
+   Checkpoint 12/13 audit-trail governance was built), but these three
+   specific repository-level tests were never updated to pass them —
+   a straightforward test-code staleness bug, not a production defect.
+2. **`test_auth_api.py` (4 failures)** — root cause: DRF's login-view
+   `ScopedRateThrottle` ("5/min") uses the process-wide `LocMemCache` in
+   the testing settings, which is **never reset between tests**. Once 5
+   logins have occurred anywhere earlier in the same test-file run, every
+   subsequent login attempt in that file gets a real `429 Too Many
+   Requests` instead of the response the test expects — a test-isolation
+   bug (shared mutable cache state leaking across tests), not a
+   production defect. (One instance of this also manifested as CSRF
+   ordering confusion in the captured log, but the root numeric cause in
+   every case was the shared throttle cache.)
+3. **`test_risk_api.py::test_full_vertical_slice_get_version` (1
+   failure)** — `body["limits"]["max_intraday_loss"]` is returned as a
+   JSON **float** (`10000.0`), not the string `"10000.00"` the test
+   expects. `REST_FRAMEWORK["COERCE_DECIMAL_TO_STRING"]` (`base.py`)
+   only affects DRF `DecimalField`s in a proper serializer — this value
+   lives inside a `JSONField`-backed blob, which uses Python's default
+   `Decimal`→JSON encoding (float) instead. **This is worth flagging as
+   a real, substantive question, not dismissed as a test bug**: the
+   project's own stated principle is "Decimal, never float" end-to-end
+   (Checkpoint 3 §18, Checkpoint 5); if the risk-limits API response
+   genuinely serializes as float today, that is a precision-fidelity gap
+   in the one place this project has repeatedly promised it would not
+   have one. Needs a deliberate decision (custom JSON encoder for that
+   field, or restructure it as real serializer fields) — not something
+   to patch inside an environment-restoration checkpoint.
+
+**None of these 8 were fixed this checkpoint** — they are genuine
+findings this checkpoint's entire purpose was to surface (tests that
+were always "skipped," never "passed," turned out to hide real problems
+once actually run), not new work authorized by this checkpoint's scope.
+Full failing-test list and root causes given here so a future checkpoint
+can address them deliberately rather than rediscover them.
+
+## Frontend Automated Regression
+
+`typecheck`: clean. `build`: succeeds (46 modules, 158.59 kB JS).
+`test -- --run`: **30 passed**, 0 failed (frontend source unmodified).
+ESLint: still not configured — reported honestly, not added (no
+architectural reason to add it merely for this checkpoint).
+
+## Backend Regression
+
+- `ruff format --check` / `ruff check`: clean.
+- `mypy --strict`: success, 106 source files (the `load_dotenv` import
+  required no `type: ignore` — `python-dotenv` ships inline types).
+- `pytest`: **334 passed, 8 failed, 0 skipped** — the first checkpoint
+  in this project's history where the Postgres-gated suite actually RAN
+  instead of being honestly skipped. Reported exactly as observed; 8
+  failures are real, not swept under "still skipped."
+- `lint-imports`: 6/6 kept, 131 files.
+- `manage.py check`: no issues. `manage.py migrate --plan`: "No planned
+  migration operations" (real verification, not "unrunnable").
+- `manage.py spectacular --fail-on-warn`: success.
+- `pip-audit`: 8 findings (pytest 1, starlette 7) — identical to
+  Checkpoints 16/17, no dependency file touched.
+
+## PostgreSQL / Redis Verification
+
+Both genuinely installed/running and verified reachable **from Django
+itself** (not just `psql`/`redis-cli` directly): a direct
+`connection.ensure_connection()` succeeded (`postgresql`), and
+`cache.set()`/`cache.get()` round-tripped through the real Redis-backed
+`CACHES["default"]`. `/readyz` independently confirms both:
+`{"status":"ready","checks":{"database":"ok","cache":"ok"}}`.
+
+## Security
+
+No credentials committed. `.env` remains gitignored (verified via `git
+check-ignore -v .env`) and was not modified in content, only the code
+that reads it was fixed. The two local dev users exist only in the
+local PostgreSQL instance — neither username nor password appears
+anywhere in a committed file. Both dev servers (8000/5173) bound to
+`127.0.0.1`/`localhost` only, stopped at the end of validation. No
+`.env`, log file, `tsconfig.tsbuildinfo`, or database file was staged
+(verified via `git status --short` before committing).
+
+## Trading Safety
+
+`trading_engine/`, `risk_engine`, `order_management`,
+`position_management`, broker adapters, `Dhan`, `kill_switch`,
+`TRADING_MODE`, signal generation, strategy execution — confirmed
+untouched. No order or broker call was introduced. No real risk/
+universe/strategy configuration was activated during authorization
+testing (only a nonexistent placeholder version was targeted, which
+correctly 404'd).
+
+## Documentation Changes
+
+`docs/development/LOCAL_DEVELOPMENT.md`: added `.env` auto-loading note,
+a "Running PostgreSQL and Redis without Docker" section, corrected the
+stale "no domain models exist yet" Migrations section (persistence
+models have existed since Checkpoint 7), and added a "Development login
+user" section with the exact non-secret setup mechanism. This
+`taskReport.md` section carries the full credential values and findings
+(never put in architecture docs, per the checkpoint brief).
+`ARCHITECTURE_DECISIONS.md`/`ARCHITECTURE.md` not modified — no
+architectural decision changed, only a genuine implementation-gap fix
+(`.env` loading) and environment state.
+
+## Git State
+
+Before this checkpoint's changes: `main` at `1f6a139` (Checkpoint 17), 6
+ahead / 0 behind `origin/main`, clean. `origin/main` re-confirmed
+unchanged. Only `src/intraday/settings/base.py` (the `load_dotenv` fix)
+and `docs/development/LOCAL_DEVELOPMENT.md` were modified in source;
+`.env`, PostgreSQL data, the two local dev users, and both dev-server
+logs all live outside git entirely and were verified absent from `git
+status --short` before staging.
+
+## Issues Found (this checkpoint)
+
+- **High**: `AuthContext`'s session-expiry auto-recovery
+  (`setSessionExpiredHandler`) never actually fires against the real
+  backend, because DRF's `SessionAuthentication` returns 403, not 401,
+  for an unauthenticated request to a protected endpoint. A user whose
+  session expires while using a protected screen will see individual
+  requests fail rather than being cleanly dropped back to the login
+  screen. Not fixed this checkpoint — needs a deliberate decision.
+- **Medium**: the risk-configuration API's `limits` blob serializes
+  `Decimal` values as JSON floats, not the strings
+  `COERCE_DECIMAL_TO_STRING` promises elsewhere — a precision-fidelity
+  question worth a real decision, not a reflexive fix.
+- **Medium**: 3 repository-level tests (`test_repositories.py`) are
+  stale against the Checkpoint 12/13 `activate()` signature change —
+  straightforward to fix, not yet done.
+- **Low**: `test_auth_api.py`'s shared `LocMemCache` throttle state
+  leaks between tests within a single pytest process, causing later
+  login-flow tests in that file to see real `429`s. A test-isolation
+  fixture (clearing the cache, or per-test cache instances) is the
+  correct fix.
+- **Cosmetic**: none newly found in this checkpoint's UX pass beyond
+  what Checkpoint 17's static review already covered — the actual
+  running frontend was not visually inspected (still no browser-
+  automation tool available), so this is not a claim that the visual
+  layer was re-reviewed.
+
+## Deferred
+
+Live browser rendering/visual UX validation (still needs a browser-
+automation tool, still not available in this environment — the actual
+authentication/authorization workflow itself, however, is no longer
+blocked by infrastructure, which was Checkpoint 17's real gap). Fixing
+the 4 newly-discovered defects above (session-expiry 401/403 mismatch,
+Decimal-as-float serialization, stale repository tests, throttle-cache
+test isolation) — all deliberately left for a dedicated follow-up
+rather than patched reflexively inside an environment-restoration
+checkpoint.
+
+## Recommended Checkpoint 18
+
+**Real frontend authentication/authorization now genuinely works**
+end-to-end against a real PostgreSQL+Redis+Django+Vite stack — the
+login/invalid-login/authorization/logout/session-invalidation workflow
+all PASSED via direct HTTP validation (only live browser rendering
+remains unverified, blocked solely by tooling availability, not by the
+application). Per the checkpoint brief's own decision rule, this
+justifies recommending the originally-planned next step: begin
+`signal_intelligence/signal_generation`'s first technology-neutral
+contract using SMA + EMA + ATR. **However**, given the 4 concrete
+defects this checkpoint surfaced (1 High, 2 Medium, 1 Low) — the first
+time this project's test suite has ever actually run against real
+infrastructure — a strong secondary recommendation is a short, focused
+"test-debt and session-expiry correctness" checkpoint before Checkpoint
+18, so these do not silently persist now that they are known rather than
+hidden behind a skip marker. Not implemented — recommendation only.

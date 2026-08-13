@@ -13,6 +13,40 @@ cp .env.example .env            # then fill in local values — never commit .en
 cd frontend && npm install      # installs frontend deps (regenerable; not committed)
 ```
 
+`.env` is loaded automatically by every `manage.py` command (Checkpoint
+17.1: `settings/base.py` calls `load_dotenv()` — a real process/OS
+environment variable always overrides a `.env` value, `.env` only fills
+gaps). Previously `.env` was silently never read outside `docker
+compose` (whose own `env_file:` directive is unrelated to
+`python-dotenv`) — this is now fixed; no separate manual export step is
+required.
+
+## Running PostgreSQL and Redis without Docker (Checkpoint 17.1)
+
+If Docker is unavailable, PostgreSQL and Redis can run as native Windows
+services/binaries instead — the same `POSTGRES_*`/`REDIS_URL` variables
+in `.env` apply either way, since `settings/base.py` only ever reads
+environment variables, never a Docker-specific mechanism.
+
+- **PostgreSQL**: install (e.g. `winget install -e --id
+  PostgreSQL.PostgreSQL.16`), then create the database/role matching
+  your `.env` values:
+  ```sql
+  CREATE USER intraday WITH PASSWORD 'changeme';
+  CREATE DATABASE intraday OWNER intraday;
+  GRANT ALL PRIVILEGES ON DATABASE intraday TO intraday;
+  ALTER USER intraday CREATEDB;  -- required so pytest-django can create/drop the test database
+  ```
+  Then `poetry run python manage.py migrate`.
+- **Redis**: install as a native service (e.g. the official Windows
+  build) or run any reachable Redis instance; `.env`'s `REDIS_URL`
+  (default `redis://localhost:6379/0`) must point at it.
+
+`poetry run python manage.py check` and `GET /readyz` (once the server
+is running) both report `database`/`cache` connectivity honestly — use
+`/readyz` to confirm both are actually reachable before assuming the
+full authenticated workflow will work.
+
 ## Backend commands
 
 | Command | What it does |
@@ -58,11 +92,38 @@ explicitly deferred Checkpoint 17 concern.
 
 ## Migrations
 
-No domain models exist yet, so there is nothing to migrate beyond Django's
-own built-in apps (`auth`, `admin`, `sessions`, `contenttypes`). Do **not**
-create placeholder/fake migrations to exercise the tooling — `make check`
-already proves `manage.py makemigrations --check --dry-run` reports "No
-changes detected", which is the correct state at this checkpoint.
+Beyond Django's own built-in apps (`auth`, `admin`, `sessions`,
+`contenttypes`), `intraday.infrastructure.persistence` (Checkpoint 7+)
+holds the configuration-versioning and audit-trail models — see
+[docs/architecture/PERSISTENCE_ARCHITECTURE.md](../architecture/PERSISTENCE_ARCHITECTURE.md).
+Run `poetry run python manage.py migrate` once PostgreSQL is reachable.
+`manage.py makemigrations --check --dry-run` reporting "No changes
+detected" remains the expected, correct state — do not create
+placeholder/fake migrations to exercise the tooling.
+
+## Development login user
+
+No development/test user is seeded by any migration or fixture (only
+the empty `configuration-operators` Group is seeded —
+`0002_seed_configuration_operators_group.py`). Create one locally once
+PostgreSQL is reachable:
+
+```bash
+poetry run python manage.py createsuperuser   # interactive; or see below for a scripted local-only user
+```
+
+To add an existing user to the operator role (grants the
+`configuration.activate` capability):
+
+```python
+# poetry run python manage.py shell
+from django.contrib.auth.models import User, Group
+user = User.objects.get(username="your-username")
+user.groups.add(Group.objects.get(name="configuration-operators"))
+```
+
+Never commit a generated password anywhere in this repository — it
+exists only in your local PostgreSQL instance.
 
 ## CI
 

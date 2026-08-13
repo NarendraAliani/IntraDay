@@ -10,8 +10,26 @@ import os
 from pathlib import Path
 
 import structlog
+from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
+
+# ---------------------------------------------------------------------------
+# .env loading (Checkpoint 17.1 fix). `python-dotenv` was already a
+# declared dependency (pyproject.toml) and `.env.example`'s own header
+# comment already claimed "manage.py... read `.env` via python-dotenv" —
+# but no code anywhere actually called `load_dotenv()`, so a developer's
+# local `.env` was silently never read by `manage.py runserver`/any other
+# management command (only `docker compose`'s own `env_file:` directive
+# actually worked). This is the concrete local-development defect
+# Checkpoint 17.1 found and fixes — not a new environment-loading
+# mechanism, just making the one already documented actually run.
+# `override=False` (the default): real process/OS environment variables
+# still always win over `.env`, so CI (which sets env vars directly, no
+# `.env` file) and production (which must never read a stray `.env`) are
+# both unaffected — this only fills gaps for local development.
+# ---------------------------------------------------------------------------
+load_dotenv(BASE_DIR / ".env")
 
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "")
 
