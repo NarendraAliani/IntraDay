@@ -7557,3 +7557,24 @@ implemented here.
 - Browser automation: re-confirmed unavailable in this environment (same as Checkpoint 27/28) - not claimed, not installed to hide the limitation.
 - Trading safety unchanged: zero orders, zero broker calls, zero live-authorization changes, TRADING_MODE/kill switch untouched.
 - No credentials/secrets introduced.
+
+## Checkpoint 31 — Trading-Grade Bar Validation & Market-Data Fidelity (2026-08-14)
+
+### What was done
+
+- A genuine, one-shot, read-only `POST /v2/charts/intraday` call against Dhan's real API (HDFCBANK, 2026-08-14, using the project owner's already-configured, never-printed credential) resolved 2 of the 3 facts left UNCONFIRMED by Checkpoint 25.1's documentation-only research: same-day intraday availability (VERIFIED) and exact timestamp/timezone convention (VERIFIED - genuine UTC epoch, cross-checked against this project's own market-open convention). An unexplained ~15-minute gap at the end of the session's returned candles was observed and disclosed, not explained away.
+- An independent (non-Dhan) price cross-check against Google Finance showed an exact price match (previous close 725.00, last price 727.00) - one data point of partial corroboration for candle authority, honestly not claimed as a full independent-reference validation.
+- `domain/market_data/aggregation.py`: new `BarQualityGrade` (SAMPLE_BAR/TRADING_GRADE_BAR) and `BarProvenance` (source/exchange/timeframe/timestamp/source_timestamp/ingestion_timestamp/aggregation_method/quality_grade/gap_count) types; `AggregatedBar` gained an additive, optional `provenance` field, populated explicitly as SAMPLE_BAR on every bar `aggregate_quotes_into_bars()` produces - a structural, tested proof rather than only a documentation claim.
+- New timestamp-boundary tests pinning IST<->UTC conversion at 09:15/09:20/15:25/15:30 IST and 1-minute interval alignment, including a permanent regression fixture for the exact epoch value observed from the live Dhan call.
+- Frontend: `LiveMarketDataMonitor.tsx` gained a static `DataQualityBanner` explaining SAMPLE_BAR status in plain language, explicit that a healthy connection indicator does not mean trading-grade data.
+- WebSocket live ingestion, gap-recovery reconciliation, and full-session observation (Parts 7/8/10/12) were explicitly NOT implemented - re-confirmed blocked by the same persistent-process infrastructure gap identified at Checkpoint 23 (no Celery worker/beat running outside Docker, which remains permanently deferred; `asgi.py`'s WebSocket router remains empty). Documented, not silently skipped.
+- `docs/research/TRADING_GRADE_BAR_VALIDATION.md` (new) is the durable report; `DHAN_MARKET_DATA_CAPABILITY_RESEARCH.md`, `LIVE_MARKET_DATA_ARCHITECTURE.md`, `LIVE_BAR_AGGREGATION_ARCHITECTURE.md`, `MARKET_DATA_QUALITY_ASSESSMENT.md` each got a short Checkpoint 31 update section.
+
+### Validation
+
+- Backend: ruff/mypy/lint-imports/manage.py check/makemigrations --check/spectacular all clean, no migration needed (additive dataclass field only, no new persisted model). Full pytest suite green (existing tests unaffected by the additive `provenance` field; new tests for provenance, timestamp boundaries, and gap-count semantics all pass).
+- Frontend: tsc/build/vitest all clean, no existing test mocks required changes (banner is unconditional, not data-shaped).
+- Browser automation: re-confirmed unavailable (same as every prior checkpoint) - not installed to hide the gap.
+- TRADING_GRADE_BAR: 2 of 6 conditions now VERIFIED with live evidence (up from 0 of 6); 4 remain unmet, primarily the WebSocket-hosting infrastructure gap.
+- Trust level: NOT promoted - remains POC. RESEARCH_READY gate re-evaluated: independent reference validation and verified cost model remain SATISFIED (unchanged); real historical data upgraded to PARTIALLY SATISFIED; TRADING_GRADE_BAR, independent one-session validation, and slippage validation remain NOT SATISFIED.
+- Trading safety: 0 orders, 0 broker execution calls, 0 position changes, 0 live-authorization changes. TRADING_MODE/kill switch/order management untouched. The one live Dhan call made was a read-only historical-data query, never an order/position/execution endpoint. No credential value printed, logged, or committed.

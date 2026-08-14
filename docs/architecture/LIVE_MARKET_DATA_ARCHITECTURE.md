@@ -190,3 +190,14 @@ ingestion pipeline, exchange holiday calendar, per-instrument health
 (this checkpoint's health model is process-wide, not per-symbol),
 automatic/scheduled polling (Celery beat), Docker (unchanged, still
 deferred).
+
+## Checkpoint 31 update
+
+WebSocket streaming remains deferred for the same reason recorded
+above ("Why REST polling, not WebSocket") - unchanged, re-confirmed
+this checkpoint: `celery.py` remains infrastructure-only scaffolding
+(no beat schedule running outside `docker-compose.yml`), `asgi.py`'s
+WebSocket router remains empty, and Docker remains permanently
+deferred. See `docs/research/TRADING_GRADE_BAR_VALIDATION.md` §5 for
+the full re-confirmation and the recommended next step (a WebSocket-
+hosting architecture decision, not implementation).

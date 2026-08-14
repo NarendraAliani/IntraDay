@@ -13,6 +13,8 @@ import pytest
 from intraday.domain.instrument.contracts import make_instrument_id
 from intraday.domain.market_data.aggregation import (
     AggregatedBar,
+    BarProvenance,
+    BarQualityGrade,
     BarStatus,
     IncompleteBarError,
     aggregate_quotes_into_bars,
@@ -412,4 +414,80 @@ def test_aggregated_bar_rejects_zero_observation_count() -> None:
             status=BarStatus.CLOSED,
             observation_count=0,
             data_source="dhan",
+        )
+
+
+# --- Checkpoint 31 Part 5: provenance ------------------------------------
+
+
+def test_every_bar_this_pipeline_produces_is_explicitly_sample_bar() -> None:
+    """This aggregation path is REST point-sample polling - every bar it
+    produces must be typedly SAMPLE_BAR, never left unset or inferred as
+    trading-grade (see docs/research/TRADING_GRADE_BAR_VALIDATION.md)."""
+    quotes = (q(RELIANCE, 0, "100.00"), q(RELIANCE, 65, "101.00"))
+    as_of = BASE + timedelta(seconds=125)
+
+    result = aggregate_quotes_into_bars(
+        quotes, timeframe=Timeframe.ONE_MINUTE, as_of=as_of, data_source="dhan"
+    )
+
+    closed_bars = [b for b in result.bars if b.status is BarStatus.CLOSED]
+    assert closed_bars
+    for bar in result.bars:
+        assert bar.provenance is not None
+        assert bar.provenance.quality_grade is BarQualityGrade.SAMPLE_BAR
+        assert bar.provenance.exchange == "NSE"
+        assert bar.provenance.aggregation_method == "point_sample_aggregation"
+        assert bar.provenance.timestamp == bar.interval_end
+
+
+def test_provenance_gap_count_reflects_missing_intervals_observed_so_far() -> None:
+    quotes = (
+        q(RELIANCE, 0, "100.00"),
+        # gap: no quote in the [BASE+60, BASE+120) interval
+        q(RELIANCE, 125, "102.00"),
+        q(RELIANCE, 185, "103.00"),
+    )
+    as_of = BASE + timedelta(seconds=245)
+
+    result = aggregate_quotes_into_bars(
+        quotes, timeframe=Timeframe.ONE_MINUTE, as_of=as_of, data_source="dhan"
+    )
+
+    closed = sorted(
+        (b for b in result.bars if b.status is BarStatus.CLOSED), key=lambda b: b.interval_start
+    )
+    assert len(closed) == 3
+    assert closed[0].provenance is not None and closed[0].provenance.gap_count == 0
+    # the third closed bar was produced after the one detected gap
+    assert closed[2].provenance is not None and closed[2].provenance.gap_count == 1
+
+
+def test_bar_provenance_rejects_negative_gap_count() -> None:
+    with pytest.raises(ValueError, match="gap_count"):
+        BarProvenance(
+            source="dhan",
+            exchange="NSE",
+            timeframe=Timeframe.ONE_MINUTE,
+            timestamp=BASE,
+            source_timestamp=None,
+            ingestion_timestamp=BASE,
+            aggregation_method="point_sample_aggregation",
+            quality_grade=BarQualityGrade.SAMPLE_BAR,
+            gap_count=-1,
+        )
+
+
+def test_bar_provenance_requires_utc_timestamp() -> None:
+    naive = BASE.replace(tzinfo=None)
+    with pytest.raises(ValueError):
+        BarProvenance(
+            source="dhan",
+            exchange="NSE",
+            timeframe=Timeframe.ONE_MINUTE,
+            timestamp=naive,
+            source_timestamp=None,
+            ingestion_timestamp=BASE,
+            aggregation_method="point_sample_aggregation",
+            quality_grade=BarQualityGrade.SAMPLE_BAR,
         )

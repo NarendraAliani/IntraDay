@@ -55,9 +55,11 @@ def test_exchange_is_nse() -> None:
     [
         (6, 0, SessionStatus.PRE_OPEN),
         (9, 0, SessionStatus.PRE_OPEN),
-        (9, 15, SessionStatus.OPEN),
+        (9, 15, SessionStatus.OPEN),  # Checkpoint 31 Part 6: exact market-open boundary
+        (9, 20, SessionStatus.OPEN),  # Checkpoint 31 Part 6: five minutes into the session
         (12, 0, SessionStatus.OPEN),
-        (15, 30, SessionStatus.OPEN),
+        (15, 25, SessionStatus.OPEN),  # Checkpoint 31 Part 6: five minutes before close
+        (15, 30, SessionStatus.OPEN),  # Checkpoint 31 Part 6: exact market-close boundary
         (15, 31, SessionStatus.CLOSED),
         (20, 0, SessionStatus.CLOSED),
     ],

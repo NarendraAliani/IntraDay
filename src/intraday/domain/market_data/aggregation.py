@@ -48,6 +48,50 @@ class BarStatus(enum.Enum):
     CLOSED = "CLOSED"
 
 
+class BarQualityGrade(enum.Enum):
+    """Checkpoint 31 Part 5/4: the explicit, typed distinction between a
+    bar this project honestly trusts for signal generation/live trading
+    and one it does not - never inferred from documentation alone, and
+    never silently defaulted to the trusted grade. See
+    `docs/architecture/DHAN_MARKET_DATA_CAPABILITY_RESEARCH.md`'s
+    six-condition acceptance definition for exactly what
+    `TRADING_GRADE_BAR` requires; every bar this codebase has ever
+    produced through Checkpoint 31 is `SAMPLE_BAR` - `TRADING_GRADE_BAR`
+    is not yet reachable by any code path (see
+    `docs/research/TRADING_GRADE_BAR_VALIDATION.md`)."""
+
+    SAMPLE_BAR = "SAMPLE_BAR"
+    TRADING_GRADE_BAR = "TRADING_GRADE_BAR"
+
+
+@dataclass(frozen=True, slots=True)
+class BarProvenance:
+    """Checkpoint 31 Part 5: an explicit, typed record of where a bar
+    came from and how much it can be trusted - so `SAMPLE_BAR` vs.
+    `TRADING_GRADE_BAR` is a property carried by the data itself, not
+    something only asserted in documentation. Attached to `AggregatedBar`
+    as an optional field (`provenance`) so existing callers/tests that
+    predate this checkpoint are unaffected (default `None`)."""
+
+    source: str  # e.g. "dhan_marketfeed_quote_rest_poll"
+    exchange: str
+    timeframe: Timeframe
+    timestamp: datetime  # canonical bar timestamp (close), UTC
+    source_timestamp: datetime | None  # provider-reported timestamp, if distinct from timestamp
+    ingestion_timestamp: datetime  # when THIS process observed/persisted it, UTC
+    aggregation_method: str  # e.g. "point_sample_aggregation", "websocket_tick_aggregation"
+    quality_grade: BarQualityGrade
+    gap_count: int = 0  # missing intervals detected for this instrument's span
+
+    def __post_init__(self) -> None:
+        ensure_utc(self.timestamp, field_name="BarProvenance.timestamp")
+        ensure_utc(self.ingestion_timestamp, field_name="BarProvenance.ingestion_timestamp")
+        if self.source_timestamp is not None:
+            ensure_utc(self.source_timestamp, field_name="BarProvenance.source_timestamp")
+        if self.gap_count < 0:
+            raise ValueError("BarProvenance.gap_count must not be negative")
+
+
 @dataclass(frozen=True, slots=True)
 class AggregatedBar:
     """A bar built from aggregated `Quote` observations. Unlike the
@@ -68,6 +112,7 @@ class AggregatedBar:
     status: BarStatus
     observation_count: int
     data_source: str
+    provenance: BarProvenance | None = None
 
     def __post_init__(self) -> None:
         ensure_utc(self.interval_start, field_name="AggregatedBar.interval_start")
@@ -245,6 +290,7 @@ def aggregate_quotes_into_bars(
         # (forming) one, so a genuinely empty interval in between is
         # reported as missing rather than silently absent from the result.
         cursor = earliest_start
+        gaps_so_far = 0
         while cursor <= current_interval_start:
             interval_end = cursor + duration
             bucket = buckets.get(cursor)
@@ -258,6 +304,7 @@ def aggregate_quotes_into_bars(
                             interval_end=interval_end,
                         )
                     )
+                    gaps_so_far += 1
                 cursor += duration
                 continue
 
@@ -265,6 +312,24 @@ def aggregate_quotes_into_bars(
             close_price = bucket[-1].last_price
             high_price = max(q.last_price for q in bucket)
             low_price = min(q.last_price for q in bucket)
+
+            # Checkpoint 31 Part 5: every bar produced by THIS aggregation
+            # path is explicitly, typedly SAMPLE_BAR - REST point-sample
+            # polling, never continuous tick coverage - see
+            # docs/research/TRADING_GRADE_BAR_VALIDATION.md. Never
+            # defaulted or inferred; set here at the one place this
+            # pipeline's bars are constructed.
+            provenance = BarProvenance(
+                source=data_source,
+                exchange=str(instrument_id).split(":", 1)[0],
+                timeframe=timeframe,
+                timestamp=interval_end,
+                source_timestamp=bucket[-1].timestamp,
+                ingestion_timestamp=as_of,
+                aggregation_method="point_sample_aggregation",
+                quality_grade=BarQualityGrade.SAMPLE_BAR,
+                gap_count=gaps_so_far,
+            )
 
             bars.append(
                 AggregatedBar(
@@ -279,6 +344,7 @@ def aggregate_quotes_into_bars(
                     status=BarStatus.FORMING if is_forming else BarStatus.CLOSED,
                     observation_count=len(bucket),
                     data_source=data_source,
+                    provenance=provenance,
                 )
             )
             cursor += duration

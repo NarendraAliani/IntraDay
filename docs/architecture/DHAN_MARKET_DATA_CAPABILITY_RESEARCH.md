@@ -717,3 +717,31 @@ Exact conditions, all required:
 `FeatureEngineService` remain unwired from live market data** -
 unchanged from Checkpoint 24A's own conclusion, now with a concrete,
 evidence-based checklist rather than an open-ended deferral.
+
+## Checkpoint 31 update — conditions 1 and 2 verified live
+
+A genuine, one-shot, read-only `POST /v2/charts/intraday` call
+(HDFCBANK, 2026-08-14, using the project owner's already-configured
+credential, never printed/logged) resolved two of this document's Open
+Questions directly against Dhan's real API, not further documentation
+reading:
+
+- **Open Question #1** (same-day intraday availability): **VERIFIED**
+  — 360 real, same-day 1-minute candles were returned.
+- **Open Question #3** (exact timezone): **VERIFIED** — the first
+  candle's epoch (`1786679100.0`), read as standard UTC epoch, equals
+  exactly `2026-08-14 09:15:00 IST` (this project's own documented
+  market-open instant). Dhan's intraday-endpoint epoch is genuine UTC.
+- **Open Question #2** (exchange-authoritative vs. Dhan-computed):
+  still not resolved by documentation; one independent cross-check
+  (Google Finance) showed an exact price match, partial corroboration
+  only.
+- A previously-unknown gap was observed and disclosed, not explained
+  away: the returned candles stopped at 15:14-15:15 IST, ~15 minutes
+  short of the documented 15:30 close.
+
+See `docs/research/TRADING_GRADE_BAR_VALIDATION.md` for the full
+evidence and the SAMPLE_BAR gate's updated status (2 of 6 conditions
+now met; WebSocket ingestion remains blocked by the unchanged
+persistent-process infrastructure gap - Docker remains permanently
+deferred per this project's invariant rules).

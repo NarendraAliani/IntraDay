@@ -134,3 +134,18 @@ in what was built. This is why Checkpoint 24A is classified **AMBER**
 (observation-quality foundation, trading-grade data explicitly still
 open) rather than GREEN or RED - see `taskReport.md`'s Checkpoint 24A
 finalization section for the full acceptance reasoning.
+
+## Checkpoint 31 update
+
+`docs/research/TRADING_GRADE_BAR_VALIDATION.md` closed two of
+Checkpoint 25.1's three unconfirmed facts with a real, live, read-only
+API call: same-day intraday availability (VERIFIED) and timestamp/
+timezone convention (VERIFIED, genuine UTC epoch). Candle authority
+remains unconfirmed beyond one data point of independent corroboration
+against Google Finance. `AGGREGATED_BAR`'s new `BarQualityGrade`/
+`BarProvenance` types (`domain/market_data/aggregation.py`) now make
+`SAMPLE_BAR` an explicit, typed, structurally-proven property of every
+bar this pipeline produces, not merely a documentation claim. Still
+**AMBER** - `TRADING_GRADE_BAR` remains unreachable (4 of 6 conditions
+still unmet, primarily the unchanged persistent-process/WebSocket
+infrastructure gap).

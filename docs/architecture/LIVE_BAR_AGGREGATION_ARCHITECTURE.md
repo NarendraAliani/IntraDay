@@ -172,3 +172,17 @@ real traded volume, WebSocket-driven incremental aggregation,
 per-instrument retention/rotation policy for `AggregatedBarObservation`
 (inherits Checkpoint 23's "revisit before scaling" limitation), a full
 exchange holiday calendar (still deferred from Checkpoint 23).
+
+## Checkpoint 31 update — explicit, typed provenance
+
+`AggregatedBar` gained an additive, optional `provenance:
+BarProvenance | None = None` field (`domain/market_data/aggregation.py`)
+- `BarQualityGrade` (`SAMPLE_BAR`/`TRADING_GRADE_BAR`) and
+`BarProvenance` (source/exchange/timeframe/timestamp/source_timestamp/
+ingestion_timestamp/aggregation_method/quality_grade/gap_count).
+`aggregate_quotes_into_bars()` now sets `quality_grade=SAMPLE_BAR` and
+`aggregation_method="point_sample_aggregation"` explicitly on every bar
+it produces - proven, not merely documented, by
+`test_every_bar_this_pipeline_produces_is_explicitly_sample_bar`. The
+default `None` preserves every pre-existing caller unchanged. See
+`docs/research/TRADING_GRADE_BAR_VALIDATION.md` §6.

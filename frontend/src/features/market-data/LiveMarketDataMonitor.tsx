@@ -34,6 +34,30 @@ import type {
 
 const AUTO_REFRESH_INTERVAL_MS = 5000;
 
+// Checkpoint 31 Part 14/15: an honest, layman-readable explanation of
+// this platform's current bar-quality classification. Every bar this
+// codebase can produce today is SAMPLE_BAR (REST point-sample polling,
+// not continuous WebSocket tick coverage) - a structural fact proven by
+// `tests/unit/domain/test_market_data_aggregation.py`, not merely
+// asserted here. This banner intentionally never says "LIVE READY"
+// just because the connection is healthy - connection health and data
+// quality are different questions. See
+// docs/research/TRADING_GRADE_BAR_VALIDATION.md for the full six-
+// condition definition and current status of each.
+function DataQualityBanner(): JSX.Element {
+  return (
+    <div className="callout callout--warn" role="note">
+      <span className="badge badge--pending">◐ SAMPLE_BAR</span> Prices shown here are built from
+      periodic point-in-time samples, not a continuous market-data stream. This is real, honest
+      market data - never fabricated - but it cannot yet guarantee a true OPEN/HIGH/LOW/CLOSE the
+      way continuous tick coverage or exchange-computed candles could, so it is not yet{" "}
+      <strong>TRADING_GRADE_BAR</strong>. A green connection indicator below means the platform is
+      successfully talking to the data provider - it does <strong>not</strong> mean these candles
+      are trading-grade.
+    </div>
+  );
+}
+
 const SESSION_LABELS: Record<SessionResponse["status"], string> = {
   PRE_OPEN: "Pre-Market",
   OPEN: "Market Open",
@@ -146,6 +170,8 @@ export function LiveMarketDataMonitor(): JSX.Element {
         Read-only observation of live NSE cash-equity prices. No orders, positions, or trading
         controls exist on this screen.
       </p>
+
+      <DataQualityBanner />
 
       {state.phase === "loading" && <LoadingState label="Loading market data…" />}
       {state.phase === "error" && <ErrorState message={state.message} />}
