@@ -1,23 +1,39 @@
 # src/intraday/research/backtesting/__init__.py
 #
-# Package boundary for research/backtesting (Checkpoint 4 scaffolding
-# only). This is the ONE package permitted the narrow, documented exception
-# to import intraday.trading_engine.strategy_execution's implementation
-# module for backtest/live code-path parity (Checkpoint 2 §4, Checkpoint 3
-# §16). It must never import any other trading_engine submodule
-# (risk_engine, order_management, execution_management, broker_abstraction,
-# session_management) — mechanically enforced by .importlinter contract #5
-# and independently re-verified by
-# tests/unit/architecture/test_narrow_dependency_exception.py. No backtest
-# engine code exists yet.
+# Package boundary for research/backtesting. This is the ONE package
+# permitted the narrow, documented exception to import
+# intraday.trading_engine.strategy_execution for backtest/live code-path
+# parity (Checkpoint 2 §4, Checkpoint 3 §16) - mechanically enforced by
+# `.importlinter` contracts 4/5 and independently re-verified by
+# tests/unit/architecture/test_narrow_dependency_exception.py.
 #
-# The import below is a deliberate, functionally-inert placeholder: it
-# exists only to give import-linter's contract #4 `ignore_imports` rule a
-# real import to exempt (import-linter errors on an `ignore_imports` entry
-# that matches nothing), proving the narrow exception is both expressible
-# and enforced *now*, rather than leaving it untestable until real backtest
-# code exists. It is not called or used and carries no business logic.
-from intraday.trading_engine import strategy_execution as _approved_strategy_execution_dependency
+# `.importlinter`'s `ignore_imports` matches the EXACT source/target
+# module pair named in `.importlinter` - "intraday.research.backtesting
+# -> intraday.trading_engine.strategy_execution" - not any submodule
+# pair. So this `__init__` is the SOLE place in `research.backtesting`
+# that imports `trading_engine.strategy_execution` directly; every other
+# module in this package (`contracts.py`, `engine.py`, ...) imports the
+# re-exported names from here instead. This keeps the exempted
+# dependency edge singular and auditable rather than growing into a set
+# of submodule-specific holes (Checkpoint 27's own audit caught an
+# earlier draft doing exactly that).
+from __future__ import annotations
 
-__all__: list[str] = []
-_ = _approved_strategy_execution_dependency  # referenced to satisfy linters; inert
+from intraday.trading_engine import strategy_execution as _strategy_execution
+from intraday.trading_engine.strategy_execution import (
+    Strategy,
+    StrategyConfigurationValues,
+    StrategyDirection,
+    StrategyRegistry,
+    build_default_registry,
+)
+
+__all__ = [
+    "Strategy",
+    "StrategyConfigurationValues",
+    "StrategyDirection",
+    "StrategyRegistry",
+    "build_default_registry",
+]
+
+_ = _strategy_execution  # referenced to satisfy linters; the re-exports above are what matter

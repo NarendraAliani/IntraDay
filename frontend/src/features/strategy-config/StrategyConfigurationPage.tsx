@@ -20,6 +20,7 @@ import { ApiNetworkError, ApiRequestError } from "../../common/api/client";
 import { useAuth } from "../../common/auth/AuthContext";
 import { ErrorState } from "../../common/components/ErrorState";
 import { LoadingState } from "../../common/components/LoadingState";
+import { ParameterSchemaFields, defaultValuesFor } from "../../common/components/ParameterSchemaFields";
 import {
   getFieldRegistry,
   getStrategySchema,
@@ -29,7 +30,6 @@ import {
 } from "../../common/api/strategyApi";
 import type {
   FieldDefinition,
-  ParameterDefinition,
   StrategyConfigurationResponse,
   StrategySchema,
   StrategySummary,
@@ -47,65 +47,6 @@ function describeError(error: unknown): string {
     return error.message;
   }
   return "An unexpected error occurred.";
-}
-
-/** Renders one control, purely from its `ParameterDefinition` - the
- * single place control-type selection happens (Part 5). */
-function ParameterControl({
-  parameter,
-  value,
-  onChange,
-  fields,
-}: {
-  parameter: ParameterDefinition;
-  value: string;
-  onChange: (next: string) => void;
-  fields: FieldDefinition[];
-}): JSX.Element {
-  const inputId = `strategy-param-${parameter.parameter_id}`;
-
-  if (parameter.parameter_type === "FIELD_REFERENCE") {
-    return (
-      <select id={inputId} value={value} onChange={(e) => onChange(e.target.value)}>
-        <option value="">Select a field…</option>
-        {fields.map((field) => (
-          <option key={field.field_id} value={field.field_id}>
-            {field.display_name}
-          </option>
-        ))}
-      </select>
-    );
-  }
-
-  if (parameter.parameter_type === "ENUM") {
-    return (
-      <select id={inputId} value={value} onChange={(e) => onChange(e.target.value)}>
-        <option value="">Select…</option>
-        {parameter.allowed_values.map((option) => (
-          <option key={option} value={option}>
-            {option}
-          </option>
-        ))}
-      </select>
-    );
-  }
-
-  if (parameter.parameter_type === "INTEGER" || parameter.parameter_type === "DECIMAL") {
-    return (
-      <input
-        id={inputId}
-        type="number"
-        step={parameter.parameter_type === "DECIMAL" ? "any" : "1"}
-        value={value}
-        min={parameter.minimum != null ? String(parameter.minimum) : undefined}
-        max={parameter.maximum != null ? String(parameter.maximum) : undefined}
-        onChange={(e) => onChange(e.target.value)}
-      />
-    );
-  }
-
-  // TIMEFRAME (and any future closed-set string type not yet special-cased)
-  return <input id={inputId} type="text" value={value} onChange={(e) => onChange(e.target.value)} />;
 }
 
 export function StrategyConfigurationPage(): JSX.Element {
@@ -166,13 +107,7 @@ export function StrategyConfigurationPage(): JSX.Element {
         if (cancelled) return;
         setSchema(strategySchema);
         setSavedConfigurations(configurations);
-        const defaults: Record<string, string> = {};
-        for (const parameter of strategySchema.parameters) {
-          if (parameter.default !== null && parameter.default !== undefined) {
-            defaults[parameter.parameter_id] = String(parameter.default);
-          }
-        }
-        setValues(defaults);
+        setValues(defaultValuesFor(strategySchema.parameters));
       } catch (error) {
         if (cancelled) return;
         setSchemaError(describeError(error));
@@ -266,25 +201,14 @@ export function StrategyConfigurationPage(): JSX.Element {
         >
           <fieldset>
             <legend>Parameters</legend>
-            {schema.parameters.map((parameter) => (
-              <div className="strategy-config-page__field" key={parameter.parameter_id}>
-                <label htmlFor={`strategy-param-${parameter.parameter_id}`}>
-                  {parameter.label}
-                  {parameter.required ? " *" : ""}
-                </label>
-                <ParameterControl
-                  parameter={parameter}
-                  value={values[parameter.parameter_id] ?? ""}
-                  onChange={(next) =>
-                    setValues((prev) => ({ ...prev, [parameter.parameter_id]: next }))
-                  }
-                  fields={fields}
-                />
-                {parameter.help_text && (
-                  <p className="strategy-config-page__help-text">{parameter.help_text}</p>
-                )}
-              </div>
-            ))}
+            <ParameterSchemaFields
+              parameters={schema.parameters}
+              values={values}
+              onChange={(parameterId, next) =>
+                setValues((prev) => ({ ...prev, [parameterId]: next }))
+              }
+              fields={fields}
+            />
           </fieldset>
 
           {canWrite && (

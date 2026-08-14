@@ -7353,3 +7353,86 @@ only. No diagnostic-execution API endpoint was exposed (the service
 exists and is tested at the application layer, but Part 17's endpoint
 list did not strictly require it and it was left out to keep the
 SAMPLE_BAR boundary surface as small as possible).
+
+## Checkpoint 27 — Strategy Workbench + Backtesting Proof of Concept (2026-08-14)
+
+### What was built
+
+- `research.backtesting` engine: `BacktestConfiguration`, `SimulatedTrade`,
+  `EquityPoint`, `BacktestMetrics`, `BacktestResult`, and
+  `run_backtest()` - a deterministic, look-ahead-free simulator that
+  reuses the EXACT Checkpoint 26 `Strategy`/`StrategyRegistry`/
+  `StrategyConfigurationValues` (no `BacktestEmaStrategy` or equivalent
+  duplicate anywhere). Execution model: signals fill at the NEXT bar's
+  open (documented, tested); end-of-series force-close at the final
+  bar's close.
+- MFE/MAE per trade (Part 9) - a small, new computation over each
+  trade's own holding-period bars, deliberately distinct from (and
+  documented as not duplicating) Checkpoint 21's `theoretical_outcome`
+  module, which measures a different thing (a fixed future horizon from
+  a signal, not a trade's actual holding period).
+- Reproducibility: `backtest_id` is a deterministic SHA-256 hash of
+  configuration + data identity - never random. Two identical runs
+  produce byte-identical results; re-running via the API upserts the
+  same row.
+- Persistence: `BacktestResultRecord`, `WatchlistRecord`,
+  `StrategyResearchStatusRecord` (migration
+  `0009_strategyresearchstatusrecord_backtestresultrecord_and_more`).
+- API: `/api/v1/config/backtesting/...`, `/api/v1/config/watchlists/...`,
+  `/api/v1/config/strategy-engine/.../research-status/...` + OpenAPI/TS.
+- Frontend: `BacktestingWorkbenchPage.tsx` (Discover -> Configure ->
+  Backtest -> Review, reusing the exact Checkpoint 26 parameter renderer
+  via a newly-extracted `ParameterSchemaFields` shared component),
+  `ComparisonPage.tsx`, `WatchlistPage.tsx`, `StrategyMonitorPage.tsx`,
+  plain-SVG `EquityChart.tsx` (no charting framework introduced).
+
+### A real architecture-boundary defect found and fixed mid-checkpoint
+
+An early draft of `research.backtesting.contracts`/`.engine` imported
+`trading_engine.strategy_execution.contracts`/`.strategy` directly,
+breaking `.importlinter` contracts 4 (`Contracts: 4 kept, 2 broken`).
+Root cause: `ignore_imports` matches the exact module pair named in
+`.importlinter` ("research.backtesting -> trading_engine.
+strategy_execution"), not any submodule pair. Fixed by routing every
+cross-context import through `research/backtesting/__init__.py`'s own
+re-export surface - the sole place that import happens. All 6 contracts
+pass after the fix. See
+[BACKTESTING_ARCHITECTURE.md](docs/architecture/BACKTESTING_ARCHITECTURE.md)
+and [ARCHITECTURE_DECISIONS.md](docs/architecture/ARCHITECTURE_DECISIONS.md)
+decisions 126-129 for the full account.
+
+### Validation
+
+- Backend: `ruff format --check`/`ruff check` clean, `mypy` clean (181
+  source files), `lint-imports` 6/6 kept, `manage.py check` clean,
+  `makemigrations --check --dry-run` clean, `spectacular --fail-on-warn`
+  clean. `pytest` results reported in the Checkpoint 27 final report
+  below (full-suite count).
+- Frontend: `tsc --noEmit` clean, `vite build` succeeds, `vitest run`
+  **73 passed / 0 failed** (12 new tests across 4 new test files).
+- No-look-ahead: proven by dedicated tests (truncating the bar series
+  never changes an earlier decision; entries never fill at the signal
+  bar's own price; warm-up respected).
+- Non-redundancy audit: zero duplicate strategy classes in
+  `research.backtesting`, zero re-implemented indicators, zero second
+  signal model, zero frontend strategy-specific backtest forms, exactly
+  one parameter-schema renderer (shared by both Strategy Configuration
+  and the Backtest Workbench), zero order/broker vocabulary anywhere in
+  the new code.
+- Trading safety unchanged: `trading_engine/{risk_engine,order_management,
+  position_management,broker_abstraction,execution_management,
+  session_management}`, kill switch, TRADING_MODE all untouched (verified
+  via `git status` diff scope).
+- No credentials/secrets introduced (repo-wide grep clean; only the
+  pre-existing, `noqa`-annotated test-fixture password constant appears).
+
+### Not done in this checkpoint (see final report's Remaining Limitations)
+
+No live browser (Playwright/Selenium) end-to-end validation - not
+available in this environment; frontend correctness validated via
+`vitest`/Testing Library against real components plus `tsc`/`vite build`.
+The equity curve marks realized P&L at trade-close events only, not
+intrabar mark-to-market of open positions (documented POC limitation).
+Brokerage/tax costs are a flat-percentage MODEL ASSUMPTION, not a
+verified Indian brokerage/STT/GST formula (no authoritative source was
+available to verify against).

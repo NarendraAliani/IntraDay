@@ -20,6 +20,11 @@
 //
 // Checkpoint 23: a third screen (Live Market Data Monitor) is added the
 // same way - still no routing library for three screens.
+//
+// Checkpoint 27: Backtesting, Watchlists, and Strategy Monitor/Compare
+// are added the same way - still no routing library. Every new nav
+// entry reads DISCOVER/CONFIGURE/BACKTEST/REVIEW language, never
+// BUY/SELL/DEPLOY LIVE (Part 34).
 import { useState } from "react";
 
 import { useAuth } from "../common/auth/AuthContext";
@@ -29,8 +34,31 @@ import { LoginScreen } from "../features/auth/LoginScreen";
 import { LiveMarketDataMonitor } from "../features/market-data/LiveMarketDataMonitor";
 import { SettingsPage } from "../features/settings/SettingsPage";
 import { StrategyConfigurationPage } from "../features/strategy-config/StrategyConfigurationPage";
+import { BacktestingWorkbenchPage } from "../features/backtesting/BacktestingWorkbenchPage";
+import { ComparisonPage } from "../features/backtesting/ComparisonPage";
+import { StrategyMonitorPage } from "../features/backtesting/StrategyMonitorPage";
+import { WatchlistPage } from "../features/backtesting/WatchlistPage";
 
-type Screen = "configuration" | "settings" | "market-data" | "strategies";
+type Screen =
+  | "configuration"
+  | "settings"
+  | "market-data"
+  | "strategies"
+  | "backtesting"
+  | "comparison"
+  | "watchlists"
+  | "strategy-monitor";
+
+const NAV_ITEMS: Array<{ id: Screen; label: string }> = [
+  { id: "configuration", label: "Configuration" },
+  { id: "settings", label: "Settings" },
+  { id: "market-data", label: "Market Data" },
+  { id: "strategies", label: "Strategies" },
+  { id: "backtesting", label: "Backtesting" },
+  { id: "comparison", label: "Compare" },
+  { id: "watchlists", label: "Watchlists" },
+  { id: "strategy-monitor", label: "Strategy Monitor" },
+];
 
 function AppShell(): JSX.Element {
   const { state, logout } = useAuth();
@@ -52,38 +80,17 @@ function AppShell(): JSX.Element {
     <main>
       <header className="app-shell__header">
         <nav className="app-shell__nav" aria-label="Primary">
-          <button
-            type="button"
-            className={screen === "configuration" ? "nav-link nav-link--active" : "nav-link"}
-            aria-current={screen === "configuration" ? "page" : undefined}
-            onClick={() => setScreen("configuration")}
-          >
-            Configuration
-          </button>
-          <button
-            type="button"
-            className={screen === "settings" ? "nav-link nav-link--active" : "nav-link"}
-            aria-current={screen === "settings" ? "page" : undefined}
-            onClick={() => setScreen("settings")}
-          >
-            Settings
-          </button>
-          <button
-            type="button"
-            className={screen === "market-data" ? "nav-link nav-link--active" : "nav-link"}
-            aria-current={screen === "market-data" ? "page" : undefined}
-            onClick={() => setScreen("market-data")}
-          >
-            Market Data
-          </button>
-          <button
-            type="button"
-            className={screen === "strategies" ? "nav-link nav-link--active" : "nav-link"}
-            aria-current={screen === "strategies" ? "page" : undefined}
-            onClick={() => setScreen("strategies")}
-          >
-            Strategies
-          </button>
+          {NAV_ITEMS.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className={screen === item.id ? "nav-link nav-link--active" : "nav-link"}
+              aria-current={screen === item.id ? "page" : undefined}
+              onClick={() => setScreen(item.id)}
+            >
+              {item.label}
+            </button>
+          ))}
         </nav>
         <span>
           Signed in as <strong>{state.username}</strong>
@@ -96,6 +103,10 @@ function AppShell(): JSX.Element {
       {screen === "settings" && <SettingsPage />}
       {screen === "market-data" && <LiveMarketDataMonitor />}
       {screen === "strategies" && <StrategyConfigurationPage />}
+      {screen === "backtesting" && <BacktestingWorkbenchPage />}
+      {screen === "comparison" && <ComparisonPage />}
+      {screen === "watchlists" && <WatchlistPage />}
+      {screen === "strategy-monitor" && <StrategyMonitorPage />}
     </main>
   );
 }

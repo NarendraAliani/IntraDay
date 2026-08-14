@@ -256,7 +256,26 @@ fixed during this checkpoint's own Part 2 audit (an early draft broke
 `.importlinter` contract 4 by importing `signal_intelligence` directly
 from `trading_engine`).
 
-**Roadmap note (post-Checkpoint 26):** the next named checkpoint
+**Backtesting proof of concept and Strategy Workbench** (Checkpoint 27):
+a full historical-bars -> features -> strategy -> simulated execution ->
+trade ledger -> equity curve -> metrics pipeline, reusing the
+Checkpoint 26 strategy engine end-to-end (same `StrategyRegistry`, same
+parameter schema/renderer, same feature dispatcher) - no duplicate
+strategy, indicator, or signal model. Deterministic, look-ahead-free
+execution (signals fill at the next bar's open, proven by dedicated
+tests); Sharpe/Sortino explicitly labeled trade-level/non-annualized to
+avoid a misleading figure. Frontend: a Discover -> Configure -> Backtest
+-> Review workflow, a comparison/leaderboard view, research watchlists,
+and a strategy research pause/resume monitor - deliberately no
+"Buy"/"Sell"/"Deploy Live" control anywhere. Strictly backtesting/
+research only; SAMPLE_BAR remains blocked from live action, and no
+broker/order-execution import exists in the new code (proven by
+`tests/unit/architecture/test_backtesting_sample_bar_boundary.py`). See
+[BACKTESTING_ARCHITECTURE.md](BACKTESTING_ARCHITECTURE.md) for the full
+design, including a real `.importlinter` narrow-exception granularity
+issue found and fixed during this checkpoint's own Part 1 audit.
+
+**Roadmap note (post-Checkpoint 27):** the next named checkpoint
 should be the **narrow, read-only Dhan API verification step**
 recommended at Checkpoint 25.1 (resolving same-day intraday candle
 availability, candle authority, and exact timestamp timezone via

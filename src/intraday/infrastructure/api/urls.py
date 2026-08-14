@@ -13,12 +13,15 @@ from __future__ import annotations
 from django.urls import path
 
 from intraday.infrastructure.api import (
+    backtesting_views,
     market_data_views,
     risk_views,
     settings_views,
     strategy_configuration_views,
+    strategy_research_status_views,
     strategy_views,
     universe_views,
+    watchlist_views,
 )
 
 app_name = "config_api"
@@ -130,5 +133,40 @@ urlpatterns = [
         "<str:specification_version>/<str:code_version>/<str:configuration_version>/",
         strategy_configuration_views.get_configuration,
         name="strategy-engine-configuration-detail",
+    ),
+    # --- Checkpoint 27: backtesting ---------------------------------------
+    path("backtesting/run/", backtesting_views.run_backtest_view, name="backtesting-run"),
+    path(
+        "backtesting/results/<str:backtest_id>/",
+        backtesting_views.get_backtest_result,
+        name="backtesting-result-detail",
+    ),
+    path(
+        "backtesting/strategies/<str:strategy_id>/results/",
+        backtesting_views.list_backtest_results,
+        name="backtesting-results-list",
+    ),
+    # --- Checkpoint 27: research watchlists -------------------------------
+    path("watchlists/", watchlist_views.list_watchlists, name="watchlists-list"),
+    path("watchlists/save/", watchlist_views.save_watchlist, name="watchlists-save"),
+    path("watchlists/<str:name>/", watchlist_views.get_watchlist, name="watchlists-detail"),
+    path(
+        "watchlists/<str:name>/delete/", watchlist_views.delete_watchlist, name="watchlists-delete"
+    ),
+    # --- Checkpoint 27: strategy research monitor --------------------------
+    path(
+        "strategy-engine/research-status/",
+        strategy_research_status_views.list_research_statuses,
+        name="strategy-research-status-list",
+    ),
+    path(
+        "strategy-engine/strategies/<str:strategy_id>/research-status/",
+        strategy_research_status_views.get_research_status,
+        name="strategy-research-status-get",
+    ),
+    path(
+        "strategy-engine/strategies/<str:strategy_id>/research-status/set/",
+        strategy_research_status_views.set_research_status,
+        name="strategy-research-status-set",
     ),
 ]

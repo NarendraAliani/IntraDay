@@ -565,3 +565,73 @@ class AggregatedBarObservation(models.Model):
         indexes = [
             models.Index(fields=["timeframe", "-interval_start"]),
         ]
+
+
+class BacktestResultRecord(models.Model):
+    """Checkpoint 27: one immutable, persisted `BacktestResult`
+    (research.backtesting.contracts). `result_payload` is a single
+    JSONField holding the full serialized result (configuration,
+    metrics, equity curve, trade ledger) - mirrors the established
+    "flexible content JSONField" precedent (`UniverseVersion.members`,
+    `StrategyConfigurationRecord.parameter_values`) rather than a
+    relational trade/equity-point schema, which the POC scope of this
+    checkpoint does not require. `backtest_id` is the engine's own
+    deterministic hash (never a random UUID - see `engine.py`), so
+    re-running an identical configuration against identical data
+    upserts the same row rather than creating a duplicate."""
+
+    backtest_id = models.CharField(max_length=64, unique=True)
+    strategy_id = models.CharField(max_length=100)
+    result_payload = models.JSONField()
+    created_at = models.DateTimeField()
+    created_by = models.CharField(max_length=150)
+
+    class Meta:
+        app_label = "persistence"
+        indexes = [models.Index(fields=["strategy_id", "created_at"])]
+
+
+class WatchlistRecord(models.Model):
+    """Checkpoint 27 Part 19: a lightweight, research-oriented named
+    instrument list - usable as a backtest universe. Deliberately NOT a
+    live order screen (no quantity, no side, no order-related field
+    anywhere on this model)."""
+
+    name = models.CharField(max_length=100)
+    owner_username = models.CharField(max_length=150)
+    instrument_ids = models.JSONField(default=list)
+    created_at = models.DateTimeField()
+
+    class Meta:
+        app_label = "persistence"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["owner_username", "name"], name="uniq_watchlist_per_owner"
+            )
+        ]
+
+
+class StrategyResearchStatusRecord(models.Model):
+    """Checkpoint 27 Part 20: research-monitor pause/resume state for one
+    strategy_id. Deliberately a SEPARATE, small state set
+    (RESEARCH_ACTIVE/RESEARCH_PAUSED/DISABLED) from
+    `domain.strategy.StrategyMaturityState` - this concept is "is this
+    strategy currently included in research/backtesting activity", not a
+    trading-lifecycle maturity state, and must never be confused with or
+    imply live-trading authorization (Part 20's own explicit warning)."""
+
+    strategy_id = models.CharField(max_length=100, unique=True)
+    status = models.CharField(
+        max_length=20,
+        choices=[
+            ("RESEARCH_ACTIVE", "RESEARCH_ACTIVE"),
+            ("RESEARCH_PAUSED", "RESEARCH_PAUSED"),
+            ("DISABLED", "DISABLED"),
+        ],
+        default="RESEARCH_ACTIVE",
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.CharField(max_length=150, default="")
+
+    class Meta:
+        app_label = "persistence"

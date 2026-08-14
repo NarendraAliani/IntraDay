@@ -47,6 +47,7 @@
       <li><a class="nav-link" data-target="market-data" href="#market-data">Market Data Concepts</a></li>
       <li><a class="nav-link" data-target="live-monitor" href="#live-monitor">Live Market Data Monitor</a></li>
       <li><a class="nav-link" data-target="strategies" href="#strategies">Strategies</a></li>
+      <li><a class="nav-link" data-target="backtesting" href="#backtesting">Strategy &amp; Backtesting</a></li>
       <li><a class="nav-link" data-target="screens" href="#screens">Screen-by-Screen Guide</a></li>
       <li><a class="nav-link" data-target="trading-mode" href="#trading-mode">Trading Mode</a></li>
 
@@ -564,6 +565,56 @@ What you see on screen</code></pre>
       <p>Anyone logged in can view strategies and their schemas. Saving a configuration requires the same "configuration-operators" group used elsewhere in this app (see <a href="#configuration">Configuration Screens</a>).</p>
     </section>
 
+    <!-- ===================================================== BACKTESTING -->
+    <section class="section" id="backtesting">
+      <h1>Strategy &amp; Backtesting</h1>
+      <p class="lede">The <strong>Backtesting</strong> screen lets you find out how a strategy would have performed on past price data, before you ever consider trusting it with real decisions.</p>
+
+      <div class="callout callout--warn">
+        <strong>A backtest is not a promise.</strong> It tells you how a strategy would have performed on the specific historical data you gave it — nothing more. Past performance never guarantees future results, and the numbers below are further limited by the data-quality notes in every result (see "Why results are not guarantees" below).
+      </div>
+
+      <h2>Key terms, in plain language</h2>
+      <table>
+        <thead><tr><th>Term</th><th>What it means</th></tr></thead>
+        <tbody>
+          <tr><td>Strategy</td><td>A rule that decides "bullish", "bearish", or "neutral" from recent prices.</td></tr>
+          <tr><td>Configuration</td><td>The specific parameter values (e.g. which moving-average lengths) a strategy is run with.</td></tr>
+          <tr><td>Backtest</td><td>Running a strategy's rule against historical bars to see what it would have done.</td></tr>
+          <tr><td>Trade simulation</td><td>One simulated buy-then-sell (or sell-then-buy) round trip the backtest generated — never a real order.</td></tr>
+          <tr><td>Net P&amp;L</td><td>Profit or loss after subtracting modeled costs (brokerage, slippage) — the "bottom line" number.</td></tr>
+          <tr><td>Drawdown</td><td>How far the simulated account balance fell from its highest point so far — a measure of how painful the ride was, not just whether it ended in profit.</td></tr>
+          <tr><td>Profit Factor</td><td>Total simulated profit divided by total simulated loss — above 1 means more was won than lost; below 1 means the opposite.</td></tr>
+        </tbody>
+      </table>
+
+      <h2>The workflow</h2>
+      <ol>
+        <li><strong>Discover</strong> — browse the strategy library and read what each one does.</li>
+        <li><strong>Configure</strong> — set its parameters (the exact same form as the Strategies screen — nothing is duplicated).</li>
+        <li><strong>Backtest</strong> — pick an instrument, date range, starting capital, and click <strong>Run Backtest</strong>.</li>
+        <li><strong>Review</strong> — read the results dashboard: summary numbers, equity curve, drawdown curve, and the full trade-by-trade ledger.</li>
+        <li><strong>Validate</strong> — compare against other strategies/configurations on the Compare screen.</li>
+        <li><strong>Activate for Research/Paper</strong> — mark a strategy "active" on the Strategies screen once you're satisfied. This still does not place any order.</li>
+      </ol>
+
+      <h2>Why results are not guarantees</h2>
+      <ul>
+        <li>Brokerage and slippage are modeled as simple flat percentages you choose — not a verified, exact Indian brokerage/tax formula. Every result labels this explicitly as a "model assumption".</li>
+        <li>The historical data used does not track stocks that were later delisted, which can make a strategy look better than it would have on the full, real universe of stocks at the time (survivorship bias).</li>
+        <li>If a result is ever built from <code>SAMPLE_BAR</code> data (see <a href="#sample-bar-explained">Why the current bars are SAMPLE_BAR, not trading-grade</a>), it is marked "NOT SUITABLE FOR TRADING-GRADE PERFORMANCE CLAIMS" — today's backtests use historical/fixture data instead, never live SAMPLE_BAR.</li>
+      </ul>
+
+      <h2>Comparing strategies</h2>
+      <p>The <strong>Compare</strong> screen lists your past backtest results for a chosen strategy, lets you pick two or more, and ranks them by whichever metric you choose (Net P&amp;L, Profit Factor, Return %, or Max Drawdown). It warns you if you try to compare results run on different instruments or timeframes, since those numbers are not directly comparable.</p>
+
+      <h2>Watchlists</h2>
+      <p>The <strong>Watchlists</strong> screen lets you save named lists of instruments for research use. This is not an order screen — there is no quantity, side, or order-related field anywhere on it.</p>
+
+      <h2>Strategy Monitor</h2>
+      <p>The <strong>Strategy Monitor</strong> screen shows each strategy's current research status and its latest backtest numbers at a glance. <strong>Pause Research</strong>/<strong>Resume Research</strong> only affects whether a strategy is included in research activity — it has no connection to live trading, which does not exist in this application.</p>
+    </section>
+
     <!-- ========================================================= SCREENS -->
     <section class="section" id="screens">
       <h1>Screen-by-Screen Guide</h1>
@@ -575,6 +626,10 @@ What you see on screen</code></pre>
         <li><strong>Settings</strong> — see <a href="#configuration">Configuration Screens</a> / <a href="#dhan-setup">Dhan Setup</a></li>
         <li><strong>Market Data</strong> — see <a href="#live-monitor">Live Market Data Monitor</a></li>
         <li><strong>Strategies</strong> — see <a href="#strategies">Strategies</a></li>
+        <li><strong>Backtesting</strong> — see <a href="#backtesting">Strategy &amp; Backtesting</a></li>
+        <li><strong>Compare</strong> — see <a href="#backtesting">Strategy &amp; Backtesting</a></li>
+        <li><strong>Watchlists</strong> — see <a href="#backtesting">Strategy &amp; Backtesting</a></li>
+        <li><strong>Strategy Monitor</strong> — see <a href="#backtesting">Strategy &amp; Backtesting</a></li>
         <li><strong>Sign out</strong> button, top-right</li>
       </ul>
 

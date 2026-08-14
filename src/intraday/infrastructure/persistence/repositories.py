@@ -36,10 +36,13 @@ from intraday.infrastructure.persistence.models import (
     ActiveStrategyVersion,
     ActiveUniverse,
     AuditLogEntry,
+    BacktestResultRecord,
     RiskConfigurationVersion,
     StrategyConfigurationRecord,
+    StrategyResearchStatusRecord,
     StrategyVersionRecord,
     UniverseVersion,
+    WatchlistRecord,
 )
 
 # --- Risk configuration ------------------------------------------------------
@@ -508,6 +511,81 @@ class DjangoStrategyConfigurationRepository:
             "created_at"
         )
         return tuple(_configuration_row_to_snapshot(row) for row in rows)
+
+
+# --- Backtest results / watchlists / strategy research status (Checkpoint 27) --
+
+
+class DjangoBacktestResultRepository:
+    """Django ORM implementation of `BacktestResultRepository`. Upserts
+    by `backtest_id` (the engine's own deterministic hash)."""
+
+    def save(
+        self,
+        backtest_id: str,
+        strategy_id: str,
+        payload: dict[str, object],
+        *,
+        created_by: str,
+        created_at: _dt.datetime,
+    ) -> None:
+        BacktestResultRecord.objects.update_or_create(
+            backtest_id=backtest_id,
+            defaults={
+                "strategy_id": strategy_id,
+                "result_payload": payload,
+                "created_at": created_at,
+                "created_by": created_by,
+            },
+        )
+
+    def get(self, backtest_id: str) -> dict[str, object] | None:
+        row = BacktestResultRecord.objects.filter(backtest_id=backtest_id).first()
+        return dict(row.result_payload) if row is not None else None
+
+    def list_for_strategy(self, strategy_id: str) -> tuple[dict[str, object], ...]:
+        rows = BacktestResultRecord.objects.filter(strategy_id=strategy_id).order_by("-created_at")
+        return tuple(dict(row.result_payload) for row in rows)
+
+
+class DjangoWatchlistRepository:
+    """Django ORM implementation of `WatchlistRepository`."""
+
+    def save(
+        self, name: str, owner: str, instrument_ids: list[str], *, created_at: _dt.datetime
+    ) -> None:
+        WatchlistRecord.objects.update_or_create(
+            owner_username=owner,
+            name=name,
+            defaults={"instrument_ids": instrument_ids, "created_at": created_at},
+        )
+
+    def get(self, name: str, owner: str) -> list[str] | None:
+        row = WatchlistRecord.objects.filter(owner_username=owner, name=name).first()
+        return list(row.instrument_ids) if row is not None else None
+
+    def list_for_owner(self, owner: str) -> tuple[str, ...]:
+        rows = WatchlistRecord.objects.filter(owner_username=owner).order_by("name")
+        return tuple(row.name for row in rows)
+
+    def delete(self, name: str, owner: str) -> None:
+        WatchlistRecord.objects.filter(owner_username=owner, name=name).delete()
+
+
+class DjangoStrategyResearchStatusRepository:
+    """Django ORM implementation of `StrategyResearchStatusRepository`."""
+
+    def get_status(self, strategy_id: str) -> str | None:
+        row = StrategyResearchStatusRecord.objects.filter(strategy_id=strategy_id).first()
+        return row.status if row is not None else None
+
+    def set_status(self, strategy_id: str, status: str, *, updated_by: str) -> None:
+        StrategyResearchStatusRecord.objects.update_or_create(
+            strategy_id=strategy_id, defaults={"status": status, "updated_by": updated_by}
+        )
+
+    def list_all(self) -> dict[str, str]:
+        return {row.strategy_id: row.status for row in StrategyResearchStatusRecord.objects.all()}
 
 
 # --- Audit (Checkpoint 12, read-only) -----------------------------------------

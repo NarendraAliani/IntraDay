@@ -169,6 +169,60 @@ class StrategyConfigurationRepository(Protocol):
     def list_for_strategy(self, strategy_id: str) -> tuple[StrategyConfigurationSnapshot, ...]: ...
 
 
+class BacktestResultRepository(Protocol):
+    """Persists/retrieves serialized `BacktestResult` payloads
+    (Checkpoint 27) - the payload itself is an already-JSON-safe `dict`
+    (produced by `research.backtesting.serialization.to_json_dict`),
+    never a Decimal/datetime/enum-bearing dataclass crossing this
+    boundary. `save()` upserts by `backtest_id` (the engine's own
+    deterministic hash) - re-running an identical configuration against
+    identical data updates the same row rather than duplicating it,
+    consistent with Part 10/11 reproducibility."""
+
+    def save(
+        self,
+        backtest_id: str,
+        strategy_id: str,
+        payload: dict[str, object],
+        *,
+        created_by: str,
+        created_at: datetime,
+    ) -> None: ...
+
+    def get(self, backtest_id: str) -> dict[str, object] | None: ...
+
+    def list_for_strategy(self, strategy_id: str) -> tuple[dict[str, object], ...]: ...
+
+
+class WatchlistRepository(Protocol):
+    """Persists named, research-only instrument lists (Checkpoint 27
+    Part 19). No order/quantity/side field exists anywhere in this
+    Protocol's shape - a watchlist is never an order screen."""
+
+    def save(
+        self, name: str, owner: str, instrument_ids: list[str], *, created_at: datetime
+    ) -> None: ...
+
+    def get(self, name: str, owner: str) -> list[str] | None: ...
+
+    def list_for_owner(self, owner: str) -> tuple[str, ...]: ...
+
+    def delete(self, name: str, owner: str) -> None: ...
+
+
+class StrategyResearchStatusRepository(Protocol):
+    """Persists the research-monitor pause/resume state for one
+    strategy_id (Checkpoint 27 Part 20) - a SEPARATE, small state set
+    from `StrategyMaturityState`; never implies live-trading
+    authorization."""
+
+    def get_status(self, strategy_id: str) -> str | None: ...
+
+    def set_status(self, strategy_id: str, status: str, *, updated_by: str) -> None: ...
+
+    def list_all(self) -> dict[str, str]: ...
+
+
 class AuditRepository(Protocol):
     """Read-only access to durable control-plane audit events
     (Checkpoint 12). Deliberately has no `save`/`update`/`delete` method

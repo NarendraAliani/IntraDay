@@ -87,7 +87,7 @@ function isApiErrorShape(value: unknown): value is ApiError {
 
 async function performRequest(
   url: string,
-  method: "GET" | "POST",
+  method: "GET" | "POST" | "DELETE",
   body?: unknown,
 ): Promise<Response> {
   const headers: Record<string, string> = { Accept: "application/json" };
@@ -96,7 +96,7 @@ async function performRequest(
     headers["Content-Type"] = "application/json";
     requestBody = JSON.stringify(body);
   }
-  if (method === "POST") {
+  if (method === "POST" || method === "DELETE") {
     const csrfToken = readCsrfToken();
     if (csrfToken) {
       headers[CSRF_HEADER_NAME] = csrfToken;
@@ -175,4 +175,17 @@ export async function apiGet<T>(path: string): Promise<T> {
 export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
   const response = await performRequest(`${resolveBaseUrl()}${path}`, "POST", body);
   return decodeResponse<T>(response);
+}
+
+/**
+ * Perform a DELETE request. Deliberately does not decode a JSON body -
+ * delete endpoints return 204 No Content (see `watchlist_views.
+ * delete_watchlist`) - but still routes a non-2xx response through the
+ * same `ApiRequestError`/`ApiNetworkError` handling as every other verb.
+ */
+export async function apiDelete(path: string): Promise<void> {
+  const response = await performRequest(`${resolveBaseUrl()}${path}`, "DELETE");
+  if (!response.ok) {
+    await decodeResponse(response);
+  }
 }

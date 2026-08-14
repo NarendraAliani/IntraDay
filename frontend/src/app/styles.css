@@ -683,3 +683,107 @@ dd {
   border-bottom: 1px solid var(--color-border);
   font-size: 0.9rem;
 }
+
+.backtest-workbench__cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.backtest-workbench__card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+}
+
+.backtest-workbench__card-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.backtest-results__kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
+  gap: 0.75rem;
+  margin: 1rem 0;
+}
+
+.backtest-results__kpi {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 0.6rem 0.8rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.backtest-results__kpi span {
+  font-size: 0.78rem;
+  color: var(--color-text-muted);
+}
+
+.backtest-results__charts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.5rem;
+  margin: 1rem 0;
+}
+
+.equity-chart {
+  margin: 0;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.equity-chart__svg {
+  width: 100%;
+  max-width: 640px;
+  height: auto;
+}
+
+.equity-chart__axis {
+  stroke: var(--color-border);
+  stroke-width: 1;
+}
+
+.equity-chart__axis-label {
+  font-size: 10px;
+  fill: var(--color-text-muted);
+}
+
+.equity-chart__line {
+  stroke: #2f7d4f;
+  stroke-width: 2;
+}
+
+.equity-chart--empty {
+  padding: 1rem;
+  color: var(--color-text-muted);
+}
+
+.backtest-results__warning {
+  color: var(--color-error-border, #b3261e);
+}
+
+.backtest-results__filters {
+  display: flex;
+  gap: 1rem;
+  margin: 0.5rem 0;
+}
+
+.backtest-results__trades table,
+.watchlist-page__list,
+.comparison-page table {
+  width: 100%;
+  overflow-x: auto;
+  display: block;
+}
+
+.comparison-page__checkbox {
+  display: block;
+  margin-bottom: 0.35rem;
+}
