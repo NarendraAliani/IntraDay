@@ -38,6 +38,7 @@ import { BacktestingWorkbenchPage } from "../features/backtesting/BacktestingWor
 import { ComparisonPage } from "../features/backtesting/ComparisonPage";
 import { StrategyMonitorPage } from "../features/backtesting/StrategyMonitorPage";
 import { WatchlistPage } from "../features/backtesting/WatchlistPage";
+import { ReportsOverviewPage } from "../features/reports/ReportsOverviewPage";
 
 type Screen =
   | "configuration"
@@ -47,7 +48,8 @@ type Screen =
   | "backtesting"
   | "comparison"
   | "watchlists"
-  | "strategy-monitor";
+  | "strategy-monitor"
+  | "reports";
 
 const NAV_ITEMS: Array<{ id: Screen; label: string }> = [
   { id: "configuration", label: "Configuration" },
@@ -58,6 +60,7 @@ const NAV_ITEMS: Array<{ id: Screen; label: string }> = [
   { id: "comparison", label: "Compare" },
   { id: "watchlists", label: "Watchlists" },
   { id: "strategy-monitor", label: "Strategy Monitor" },
+  { id: "reports", label: "Reports" },
 ];
 
 function AppShell(): JSX.Element {
@@ -107,6 +110,7 @@ function AppShell(): JSX.Element {
       {screen === "comparison" && <ComparisonPage />}
       {screen === "watchlists" && <WatchlistPage />}
       {screen === "strategy-monitor" && <StrategyMonitorPage />}
+      {screen === "reports" && <ReportsOverviewPage />}
     </main>
   );
 }

@@ -14,3 +14,12 @@ domain, data/research_data, data/historical_data
 
 trading_engine (no live execution), infrastructure/brokers, communication
 
+## Checkpoint 32 update
+
+Real code for this bounded context lives at `src/intraday/research/`
+(this top-level directory remains the original Checkpoint-1 file-structure
+placeholder). No new research/backtesting logic was added this
+checkpoint - `application/reporting/backtest_report.py` only maps
+existing `BacktestResult` data into the shared report-metadata
+contract. See [docs/architecture/REPORTING_ARCHITECTURE.md](../docs/architecture/REPORTING_ARCHITECTURE.md).
+

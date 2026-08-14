@@ -14,3 +14,13 @@ domain, trading_engine (observes, does not implement strategy logic)
 
 research, signal_intelligence internals
 
+## Checkpoint 32 update
+
+Real code for this bounded context lives at `src/intraday/control_plane/`
+(this top-level directory remains the original Checkpoint-1 file-structure
+placeholder). `market_data_health/` gained no new code this checkpoint;
+its existing evidence was structured into
+`application/reporting/market_data_quality_report.py`'s
+`SYSTEM_HEALTH_REPORT`/`MARKET_DATA_QUALITY_REPORT` catalogue entries -
+see [docs/architecture/REPORTING_ARCHITECTURE.md](../docs/architecture/REPORTING_ARCHITECTURE.md).
+

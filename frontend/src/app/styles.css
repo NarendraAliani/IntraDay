@@ -808,3 +808,53 @@ dd {
   margin: 0.5rem 0;
   font-size: 0.9rem;
 }
+
+/* Checkpoint 32: shared capability/report placeholder card - the ONE
+   reusable visual language for AVAILABLE/PARTIAL/PLANNED/BLOCKED/
+   NOT_YET_IMPLEMENTED/RESEARCH_ONLY, reused everywhere a capability or
+   report status is shown. */
+.capability-status {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.capability-status__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.capability-status__title {
+  font-weight: 600;
+}
+
+.capability-status__description,
+.capability-status__blocker,
+.capability-status__prerequisite,
+.capability-status__checkpoint,
+.capability-status__doc-link {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--color-text-muted);
+}
+
+.capability-status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1rem;
+  margin: 1rem 0 2rem;
+}
+
+.capability-status-section {
+  margin: 2rem 0;
+}
+
+.capability-status-section h2 {
+  margin-bottom: 0.75rem;
+}

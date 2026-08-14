@@ -372,3 +372,15 @@ endpoints, broker integration code, or frontend components have been written.
 Those are explicitly deferred to future architecture checkpoints once the
 relevant PENDING decisions are approved (see
 [ARCHITECTURE_DECISIONS.md](ARCHITECTURE_DECISIONS.md)).
+
+## Note on this document's currency
+
+This document's "Status" narrative above was kept current through
+Checkpoint 8; from Checkpoint 9 onward, `taskReport.md` (session log)
+and per-topic documents under `docs/architecture/` are the current
+source of truth for what exists - this file is preserved as the
+original architecture-review record, not rewritten each checkpoint.
+Checkpoint 32 added `REPORTING_ARCHITECTURE.md`,
+`PLACEHOLDER_AND_FEATURE_STATE_ARCHITECTURE.md`, and
+`RUNTIME_ARCHITECTURE_DECISION.md` - see `ARCHITECTURE_DECISIONS.md`'s
+Checkpoint 32 entries and `taskReport.md` for what they establish.

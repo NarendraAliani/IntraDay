@@ -22,3 +22,12 @@ research/research_reports, control_plane
 
 Being treated as authoritative input
 
+## Checkpoint 32 update
+
+Report *logic* (metadata contract, catalogue, status mapping) lives in
+`src/intraday/application/reporting/` — an application-layer module,
+not this directory. This directory remains what Checkpoint 2 defined
+it as: reserved for generated report *files*, still empty of
+business logic. See
+[docs/architecture/REPORTING_ARCHITECTURE.md](../docs/architecture/REPORTING_ARCHITECTURE.md).
+
