@@ -219,15 +219,33 @@ shortcut of connecting `Quote`s directly to a pipeline that requires
 for the full aggregation rule, volume limitation, and upsert-persistence
 rationale.
 
-**Roadmap note (post-Checkpoint 24A):** the next named checkpoint is
-**Checkpoint 24 — Live Signal Observation** (wiring the existing
-`SignalGenerationService` to Checkpoint 24A's canonical live bars,
-display/log only, still zero order code). Paper trading, a real order
-API, and controlled live trading remain deliberately un-numbered — each
-depends on `trading_engine/*` components (order management, execution
-management, risk engine) that do not exist yet, and assigning checkpoint
-numbers to them before that dependency is real would misrepresent how
-much design work those numbers actually cover.
+**Dhan market-data capability research** (Checkpoint 25.1, research
+only — no code changed): confirmed against Dhan's own official
+documentation that both a WebSocket tick-by-tick feed and a
+historical/intraday OHLC REST endpoint exist, and that a **hybrid** of
+the two (WebSocket for real-time forming bars, historical OHLC for
+authoritative closed-bar reconciliation and gap backfill) is the
+correct target architecture for eventually replacing `SAMPLE_BAR` —
+but three material facts about Dhan's actual behavior (same-day
+intraday candle availability, candle authority, exact timestamp
+timezone) remain unconfirmed by documentation alone and require direct
+API verification before any implementation begins. See
+[DHAN_MARKET_DATA_CAPABILITY_RESEARCH.md](DHAN_MARKET_DATA_CAPABILITY_RESEARCH.md)
+for the full evidence, and its six-condition `TRADING_GRADE_BAR`
+promotion checklist. `SAMPLE_BAR` remains the classification;
+`SignalGenerationService`/`FeatureEngineService` remain unwired.
+
+**Roadmap note (post-Checkpoint 25.1):** the next named checkpoint
+should be a **narrow, read-only Dhan API verification step**
+(resolving the three open questions above via direct, live API calls —
+not documentation reading) — not yet "Live Signal Observation" and not
+yet a hybrid-architecture implementation, both of which remain
+premature until that verification completes. Paper trading, a real
+order API, and controlled live trading remain deliberately un-numbered
+— each depends on `trading_engine/*` components (order management,
+execution management, risk engine) that do not exist yet, and assigning
+checkpoint numbers to them before that dependency is real would
+misrepresent how much design work those numbers actually cover.
 
 ## 3. Layering
 

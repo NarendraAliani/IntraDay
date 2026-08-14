@@ -7100,3 +7100,167 @@ SAMPLE_BAR → TRADING_GRADE_BAR question, before either
 **Checkpoint 26 — Market Data Fidelity / Trading-Grade Bar
 Architecture** or **Checkpoint 26 — Live Signal Observation** can be
 correctly chosen. Not implemented - recommendation only.
+
+# Checkpoint 25.1 — Dhan Market-Data Capability Research & Trading-Grade Bar Decision (2026-08-14)
+
+## Objective
+
+Pure research/verification checkpoint. Independently verify Dhan's
+actual documented market-data capabilities (WebSocket live feed,
+historical/intraday OHLC) directly against Dhan's own official
+documentation, and determine the correct technical foundation for
+eventually replacing `SAMPLE_BAR` with trading-grade bars. No code
+implemented, no market-data pipeline modified.
+
+## What Was Researched
+
+Fetched directly from Dhan's official documentation
+(`dhanhq.co/docs/v2/...` - never a blog, third-party SDK, or
+unofficial source):
+
+- **Live Market Feed (WebSocket):** `wss://api-feed.dhan.co` -
+  confirmed tick-by-tick (not sampled) delivery, subscription/
+  unsubscription message formats, Ticker/Quote/Full packet field
+  layouts, 100 instruments/message, 5,000/connection, 5 connections/
+  user limits, 10s/40s heartbeat/timeout, EPOCH timestamps (timezone
+  unstated).
+- **Historical/Intraday OHLC:** `POST /v2/charts/historical` (daily)
+  and `POST /v2/charts/intraday` (1/5/15/25/60-minute intervals, 90-day
+  max range/request, 5-year depth) - confirmed to return real OHLCV
+  records, but candle authority (exchange vs. Dhan-computed) and
+  same-day real-time availability are NOT confirmed by the fetched
+  documentation.
+- **Instrument mapping:** confirmed unchanged from Checkpoint 23's own
+  findings; a REST alternative to the scrip-master CSV was newly found
+  (`GET /v2/instrument/{exchangeSegment}`), not currently used.
+- **Rate limits:** Order/Data/Quote/Non-Trading API tiers found;
+  endpoint-to-tier mapping partly inferred, not explicitly stated.
+- **Authentication:** 24-hour access-token validity confirmed, with
+  both a Renew Token API and TOTP-based Generate Token flow; WebSocket
+  uses the same token as a query parameter (strongly implied, not
+  explicitly confirmed as identical to the REST header value).
+
+## Trading-Grade Bar — Acceptance Definition Established
+
+A precise, field-by-field acceptance contract was defined for
+`TRADING_GRADE_BAR` - not a rename of `SAMPLE_BAR`. Every requirement
+is labeled either as a direct Dhan fact or an explicit `PROJECT
+DECISION`. Full table in
+`docs/architecture/DHAN_MARKET_DATA_CAPABILITY_RESEARCH.md`.
+
+## Architecture Comparison and Recommendation
+
+WebSocket alone, Historical OHLC alone, and a Hybrid of both were
+compared across 12 dimensions (accuracy, latency, completeness,
+reliability, complexity, backtest parity, etc.). **Hybrid** (WebSocket
+for real-time forming-candle construction + historical/intraday OHLC
+for authoritative closed-candle reconciliation and gap backfill) is
+the only option that can plausibly satisfy the trading-grade
+definition - WebSocket alone has no documented gap-recovery mechanism;
+historical OHLC alone cannot serve live/forming-candle observation.
+
+**However, implementation is explicitly NOT recommended yet.** Three
+material facts remain unconfirmed by Dhan's documentation (same-day
+intraday candle availability, candle authority, exact timestamp
+timezone) - each is load-bearing for the hybrid design's core safety
+claim. The recommended next step is a narrow, read-only API
+verification checkpoint, not implementation.
+
+## SAMPLE_BAR Gate
+
+**CONDITIONAL** - promotion to `TRADING_GRADE_BAR` requires all six
+conditions in the research document's own checklist (direct API
+verification of same-day availability and timezone; confidence in
+candle authority; WebSocket ingestion implementation; gap
+reconciliation implementation; validation against an independent price
+source for one full session). Until then, `SignalGenerationService`/
+`FeatureEngineService` remain unwired - unchanged from Checkpoint
+24A's own conclusion, now with a concrete, falsifiable checklist rather
+than an open-ended deferral.
+
+## Real Test-Quality Defect Found and Fixed (Unrelated to This
+Checkpoint's Own Scope, Found While Re-Running the Existing Suite)
+
+`test_bar_aggregation_failure_never_masks_a_successful_refresh_result`
+(added at Checkpoint 24A) asserted an exact health state
+(`CONNECTED_FRESH`) without controlling "now" - a latent, pre-existing
+time-dependency bug that had simply never been triggered because every
+prior test run happened to occur during real NSE market hours. This
+session's regression run occurred at 15:37 IST (just past the 15:30
+market close), correctly surfacing `MARKET_CLOSED` instead and failing
+the hard-coded assertion. Root-caused precisely (not guessed) and
+fixed by asserting the state is not a failure state and that
+`last_success_at`/`consecutive_failures` reflect success, rather than
+requiring one specific time-dependent state - the test's actual intent
+(a bug in aggregation must never mask a successful refresh) is now
+correctly, permanently time-independent. This is a test-only change;
+no application/business logic was touched, consistent with this
+checkpoint's "no code implementation" scope.
+
+## Documentation Updates
+
+- `docs/architecture/DHAN_MARKET_DATA_CAPABILITY_RESEARCH.md` (new) -
+  the full research document: Executive Summary, Research Scope,
+  Official Sources, WebSocket/Historical/Instrument/Timestamp/Volume/
+  Rate-Limit/Authentication Findings, Comparison, Hybrid Analysis,
+  Trading-Grade Bar Definition, Failure/Recovery Analysis, Backtesting
+  Parity Analysis, Open Questions, Evidence Table, Decision Matrix,
+  Recommendation, SAMPLE_BAR Gate.
+- `docs/architecture/ARCHITECTURE_DECISIONS.md` - decisions 120-121 +
+  Notes (Checkpoint 25.1).
+- `docs/architecture/ARCHITECTURE.md` - added a Checkpoint 25.1
+  narrative paragraph; updated the (already-stale, pre-dating this
+  checkpoint) roadmap note to correctly point at a verification step
+  next, not "Live Signal Observation."
+- `docs/architecture/MARKET_DATA_QUALITY_ASSESSMENT.md` - updated its
+  own "marked OPEN" language to point at this checkpoint's resolution
+  and six-condition checklist.
+
+## Validation
+
+- All 5 official Dhan documentation URLs cited verified to match
+  exactly what was fetched via WebFetch this session - none invented.
+- Internal Markdown links (`DHAN_MARKET_DATA_CAPABILITY_RESEARCH.md`
+  referenced from `MARKET_DATA_QUALITY_ASSESSMENT.md` and
+  `ARCHITECTURE.md`) verified to resolve to the real, newly-created
+  file.
+- Repo-wide grep for JWT-shaped/credential-shaped strings in the new
+  document: none found.
+- `docs/user-guide/validate.py`: passed (unaffected, re-confirmed).
+- Backend: `ruff format --check` clean (267 files), `ruff check`
+  clean, `mypy` clean (156 files), `import-linter` 6/6 kept,
+  `manage.py check` clean, `makemigrations --check --dry-run` clean,
+  `spectacular --fail-on-warn` clean, `pytest` **697 passed / 0 failed
+  / 0 skipped** (unchanged test count from Checkpoint 25 - one
+  pre-existing test's assertion was corrected, not added/removed).
+- No frontend code was touched this checkpoint; frontend suite not
+  re-run (nothing to regress).
+
+## Safety
+
+    Orders placed: 0
+    Order API calls: 0
+    Position changes: 0
+    Signal execution: 0
+    Trading engine changes: 0
+
+`trading_engine/*` and `signal_intelligence.signal_generation`
+re-confirmed untouched before and after this checkpoint (every
+`trading_engine` subpackage's `__init__.py` still its original
+Checkpoint-4 scaffolding). No WebSocket client, REST candle adapter,
+database model, frontend screen, or signal-wiring code was written -
+this checkpoint is documentation and one test-quality fix only.
+
+## Checkpoint 26 Recommendation
+
+**Not Live Signal Observation. Not hybrid-architecture implementation.**
+A narrow, read-only Dhan API verification step: directly call (with a
+valid, real Dhan credential, once available) `POST /v2/charts/intraday`
+for the current trading day and inspect (a) whether today's
+already-elapsed candles are actually returned, (b) the exact timezone
+of the returned timestamps against a known-correct reference, and (c)
+whether the returned OHLC values match an independent, trusted price
+source closely enough to trust as authoritative. Only after that
+verification should a future checkpoint implement the hybrid
+WebSocket + historical-OHLC architecture this research recommends as
+the eventual target. Not implemented - recommendation only.

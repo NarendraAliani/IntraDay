@@ -959,3 +959,33 @@ Full detail:
   session's investigation or fixes - the real Dhan credential's
   validity remains exactly as reported at Checkpoint 23 (rejected by
   Dhan, HTTP 401/403), unchanged and untouched.
+| 120 | The confirmed target architecture for replacing `SAMPLE_BAR` with trading-grade bars is a HYBRID design (Dhan WebSocket tick stream for real-time forming-candle construction + Dhan's historical/intraday OHLC REST endpoint for authoritative closed-candle reconciliation and gap backfill) - but this architecture must NOT be implemented until three specific, currently-unconfirmed facts about Dhan's actual API behavior are verified directly (same-day intraday candle availability, candle authority/provenance, exact timestamp timezone). | A dedicated official-documentation research pass (`DHAN_MARKET_DATA_CAPABILITY_RESEARCH.md`) confirmed both a WebSocket feed (tick-by-tick, not sampled - eliminates the sampling-gap problem that defines SAMPLE_BAR) and a historical/intraday OHLC endpoint exist and are real, documented Dhan capabilities - resolving the "OPEN, not verified" status this question held at Checkpoints 24A/25. WebSocket alone has no documented gap-recovery mechanism after a disconnect; historical OHLC alone cannot serve live/forming-candle observation. Only the hybrid combination can plausibly satisfy the Trading-Grade Bar definition this same research proposes. | Implementing the hybrid architecture immediately based on this research alone (rejected - building a reconciliation mechanism against an authority whose own trustworthiness is unconfirmed would repeat the exact "build on an assumption" mistake this project has avoided at every prior checkpoint); WebSocket-only (rejected - no documented recovery from a disconnect, an unacceptable gap for a "trading-grade" claim); historical-OHLC-only (rejected - cannot serve real-time/forming-candle observation, this project's original Checkpoint 23 purpose). | LOCKED |
+| 121 | A precise, six-condition acceptance definition for `TRADING_GRADE_BAR` was established, distinct from and materially stricter than a rename of `SAMPLE_BAR`. | The prior classification work (Decision 119) named what SAMPLE_BAR is NOT, but never defined what would actually qualify as trading-grade - leaving "promote when ready" as an open-ended, unmeasurable deferral. A concrete checklist (verify same-day intraday availability; verify timezone; obtain confidence in candle authority; implement WebSocket ingestion; implement gap reconciliation; validate against an independent price source for one full session) makes the promotion decision falsifiable and evidence-based rather than a judgment call made later without a documented bar to clear. | Treating "we implemented WebSocket ingestion" alone as sufficient for promotion (rejected - WebSocket alone still has the undocumented-gap-recovery problem; the full six-condition list is required, not a subset). | LOCKED |
+
+## Notes (Checkpoint 25.1)
+
+- Pure research/verification checkpoint - no implementation code was
+  changed. `trading_engine/*` and `signal_intelligence.signal_generation`
+  re-confirmed untouched before and after this checkpoint.
+- Every Dhan-specific capability claim in
+  `DHAN_MARKET_DATA_CAPABILITY_RESEARCH.md` was fetched directly from
+  Dhan's own official documentation (`dhanhq.co/docs/v2/...`) during
+  this checkpoint - no blog, third-party SDK, or unofficial source was
+  used as the basis for any claim. Facts Dhan's documentation did not
+  explicitly state are marked UNCONFIRMED or a lower confidence level,
+  never assumed as fact.
+- This checkpoint resolves the "OPEN, not verified" status the
+  WebSocket-vs-historical-OHLC question held at the end of Checkpoints
+  24A and 25 (`LIVE_BAR_AGGREGATION_ARCHITECTURE.md`'s own "Data-
+  quality classification" section) with a concrete recommendation
+  (hybrid) and a concrete, falsifiable promotion checklist (Decision
+  121) - but does not fully close the question, since three material
+  facts about Dhan's actual behavior remain genuinely unconfirmed by
+  documentation alone and require direct API verification.
+- `SAMPLE_BAR` remains the correct, unchanged classification
+  (Decision 119, unaffected by this checkpoint). `SignalGenerationService`/
+  `FeatureEngineService` remain unwired.
+- The recommended next step is explicitly NOT "implement the hybrid
+  architecture" - it is a narrower, read-only API verification
+  checkpoint to resolve the three open questions before any
+  implementation begins.

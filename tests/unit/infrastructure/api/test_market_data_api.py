@@ -458,7 +458,24 @@ def test_bar_aggregation_failure_never_masks_a_successful_refresh_result(
 
     assert response.status_code == 200
     body = response.json()
-    assert body["state"] == "CONNECTED_FRESH"
+    # The refresh (quote fetch/save) itself genuinely succeeded - the
+    # health state must reflect that, never a failure state, regardless
+    # of the simulated aggregation bug above. Deliberately NOT asserting
+    # an exact state like "CONNECTED_FRESH": that would make this test's
+    # result depend on the real wall-clock market session at whatever
+    # instant it happens to run (a pre-existing defect this fix
+    # corrects - found because the suite was run outside NSE market
+    # hours, surfacing that MARKET_CLOSED is an equally legitimate,
+    # equally non-failure outcome the original assertion didn't allow
+    # for). A failure state here would mean the exception thrown after
+    # the successful save incorrectly overwrote that success.
+    assert body["state"] not in (
+        "AUTHENTICATION_FAILED",
+        "ERROR",
+        "DISCONNECTED",
+    )
+    assert body["last_success_at"] is not None
+    assert body["consecutive_failures"] == 0
 
 
 @requires_postgres

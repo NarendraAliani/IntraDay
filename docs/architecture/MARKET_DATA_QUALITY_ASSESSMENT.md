@@ -110,12 +110,18 @@ implemented here**:
    just prior-day) data were not confirmed against Dhan's official
    documentation during this checkpoint.
 
-**This decision is marked OPEN.** Before Checkpoint 24 (or any future
-checkpoint) builds trading-grade bars, the exact Dhan capability (1),
-(2), or both, must be verified directly against Dhan's own official
-documentation - the same discipline every prior checkpoint's Dhan
-integration has followed (never inventing an endpoint or payload
-shape). No endpoint is invented or assumed here.
+**Update (Checkpoint 25.1):** this decision is no longer fully open.
+Both capabilities (1) and (2) were confirmed to exist against Dhan's
+own official documentation, and a **hybrid** of the two was identified
+as the correct target architecture - see
+[DHAN_MARKET_DATA_CAPABILITY_RESEARCH.md](DHAN_MARKET_DATA_CAPABILITY_RESEARCH.md)
+for the full evidence. Three specific facts about Dhan's actual
+behavior (same-day intraday candle availability, candle authority,
+timestamp timezone) remain unconfirmed by documentation alone and
+require direct API verification before implementation - that research
+document's own six-condition promotion checklist is now the
+authoritative gate for this decision, superseding the general
+"marked OPEN" language originally written here.
 
 ## Conclusion feeding the CP24A acceptance classification
 
