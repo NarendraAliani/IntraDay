@@ -21,7 +21,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
+from intraday.domain.market_data.aggregation import AggregatedBar
 from intraday.domain.market_data.contracts import Quote
+from intraday.domain.shared_kernel.contracts import Timeframe
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +51,36 @@ class LiveQuoteRepository(Protocol):
         """The most recently observed `Quote` for each instrument in the
         configured observation universe that has ever been successfully
         fetched - empty tuple if none has."""
+        ...
+
+    def get_observations(self, *, since: datetime) -> tuple[Quote, ...]:
+        """Checkpoint 24A: EVERY observed `Quote` (not just the latest
+        per instrument) with `source_timestamp >= since`, across all
+        instruments, in no particular guaranteed order - the caller
+        (`domain.market_data.aggregation`) is responsible for sorting.
+        This is the read path bar aggregation is built on; it exists
+        alongside `get_latest()` rather than replacing it, since the
+        Live Market Data Monitor's "current quotes" view only ever
+        needs the latest value, not the full history."""
+        ...
+
+
+class AggregatedBarRepository(Protocol):
+    """Checkpoint 24A: persists and retrieves aggregated bars
+    (`domain.market_data.aggregation.AggregatedBar`). Unlike
+    `LiveQuoteRepository` (append-only observations), this repository's
+    `save_all()` is an UPSERT by (instrument, timeframe, interval_start)
+    - bars are a derived, recomputable projection of the observation
+    log, not an independent observation themselves, so revising a
+    previously-stored bar when new/late data changes its OHLC (or when
+    a FORMING bar becomes CLOSED) is the correct, intended behavior -
+    see `domain/market_data/aggregation.py`'s own module docstring."""
+
+    def save_all(self, bars: tuple[AggregatedBar, ...]) -> None: ...
+
+    def get_recent(self, *, timeframe: Timeframe, limit: int = 200) -> tuple[AggregatedBar, ...]:
+        """The most recent `limit` bars across all instruments, newest
+        first - read-only, never triggers aggregation itself."""
         ...
 
 

@@ -46,3 +46,23 @@ class QuoteResponseSerializer(serializers.Serializer[dict[str, object]]):
     source_timestamp = serializers.DateTimeField()
     freshness_age_seconds = serializers.FloatField()
     is_stale = serializers.BooleanField()
+
+
+class BarResponseSerializer(serializers.Serializer[dict[str, object]]):
+    """Checkpoint 24A. `status` is always present and explicit
+    (FORMING/CLOSED, never implied) - the checkpoint's own requirement
+    that a consumer can never mistake an in-progress bar for a closed
+    one."""
+
+    symbol = serializers.CharField()
+    exchange = serializers.CharField()
+    timeframe = serializers.CharField()
+    interval_start = serializers.DateTimeField()
+    interval_end = serializers.DateTimeField()
+    open = serializers.DecimalField(max_digits=14, decimal_places=4)
+    high = serializers.DecimalField(max_digits=14, decimal_places=4)
+    low = serializers.DecimalField(max_digits=14, decimal_places=4)
+    close = serializers.DecimalField(max_digits=14, decimal_places=4)
+    status = serializers.ChoiceField(choices=["FORMING", "CLOSED"])
+    observation_count = serializers.IntegerField()
+    data_source = serializers.CharField()

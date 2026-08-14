@@ -28,6 +28,8 @@ urlpatterns = [
     path("market-data/health/", market_data_views.health_status, name="market-data-health"),
     path("market-data/quotes/", market_data_views.current_quotes, name="market-data-quotes"),
     path("market-data/refresh/", market_data_views.refresh, name="market-data-refresh"),
+    # --- Checkpoint 24A: read-only canonical bars --------------------------
+    path("market-data/bars/", market_data_views.recent_bars, name="market-data-bars"),
     # --- Checkpoint 22: operational provider settings --------------------
     path("settings/dhan/", settings_views.dhan_settings, name="settings-dhan"),
     path("settings/dhan/save/", settings_views.dhan_settings_save, name="settings-dhan-save"),

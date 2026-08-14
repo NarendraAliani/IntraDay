@@ -10,6 +10,7 @@ import type { components } from "@shared/generated_contracts/api-types";
 export type SessionResponse = components["schemas"]["SessionResponse"];
 export type MarketDataHealthResponse = components["schemas"]["MarketDataHealthResponse"];
 export type QuoteResponse = components["schemas"]["QuoteResponse"];
+export type BarResponse = components["schemas"]["BarResponse"];
 
 export function getMarketSession(): Promise<SessionResponse> {
   return apiGet<SessionResponse>("/api/v1/config/market-data/session/");
@@ -28,4 +29,11 @@ export function getCurrentQuotes(): Promise<QuoteResponse[]> {
  * explicit user action (the "Refresh" button). */
 export function refreshMarketData(): Promise<MarketDataHealthResponse> {
   return apiPost<MarketDataHealthResponse>("/api/v1/config/market-data/refresh/");
+}
+
+/** Checkpoint 24A: the most recently aggregated 1-minute bars - reads
+ * only already-persisted data, never triggers a live fetch or
+ * aggregation itself. */
+export function getRecentBars(): Promise<BarResponse[]> {
+  return apiGet<BarResponse[]>("/api/v1/config/market-data/bars/");
 }

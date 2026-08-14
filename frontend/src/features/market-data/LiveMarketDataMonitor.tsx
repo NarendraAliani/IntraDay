@@ -18,6 +18,7 @@ import {
   getCurrentQuotes,
   getMarketDataHealth,
   getMarketSession,
+  getRecentBars,
   refreshMarketData,
 } from "../../common/api/marketDataApi";
 import { ApiNetworkError, ApiRequestError } from "../../common/api/client";
@@ -25,6 +26,7 @@ import { useAuth } from "../../common/auth/AuthContext";
 import { ErrorState } from "../../common/components/ErrorState";
 import { LoadingState } from "../../common/components/LoadingState";
 import type {
+  BarResponse,
   MarketDataHealthResponse,
   QuoteResponse,
   SessionResponse,
@@ -92,6 +94,7 @@ type LoadState =
       session: SessionResponse;
       health: MarketDataHealthResponse;
       quotes: QuoteResponse[];
+      bars: BarResponse[];
     };
 
 export function LiveMarketDataMonitor(): JSX.Element {
@@ -105,12 +108,13 @@ export function LiveMarketDataMonitor(): JSX.Element {
 
   const loadAll = useCallback(async (): Promise<void> => {
     try {
-      const [session, health, quotes] = await Promise.all([
+      const [session, health, quotes, bars] = await Promise.all([
         getMarketSession(),
         getMarketDataHealth(),
         getCurrentQuotes(),
+        getRecentBars(),
       ]);
-      setState({ phase: "ready", session, health, quotes });
+      setState({ phase: "ready", session, health, quotes, bars });
     } catch (error) {
       setState({ phase: "error", message: describeError(error) });
     }
@@ -233,6 +237,56 @@ export function LiveMarketDataMonitor(): JSX.Element {
                           {quote.is_stale ? "◐ Stale" : "● Fresh"}
                         </span>
                       </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </section>
+
+          <section aria-labelledby="bars-heading">
+            <h2 id="bars-heading">Recent Bars (1-Minute)</h2>
+            {state.bars.length === 0 ? (
+              <p className="market-data-monitor__empty">
+                No bars aggregated yet. {canRefresh ? "Press Refresh Quotes to fetch live data." : ""}
+              </p>
+            ) : (
+              <table className="market-data-monitor__table">
+                <thead>
+                  <tr>
+                    <th scope="col">Symbol</th>
+                    <th scope="col">Timeframe</th>
+                    <th scope="col">Interval</th>
+                    <th scope="col">Open</th>
+                    <th scope="col">High</th>
+                    <th scope="col">Low</th>
+                    <th scope="col">Close</th>
+                    <th scope="col">Volume</th>
+                    <th scope="col">Status</th>
+                    <th scope="col">Source Timestamp</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {state.bars.map((bar) => (
+                    <tr key={`${bar.symbol}-${bar.interval_start}`}>
+                      <td>{bar.symbol}</td>
+                      <td>{bar.timeframe}</td>
+                      <td>
+                        {formatTimestamp(bar.interval_start)} – {formatTimestamp(bar.interval_end)}
+                      </td>
+                      <td>₹{bar.open}</td>
+                      <td>₹{bar.high}</td>
+                      <td>₹{bar.low}</td>
+                      <td>₹{bar.close}</td>
+                      <td>—</td>
+                      <td>
+                        <span
+                          className={`badge ${bar.status === "CLOSED" ? "badge--active" : "badge--pending"}`}
+                        >
+                          {bar.status === "CLOSED" ? "● Closed" : "◐ Forming"}
+                        </span>
+                      </td>
+                      <td>{formatTimestamp(bar.interval_end)}</td>
                     </tr>
                   ))}
                 </tbody>

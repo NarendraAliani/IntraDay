@@ -203,15 +203,31 @@ Checkpoint-4 scaffolding. See
 for the full REST-vs-WebSocket rationale, health model, and manual
 live-market validation record.
 
-**Roadmap note (post-Checkpoint 23):** the next named checkpoint is
+**Live bar aggregation foundation** (Checkpoint 24A): bridges
+Checkpoint 23's `Quote` observations to the canonical `Bar` contract
+(Checkpoint 5/14, reused completely unmodified) that
+`SignalGenerationService`/`FeatureEngineService` already expect — a
+pure, deterministic, replay-safe Quote→Bar aggregation function
+(`domain/market_data/aggregation.py`), explicit FORMING/CLOSED bar
+status, gap detection, and anomalous-observation reporting, all
+read-only and still explicitly unwired from signal generation
+(mechanically proven by a dedicated architecture test). Introduced as
+an intermediate step specifically to avoid the invalid architectural
+shortcut of connecting `Quote`s directly to a pipeline that requires
+`Bar`s. See
+[LIVE_BAR_AGGREGATION_ARCHITECTURE.md](LIVE_BAR_AGGREGATION_ARCHITECTURE.md)
+for the full aggregation rule, volume limitation, and upsert-persistence
+rationale.
+
+**Roadmap note (post-Checkpoint 24A):** the next named checkpoint is
 **Checkpoint 24 — Live Signal Observation** (wiring the existing
-`SignalGenerationService` to Checkpoint 23's live feed, display/log only,
-still zero order code). Paper trading, a real order API, and controlled
-live trading remain deliberately un-numbered — each depends on
-`trading_engine/*` components (order management, execution management,
-risk engine) that do not exist yet, and assigning checkpoint numbers to
-them before that dependency is real would misrepresent how much design
-work those numbers actually cover.
+`SignalGenerationService` to Checkpoint 24A's canonical live bars,
+display/log only, still zero order code). Paper trading, a real order
+API, and controlled live trading remain deliberately un-numbered — each
+depends on `trading_engine/*` components (order management, execution
+management, risk engine) that do not exist yet, and assigning checkpoint
+numbers to them before that dependency is real would misrepresent how
+much design work those numbers actually cover.
 
 ## 3. Layering
 

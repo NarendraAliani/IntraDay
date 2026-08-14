@@ -861,3 +861,55 @@ Full detail:
   remain completely unwired from this checkpoint's live feed - it still
   imports and consumes only the Checkpoint 14 synthetic fixture
   repository, exactly as before this checkpoint.
+| 112 | Bar aggregation is a PURE, stateless function recomputed from scratch on every run over the full recent observation history - not an incrementally-updated, independently-mutable accumulator. | The observation log (`LiveQuoteObservation`, Checkpoint 23) is already the single source of truth and already append-only; a stateful accumulator would need its own revision/consistency logic to stay correct against that log, which is more machinery than this checkpoint's scope justifies. A pure recomputation is trivially correct by construction and trivially testable without mocking any state. | A stateful, incrementally-updated `BarBuilder` that reacts to each new quote as it arrives (rejected - requires solving a harder correctness problem - "what happens when a late quote arrives after the builder already moved on" - that pure recomputation sidesteps entirely). | LOCKED |
+| 113 | A late-arriving observation for an already-CLOSED interval correctly REVISES that bar's OHLC on the next aggregation run - this is intended behavior, not a bug. | Direct, necessary consequence of Decision 112: if bars are always recomputed from the observation log, and the observation log has genuinely gained a new fact, the recomputed bar must reflect that fact. Silently ignoring late data to keep a bar "final" would make bars diverge from what was actually observed. | Locking a bar's OHLC permanently once first computed, ignoring later data for that interval (rejected - produces bars that are provably wrong once contradicted by data that arrives even one refresh cycle later; explicitly against the checkpoint's own "must fail safely and visibly" principle - silently wrong is not safe). | LOCKED |
+| 114 | `AggregatedBarObservation` (bar persistence) is UPSERTED by `(instrument, timeframe, interval_start)`, unlike `LiveQuoteObservation`'s append-only design. | A bar is a derived, recomputable projection of the observation log, not an independent observation itself (see Decisions 112-113) - revising a stored bar in place when new data changes it is correct, not data corruption, and matches how the pure aggregation function itself behaves. | Append-only bar history, keeping every historical revision of each interval (rejected as unnecessary for this checkpoint's scope - the full revision history is already recoverable by re-running aggregation over the still-append-only quote log, so nothing is actually lost by upserting the derived projection). | LOCKED |
+| 115 | Volume is never computed or fabricated this checkpoint - `AggregatedBar`/`Bar.volume` is always `Decimal("0")`, and the frontend renders it as an explicit "—", not a number. | Dhan's Market Quote volume field is cumulative day-volume, not a per-tick trade size; deriving a correct per-bar delta from it requires either session-reset-aware cumulative-delta logic or genuine tick-level data, neither of which this checkpoint implements. Fabricating a plausible-looking volume number would be actively misleading - exactly what Checkpoint 24A §4's "do NOT invent volume" forbids. | Approximating volume from the cumulative field via naive differencing between refreshes (rejected - explicitly unsafe per the session-reset/correction problem above; would produce numbers that look authoritative but are not verified correct). | LOCKED |
+| 116 | Bar aggregation is chained into Checkpoint 23's existing `POST refresh/` endpoint (after a successful quote save) rather than exposed as its own separate write endpoint. | Aggregation itself makes zero additional broker calls (it only reads already-persisted quotes) - chaining it costs nothing in terms of the "no extra Dhan call" safety property, and keeps bars automatically in sync with quotes without requiring the operator to remember a second manual trigger. A bug in aggregation is isolated with its own try/except so it can never mask the refresh's own success/failure result. | A separate `POST bars/aggregate/` endpoint (rejected - adds a second manual step for no safety benefit, since aggregation has no broker-call cost of its own to justify gating behind an explicit trigger the way refresh's real Dhan call does). | LOCKED |
+
+## Notes (Checkpoint 24A)
+
+- First checkpoint to introduce a canonical Bar-producing pipeline
+  since Checkpoint 14's `Bar` contract itself - `domain/market_data/
+  contracts.py`'s `Bar` was reused completely unmodified, proving it
+  was correctly designed generically enough at Checkpoint 5/14 to serve
+  a live-data consumer four checkpoints later without any change.
+- First Django-backed persistence for anything `Bar`-shaped -
+  `HistoricalMarketDataRepository` (Checkpoint 14) remains implemented
+  only by the in-memory fixture; `AggregatedBarObservation` is a
+  deliberately separate, CP24A-scoped table (Decision 114's upsert
+  design differs fundamentally from what a historical-archive
+  implementation of `HistoricalMarketDataRepository` would need), not
+  an implementation of that Protocol - explicitly not conflated.
+- `import-linter` remains 6/6 kept (191 files analyzed, up from 188) -
+  no new contract needed; the aggregation domain module and application
+  service fit cleanly within the existing layering.
+- A dedicated architecture boundary test
+  (`test_bar_aggregation_boundaries.py`) independently re-verifies that
+  `domain/market_data/aggregation.py` is pure (no infrastructure/
+  Django/HTTP import) and that neither it nor
+  `application/services/bar_aggregation.py` imports
+  `signal_intelligence` or `trading_engine` - mechanically proving
+  Checkpoint 24A §15's "do not connect bars to FeatureEngine/
+  SignalGenerationService/StrategyExecution yet."
+- 44 new backend tests (22 domain aggregation - including 9 explicitly
+  adversarial: duplicate/out-of-order/same-timestamp/delayed/future-
+  timestamp/gap/invalid-construction cases - 4 application-service, 6
+  persistence, 8 API vertical-slice/chaining, 4 architecture) pass
+  genuinely, all passing on the first real test run (no aggregation
+  logic bug was found needing a fix, unlike Checkpoint 23's evaluator).
+  Full suite: 695 passed / 0 failed / 0 skipped (up from Checkpoint
+  23's 651).
+- 5 new frontend tests for the "Recent Bars" table extension (empty
+  state, rendered bars with correct FORMING/CLOSED badges, explicit
+  non-fabricated volume placeholder). Full frontend suite: 55 passed /
+  0 failed (up from Checkpoint 23's 52).
+- OpenAPI schema regeneration re-confirmed deterministic (byte-
+  identical across two independent runs) after the new `BarResponse`
+  schema and `/market-data/bars/` route were added.
+- No new dependency was added this checkpoint - `pip-audit`'s 8
+  pre-existing `pytest`/`starlette` vulnerabilities are unchanged from
+  Checkpoint 23, confirming nothing new was introduced.
+- Docker remains explicitly deferred, unchanged from every prior
+  checkpoint. `trading_engine/*` re-confirmed untouched (every file
+  still its original Checkpoint-4 scaffolding line count).

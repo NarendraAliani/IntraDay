@@ -161,6 +161,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/config/market-data/bars/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Checkpoint 24A: the most recently aggregated 1-minute bars,
+         *     newest first - reads only already-persisted `AggregatedBarObservation`
+         *     rows, NEVER triggers aggregation or a live broker call itself
+         *     (Checkpoint 24A §11's "the API must not trigger broker calls").
+         *     Optional `symbol` query parameter filters to one instrument.
+         */
+        get: operations["api_v1_config_market_data_bars_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/config/market-data/health/": {
         parameters: {
             query?: never;
@@ -706,6 +729,38 @@ export interface components {
             occurred_at: string;
             request_id: string;
         };
+        /**
+         * @description Checkpoint 24A. `status` is always present and explicit
+         *     (FORMING/CLOSED, never implied) - the checkpoint's own requirement
+         *     that a consumer can never mistake an in-progress bar for a closed
+         *     one.
+         */
+        BarResponse: {
+            symbol: string;
+            exchange: string;
+            timeframe: string;
+            /** Format: date-time */
+            interval_start: string;
+            /** Format: date-time */
+            interval_end: string;
+            /** Format: decimal */
+            open: string;
+            /** Format: decimal */
+            high: string;
+            /** Format: decimal */
+            low: string;
+            /** Format: decimal */
+            close: string;
+            status: components["schemas"]["BarResponseStatusEnum"];
+            observation_count: number;
+            data_source: string;
+        };
+        /**
+         * @description * `FORMING` - FORMING
+         *     * `CLOSED` - CLOSED
+         * @enum {string}
+         */
+        BarResponseStatusEnum: "FORMING" | "CLOSED";
         ConnectionStatusResponse: {
             provider: components["schemas"]["ProviderEnum"];
             status: components["schemas"]["ConnectionStatusResponseStatusEnum"];
@@ -1126,6 +1181,25 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CurrentUserResponse"];
+                };
+            };
+        };
+    };
+    api_v1_config_market_data_bars_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BarResponse"][];
                 };
             };
         };

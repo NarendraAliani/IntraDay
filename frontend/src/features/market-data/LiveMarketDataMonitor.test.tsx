@@ -17,6 +17,7 @@ import type { components } from "@shared/generated_contracts/api-types";
 type SessionResponse = components["schemas"]["SessionResponse"];
 type MarketDataHealthResponse = components["schemas"]["MarketDataHealthResponse"];
 type QuoteResponse = components["schemas"]["QuoteResponse"];
+type BarResponse = components["schemas"]["BarResponse"];
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -69,15 +70,32 @@ const RELIANCE_QUOTE: QuoteResponse = {
   is_stale: false,
 };
 
+const RELIANCE_BAR: BarResponse = {
+  symbol: "RELIANCE",
+  exchange: "NSE",
+  timeframe: "1m",
+  interval_start: "2026-08-14T06:00:00Z",
+  interval_end: "2026-08-14T06:01:00Z",
+  open: "1230.0000",
+  high: "1236.0000",
+  low: "1228.0000",
+  close: "1234.5600",
+  status: "CLOSED",
+  observation_count: 4,
+  data_source: "dhan",
+};
+
 function stubEndpoints(
   session: SessionResponse,
   health: MarketDataHealthResponse,
   quotes: QuoteResponse[],
+  bars: BarResponse[] = [],
 ): ReturnType<typeof vi.fn> {
   const fetchMock = vi.fn((input: RequestInfo | URL) => {
     const url = String(input);
     if (url.includes("/session/")) return Promise.resolve(jsonResponse(session));
     if (url.includes("/health/")) return Promise.resolve(jsonResponse(health));
+    if (url.includes("/bars/")) return Promise.resolve(jsonResponse(bars));
     if (url.includes("/quotes/")) return Promise.resolve(jsonResponse(quotes));
     return Promise.resolve(jsonResponse(health));
   });
@@ -117,6 +135,37 @@ describe("LiveMarketDataMonitor", () => {
     expect(screen.getByText("● Fresh")).toBeInTheDocument();
   });
 
+  it("renders an empty state for bars before any aggregation has run", async () => {
+    stubEndpoints(SESSION, HEALTH_DISCONNECTED, [], []);
+
+    renderWithAuth(<LiveMarketDataMonitor />);
+
+    await waitFor(() => expect(screen.getByText(/no bars aggregated yet/i)).toBeInTheDocument());
+  });
+
+  it("renders recent bars with explicit FORMING/CLOSED status, never a fabricated volume", async () => {
+    stubEndpoints(SESSION, HEALTH_CONNECTED, [RELIANCE_QUOTE], [RELIANCE_BAR]);
+
+    renderWithAuth(<LiveMarketDataMonitor />);
+
+    await waitFor(() => expect(screen.getByText("● Closed")).toBeInTheDocument());
+    expect(screen.getByText("₹1230.0000")).toBeInTheDocument();
+    expect(screen.getByText("₹1236.0000")).toBeInTheDocument();
+    // Volume is never fabricated - rendered as an explicit placeholder, not a number.
+    const volumeCells = screen.getAllByText("—");
+    expect(volumeCells.length).toBeGreaterThan(0);
+  });
+
+  it("renders a FORMING bar with a distinct badge from CLOSED", async () => {
+    const formingBar: BarResponse = { ...RELIANCE_BAR, status: "FORMING" };
+    stubEndpoints(SESSION, HEALTH_CONNECTED, [RELIANCE_QUOTE], [formingBar]);
+
+    renderWithAuth(<LiveMarketDataMonitor />);
+
+    await waitFor(() => expect(screen.getByText("◐ Forming")).toBeInTheDocument());
+    expect(screen.queryByText("● Closed")).not.toBeInTheDocument();
+  });
+
   it("hides the Refresh button for a reader without operator capability", async () => {
     stubEndpoints(SESSION, HEALTH_DISCONNECTED, []);
 
@@ -135,6 +184,7 @@ describe("LiveMarketDataMonitor", () => {
       if (url.includes("/refresh/")) return Promise.resolve(jsonResponse(HEALTH_CONNECTED));
       if (url.includes("/session/")) return Promise.resolve(jsonResponse(SESSION));
       if (url.includes("/health/")) return Promise.resolve(jsonResponse(HEALTH_CONNECTED));
+      if (url.includes("/bars/")) return Promise.resolve(jsonResponse([RELIANCE_BAR]));
       if (url.includes("/quotes/")) return Promise.resolve(jsonResponse([RELIANCE_QUOTE]));
       return Promise.resolve(jsonResponse(HEALTH_CONNECTED));
     });
@@ -166,11 +216,11 @@ describe("LiveMarketDataMonitor", () => {
   });
 
   it("never renders any trading control or field (Checkpoint 23 §12)", async () => {
-    stubEndpoints(SESSION, HEALTH_CONNECTED, [RELIANCE_QUOTE]);
+    stubEndpoints(SESSION, HEALTH_CONNECTED, [RELIANCE_QUOTE], [RELIANCE_BAR]);
 
     const { container } = renderWithAuth(<LiveMarketDataMonitor />);
 
-    await waitFor(() => expect(screen.getByText("RELIANCE")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText("RELIANCE").length).toBeGreaterThan(0));
 
     const forbiddenPatterns = [
       /\bbuy\b/i,

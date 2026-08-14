@@ -289,3 +289,230 @@ def test_refresh_never_imports_or_calls_a_broker_gateway_order_method(
     assert not any("trading_engine" in name for name in imported_modules)
     assert not any("domain.broker" in name for name in imported_modules)
     assert not any("signal_intelligence" in name for name in imported_modules)
+
+
+# --- Checkpoint 24A: read-only bars endpoint + refresh->aggregation chain --
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_bars_requires_authentication() -> None:
+    client = Client()
+
+    response = client.get("/api/v1/config/market-data/bars/")
+
+    assert response.status_code == 401
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_bars_allowed_for_authenticated_reader_and_empty_before_any_refresh() -> None:
+    client = _client_as_reader()
+
+    response = client.get("/api/v1/config/market-data/bars/")
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_reading_bars_never_calls_dhan() -> None:
+    client = _client_as_reader()
+
+    with patch("intraday.infrastructure.api.market_data_views.fetch_quotes") as mock_fetch:
+        client.get("/api/v1/config/market-data/bars/")
+
+    mock_fetch.assert_not_called()
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_successful_refresh_aggregates_and_persists_bars(monkeypatch: pytest.MonkeyPatch) -> None:
+    from datetime import UTC, datetime
+    from decimal import Decimal
+
+    _configure_dhan(monkeypatch)
+    client = _client_as_operator()
+
+    fake_result = DhanQuoteFetchResult(
+        observations=(
+            DhanQuoteObservation(
+                instrument=RELIANCE,
+                last_price=Decimal("1234.56"),
+                source_timestamp=datetime.now(tz=UTC),
+                open=None,
+                high=None,
+                low=None,
+                close=None,
+            ),
+        ),
+        fetched_at=datetime.now(tz=UTC),
+        latency_ms=100,
+    )
+
+    with patch(
+        "intraday.infrastructure.api.market_data_views.fetch_quotes", return_value=fake_result
+    ):
+        refresh_response = client.post("/api/v1/config/market-data/refresh/")
+    assert refresh_response.status_code == 200
+
+    bars_response = client.get("/api/v1/config/market-data/bars/")
+    assert bars_response.status_code == 200
+    body = bars_response.json()
+    assert len(body) == 1
+    assert body[0]["symbol"] == "RELIANCE"
+    assert body[0]["status"] in ("FORMING", "CLOSED")
+    assert body[0]["timeframe"] == "1m"
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_bars_endpoint_filters_by_symbol(monkeypatch: pytest.MonkeyPatch) -> None:
+    from datetime import UTC, datetime
+    from decimal import Decimal
+
+    _configure_dhan(monkeypatch)
+    client = _client_as_operator()
+    tcs = DhanInstrument(symbol="TCS", security_id=11536)
+
+    fake_result = DhanQuoteFetchResult(
+        observations=(
+            DhanQuoteObservation(
+                instrument=RELIANCE,
+                last_price=Decimal("1234.56"),
+                source_timestamp=datetime.now(tz=UTC),
+                open=None,
+                high=None,
+                low=None,
+                close=None,
+            ),
+            DhanQuoteObservation(
+                instrument=tcs,
+                last_price=Decimal("3456.78"),
+                source_timestamp=datetime.now(tz=UTC),
+                open=None,
+                high=None,
+                low=None,
+                close=None,
+            ),
+        ),
+        fetched_at=datetime.now(tz=UTC),
+        latency_ms=100,
+    )
+
+    with patch(
+        "intraday.infrastructure.api.market_data_views.fetch_quotes", return_value=fake_result
+    ):
+        client.post("/api/v1/config/market-data/refresh/")
+
+    response = client.get("/api/v1/config/market-data/bars/?symbol=TCS")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    assert body[0]["symbol"] == "TCS"
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_bar_aggregation_failure_never_masks_a_successful_refresh_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A bug in bar aggregation must never make the refresh endpoint
+    itself report failure - the quote fetch/save already succeeded and
+    that must remain the reported outcome."""
+    from datetime import UTC, datetime
+    from decimal import Decimal
+
+    _configure_dhan(monkeypatch)
+    client = _client_as_operator()
+
+    fake_result = DhanQuoteFetchResult(
+        observations=(
+            DhanQuoteObservation(
+                instrument=RELIANCE,
+                last_price=Decimal("1234.56"),
+                source_timestamp=datetime.now(tz=UTC),
+                open=None,
+                high=None,
+                low=None,
+                close=None,
+            ),
+        ),
+        fetched_at=datetime.now(tz=UTC),
+        latency_ms=100,
+    )
+
+    with (
+        patch(
+            "intraday.infrastructure.api.market_data_views.fetch_quotes",
+            return_value=fake_result,
+        ),
+        patch(
+            "intraday.infrastructure.api.market_data_views._bar_service",
+            side_effect=RuntimeError("simulated aggregation bug"),
+        ),
+    ):
+        response = client.post("/api/v1/config/market-data/refresh/")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["state"] == "CONNECTED_FRESH"
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_bars_endpoint_never_leaks_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    from datetime import UTC, datetime
+    from decimal import Decimal
+
+    _configure_dhan(monkeypatch)
+    client = _client_as_operator()
+
+    fake_result = DhanQuoteFetchResult(
+        observations=(
+            DhanQuoteObservation(
+                instrument=RELIANCE,
+                last_price=Decimal("1234.56"),
+                source_timestamp=datetime.now(tz=UTC),
+                open=None,
+                high=None,
+                low=None,
+                close=None,
+            ),
+        ),
+        fetched_at=datetime.now(tz=UTC),
+        latency_ms=100,
+    )
+    with patch(
+        "intraday.infrastructure.api.market_data_views.fetch_quotes", return_value=fake_result
+    ):
+        client.post("/api/v1/config/market-data/refresh/")
+
+    response = client.get("/api/v1/config/market-data/bars/")
+
+    assert "fake-test-token-not-real" not in response.content.decode()
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_recent_bars_never_imports_trading_or_signal_code() -> None:
+    import ast
+
+    import intraday.infrastructure.api.market_data_views as module
+
+    source = module.__file__
+    assert source is not None
+    with open(source, encoding="utf-8") as handle:
+        tree = ast.parse(handle.read())
+
+    imported_modules: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported_modules.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported_modules.add(node.module)
+
+    assert not any("trading_engine" in name for name in imported_modules)
+    assert not any("signal_intelligence" in name for name in imported_modules)

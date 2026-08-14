@@ -6514,3 +6514,186 @@ before Checkpoint 24 can safely begin:
    order code, matching this checkpoint's own scope discipline.
 
 Not implemented - recommendation only.
+
+# Checkpoint 24A — Live Quote to Canonical Bar Foundation (2026-08-14)
+
+## Part 1 — CP23 Final Acceptance Verification
+
+Re-verified independently before starting CP24A (not assumed from the
+prior session):
+
+- [x] Dhan integration uses only `POST /v2/marketfeed/quote` (grepped
+  the client source directly; no order/position wording found)
+- [x] No order/position/trading endpoint exists anywhere in CP23 code
+- [x] `trading_engine/*` remains untouched (every subpackage's
+  `__init__.py` still 7-8 lines, unchanged Checkpoint-4 scaffolding)
+- [x] Signal generation remains unwired (zero references to live/Dhan/
+  market_data_views anywhere in `signal_intelligence.signal_generation`)
+- [x] 651 backend tests pass (re-run, confirmed, not assumed)
+- [x] 52 frontend tests pass (re-run, confirmed)
+- [x] `ruff format --check`/`ruff check` clean
+- [x] `mypy` clean (154 files)
+- [x] `import-linter` 6/6 kept
+- [x] `manage.py check` clean
+- [x] `makemigrations --check --dry-run` clean
+- [x] `spectacular --fail-on-warn` clean
+- [x] No credentials logged (repo-wide grep for JWT-shaped strings: none)
+- [x] No secrets exposed through API/frontend (re-confirmed via grep)
+- [x] Working tree clean, HEAD still `4056f39`, 4 ahead / 0 behind
+  `origin/main`
+
+**CP23 remaining blocker (unchanged, explicitly re-stated, not
+resolved this checkpoint):** the real Dhan credential present in this
+environment's `.env` was rejected by Dhan (`AUTHENTICATION_FAILED`,
+HTTP 401/403) during Checkpoint 23's live manual validation. Real live
+quote reception therefore remains **pending** — the pipeline itself was
+proven to reach Dhan's real API correctly; the credential itself was
+not proven valid. This checkpoint did **not** modify the Dhan
+integration, weaken authentication handling, bypass the error, or use
+fake data in place of live data anywhere.
+
+## Part 2 — CP24A Implementation
+
+### What Was Built
+
+- `domain/market_data/aggregation.py` — pure, technology-neutral
+  Quote→Bar aggregation. `BarStatus` (FORMING/CLOSED), `AggregatedBar`
+  (wraps a bar that may still be in-progress; `to_bar()` converts a
+  CLOSED bar into the existing, unmodified, reused `Bar` contract from
+  Checkpoint 5/14, raising `IncompleteBarError` on a FORMING bar),
+  `MissingInterval`, `AnomalousObservation`, `BarAggregationResult`,
+  and `aggregate_quotes_into_bars()` — a pure function recomputed from
+  scratch on every call over the full recent observation history (see
+  Data Flow below for why).
+- `application/repositories/live_market_data.py` — extended with
+  `get_observations(since=...)` on `LiveQuoteRepository` (full
+  observation history, not just latest-per-instrument) and a new
+  `AggregatedBarRepository` Protocol (`save_all()` upsert,
+  `get_recent()` read-only).
+- `application/services/bar_aggregation.py` — `BarAggregationService`,
+  depending only on repository Protocols and pure domain logic, never a
+  concrete Dhan/HTTP client (`.importlinter` contract 6 discipline,
+  matching Checkpoint 22 decision 105/Checkpoint 23's precedent).
+- `infrastructure/persistence/models.py` — `AggregatedBarObservation`
+  (upsert-by-`(instrument, timeframe, interval_start)`, unlike
+  Checkpoint 23's append-only `LiveQuoteObservation`). Migration
+  `0007_aggregated_bars.py`.
+- `infrastructure/persistence/live_market_data_repositories.py` —
+  `DjangoAggregatedBarRepository`; `DjangoLiveQuoteRepository` extended
+  with `get_observations()`.
+- `infrastructure/api/market_data_views.py` — `recent_bars` GET view
+  (read-only, never triggers aggregation or a broker call); bar
+  aggregation chained into the existing `refresh()` POST view
+  immediately after a successful quote save, wrapped in its own
+  `try`/`except` so an aggregation bug can never mask refresh's own
+  success/failure result.
+- `application/contracts/market_data.py` — `BarResponseSerializer`.
+- `infrastructure/api/urls.py` — `GET /api/v1/config/market-data/bars/`
+  (optional `?symbol=` filter).
+- Frontend: `marketDataApi.ts` extended with `getRecentBars()`;
+  `LiveMarketDataMonitor.tsx` extended with a "Recent Bars (1-Minute)"
+  read-only table (Symbol/Timeframe/Interval/Open/High/Low/Close/
+  Volume/Status/Source Timestamp) — volume rendered as an explicit "—"
+  (never fabricated), status rendered with a distinct FORMING/CLOSED
+  badge — auto-refreshed on the same 5-second client-side timer as the
+  rest of the screen, no new Dhan call triggered by reading it.
+
+### Data Flow
+
+```
+Dhan Quote (POST /v2/marketfeed/quote, unchanged from CP23)
+    -> Quote normalization (infrastructure/api/market_data_views.py, unchanged from CP23)
+    -> LiveQuoteObservation persistence (unchanged from CP23)
+    -> Bar aggregation (domain/market_data/aggregation.py - NEW, pure)
+    -> AggregatedBarObservation persistence (NEW, upsert)
+    -> Read-only API (GET .../bars/ - NEW)
+    -> Frontend "Recent Bars" table (NEW)
+```
+
+### Tests
+
+- Backend: 44 new tests (22 domain aggregation - including 9
+  deliberately adversarial: duplicate, out-of-order, same-timestamp-
+  different-value, delayed/late-arriving, future-timestamp,
+  gap-detection, and 4 invalid-`AggregatedBar`-construction cases; 4
+  application-service; 6 persistence upsert/retrieval; 8 API
+  vertical-slice/refresh-chaining/failure-isolation; 4 architecture
+  boundary). **All 44 passed on the first real test run** - no
+  aggregation logic defect was found needing a fix (unlike Checkpoint
+  23's health-evaluator precedence bug). Full backend suite: **695
+  passed / 0 failed / 0 skipped** (up from 651).
+- Frontend: 5 new tests (empty-bars state, rendered bars with correct
+  status badges, explicit non-fabricated volume placeholder). Full
+  frontend suite: **55 passed / 0 failed** (up from 52).
+- `ruff format --check`/`ruff check` clean, `mypy` clean (156 files),
+  `import-linter` 6/6 kept (191 files), `manage.py check` clean,
+  `makemigrations --check --dry-run` clean, `spectacular --fail-on-warn`
+  clean and re-confirmed byte-identical across two independent
+  generations, `pip-audit` unchanged from Checkpoint 23 (no new
+  dependency added this checkpoint).
+
+### Safety
+
+    Orders placed: 0
+    Order API calls: 0
+    Position changes: 0
+    Signal execution: 0
+    Trading engine changes: 0 (re-confirmed - every trading_engine/*
+                              file still its original Checkpoint-4
+                              scaffolding)
+
+### Known Limitations
+
+- Volume is never computed — Dhan's Market Quote `volume` field is
+  cumulative day-volume, not a safely-derivable per-bar delta with this
+  checkpoint's point-sample design; documented, not silently omitted
+  (frontend shows an explicit "—").
+- Only 1-minute bars — no other timeframe is aggregated this checkpoint
+  (matches the checkpoint's own "unless the existing architecture
+  establishes a different canonical base timeframe" - none does yet).
+- `AggregatedBarObservation` has no dedicated retention/rotation policy
+  — inherits Checkpoint 23's "revisit before scaling" limitation for
+  the same reason (low, explicit-trigger volume).
+- No exchange holiday calendar (unchanged limitation from Checkpoint
+  23) — a holiday still computes a normal-looking session/bar sequence.
+- Gap detection and bar aggregation both operate only within the
+  8-hour lookback window (`DEFAULT_LOOKBACK`) each refresh scans — a
+  gap older than that window would not be (re-)detected on a later
+  run, though it would have been correctly detected and reported at
+  the time it was still in-window.
+- `HistoricalMarketDataRepository` (Checkpoint 14) remains implemented
+  only by the in-memory fixture — `AggregatedBarObservation` is a
+  deliberately separate, narrower table, not an implementation of that
+  Protocol; unifying them (if ever appropriate) is a future decision,
+  not made here.
+
+## Documentation
+
+`docs/architecture/LIVE_BAR_AGGREGATION_ARCHITECTURE.md` (new);
+`docs/architecture/ARCHITECTURE.md` updated with a Checkpoint 24A
+narrative paragraph and a revised roadmap note; `docs/architecture/
+ARCHITECTURE_DECISIONS.md` decisions 112-116 + Notes (Checkpoint 24A).
+
+## CP24 Recommendation
+
+Live bars now exist in the canonical `Bar` shape
+`SignalGenerationService`/`FeatureEngineService` already consume. What
+remains before Checkpoint 24 (Live Signal Observation) can safely
+begin:
+
+1. **A live-bar repository adapter** satisfying
+   `HistoricalMarketDataRepository` (or a narrower, CP24-scoped
+   equivalent), backed by `AggregatedBarObservation` (CLOSED bars
+   only — `FeatureEngineService` must never receive a FORMING bar,
+   which `AggregatedBar.to_bar()`'s `IncompleteBarError` already
+   structurally prevents at the source).
+2. **A minimum-history decision**: how many closed 1-minute bars must
+   exist before SMA/EMA/ATR (Checkpoints 15-17) have enough data to
+   produce a real, non-degenerate signal — not yet decided, since no
+   checkpoint has needed to reason about a live, continuously-growing
+   bar count before.
+3. **A read-only API/frontend surface** for the resulting
+   `DirectionalIndication` — display and logging only, explicitly no
+   order code, matching every prior checkpoint's own scope discipline.
+
+Not implemented — recommendation only.

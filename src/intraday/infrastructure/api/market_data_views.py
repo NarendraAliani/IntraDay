@@ -37,17 +37,20 @@ from rest_framework.throttling import ScopedRateThrottle
 
 from intraday.application.contracts.errors import ApiErrorSerializer
 from intraday.application.contracts.market_data import (
+    BarResponseSerializer,
     MarketDataHealthResponseSerializer,
     QuoteResponseSerializer,
     SessionResponseSerializer,
 )
+from intraday.application.services.bar_aggregation import BarAggregationService
 from intraday.application.services.live_market_data import LiveMarketDataService
 from intraday.application.services.provider_settings import DhanSettingsService
 from intraday.control_plane.market_data_health.contracts import MarketDataHealthSnapshot
 from intraday.control_plane.market_data_health.evaluator import FRESHNESS_THRESHOLD_SECONDS
 from intraday.domain.instrument.contracts import make_instrument_id
+from intraday.domain.market_data.aggregation import AggregatedBar
 from intraday.domain.market_data.contracts import Quote
-from intraday.domain.shared_kernel.contracts import Exchange
+from intraday.domain.shared_kernel.contracts import Exchange, Timeframe
 from intraday.infrastructure.api.permissions import IsConfigurationOperator
 from intraday.infrastructure.market_data_providers.dhan.client import (
     DhanAuthenticationError,
@@ -58,6 +61,7 @@ from intraday.infrastructure.market_data_providers.dhan.client import (
 )
 from intraday.infrastructure.market_data_providers.dhan.instruments import observation_universe
 from intraday.infrastructure.persistence.live_market_data_repositories import (
+    DjangoAggregatedBarRepository,
     DjangoLiveQuoteRepository,
     DjangoMarketDataHealthRepository,
 )
@@ -83,6 +87,13 @@ def _service() -> LiveMarketDataService:
 
 def _dhan_service() -> DhanSettingsService:
     return DhanSettingsService(repository=DjangoDhanCredentialRepository())
+
+
+def _bar_service() -> BarAggregationService:
+    return BarAggregationService(
+        quote_repository=DjangoLiveQuoteRepository(),
+        bar_repository=DjangoAggregatedBarRepository(),
+    )
 
 
 @extend_schema(responses={200: SessionResponseSerializer})
@@ -184,7 +195,48 @@ def refresh(request: Request) -> Response:
     quotes = tuple(_observation_to_quote(observation) for observation in result.observations)
     service.record_refresh_success(quotes, fetched_at=result.fetched_at)
     logger.info("market_data.refresh_succeeded", instrument_count=len(quotes))
+
+    # Checkpoint 24A: re-aggregate bars from the observation log now
+    # that new quotes exist. This makes NO additional broker call - it
+    # only reads already-persisted `LiveQuoteObservation` rows (via
+    # `BarAggregationService`) and writes derived `AggregatedBar`s. A
+    # failure here must never mask the refresh's own success/failure
+    # result above - it is logged and swallowed, not re-raised, so a
+    # bar-aggregation bug can never make live quote observation itself
+    # appear to fail.
+    try:
+        aggregation_result = _bar_service().aggregate_and_persist(as_of=_now())
+        logger.info(
+            "market_data.bars_aggregated",
+            bar_count=len(aggregation_result.bars),
+            missing_interval_count=len(aggregation_result.missing_intervals),
+            anomalous_observation_count=len(aggregation_result.anomalous_observations),
+        )
+    except Exception:  # noqa: BLE001 - deliberately broad: aggregation must never break refresh
+        logger.exception("market_data.bar_aggregation_failed")
+
     return Response(_health_response_data(service.get_health(now=_now())))
+
+
+@extend_schema(responses={200: BarResponseSerializer(many=True)})
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def recent_bars(request: Request) -> Response:
+    """Checkpoint 24A: the most recently aggregated 1-minute bars,
+    newest first - reads only already-persisted `AggregatedBarObservation`
+    rows, NEVER triggers aggregation or a live broker call itself
+    (Checkpoint 24A §11's "the API must not trigger broker calls").
+    Optional `symbol` query parameter filters to one instrument."""
+    bars = _bar_service().get_recent_bars(timeframe=Timeframe.ONE_MINUTE, limit=200)
+    symbol_filter = request.query_params.get("symbol")
+    if symbol_filter:
+        bars = tuple(
+            bar
+            for bar in bars
+            if str(bar.instrument_id).split(":", maxsplit=1)[-1] == symbol_filter.upper()
+        )
+    body = [dict(BarResponseSerializer(_bar_response_data(bar)).data) for bar in bars]
+    return Response(body)
 
 
 def _observation_to_quote(observation: DhanQuoteObservation) -> Quote:
@@ -225,6 +277,24 @@ def _quote_response_data(quote: Quote, *, now: dt.datetime) -> dict[str, object]
         "source_timestamp": quote.timestamp,
         "freshness_age_seconds": age_seconds,
         "is_stale": age_seconds > FRESHNESS_THRESHOLD_SECONDS,
+    }
+
+
+def _bar_response_data(bar: AggregatedBar) -> dict[str, object]:
+    symbol = str(bar.instrument_id).split(":", maxsplit=1)[-1]
+    return {
+        "symbol": symbol,
+        "exchange": Exchange.NSE.value,
+        "timeframe": bar.timeframe.value,
+        "interval_start": bar.interval_start,
+        "interval_end": bar.interval_end,
+        "open": bar.open,
+        "high": bar.high,
+        "low": bar.low,
+        "close": bar.close,
+        "status": bar.status.value,
+        "observation_count": bar.observation_count,
+        "data_source": bar.data_source,
     }
 
 

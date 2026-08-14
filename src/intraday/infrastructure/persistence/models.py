@@ -479,3 +479,43 @@ class MarketDataHealthStatus(models.Model):
 
     class Meta:
         app_label = "persistence"
+
+
+class AggregatedBarObservation(models.Model):
+    """Checkpoint 24A: a persisted, aggregated bar built from
+    `LiveQuoteObservation` rows
+    (`domain.market_data.aggregation.aggregate_quotes_into_bars`).
+
+    Unlike `LiveQuoteObservation` (append-only), this table is an
+    UPSERT-by-identity projection - `(instrument_symbol, timeframe,
+    interval_start)` is unique, and a row is replaced in place when
+    aggregation is re-run (a FORMING bar becoming CLOSED, or a
+    previously-CLOSED bar being revised by a late-arriving observation
+    - both are intended, documented behavior, not a bug - see
+    `domain/market_data/aggregation.py`'s own module docstring)."""
+
+    instrument_symbol = models.CharField(max_length=32)
+    exchange = models.CharField(max_length=8, default="NSE")
+    timeframe = models.CharField(max_length=8)
+    interval_start = models.DateTimeField()
+    interval_end = models.DateTimeField()
+    open_price = models.DecimalField(max_digits=14, decimal_places=4)
+    high_price = models.DecimalField(max_digits=14, decimal_places=4)
+    low_price = models.DecimalField(max_digits=14, decimal_places=4)
+    close_price = models.DecimalField(max_digits=14, decimal_places=4)
+    status = models.CharField(max_length=8, choices=[("FORMING", "FORMING"), ("CLOSED", "CLOSED")])
+    observation_count = models.PositiveIntegerField()
+    data_source = models.CharField(max_length=32)
+    computed_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        app_label = "persistence"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["instrument_symbol", "timeframe", "interval_start"],
+                name="unique_bar_per_instrument_timeframe_interval",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["timeframe", "-interval_start"]),
+        ]

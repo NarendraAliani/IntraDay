@@ -16,9 +16,11 @@ from intraday.application.repositories.live_market_data import (
     MarketDataHealthRecord,
 )
 from intraday.domain.instrument.contracts import make_instrument_id
+from intraday.domain.market_data.aggregation import AggregatedBar, BarStatus
 from intraday.domain.market_data.contracts import Quote
-from intraday.domain.shared_kernel.contracts import Exchange
+from intraday.domain.shared_kernel.contracts import Exchange, Timeframe
 from intraday.infrastructure.persistence.models import (
+    AggregatedBarObservation,
     LiveQuoteObservation,
     MarketDataHealthStatus,
 )
@@ -56,6 +58,45 @@ class DjangoLiveQuoteRepository:
             if row is not None:
                 quotes.append(_row_to_quote(row))
         return tuple(quotes)
+
+    def get_observations(self, *, since: _dt.datetime) -> tuple[Quote, ...]:
+        rows = LiveQuoteObservation.objects.filter(source_timestamp__gte=since).order_by(
+            "instrument_symbol", "source_timestamp"
+        )
+        return tuple(_row_to_quote(row) for row in rows)
+
+
+class DjangoAggregatedBarRepository:
+    """Django ORM implementation of `AggregatedBarRepository`. `save_all()`
+    is an upsert (`update_or_create`, keyed by the unique constraint on
+    `(instrument_symbol, timeframe, interval_start)`) - see the model's
+    own docstring for why this differs from `LiveQuoteObservation`'s
+    append-only pattern."""
+
+    def save_all(self, bars: tuple[AggregatedBar, ...]) -> None:
+        for bar in bars:
+            AggregatedBarObservation.objects.update_or_create(
+                instrument_symbol=_symbol_from_instrument_id(bar.instrument_id),
+                timeframe=bar.timeframe.value,
+                interval_start=bar.interval_start,
+                defaults={
+                    "exchange": Exchange.NSE.value,
+                    "interval_end": bar.interval_end,
+                    "open_price": bar.open,
+                    "high_price": bar.high,
+                    "low_price": bar.low,
+                    "close_price": bar.close,
+                    "status": bar.status.value,
+                    "observation_count": bar.observation_count,
+                    "data_source": bar.data_source,
+                },
+            )
+
+    def get_recent(self, *, timeframe: Timeframe, limit: int = 200) -> tuple[AggregatedBar, ...]:
+        rows = AggregatedBarObservation.objects.filter(timeframe=timeframe.value).order_by(
+            "-interval_start"
+        )[:limit]
+        return tuple(_row_to_aggregated_bar(row) for row in rows)
 
 
 class DjangoMarketDataHealthRepository:
@@ -101,4 +142,20 @@ def _row_to_quote(row: LiveQuoteObservation) -> Quote:
         instrument_id=make_instrument_id(Exchange.NSE, row.instrument_symbol),
         timestamp=row.source_timestamp,
         last_price=Decimal(row.last_price),
+    )
+
+
+def _row_to_aggregated_bar(row: AggregatedBarObservation) -> AggregatedBar:
+    return AggregatedBar(
+        instrument_id=make_instrument_id(Exchange.NSE, row.instrument_symbol),
+        timeframe=Timeframe(row.timeframe),
+        interval_start=row.interval_start,
+        interval_end=row.interval_end,
+        open=Decimal(row.open_price),
+        high=Decimal(row.high_price),
+        low=Decimal(row.low_price),
+        close=Decimal(row.close_price),
+        status=BarStatus(row.status),
+        observation_count=row.observation_count,
+        data_source=row.data_source,
     )
