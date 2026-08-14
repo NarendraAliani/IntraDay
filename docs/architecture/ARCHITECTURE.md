@@ -397,3 +397,20 @@ regression - every prior checkpoint correctly kept these boundaries
 untouched per its own safety rules - but it means the distance between
 "architecturally sound" and "operationally ready" is large and should
 not be assumed closed by the volume of work completed so far.
+
+Checkpoint 34 closes a real slice of that gap - PAPER mode only,
+TRADING_MODE=LIVE remains unavailable. A genuine, broker-neutral
+order state machine and event model (`docs/architecture/
+ORDER_LIFECYCLE.md`), the first real risk engine and kill switch
+(`docs/architecture/RISK_ENGINE_ARCHITECTURE.md`), a broker-neutral
+reconciliation service, and an event-driven `PaperBroker` implementing
+`domain.broker.BrokerGateway` (`docs/architecture/
+PAPER_TRADING_ARCHITECTURE.md`) now exist, tested, and orchestrated
+through one non-bypassable `PaperTradingService`
+(kill switch -> risk -> broker). `trading_engine/order_management`,
+`execution_management`, and `broker_abstraction` remain otherwise
+untouched scaffolding - this checkpoint's new code lives in
+`domain/order`, `trading_engine/risk_engine`, `control_plane/kill_switch`
+and `control_plane/reconciliation`, `infrastructure/brokers/paper`, and
+`application/services/paper_trading.py`. No real order has been placed;
+LIVE mode does not exist anywhere in this codebase.

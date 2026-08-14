@@ -7618,3 +7618,34 @@ A deliberately critical, evidence-based audit answering "what is still missing t
 - Browser automation: not claimed - no browser tool available this session either.
 - Trading safety: 0 orders, 0 broker execution calls, 0 position changes, 0 live trading enabled. TRADING_MODE/kill switch (non-existent)/order management (non-existent) all confirmed untouched. No credentials exposed - only public documentation and one already-established read-only research pattern were used.
 - This checkpoint's own honest conclusion, stated without hedging: **the architecture is strong, but the product is not yet operational.** The research/backtesting subsystem is genuinely production-quality; the execution/risk/reconciliation subsystems do not yet exist beyond empty scaffolding and domain-contract shapes.
+
+## Checkpoint 34 — Paper Trading Readiness + Execution Lifecycle Research (2026-08-14)
+
+### What was researched
+
+- `docs/research/EXECUTION_RESEARCH.md`: closed remaining Dhan gaps via live fetches - positions endpoint (productType CNC/INTRADAY/MARGIN/MTF/CO/BO, day-vs-carryforward quantities), funds/margin endpoints (GET /fundlimit, POST /margincalculator), the order-update WebSocket (wss://api-order-update.dhan.co, real message shape confirmed), and postback (secondary-sourced). SEBI regulatory research re-confirmed (primary circular metadata verified live, substantive content remains secondary-sourced, explicitly labeled). Every remaining UNKNOWN named explicitly, never converted into an assumption.
+
+### What was implemented (PAPER mode only - zero real orders)
+
+- `domain/order/contracts.py`: `OrderStatus` extended from 6 to 12 broker-neutral states (added CREATED/TRANSIT/ACKNOWLEDGED/CANCEL_REQUESTED/ERROR) - deliberately NOT copying Dhan's 7-state lifecycle verbatim.
+- `domain/order/state_machine.py`: the full allowed-transition table, terminal states, and `validate_transition()` - including the documented cancel-vs-fill race (Dhan's DELETE returns async 202).
+- `domain/order/events.py`: canonical `OrderEvent`/`OrderEventType` model (12 event types, broker-agnostic fields only).
+- `domain/order/idempotency.py`: the idempotency-key -> correlation-ID -> broker-order-ID -> order-ID chain, `DuplicateOrderSubmissionError`.
+- `domain/broker/contracts.py`: extended `BrokerGateway` with `get_orders`/`get_trades`/`get_funds`; new `Funds` contract (deliberately simple, no SPAN/margin replication).
+- `trading_engine/risk_engine/`: real `evaluate_order_risk()` - 10 fixed-order checks (kill switch first), reusing `RiskLimits`/`RiskDecisionOutcome`/`TradingHaltState` from Checkpoint 5's domain contracts, never inventing parallel enums.
+- `control_plane/kill_switch` (via `application/services/kill_switch.py` + `infrastructure/persistence/kill_switch_repository.py`): the FIRST real kill-switch implementation - persistent, audited (every engage/reset writes an AuditLogEntry), RBAC-protected (reuses `configuration.activate`), full API (`GET/POST /api/v1/config/kill-switch/...`).
+- `control_plane/reconciliation/`: broker-neutral divergence detection (7 divergence types), pure functions, mechanically proven to never mutate anything.
+- `infrastructure/brokers/paper/broker.py`: `PaperBroker` - genuine, event-driven, in-memory (Django-free) simulated broker implementing `domain.broker.BrokerGateway` exactly. Market/limit/stop-loss/stop-loss-market execution, partial fills, slippage, injected cost model, position/trade bookkeeping reusing domain contracts verbatim.
+- `application/services/paper_trading.py`: `PaperTradingService` - the one non-bypassable orchestration point (kill switch -> risk -> broker), mechanically proven by architecture-fitness tests inspecting actual source-code ordering.
+- Persistence: `KillSwitchState`, `PaperOrderRecord`, `PaperTradeRecord`, `PaperPositionRecord`, `PaperFundsRecord` (migration 0010) - Order/Trade/Position kept as distinct tables, never collapsed.
+- Reporting: `RISK_REPORT` catalogue status upgraded PARTIAL (real risk decisions now exist).
+- Frontend: `PaperTradingPage.tsx` (real, wired kill-switch controls; every other capability shown via `CapabilityStatus`, never bespoke markup) - PAPER MODE banner, explicit "LIVE mode does not exist" statement, no trading control anywhere.
+
+### Validation
+
+- Backend: ruff/mypy/lint-imports (6/6 contracts kept, including contract 5's research.backtesting/risk_engine isolation) all clean. New tests: 30 domain (state machine + events + idempotency), 17 risk engine, 11 kill switch (service + full API vertical slice), 19 PaperBroker, 5 PaperTradingService, 9 reconciliation, 9 architecture-fitness (mechanically proving all six Part 19 claims) = 100 new backend tests.
+- Frontend: tsc/build clean. New tests: 7 PaperTradingPage (PAPER/LIVE distinction, kill-switch wiring, RBAC, no trading control, capability placeholders).
+- OpenAPI schema regenerated to include kill-switch endpoints; frontend types regenerated from it.
+- Trust level/RESEARCH_READY gate: unchanged (this checkpoint builds execution-side capability, not new backtest validation evidence).
+- Trading safety: 0 real orders, 0 broker execution calls, 0 positions changed at a real broker, 0 LIVE mode enablement (LIVE mode does not exist anywhere in this codebase). TRADING_MODE unchanged. No credentials exposed.
+- Explicit, honest scope decisions: no automatic ledger persistence wiring, no frontend order-submission control, no scheduled end-of-session expiry trigger, no live-market-data feed into the paper broker - all named in `PAPER_TRADING_ARCHITECTURE.md`'s own Gaps section, not hidden.

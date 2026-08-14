@@ -104,19 +104,28 @@ export const CAPABILITY_REGISTRY: CapabilityGroup[] = [
       },
       {
         title: "Paper Trading",
-        description: "Simulated order execution against live prices, without real broker orders.",
-        status: "PLANNED",
-        prerequisite: "TRADING_GRADE_BAR and RESEARCH_READY.",
+        description:
+          "Simulated order execution against recorded prices - order state machine, risk gating, and position/trade bookkeeping, backend-only.",
+        status: "PARTIAL",
+        prerequisite: "A frontend order-submission control (backend orchestration is implemented and tested; no UI action submits an order yet).",
+        documentationLink: "docs/architecture/PAPER_TRADING_ARCHITECTURE.md",
       },
       {
         title: "Order Management",
         description: "Order lifecycle tracking (placement, modification, cancellation, fills).",
-        status: "PLANNED",
+        status: "PARTIAL",
+        documentationLink: "docs/architecture/ORDER_LIFECYCLE.md",
       },
       {
         title: "Risk Engine",
-        description: "Non-bypassable pre-trade risk gating for every signal.",
-        status: "PLANNED",
+        description: "Non-bypassable pre-trade risk gating for every order.",
+        status: "PARTIAL",
+        documentationLink: "docs/architecture/RISK_ENGINE_ARCHITECTURE.md",
+      },
+      {
+        title: "Kill Switch",
+        description: "Manual, auditable halt on all new order submission.",
+        status: "AVAILABLE",
       },
       {
         title: "Live Execution",

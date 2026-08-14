@@ -132,14 +132,17 @@ REPORT_CATALOGUE: tuple[ReportCatalogueEntry, ...] = (
     ),
     ReportCatalogueEntry(
         report_type=ReportType.RISK_REPORT,
-        status=ReportStatus.NOT_YET_IMPLEMENTED,
-        purpose="Risk-engine exposure/limit-utilization reporting.",
+        status=ReportStatus.PARTIAL,
+        purpose="Risk-engine exposure/limit-utilization reporting, including "
+        "risk-breach events (rejected orders and their reason codes).",
         owner="trading_engine.risk_engine",
-        required_data="risk_engine remains empty Checkpoint-4 scaffolding - no "
-        "data exists to report on",
-        future_data_dependencies="risk_engine implementation itself (out of this "
-        "checkpoint's scope - forbidden by its own safety rules)",
-        ui_surface="Reports Overview page (placeholder only, this checkpoint)",
+        required_data="Checkpoint 34: a real risk-gating engine "
+        "(evaluate_order_risk()/OrderRiskDecision) now exists and produces "
+        "auditable APPROVED/REJECTED decisions for paper orders - no dedicated "
+        "presentation surface beyond the raw decision exists yet",
+        future_data_dependencies="a dedicated risk-breach report view aggregating "
+        "OrderRiskDecision history",
+        ui_surface="Paper Trading page (risk status only, this checkpoint)",
     ),
     ReportCatalogueEntry(
         report_type=ReportType.PRODUCTION_REPORT,

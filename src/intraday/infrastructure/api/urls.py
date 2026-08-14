@@ -14,6 +14,7 @@ from django.urls import path
 
 from intraday.infrastructure.api import (
     backtesting_views,
+    kill_switch_views,
     market_data_views,
     risk_views,
     settings_views,
@@ -38,6 +39,10 @@ urlpatterns = [
     path("settings/dhan/", settings_views.dhan_settings, name="settings-dhan"),
     path("settings/dhan/save/", settings_views.dhan_settings_save, name="settings-dhan-save"),
     path("settings/dhan/test/", settings_views.dhan_test_connection, name="settings-dhan-test"),
+    # --- Checkpoint 34: kill switch ---------------------------------------
+    path("kill-switch/", kill_switch_views.kill_switch_status, name="kill-switch-status"),
+    path("kill-switch/engage/", kill_switch_views.kill_switch_engage, name="kill-switch-engage"),
+    path("kill-switch/reset/", kill_switch_views.kill_switch_reset, name="kill-switch-reset"),
     path("settings/telegram/", settings_views.telegram_settings, name="settings-telegram"),
     path(
         "settings/telegram/save/",

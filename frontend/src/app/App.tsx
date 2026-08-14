@@ -39,6 +39,7 @@ import { ComparisonPage } from "../features/backtesting/ComparisonPage";
 import { StrategyMonitorPage } from "../features/backtesting/StrategyMonitorPage";
 import { WatchlistPage } from "../features/backtesting/WatchlistPage";
 import { ReportsOverviewPage } from "../features/reports/ReportsOverviewPage";
+import { PaperTradingPage } from "../features/paper-trading/PaperTradingPage";
 
 type Screen =
   | "configuration"
@@ -49,6 +50,7 @@ type Screen =
   | "comparison"
   | "watchlists"
   | "strategy-monitor"
+  | "paper-trading"
   | "reports";
 
 const NAV_ITEMS: Array<{ id: Screen; label: string }> = [
@@ -60,6 +62,7 @@ const NAV_ITEMS: Array<{ id: Screen; label: string }> = [
   { id: "comparison", label: "Compare" },
   { id: "watchlists", label: "Watchlists" },
   { id: "strategy-monitor", label: "Strategy Monitor" },
+  { id: "paper-trading", label: "Paper Trading" },
   { id: "reports", label: "Reports" },
 ];
 
@@ -110,6 +113,7 @@ function AppShell(): JSX.Element {
       {screen === "comparison" && <ComparisonPage />}
       {screen === "watchlists" && <WatchlistPage />}
       {screen === "strategy-monitor" && <StrategyMonitorPage />}
+      {screen === "paper-trading" && <PaperTradingPage />}
       {screen === "reports" && <ReportsOverviewPage />}
     </main>
   );

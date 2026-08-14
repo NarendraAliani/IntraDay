@@ -18,6 +18,7 @@ from typing import Protocol
 from intraday.domain.order.contracts import OrderIntent, OrderStatus
 from intraday.domain.position.contracts import Position
 from intraday.domain.shared_kernel.contracts import OrderId, ensure_utc
+from intraday.domain.trade.contracts import Trade
 
 
 class BrokerConnectionState(enum.Enum):
@@ -46,6 +47,31 @@ class BrokerOrderStatusReport:
             raise ValueError(
                 "BrokerOrderStatusReport.average_fill_price must be positive when provided"
             )
+
+
+@dataclass(frozen=True, slots=True)
+class Funds:
+    """Checkpoint 34 Part 7/12: a deliberately SIMPLE, broker-neutral
+    capital snapshot - `available_balance` and `utilized_margin` only.
+    Does NOT attempt to replicate a real broker's SPAN/exposure-margin
+    math (`docs/research/EXECUTION_RESEARCH.md` §2 - Dhan's own
+    `POST /margincalculator` performs that calculation broker-side;
+    this project has no basis, and no need this checkpoint, to
+    reimplement it). A future real-broker adapter is free to populate
+    this from Dhan's richer `GET /fundlimit` response - this contract
+    only requires the two fields every broker-neutral capital check
+    (Checkpoint 34's risk engine) actually needs."""
+
+    available_balance: Decimal
+    utilized_margin: Decimal
+    as_of: datetime
+
+    def __post_init__(self) -> None:
+        ensure_utc(self.as_of, field_name="Funds.as_of")
+        if self.available_balance < 0:
+            raise ValueError("Funds.available_balance must not be negative")
+        if self.utilized_margin < 0:
+            raise ValueError("Funds.utilized_margin must not be negative")
 
 
 class BrokerGateway(Protocol):
@@ -78,4 +104,23 @@ class BrokerGateway(Protocol):
 
     def get_order_status(self, order_id: OrderId) -> BrokerOrderStatusReport: ...
 
+    def get_orders(self) -> tuple[BrokerOrderStatusReport, ...]: ...
+
+    """Checkpoint 34 Part 7/13: every order this broker knows about
+    today - the reconciliation-side counterpart to `get_order_status`
+    (one order) - mirrors Dhan's own `GET /orders` (order book,
+    Checkpoint 33 research)."""
+
+    def get_trades(self) -> tuple[Trade, ...]: ...
+
+    """Checkpoint 34 Part 7/13: every trade this broker has recorded -
+    mirrors Dhan's own `GET /trades` (trade book, Checkpoint 33
+    research)."""
+
     def get_positions(self) -> tuple[Position, ...]: ...
+
+    def get_funds(self) -> Funds: ...
+
+    """Checkpoint 34 Part 7/13: current capital snapshot - mirrors
+    Dhan's own `GET /fundlimit` (Checkpoint 34 research), deliberately
+    simplified per `Funds`'s own docstring."""

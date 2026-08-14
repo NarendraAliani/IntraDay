@@ -635,3 +635,114 @@ class StrategyResearchStatusRecord(models.Model):
 
     class Meta:
         app_label = "persistence"
+
+
+class KillSwitchState(models.Model):
+    """Checkpoint 34 Part 11: the FIRST real kill-switch implementation
+    this project has ever had - Checkpoint 33's audit found every prior
+    reference to a "kill switch" was documentation/prose only. Singleton
+    (`get_or_create(pk=1)`, matching every other singleton state model
+    in this file). `enabled=True` means the switch is ENGAGED (trading
+    halted) - named `enabled` rather than `engaged` to match
+    `domain.risk.contracts.TradingHaltStatus`'s own HALTED/ACTIVE
+    vocabulary at the repository boundary (`TradingHaltStatus.HALTED`
+    <-> `enabled=True`). Never deletes history - `reset()` sets
+    `enabled=False` and records a NEW audit event, it does not erase the
+    engage event."""
+
+    enabled = models.BooleanField(default=False)
+    reason = models.CharField(max_length=500, blank=True, default="")
+    actor_username = models.CharField(max_length=150, blank=True, default="")
+    changed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        app_label = "persistence"
+
+
+class PaperOrderRecord(models.Model):
+    """Checkpoint 34 Part 12: the persistent paper-trading order ledger.
+    Deliberately a SEPARATE model from `PaperTradeRecord`/
+    `PaperPositionRecord` (Part 12's explicit "keep Order/Trade/Position
+    as distinct concepts... do not collapse everything into one table").
+    `state_history` is an append-only JSON log of every
+    `domain.order.events.OrderEvent` this order has experienced -
+    reconstructable audit trail without a second events table this
+    checkpoint's scope does not need."""
+
+    order_id = models.CharField(max_length=100, unique=True)
+    idempotency_key = models.CharField(max_length=100, unique=True)
+    correlation_id = models.CharField(max_length=30)
+    instrument_id = models.CharField(max_length=100)
+    strategy_id = models.CharField(max_length=100)
+    side = models.CharField(max_length=10)
+    order_type = models.CharField(max_length=20)
+    quantity = models.DecimalField(max_digits=18, decimal_places=4)
+    filled_quantity = models.DecimalField(max_digits=18, decimal_places=4, default=0)
+    limit_price = models.DecimalField(max_digits=18, decimal_places=4, null=True, blank=True)
+    trigger_price = models.DecimalField(max_digits=18, decimal_places=4, null=True, blank=True)
+    status = models.CharField(max_length=20)
+    created_at = models.DateTimeField()
+    updated_at = models.DateTimeField(auto_now=True)
+    state_history = models.JSONField(default=list)
+
+    class Meta:
+        app_label = "persistence"
+        indexes = [models.Index(fields=["instrument_id", "status"])]
+
+
+class PaperTradeRecord(models.Model):
+    """Checkpoint 34 Part 12: one completed round trip (entry + exit) in
+    the paper ledger - mirrors `domain.trade.Trade` exactly."""
+
+    trade_id = models.CharField(max_length=100, unique=True)
+    strategy_id = models.CharField(max_length=100)
+    instrument_id = models.CharField(max_length=100)
+    direction = models.CharField(max_length=10)
+    order_ids = models.JSONField(default=list)
+    entry_price = models.DecimalField(max_digits=18, decimal_places=4)
+    exit_price = models.DecimalField(max_digits=18, decimal_places=4)
+    quantity = models.DecimalField(max_digits=18, decimal_places=4)
+    realized_pnl = models.DecimalField(max_digits=18, decimal_places=4)
+    costs = models.DecimalField(max_digits=18, decimal_places=4, default=0)
+    opened_at = models.DateTimeField()
+    closed_at = models.DateTimeField()
+
+    class Meta:
+        app_label = "persistence"
+
+
+class PaperPositionRecord(models.Model):
+    """Checkpoint 34 Part 12: current/historical position snapshots in
+    the paper ledger - mirrors `domain.position.Position` exactly.
+    Upserted per instrument while OPEN (one open position per
+    instrument, matching this checkpoint's own risk-engine "instrument
+    already has a pending/open order" duplicate check); a new row is
+    created once a position closes, so history is never overwritten."""
+
+    position_id = models.CharField(max_length=100, unique=True)
+    instrument_id = models.CharField(max_length=100)
+    direction = models.CharField(max_length=10)
+    quantity = models.DecimalField(max_digits=18, decimal_places=4)
+    average_entry_price = models.DecimalField(max_digits=18, decimal_places=4)
+    realized_pnl = models.DecimalField(max_digits=18, decimal_places=4, default=0)
+    unrealized_pnl = models.DecimalField(max_digits=18, decimal_places=4, default=0)
+    opened_at = models.DateTimeField()
+    closed_at = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(max_length=10, default="OPEN")
+
+    class Meta:
+        app_label = "persistence"
+        indexes = [models.Index(fields=["instrument_id", "status"])]
+
+
+class PaperFundsRecord(models.Model):
+    """Checkpoint 34 Part 12: singleton paper-account capital state -
+    mirrors `domain.broker.Funds` exactly (deliberately simple, no
+    SPAN/exposure-margin replication - see `Funds`'s own docstring)."""
+
+    available_balance = models.DecimalField(max_digits=18, decimal_places=4)
+    utilized_margin = models.DecimalField(max_digits=18, decimal_places=4, default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        app_label = "persistence"

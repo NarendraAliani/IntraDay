@@ -36,16 +36,42 @@ class TimeInForce(enum.Enum):
 
 
 class OrderStatus(enum.Enum):
-    """Broker-neutral order lifecycle. Mapping a specific broker's status
-    codes onto this enum is an `infrastructure/brokers` adapter concern
-    (Checkpoint 3 §7), never represented here."""
+    """Broker-neutral order lifecycle (extended Checkpoint 34 Part 4).
+    Mapping a specific broker's status codes onto this enum is an
+    `infrastructure/brokers` adapter concern (Checkpoint 3 §7), never
+    represented here.
 
-    PENDING = "PENDING"
+    Checkpoint 34's own research (`docs/research/EXECUTION_RESEARCH.md`,
+    Checkpoint 33's `dhanhq.co/docs/v2/orders/` fetch) found Dhan's real
+    order lifecycle is 7 states: TRANSIT, PENDING, REJECTED, CANCELLED,
+    PART_TRADED, TRADED, EXPIRED. Checkpoint 34 Part 4 explicitly
+    forbids copying broker terminology into the domain verbatim - this
+    enum is deliberately BROADER than Dhan's own set (adding CREATED,
+    ACKNOWLEDGED, CANCEL_REQUESTED, ERROR) because a broker-neutral
+    model must represent states that are meaningful regardless of which
+    broker is behind `domain.broker.BrokerGateway` - e.g. `CREATED`
+    (an `OrderIntent` exists locally but has not yet been submitted to
+    any broker) has no Dhan equivalent because Dhan only ever sees an
+    order once it has already been submitted.
+
+    See `domain/order/state_machine.py` for the allowed-transition
+    table - this enum only defines the vocabulary, never transition
+    rules (mirrors `BarStatus`/`AggregatedBar`'s own separation of
+    "what states exist" from "what aggregation does with them").
+    """
+
+    CREATED = "CREATED"
     SUBMITTED = "SUBMITTED"
+    TRANSIT = "TRANSIT"
+    ACKNOWLEDGED = "ACKNOWLEDGED"
+    PENDING = "PENDING"
     PARTIALLY_FILLED = "PARTIALLY_FILLED"
     FILLED = "FILLED"
+    CANCEL_REQUESTED = "CANCEL_REQUESTED"
     CANCELLED = "CANCELLED"
     REJECTED = "REJECTED"
+    EXPIRED = "EXPIRED"
+    ERROR = "ERROR"
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,7 +99,7 @@ class OrderIntent:
     strategy_id: StrategyId
     created_at: datetime
     idempotency_key: str
-    status: OrderStatus = OrderStatus.PENDING
+    status: OrderStatus = OrderStatus.CREATED
     signal_id: SignalId | None = None
     limit_price: Decimal | None = None
     trigger_price: Decimal | None = None

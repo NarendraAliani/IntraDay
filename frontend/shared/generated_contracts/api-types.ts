@@ -209,6 +209,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/config/kill-switch/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["api_v1_config_kill_switch_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config/kill-switch/engage/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["api_v1_config_kill_switch_engage_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config/kill-switch/reset/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["api_v1_config_kill_switch_reset_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/config/market-data/bars/": {
         parameters: {
             query?: never;
@@ -1170,6 +1218,21 @@ export interface components {
          * @enum {string}
          */
         HealthzResponseStatusEnum: "alive";
+        KillSwitchEngageRequest: {
+            reason: string;
+        };
+        KillSwitchStatusResponse: {
+            status: components["schemas"]["KillSwitchStatusResponseStatusEnum"];
+            reason: string | null;
+            /** Format: date-time */
+            changed_at: string | null;
+        };
+        /**
+         * @description * `ACTIVE` - ACTIVE
+         *     * `HALTED` - HALTED
+         * @enum {string}
+         */
+        KillSwitchStatusResponseStatusEnum: "ACTIVE" | "HALTED";
         /**
          * @description Request body for `POST /api/v1/auth/login/`. `password` is
          *     `write_only` purely for schema documentation purposes - the view
@@ -1677,6 +1740,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BacktestResult"][];
+                };
+            };
+        };
+    };
+    api_v1_config_kill_switch_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KillSwitchStatusResponse"];
+                };
+            };
+        };
+    };
+    api_v1_config_kill_switch_engage_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["KillSwitchEngageRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["KillSwitchEngageRequest"];
+                "multipart/form-data": components["schemas"]["KillSwitchEngageRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KillSwitchStatusResponse"];
+                };
+            };
+            /** @description Missing/empty reason */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    api_v1_config_kill_switch_reset_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KillSwitchStatusResponse"];
                 };
             };
         };

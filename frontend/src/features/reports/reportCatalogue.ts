@@ -63,9 +63,9 @@ export const REPORT_CATALOGUE: ReportCatalogueEntry[] = [
   {
     reportType: "RISK_REPORT",
     title: "Risk Report",
-    status: "NOT_YET_IMPLEMENTED",
-    purpose: "Risk-engine exposure/limit-utilization reporting.",
-    uiSurface: "Not yet surfaced",
+    status: "PARTIAL",
+    purpose: "Risk-engine exposure/limit-utilization reporting and risk-breach events.",
+    uiSurface: "Paper Trading page (risk status only)",
   },
   {
     reportType: "PRODUCTION_REPORT",
