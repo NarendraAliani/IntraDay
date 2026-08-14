@@ -179,6 +179,52 @@ class ActiveStrategyVersion(models.Model):
         app_label = "persistence"
 
 
+class StrategyConfigurationRecord(models.Model):
+    """One immutable set of strategy parameter VALUES (Checkpoint 26).
+
+    Distinct from and layered on top of `StrategyVersionRecord`/
+    `ActiveStrategyVersion` above (Checkpoint 8/13), which remain the
+    version-IDENTITY/activation-pointer records - this table is the
+    genuinely new piece: the actual parameter values a
+    `configuration_version` label points at. Same identity tuple
+    (strategy_id, specification_version, code_version,
+    configuration_version) as `StrategyVersionRecord`, deliberately not
+    a ForeignKey to it - a configuration can be validated and saved
+    before a matching `StrategyVersionRecord`/activation exists (Part 11
+    "material configuration changes must create a NEW version" implies
+    configuration authoring is a precursor step, not the same act as
+    activation).
+
+    `parameter_values` is a single JSONField, following the exact
+    `UniverseVersion.members` precedent (Checkpoint 5/8): a
+    configuration's parameter set is read/written as one atomic unit, and
+    its size never justifies a per-parameter row/table.
+    """
+
+    strategy_id = models.CharField(max_length=100)
+    specification_version = models.CharField(max_length=100)
+    code_version = models.CharField(max_length=100)
+    configuration_version = models.CharField(max_length=100)
+    parameter_values = models.JSONField(default=dict)
+    created_at = models.DateTimeField()
+    created_by = models.CharField(max_length=150)
+
+    class Meta:
+        app_label = "persistence"
+        constraints = [
+            models.UniqueConstraint(
+                fields=[
+                    "strategy_id",
+                    "specification_version",
+                    "code_version",
+                    "configuration_version",
+                ],
+                name="uniq_strategy_configuration_identity",
+            ),
+        ]
+        indexes = [models.Index(fields=["strategy_id", "created_at"])]
+
+
 class AuditLogEntry(models.Model):
     """Durable, append-only control-plane audit record (Checkpoint 12).
     Scope: risk-configuration activation only — see

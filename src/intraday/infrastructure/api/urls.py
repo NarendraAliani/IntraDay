@@ -16,6 +16,7 @@ from intraday.infrastructure.api import (
     market_data_views,
     risk_views,
     settings_views,
+    strategy_configuration_views,
     strategy_views,
     universe_views,
 )
@@ -97,5 +98,37 @@ urlpatterns = [
         "<str:configuration_version>/activate/",
         strategy_views.activate,
         name="strategy-activate",
+    ),
+    # --- Checkpoint 26: strategy engine field registry / registry / config ---
+    path(
+        "strategy-engine/fields/",
+        strategy_configuration_views.field_registry,
+        name="strategy-engine-fields",
+    ),
+    path(
+        "strategy-engine/strategies/",
+        strategy_configuration_views.list_strategies,
+        name="strategy-engine-strategies",
+    ),
+    path(
+        "strategy-engine/strategies/<str:strategy_id>/schema/",
+        strategy_configuration_views.strategy_schema,
+        name="strategy-engine-schema",
+    ),
+    path(
+        "strategy-engine/strategies/<str:strategy_id>/configurations/",
+        strategy_configuration_views.list_configurations,
+        name="strategy-engine-configurations-list",
+    ),
+    path(
+        "strategy-engine/strategies/<str:strategy_id>/configurations/save/",
+        strategy_configuration_views.save_configuration,
+        name="strategy-engine-configurations-save",
+    ),
+    path(
+        "strategy-engine/strategies/<str:strategy_id>/configurations/"
+        "<str:specification_version>/<str:code_version>/<str:configuration_version>/",
+        strategy_configuration_views.get_configuration,
+        name="strategy-engine-configuration-detail",
     ),
 ]

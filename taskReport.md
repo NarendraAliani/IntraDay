@@ -7264,3 +7264,92 @@ source closely enough to trust as authoritative. Only after that
 verification should a future checkpoint implement the hybrid
 WebSocket + historical-OHLC architecture this research recommends as
 the eventual target. Not implemented - recommendation only.
+
+## Checkpoint 26 — Integrated Strategy Engine, Multi-Strategy Registry, Dynamic Configuration & Frontend (2026-08-14)
+
+**Note on scope:** the "Checkpoint 26 Recommendation" above (from
+Checkpoint 25.1) proposed a narrow Dhan API verification step. The user
+instead directed Checkpoint 26 toward a different, explicitly-scoped
+objective (the strategy engine covered below) - that recommendation
+remains valid and un-actioned, and is the natural candidate for the
+next checkpoint after this one (see the final report's "Recommended
+Next Checkpoint" section for the restated version).
+
+### What was built
+
+- Canonical field/feature registry (`signal_intelligence.feature_engine.field_registry`)
+  - raw OHLCV + SMA/EMA/ATR only, no unimplemented indicator listed.
+- Generic parameter schema/validation
+  (`trading_engine.strategy_execution.contracts`) - `ParameterType`,
+  `ParameterDefinition`, `StrategyParameterSchema`,
+  `StrategyConfigurationValues`, a single `validate_configuration()`.
+- Three genuinely different executable strategies (EMA Crossover, SMA
+  Trend Filter, ATR Volatility Breakout), all built from existing
+  SMA/EMA/ATR - no new indicator implemented.
+- `StrategyRegistry` (register/get/list/activate/deactivate/get_active/
+  validate_configuration) and `StrategyExecutionCoordinator`
+  (shared-feature-computed-once, per-strategy failure isolation).
+- New `StrategySignal` type (strategy-attributed directional signal),
+  layered alongside (not replacing) `DirectionalIndication`.
+- New `StrategyConfigurationRecord` persistence (Django model,
+  migration `0008_strategyconfigurationrecord`, repository, migration
+  applied), layered alongside (not replacing) `StrategyVersionRecord`/
+  `ActiveStrategyVersion` (Checkpoint 8/13).
+- API surface under `/api/v1/config/strategy-engine/...` (fields,
+  strategies, schema, save/list/get configuration) + OpenAPI/generated
+  TypeScript types.
+- Frontend: one generic, schema-driven `StrategyConfigurationPage.tsx`
+  (no per-strategy hardcoded forms), with dependent-dropdown clearing on
+  strategy switch, wired into `App.tsx` as a new "Strategies" nav entry.
+- `application.services.strategy_execution.DiagnosticStrategyExecutionService`
+  - the only orchestration point feeding bars into the coordinator,
+  structurally limited to `HistoricalMarketDataService` (fixture/
+  historical-only), proven by a dedicated ast-based architecture test.
+
+### A real architecture violation found and fixed mid-checkpoint
+
+An early draft imported `signal_intelligence.feature_engine`/
+`signal_generation.contracts` directly from `trading_engine.strategy_execution`,
+breaking `.importlinter` contract 4 ("Bounded-context independence").
+Caught by re-running `lint-imports` during this checkpoint's own Part 2
+audit (not by a downstream failure). Fixed by (a) defining a small,
+independent `StrategyDirection` enum instead of importing
+`SignalDirection`, and (b) moving feature-computation dispatch into the
+application layer, injected into the coordinator as a callable. All 6
+import-linter contracts pass after the fix. See
+[STRATEGY_ENGINE_ARCHITECTURE.md](docs/architecture/STRATEGY_ENGINE_ARCHITECTURE.md)
+for the full account and
+[ARCHITECTURE_DECISIONS.md](docs/architecture/ARCHITECTURE_DECISIONS.md)
+decisions 122-125.
+
+### Validation
+
+- Backend: `ruff format --check` clean, `ruff check` clean, `mypy`
+  clean (170 source files), `lint-imports` 6/6 contracts kept,
+  `manage.py check` clean, `makemigrations --check --dry-run` clean,
+  `spectacular --fail-on-warn` clean and byte-identical across two
+  independent generations, `pytest` **750 passed / 0 failed / 0
+  skipped** against a real local PostgreSQL instance (53 new tests vs.
+  Checkpoint 25.1's 697).
+- Frontend: `tsc --noEmit` clean, `vite build` succeeds, `vitest run`
+  **61 passed / 0 failed** (5 new tests for the Strategies screen).
+- Non-redundancy audit: 3 strategy IDs / 3 registry entries / 3
+  executable strategy classes, all unique; 8 field IDs, all unique;
+  per-strategy parameter IDs all unique; 0 frontend strategy-specific
+  form files; 0 hardcoded field-definition lists in frontend code.
+- SAMPLE_BAR safety gate: dedicated ast-based test proves
+  `trading_engine.strategy_execution` and the diagnostic execution
+  service never import any live-market-data module.
+- No credentials/tokens found in any new file (repo-wide grep, plus the
+  user-guide's own `validate.py` secret-pattern scan).
+
+### Not done in this checkpoint (see final report's Remaining Limitations)
+
+Live browser (Playwright/Selenium) end-to-end validation was not
+performed - no such tool is available in this environment; frontend
+correctness was validated via `vitest`/Testing Library
+(fetch-mocked, real components) and a manual `tsc`/`vite build` pass
+only. No diagnostic-execution API endpoint was exposed (the service
+exists and is tested at the application layer, but Part 17's endpoint
+list did not strictly require it and it was left out to keep the
+SAMPLE_BAR boundary surface as small as possible).

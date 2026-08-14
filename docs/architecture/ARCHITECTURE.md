@@ -235,17 +235,40 @@ for the full evidence, and its six-condition `TRADING_GRADE_BAR`
 promotion checklist. `SAMPLE_BAR` remains the classification;
 `SignalGenerationService`/`FeatureEngineService` remain unwired.
 
-**Roadmap note (post-Checkpoint 25.1):** the next named checkpoint
-should be a **narrow, read-only Dhan API verification step**
-(resolving the three open questions above via direct, live API calls —
-not documentation reading) — not yet "Live Signal Observation" and not
-yet a hybrid-architecture implementation, both of which remain
-premature until that verification completes. Paper trading, a real
-order API, and controlled live trading remain deliberately un-numbered
-— each depends on `trading_engine/*` components (order management,
-execution management, risk engine) that do not exist yet, and assigning
-checkpoint numbers to them before that dependency is real would
-misrepresent how much design work those numbers actually cover.
+**Strategy engine, multi-strategy registry, dynamic configuration**
+(Checkpoint 26): the first real executable strategies (EMA Crossover,
+SMA Trend Filter, ATR Volatility Breakout), a canonical field registry,
+a generic parameter-schema/validation system, a strategy registry with
+activation semantics, a multi-strategy execution coordinator (shared
+feature computation, per-strategy failure isolation), versioned
+configuration persistence, an OpenAPI-backed API surface, and a
+schema-driven frontend renderer. Strictly diagnostic/fixture-only —
+`DiagnosticStrategyExecutionService` depends solely on
+`HistoricalMarketDataService`, structurally unable to reach live/
+SAMPLE_BAR data (proven by
+`tests/unit/architecture/test_strategy_execution_sample_bar_boundary.py`).
+Registry "activation" governs diagnostic eligibility only and is
+explicitly not live-trading authorization. See
+[STRATEGY_ENGINE_ARCHITECTURE.md](STRATEGY_ENGINE_ARCHITECTURE.md) and
+[STRATEGY_CONFIGURATION.md](STRATEGY_CONFIGURATION.md) for the full
+design, including a real architecture-boundary violation found and
+fixed during this checkpoint's own Part 2 audit (an early draft broke
+`.importlinter` contract 4 by importing `signal_intelligence` directly
+from `trading_engine`).
+
+**Roadmap note (post-Checkpoint 26):** the next named checkpoint
+should be the **narrow, read-only Dhan API verification step**
+recommended at Checkpoint 25.1 (resolving same-day intraday candle
+availability, candle authority, and exact timestamp timezone via
+direct, live API calls) — not yet "Live Signal Observation", not yet a
+hybrid-architecture implementation, and not yet `TRADING_GRADE_BAR`
+promotion, all of which remain premature until that verification
+completes. Paper trading, a real order API, and controlled live trading
+remain deliberately un-numbered — each depends on `trading_engine/*`
+components (order management, execution management, risk engine) that
+do not exist yet, and assigning checkpoint numbers to them before that
+dependency is real would misrepresent how much design work those
+numbers actually cover.
 
 ## 3. Layering
 

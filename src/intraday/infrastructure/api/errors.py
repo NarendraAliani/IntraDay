@@ -46,6 +46,29 @@ def invalid_activation(exc: InvalidActivationRequestError) -> Response:
     )
 
 
+def unknown_strategy(exc: Exception) -> Response:
+    """Checkpoint 26: 404 for `UnknownStrategyError` - a strategy_id not
+    present in the authoritative `StrategyRegistry`."""
+    return _error_response(
+        status_code=status.HTTP_404_NOT_FOUND, error_code="unknown_strategy", message=str(exc)
+    )
+
+
+def invalid_configuration(exc: Exception) -> Response:
+    """Checkpoint 26: generic 400 for any strategy-configuration
+    validation failure (InvalidParameterValueError/UnknownParameterError/
+    MissingRequiredParameterError/UnknownFieldReferenceError/
+    UnknownStrategyError - all ValueError subclasses raised by
+    `trading_engine.strategy_execution.contracts.validate_configuration`
+    or `StrategyRegistry`). A single mapping, matching the "one canonical
+    validation path" requirement (Part 4) - no per-error-type view logic."""
+    return _error_response(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        error_code="invalid_configuration",
+        message=str(exc),
+    )
+
+
 def duplicate_version(exc: DuplicateVersionError) -> Response:
     return _error_response(
         status_code=status.HTTP_409_CONFLICT, error_code="duplicate_version", message=str(exc)

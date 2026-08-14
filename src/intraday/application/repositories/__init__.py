@@ -20,6 +20,7 @@ from typing import Protocol
 
 from intraday.application.config_schema.records import (
     RiskConfigurationRecord,
+    StrategyConfigurationSnapshot,
     StrategyVersionSnapshot,
     UniverseRecord,
 )
@@ -140,6 +141,32 @@ class StrategyVersionRepository(Protocol):
         actor_user_id: int,
         request_id: str,
     ) -> ActivationOutcome: ...
+
+
+class StrategyConfigurationRepository(Protocol):
+    """Persists and retrieves `StrategyConfigurationSnapshot` records -
+    the actual parameter VALUES a `configuration_version` label points
+    at (Checkpoint 26). Deliberately separate from
+    `StrategyVersionRepository` above: that Protocol persists
+    version-IDENTITY/activation-pointer records only (Checkpoint 8/13,
+    unchanged); this one persists values, and is layered alongside it,
+    never replacing it. `save()` is append-only - a configuration record
+    is immutable once written (Part 11: "Do not mutate an activated
+    immutable configuration"); a materially different configuration
+    must be saved under a new `configuration_version`, which
+    `DuplicateVersionError` enforces at the identity level."""
+
+    def save(self, snapshot: StrategyConfigurationSnapshot) -> None: ...
+
+    def get(
+        self,
+        strategy_id: str,
+        specification_version: str,
+        code_version: str,
+        configuration_version: str,
+    ) -> StrategyConfigurationSnapshot | None: ...
+
+    def list_for_strategy(self, strategy_id: str) -> tuple[StrategyConfigurationSnapshot, ...]: ...
 
 
 class AuditRepository(Protocol):

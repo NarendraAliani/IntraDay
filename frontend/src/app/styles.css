@@ -633,3 +633,53 @@ dd {
 .market-data-monitor__table tbody tr:last-child td {
   border-bottom: none;
 }
+
+.strategy-config-page__field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-bottom: 1rem;
+  max-width: 28rem;
+}
+
+.strategy-config-page__field label {
+  font-weight: 600;
+  color: var(--color-text-muted);
+  font-size: 0.9rem;
+}
+
+.strategy-config-page__field select,
+.strategy-config-page__field input {
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-surface);
+  color: inherit;
+}
+
+.strategy-config-page__help-text {
+  color: var(--color-text-muted);
+  font-size: 0.82rem;
+  margin: 0;
+}
+
+.strategy-config-page__form fieldset {
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+  margin: 0 0 1.25rem;
+}
+
+.strategy-config-page__saved table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 0.75rem;
+}
+
+.strategy-config-page__saved th,
+.strategy-config-page__saved td {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 0.9rem;
+}

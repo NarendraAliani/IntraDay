@@ -46,6 +46,7 @@
       <li><a class="nav-link" data-target="dhan-setup" href="#dhan-setup">Dhan Setup</a></li>
       <li><a class="nav-link" data-target="market-data" href="#market-data">Market Data Concepts</a></li>
       <li><a class="nav-link" data-target="live-monitor" href="#live-monitor">Live Market Data Monitor</a></li>
+      <li><a class="nav-link" data-target="strategies" href="#strategies">Strategies</a></li>
       <li><a class="nav-link" data-target="screens" href="#screens">Screen-by-Screen Guide</a></li>
       <li><a class="nav-link" data-target="trading-mode" href="#trading-mode">Trading Mode</a></li>
 
@@ -396,7 +397,7 @@ ALTER USER intraday CREATEDB;</code></pre>
         <tbody>
           <tr><td>Risk Configuration</td><td>Every saved version of risk limits (max intraday loss, max position size, max per-trade risk), which one is currently active.</td></tr>
           <tr><td>Universe</td><td>Every saved version of the tradable-instrument list.</td></tr>
-          <tr><td>Strategy Version</td><td>Every saved version of a strategy's specification/code/configuration identity. <em>(No actual strategy implementation exists yet — this tracks versioning only.)</em></td></tr>
+          <tr><td>Strategy Version</td><td>Every saved version of a strategy's specification/code/configuration identity (version bookkeeping). For the actual strategies and their parameters, see <a href="#strategies">Strategies</a>.</td></tr>
         </tbody>
       </table>
       <p><strong>Activation behavior:</strong> selecting a historical version and confirming makes it the active one; the previous active version becomes historical. Every activation is recorded permanently (audit trail) with who did it and when.</p>
@@ -528,6 +529,41 @@ What you see on screen</code></pre>
       <p>This screen requires a working Dhan connection (see <a href="#dhan-setup">Dhan Setup</a>) and, for real data, the NSE market to be open (weekdays, 09:15–15:30 IST).</p>
     </section>
 
+    <!-- ====================================================== STRATEGIES -->
+    <section class="section" id="strategies">
+      <h1>Strategies</h1>
+      <p class="lede">The <strong>Strategies</strong> screen lets you configure and version the parameters of the built-in trading strategies. It does not place trades — see the callout below.</p>
+
+      <div class="callout callout--warn">
+        <strong>"Active" does not mean "live trading."</strong> Activating a strategy or saving a configuration on this screen only makes it eligible for research, diagnostics, and backtesting against fixture/historical data. It never places an order or authorizes broker execution — that remains governed separately by risk controls and the kill switch, neither of which this screen touches. Live signal execution also remains blocked because current market data is <a href="#sample-bar-explained">SAMPLE_BAR, not trading-grade</a>.
+      </div>
+
+      <h2>What a strategy is</h2>
+      <p>A strategy is a small, self-contained rule that looks at recent price bars and computed features (like a moving average) and decides whether the picture looks bullish, bearish, or neutral. Three are built in today:</p>
+      <table>
+        <thead><tr><th>Strategy</th><th>What it looks at</th></tr></thead>
+        <tbody>
+          <tr><td>EMA Crossover</td><td>Whether a fast moving average has crossed above or below a slower one.</td></tr>
+          <tr><td>SMA Trend Filter</td><td>Whether the price has moved meaningfully above or below a single moving average.</td></tr>
+          <tr><td>ATR Volatility Breakout</td><td>Whether a bar's price move is unusually large compared to its recent typical volatility.</td></tr>
+        </tbody>
+      </table>
+
+      <h2>How to configure one</h2>
+      <ol>
+        <li>Pick a strategy from the <strong>Strategy</strong> dropdown.</li>
+        <li>Fill in its parameters — each field's label and help text explain what it means and what values are allowed; fields that reference a data field (like "which price to use") are themselves dropdowns, populated from the same field list the backend uses.</li>
+        <li>Enter a <strong>Configuration Version</strong> label (e.g. <code>cfg-v1</code>) and click <strong>Save Configuration</strong>. A saved configuration cannot be edited afterward — save a new version instead, so past configurations are never silently changed.</li>
+      </ol>
+      <p>Switching the Strategy dropdown clears any values you entered for the previous strategy — this is intentional, so a value that belongs to a different strategy's parameter can never be saved by mistake.</p>
+
+      <h2>Why some fields are unavailable</h2>
+      <p>Only fields the platform has actually implemented and tested (raw price/volume, plus the moving-average and volatility features above) appear anywhere. Nothing appears merely because it is planned.</p>
+
+      <h2>Who can save</h2>
+      <p>Anyone logged in can view strategies and their schemas. Saving a configuration requires the same "configuration-operators" group used elsewhere in this app (see <a href="#configuration">Configuration Screens</a>).</p>
+    </section>
+
     <!-- ========================================================= SCREENS -->
     <section class="section" id="screens">
       <h1>Screen-by-Screen Guide</h1>
@@ -538,6 +574,7 @@ What you see on screen</code></pre>
         <li><strong>Configuration</strong> — see <a href="#configuration">Configuration Screens</a></li>
         <li><strong>Settings</strong> — see <a href="#configuration">Configuration Screens</a> / <a href="#dhan-setup">Dhan Setup</a></li>
         <li><strong>Market Data</strong> — see <a href="#live-monitor">Live Market Data Monitor</a></li>
+        <li><strong>Strategies</strong> — see <a href="#strategies">Strategies</a></li>
         <li><strong>Sign out</strong> button, top-right</li>
       </ul>
 

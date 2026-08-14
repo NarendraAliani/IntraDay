@@ -504,6 +504,115 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/config/strategy-engine/fields/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Checkpoint 26 Part 4/6: the single canonical source the frontend's
+         *     Field dropdown consumes - no duplicated option array exists in
+         *     frontend code.
+         */
+        get: operations["api_v1_config_strategy_engine_fields_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config/strategy-engine/strategies/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Checkpoint 26 Part 8: the authoritative strategy list - the
+         *     frontend's Strategy dropdown consumes this, never a hardcoded array.
+         */
+        get: operations["api_v1_config_strategy_engine_strategies_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config/strategy-engine/strategies/{strategy_id}/configurations/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["api_v1_config_strategy_engine_strategies_configurations_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config/strategy-engine/strategies/{strategy_id}/configurations/{specification_version}/{code_version}/{configuration_version}/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["api_v1_config_strategy_engine_strategies_configurations_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config/strategy-engine/strategies/{strategy_id}/configurations/save/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["api_v1_config_strategy_engine_strategies_configurations_save_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config/strategy-engine/strategies/{strategy_id}/schema/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Checkpoint 26 Part 5/13: the single canonical parameter schema the
+         *     generic frontend renderer consumes - no per-strategy React form.
+         */
+        get: operations["api_v1_config_strategy_engine_strategies_schema_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/config/strategy/{strategy_id}/": {
         parameters: {
             query?: never;
@@ -825,6 +934,18 @@ export interface components {
             webhook_url?: string;
             enabled?: boolean;
         };
+        FieldDefinition: {
+            field_id: string;
+            display_name: string;
+            category: string;
+            data_type: string;
+            source: string;
+            timeframe_support: string;
+            required_inputs: string[];
+            availability: string;
+            version: string;
+            description: string;
+        };
         HealthzResponse: {
             status: components["schemas"]["HealthzResponseStatusEnum"];
         };
@@ -862,6 +983,19 @@ export interface components {
          * @enum {string}
          */
         OutcomeEnum: "activated" | "already_active" | "rejected";
+        ParameterDefinition: {
+            parameter_id: string;
+            label: string;
+            parameter_type: string;
+            required: boolean;
+            default: unknown;
+            minimum: unknown;
+            maximum: unknown;
+            allowed_values: string[];
+            field_category: string | null;
+            depends_on: string[];
+            help_text: string;
+        };
         /**
          * @description * `DATABASE` - DATABASE
          *     * `ENVIRONMENT` - ENVIRONMENT
@@ -974,6 +1108,33 @@ export interface components {
          * @enum {string}
          */
         StateEnum: "CONNECTED_FRESH" | "CONNECTED_STALE" | "DISCONNECTED" | "AUTHENTICATION_FAILED" | "ERROR" | "MARKET_CLOSED";
+        StrategyConfigurationResponse: {
+            strategy_id: string;
+            specification_version: string;
+            code_version: string;
+            configuration_version: string;
+            values: unknown;
+            /** Format: date-time */
+            created_at: string;
+            created_by: string;
+        };
+        StrategyConfigurationSaveRequest: {
+            specification_version: string;
+            code_version: string;
+            configuration_version: string;
+            values: unknown;
+        };
+        StrategySchema: {
+            strategy_id: string;
+            parameters: components["schemas"]["ParameterDefinition"][];
+        };
+        StrategySummary: {
+            strategy_id: string;
+            display_name: string;
+            specification_version: string;
+            code_version: string;
+            is_active: boolean;
+        };
         /**
          * @description Response shape for a strategy version. Identity is the 3-tuple
          *     (specification_version, code_version, configuration_version), matching
@@ -1631,6 +1792,177 @@ export interface operations {
                 };
             };
             429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+        };
+    };
+    api_v1_config_strategy_engine_fields_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FieldDefinition"][];
+                };
+            };
+        };
+    };
+    api_v1_config_strategy_engine_strategies_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrategySummary"][];
+                };
+            };
+        };
+    };
+    api_v1_config_strategy_engine_strategies_configurations_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                strategy_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrategyConfigurationResponse"][];
+                };
+            };
+        };
+    };
+    api_v1_config_strategy_engine_strategies_configurations_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                code_version: string;
+                configuration_version: string;
+                specification_version: string;
+                strategy_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrategyConfigurationResponse"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+        };
+    };
+    api_v1_config_strategy_engine_strategies_configurations_save_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                strategy_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StrategyConfigurationSaveRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["StrategyConfigurationSaveRequest"];
+                "multipart/form-data": components["schemas"]["StrategyConfigurationSaveRequest"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrategyConfigurationResponse"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+        };
+    };
+    api_v1_config_strategy_engine_strategies_schema_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                strategy_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrategySchema"];
+                };
+            };
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

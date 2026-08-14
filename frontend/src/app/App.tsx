@@ -28,8 +28,9 @@ import { ConfigurationViewer } from "../features/configuration/ConfigurationView
 import { LoginScreen } from "../features/auth/LoginScreen";
 import { LiveMarketDataMonitor } from "../features/market-data/LiveMarketDataMonitor";
 import { SettingsPage } from "../features/settings/SettingsPage";
+import { StrategyConfigurationPage } from "../features/strategy-config/StrategyConfigurationPage";
 
-type Screen = "configuration" | "settings" | "market-data";
+type Screen = "configuration" | "settings" | "market-data" | "strategies";
 
 function AppShell(): JSX.Element {
   const { state, logout } = useAuth();
@@ -75,6 +76,14 @@ function AppShell(): JSX.Element {
           >
             Market Data
           </button>
+          <button
+            type="button"
+            className={screen === "strategies" ? "nav-link nav-link--active" : "nav-link"}
+            aria-current={screen === "strategies" ? "page" : undefined}
+            onClick={() => setScreen("strategies")}
+          >
+            Strategies
+          </button>
         </nav>
         <span>
           Signed in as <strong>{state.username}</strong>
@@ -86,6 +95,7 @@ function AppShell(): JSX.Element {
       {screen === "configuration" && <ConfigurationViewer />}
       {screen === "settings" && <SettingsPage />}
       {screen === "market-data" && <LiveMarketDataMonitor />}
+      {screen === "strategies" && <StrategyConfigurationPage />}
     </main>
   );
 }

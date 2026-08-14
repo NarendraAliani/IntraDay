@@ -79,3 +79,34 @@ class StrategyVersionSnapshot:
 
     def __post_init__(self) -> None:
         ensure_utc(self.created_at, field_name="StrategyVersionSnapshot.created_at")
+
+
+@dataclass(frozen=True, slots=True)
+class StrategyConfigurationSnapshot:
+    """A persisted set of strategy parameter VALUES plus its identity and
+    creation metadata (Checkpoint 26). Layered alongside, not on top of,
+    `StrategyVersionSnapshot` above - that type remains the version-
+    IDENTITY record; this carries the actual values a
+    `configuration_version` label points at (a genuinely new need,
+    per `application/config_schema/strategy.py`'s own prior-checkpoint
+    deferral comment)."""
+
+    strategy_id: str
+    specification_version: str
+    code_version: str
+    configuration_version: str
+    parameter_values: dict[str, object]
+    created_at: datetime
+    created_by: str
+
+    def __post_init__(self) -> None:
+        ensure_utc(self.created_at, field_name="StrategyConfigurationSnapshot.created_at")
+        for name in (
+            "strategy_id",
+            "specification_version",
+            "code_version",
+            "configuration_version",
+            "created_by",
+        ):
+            if not getattr(self, name).strip():
+                raise ValueError(f"StrategyConfigurationSnapshot.{name} must be non-empty")

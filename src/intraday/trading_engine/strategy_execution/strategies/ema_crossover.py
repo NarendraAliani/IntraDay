@@ -1,0 +1,102 @@
+# File: src/intraday/trading_engine/strategy_execution/strategies/ema_crossover.py
+#
+# Checkpoint 26: EMA Crossover - trend-following, two-EMA crossover
+# shape. Uses only `signal_intelligence.feature_engine.ema` (existing,
+# tested); no new indicator implemented.
+from __future__ import annotations
+
+from intraday.domain.feature.contracts import FeatureValue
+from intraday.domain.market_data.contracts import Bar
+from intraday.trading_engine.strategy_execution.contracts import (
+    ParameterDefinition,
+    ParameterType,
+    StrategyConfigurationValues,
+    StrategyDirection,
+    StrategyParameterSchema,
+    StrategySignal,
+    require_int,
+)
+
+STRATEGY_ID = "ema_crossover"
+DISPLAY_NAME = "EMA Crossover"
+SPECIFICATION_VERSION = "v1"
+CODE_VERSION = "v1"
+
+
+class EmaCrossoverStrategy:
+    """BULLISH when the fast EMA is above the slow EMA and price is above
+    the fast EMA; BEARISH when the fast EMA is below the slow EMA and
+    price is below the fast EMA; NEUTRAL otherwise. Deliberately similar
+    in spirit to (but structurally distinct from, and independently
+    configurable versus) `signal_generation.directional`'s fixed rule -
+    that module remains untouched."""
+
+    strategy_id = STRATEGY_ID
+    display_name = DISPLAY_NAME
+    specification_version = SPECIFICATION_VERSION
+    code_version = CODE_VERSION
+
+    def parameter_schema(self) -> StrategyParameterSchema:
+        return StrategyParameterSchema(
+            strategy_id=STRATEGY_ID,
+            parameters=(
+                ParameterDefinition(
+                    parameter_id="fast_lookback",
+                    label="Fast EMA Lookback",
+                    parameter_type=ParameterType.INTEGER,
+                    required=True,
+                    default=9,
+                    minimum=1,
+                    maximum=200,
+                    help_text="Period of the fast (short) EMA.",
+                ),
+                ParameterDefinition(
+                    parameter_id="slow_lookback",
+                    label="Slow EMA Lookback",
+                    parameter_type=ParameterType.INTEGER,
+                    required=True,
+                    default=21,
+                    minimum=2,
+                    maximum=400,
+                    help_text="Period of the slow (long) EMA. Must exceed fast_lookback.",
+                ),
+            ),
+        )
+
+    def required_features(self, config: StrategyConfigurationValues) -> tuple[str, ...]:
+        fast = require_int(config.values, "fast_lookback")
+        slow = require_int(config.values, "slow_lookback")
+        return (f"ema_{fast}", f"ema_{slow}")
+
+    def evaluate(
+        self,
+        bar: Bar,
+        feature_values: dict[str, FeatureValue],
+        config: StrategyConfigurationValues,
+    ) -> StrategySignal | None:
+        fast_name, slow_name = self.required_features(config)
+        fast = feature_values.get(fast_name)
+        slow = feature_values.get(slow_name)
+        if fast is None or slow is None:
+            return None
+
+        price = bar.close
+        if fast.value > slow.value and price > fast.value:
+            direction = StrategyDirection.BULLISH
+        elif fast.value < slow.value and price < fast.value:
+            direction = StrategyDirection.BEARISH
+        else:
+            direction = StrategyDirection.NEUTRAL
+
+        return StrategySignal(
+            strategy_id=self.strategy_id,
+            specification_version=self.specification_version,
+            code_version=self.code_version,
+            configuration_version=config.configuration_version,
+            instrument_id=bar.instrument_id,
+            timeframe=bar.timeframe,
+            timestamp=bar.timestamp,
+            direction=direction,
+            price=price,
+            evidence=(fast, slow),
+        )

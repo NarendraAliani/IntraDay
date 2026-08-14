@@ -15,6 +15,7 @@ from django.db import IntegrityError, transaction
 
 from intraday.application.config_schema.records import (
     RiskConfigurationRecord,
+    StrategyConfigurationSnapshot,
     StrategyVersionSnapshot,
     UniverseRecord,
 )
@@ -36,6 +37,7 @@ from intraday.infrastructure.persistence.models import (
     ActiveUniverse,
     AuditLogEntry,
     RiskConfigurationVersion,
+    StrategyConfigurationRecord,
     StrategyVersionRecord,
     UniverseVersion,
 )
@@ -442,6 +444,70 @@ def _strategy_row_to_snapshot(row: StrategyVersionRecord) -> StrategyVersionSnap
         maturity_state=StrategyMaturityState(row.maturity_state),
     )
     return StrategyVersionSnapshot(strategy_version=strategy_version, created_at=row.created_at)
+
+
+# --- Strategy configuration values (Checkpoint 26) ------------------------
+
+
+def _configuration_row_to_snapshot(
+    row: StrategyConfigurationRecord,
+) -> StrategyConfigurationSnapshot:
+    return StrategyConfigurationSnapshot(
+        strategy_id=row.strategy_id,
+        specification_version=row.specification_version,
+        code_version=row.code_version,
+        configuration_version=row.configuration_version,
+        parameter_values=dict(row.parameter_values),
+        created_at=row.created_at,
+        created_by=row.created_by,
+    )
+
+
+class DjangoStrategyConfigurationRepository:
+    """Django ORM implementation of `StrategyConfigurationRepository`.
+    Append-only: `save()` never updates an existing row - a materially
+    different configuration must be saved under a new
+    `configuration_version` (Part 11/12); attempting to reuse an
+    existing identity raises `DuplicateVersionError`, the same
+    technology-neutral error `DjangoStrategyVersionRepository.save()`
+    already raises for the analogous case."""
+
+    def save(self, snapshot: StrategyConfigurationSnapshot) -> None:
+        try:
+            StrategyConfigurationRecord.objects.create(
+                strategy_id=snapshot.strategy_id,
+                specification_version=snapshot.specification_version,
+                code_version=snapshot.code_version,
+                configuration_version=snapshot.configuration_version,
+                parameter_values=snapshot.parameter_values,
+                created_at=snapshot.created_at,
+                created_by=snapshot.created_by,
+            )
+        except IntegrityError as exc:
+            raise DuplicateVersionError(
+                f"strategy configuration identity already exists for {snapshot.strategy_id!r}"
+            ) from exc
+
+    def get(
+        self,
+        strategy_id: str,
+        specification_version: str,
+        code_version: str,
+        configuration_version: str,
+    ) -> StrategyConfigurationSnapshot | None:
+        row = StrategyConfigurationRecord.objects.filter(
+            strategy_id=strategy_id,
+            specification_version=specification_version,
+            code_version=code_version,
+            configuration_version=configuration_version,
+        ).first()
+        return _configuration_row_to_snapshot(row) if row is not None else None
+
+    def list_for_strategy(self, strategy_id: str) -> tuple[StrategyConfigurationSnapshot, ...]:
+        rows = StrategyConfigurationRecord.objects.filter(strategy_id=strategy_id).order_by(
+            "created_at"
+        )
+        return tuple(_configuration_row_to_snapshot(row) for row in rows)
 
 
 # --- Audit (Checkpoint 12, read-only) -----------------------------------------
