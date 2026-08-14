@@ -452,6 +452,36 @@ interface TradeRawForCosts {
   costs: string;
 }
 
+// Checkpoint 30 Part 17: a compact, static indicator of the *engine's*
+// independent reference-validation status - see
+// docs/research/BACKTEST_REFERENCE_VALIDATION.md for the full report.
+// This is code-embedded (not fetched from an API) because the
+// validation is a property of the engine's source code at a given
+// commit, not of any individual backtest run. It intentionally says
+// nothing about whether any particular strategy or result is
+// profitable, safe, or production-ready - only that the calculation
+// engine itself has been cross-checked against an independent
+// reference implementation.
+const ENGINE_VALIDATION = {
+  status: "VERIFIED" as const,
+  lastValidated: "2026-08-14",
+  reference: "independent reference implementation (tests/validation/reference_engine.py)",
+  datasets: "MICRO-EMA-CROSSOVER-V1, EXTENDED-EMA-CROSSOVER-V1",
+};
+
+function EngineValidationIndicator(): JSX.Element {
+  return (
+    <div className="callout callout--info" role="note">
+      <span className="badge badge--ok">ENGINE VALIDATION: {ENGINE_VALIDATION.status}</span>{" "}
+      Calculation engine cross-checked against an {ENGINE_VALIDATION.reference} on{" "}
+      {ENGINE_VALIDATION.datasets} (last validated {ENGINE_VALIDATION.lastValidated}). This
+      confirms the engine computes signals, trades, costs, and equity correctly - it does{" "}
+      <strong>not</strong> mean this strategy or result is profitable, safe, or production ready.
+      See <code>docs/research/BACKTEST_REFERENCE_VALIDATION.md</code> for the full report.
+    </div>
+  );
+}
+
 function BacktestResultsPanel({ result }: { result: BacktestResult }): JSX.Element {
   const m = result.metrics as Record<string, string | number | null>;
   const configuration = asConfigurationView(result);
@@ -479,6 +509,8 @@ function BacktestResultsPanel({ result }: { result: BacktestResult }): JSX.Eleme
         <span className="badge badge--pending">{trustLevel}</span> - see the Strategy &amp;
         Backtesting guide for what this level means and does not mean.
       </div>
+
+      <EngineValidationIndicator />
 
       <div className="backtest-results__cost-model-identity">
         <span
