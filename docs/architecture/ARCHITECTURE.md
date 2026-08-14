@@ -384,3 +384,16 @@ Checkpoint 32 added `REPORTING_ARCHITECTURE.md`,
 `PLACEHOLDER_AND_FEATURE_STATE_ARCHITECTURE.md`, and
 `RUNTIME_ARCHITECTURE_DECISION.md` - see `ARCHITECTURE_DECISIONS.md`'s
 Checkpoint 32 entries and `taskReport.md` for what they establish.
+Checkpoint 33 is a critical, evidence-based product-readiness audit -
+see `docs/architecture/PRODUCT_READINESS_GAP_ANALYSIS.md` and
+`docs/research/ACTIVE_PRODUCT_READINESS_RESEARCH.md`. Its headline
+finding: this codebase is a disciplined, well-tested research/
+backtesting platform with a live-data observation front end - it is
+**not yet an operable trading system**. `risk_engine`, `order_management`,
+`execution_management`, `session_management`, and `broker_abstraction`
+remain empty scaffolding; no order has ever been placed; no
+reconciliation, paper trading, or risk gating exists. This is not a
+regression - every prior checkpoint correctly kept these boundaries
+untouched per its own safety rules - but it means the distance between
+"architecturally sound" and "operationally ready" is large and should
+not be assumed closed by the volume of work completed so far.
