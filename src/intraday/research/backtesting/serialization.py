@@ -72,6 +72,18 @@ def to_json_dict(result: BacktestResult) -> dict[str, object]:
             }
             for p in result.equity_curve
         ],
+        "mark_to_market_curve": [
+            {
+                "timestamp": p.timestamp.isoformat(),
+                "realized_pnl": _dec(p.realized_pnl),
+                "unrealized_pnl": _dec(p.unrealized_pnl),
+                "total_equity": _dec(p.total_equity),
+                "peak_equity": _dec(p.peak_equity),
+                "drawdown": _dec(p.drawdown),
+                "drawdown_percent": _dec(p.drawdown_percent),
+            }
+            for p in result.mark_to_market_curve
+        ],
         "metrics": {
             "total_trades": result.metrics.total_trades,
             "winning_trades": result.metrics.winning_trades,
@@ -83,6 +95,7 @@ def to_json_dict(result: BacktestResult) -> dict[str, object]:
             "profit_factor": _dec(result.metrics.profit_factor),
             "max_drawdown": _dec(result.metrics.max_drawdown),
             "max_drawdown_percent": _dec(result.metrics.max_drawdown_percent),
+            "max_drawdown_duration_bars": result.metrics.max_drawdown_duration_bars,
             "average_trade": _dec(result.metrics.average_trade),
             "average_winner": _dec(result.metrics.average_winner),
             "average_loser": _dec(result.metrics.average_loser),
@@ -100,4 +113,14 @@ def to_json_dict(result: BacktestResult) -> dict[str, object]:
             "slippage_assumption": result.data_quality.slippage_assumption,
             "survivorship_bias_note": result.data_quality.survivorship_bias_note,
         },
+        "validation": {
+            "bar_count": result.validation.bar_count,
+            "signal_count": result.validation.signal_count,
+            "trade_count": result.validation.trade_count,
+            "warmup_bars": result.validation.warmup_bars,
+            "skipped_signals": result.validation.skipped_signals,
+            "rejected_trades": result.validation.rejected_trades,
+            "data_gaps_note": result.validation.data_gaps_note,
+        },
+        "trust_level": result.trust_level.value,
     }

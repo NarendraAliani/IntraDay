@@ -98,6 +98,10 @@ const BACKTEST_RESULT = {
     { timestamp: "2026-01-02T04:00:00Z", balance: "100000", cumulative_pnl: "0", drawdown: "0", drawdown_percent: "0" },
     { timestamp: "2026-01-02T04:10:00Z", balance: "100020", cumulative_pnl: "20", drawdown: "0", drawdown_percent: "0" },
   ],
+  mark_to_market_curve: [
+    { timestamp: "2026-01-02T04:00:00Z", realized_pnl: "0", unrealized_pnl: "0", total_equity: "100000", peak_equity: "100000", drawdown: "0", drawdown_percent: "0" },
+    { timestamp: "2026-01-02T04:10:00Z", realized_pnl: "20", unrealized_pnl: "0", total_equity: "100020", peak_equity: "100020", drawdown: "0", drawdown_percent: "0" },
+  ],
   metrics: {
     total_trades: 1,
     winning_trades: 1,
@@ -109,6 +113,7 @@ const BACKTEST_RESULT = {
     profit_factor: null,
     max_drawdown: "0",
     max_drawdown_percent: "0",
+    max_drawdown_duration_bars: 0,
     average_trade: "20",
     average_winner: "20",
     average_loser: null,
@@ -117,6 +122,16 @@ const BACKTEST_RESULT = {
     final_capital: "100020",
     return_percent: "0.02",
   },
+  validation: {
+    bar_count: 8,
+    signal_count: 3,
+    trade_count: 1,
+    warmup_bars: 5,
+    skipped_signals: 0,
+    rejected_trades: 0,
+    data_gaps_note: "not computed",
+  },
+  trust_level: "POC",
   data_quality: {
     data_source: "fixture",
     data_quality: "FIXTURE_OR_HISTORICAL",
@@ -254,5 +269,64 @@ describe("BacktestingWorkbenchPage", () => {
 
     expect(screen.queryByRole("button", { name: "Run Backtest" })).not.toBeInTheDocument();
     expect(screen.getByText(/configuration-operator role/)).toBeInTheDocument();
+  });
+
+  it("shows the POC trust level and a not-a-guarantee disclaimer on results", async () => {
+    stubFetch({
+      "/strategy-engine/fields/": FIELDS,
+      "/strategy-engine/strategies/": STRATEGIES,
+      "/strategy-engine/strategies/ema_crossover/schema/": SCHEMA,
+      "/backtesting/run/": BACKTEST_RESULT,
+    });
+    renderWithAuth(<BacktestingWorkbenchPage />);
+    await waitFor(() => expect(screen.getByText("EMA Crossover")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Configure" }));
+    await waitFor(() => expect(screen.getByLabelText(/Fast EMA Lookback/)).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Run Backtest" }));
+
+    await waitFor(() => expect(screen.getByText("Results")).toBeInTheDocument());
+    expect(screen.getByText("POC")).toBeInTheDocument();
+    expect(screen.getByText(/not guarantees of future performance/)).toBeInTheDocument();
+    expect(screen.getByText("Research-Quality Validation")).toBeInTheDocument();
+  });
+
+  it("warns when data quality is SAMPLE_BAR", async () => {
+    const sampleBarResult = {
+      ...BACKTEST_RESULT,
+      data_quality: { ...BACKTEST_RESULT.data_quality, data_quality: "SAMPLE_BAR" },
+    };
+    stubFetch({
+      "/strategy-engine/fields/": FIELDS,
+      "/strategy-engine/strategies/": STRATEGIES,
+      "/strategy-engine/strategies/ema_crossover/schema/": SCHEMA,
+      "/backtesting/run/": sampleBarResult,
+    });
+    renderWithAuth(<BacktestingWorkbenchPage />);
+    await waitFor(() => expect(screen.getByText("EMA Crossover")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Configure" }));
+    await waitFor(() => expect(screen.getByLabelText(/Fast EMA Lookback/)).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Run Backtest" }));
+
+    await waitFor(() =>
+      expect(screen.getByText(/NOT SUITABLE FOR TRADING-GRADE/)).toBeInTheDocument(),
+    );
+  });
+
+  it("View expands strategy details showing parameter count", async () => {
+    stubFetch({
+      "/strategy-engine/fields/": FIELDS,
+      "/strategy-engine/strategies/": STRATEGIES,
+      "/strategy-engine/strategies/ema_crossover/schema/": SCHEMA,
+    });
+    renderWithAuth(<BacktestingWorkbenchPage />);
+    await waitFor(() => expect(screen.getByText("EMA Crossover")).toBeInTheDocument());
+
+    const viewButtons = screen.getAllByRole("button", { name: "View" });
+    fireEvent.click(viewButtons[0]);
+
+    await waitFor(() =>
+      expect(screen.getByText("Parameters:", { exact: false })).toBeInTheDocument(),
+    );
+    expect(screen.getByText("Fast EMA Lookback")).toBeInTheDocument();
   });
 });

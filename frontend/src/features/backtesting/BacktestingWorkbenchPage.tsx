@@ -80,6 +80,8 @@ export function BacktestingWorkbenchPage(): JSX.Element {
   const [slippagePercent, setSlippagePercent] = useState("0");
 
   const [runState, setRunState] = useState<RunState>({ phase: "ready" });
+  const [expandedStrategyId, setExpandedStrategyId] = useState<string | null>(null);
+  const [schemaCache, setSchemaCache] = useState<Record<string, StrategySchema>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -115,6 +117,22 @@ export function BacktestingWorkbenchPage(): JSX.Element {
       setValues(defaultValuesFor(strategySchema.parameters));
     } catch (error) {
       setLoadError(describeError(error));
+    }
+  }
+
+  async function toggleView(strategyId: string): Promise<void> {
+    if (expandedStrategyId === strategyId) {
+      setExpandedStrategyId(null);
+      return;
+    }
+    setExpandedStrategyId(strategyId);
+    if (!schemaCache[strategyId]) {
+      try {
+        const strategySchema = await getStrategySchema(strategyId);
+        setSchemaCache((prev) => ({ ...prev, [strategyId]: strategySchema }));
+      } catch (error) {
+        setLoadError(describeError(error));
+      }
     }
   }
 
@@ -174,10 +192,27 @@ export function BacktestingWorkbenchPage(): JSX.Element {
                   <dd>
                     {strategy.specification_version} / {strategy.code_version}
                   </dd>
-                  <dt>Status</dt>
+                  <dt>Maturity</dt>
                   <dd>{strategy.is_active ? "Active for research" : "Registered"}</dd>
+                  <dt>Backtest availability</dt>
+                  <dd>Available (fixture/historical data)</dd>
                 </dl>
+                {expandedStrategyId === strategy.strategy_id && schemaCache[strategy.strategy_id] && (
+                  <div className="backtest-workbench__card-detail">
+                    <p>
+                      <strong>Parameters:</strong> {schemaCache[strategy.strategy_id].parameters.length}
+                    </p>
+                    <ul>
+                      {schemaCache[strategy.strategy_id].parameters.map((p) => (
+                        <li key={p.parameter_id}>{p.label}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
                 <div className="backtest-workbench__card-actions">
+                  <button type="button" onClick={() => void toggleView(strategy.strategy_id)}>
+                    {expandedStrategyId === strategy.strategy_id ? "Hide" : "View"}
+                  </button>
                   <button type="button" onClick={() => void openConfigure(strategy.strategy_id)}>
                     Configure
                   </button>
@@ -223,10 +258,16 @@ export function BacktestingWorkbenchPage(): JSX.Element {
                   value={instrumentId}
                   onChange={(e) => setInstrumentId(e.target.value)}
                 />
+                <p className="strategy-config-page__help-text">
+                  What stock/universe: the exact instrument this backtest simulates trading.
+                </p>
               </div>
               <div className="strategy-config-page__field">
                 <label htmlFor="bt-timeframe">Timeframe</label>
                 <input id="bt-timeframe" value={timeframe} onChange={(e) => setTimeframe(e.target.value)} />
+                <p className="strategy-config-page__help-text">
+                  The bar size the strategy evaluates on, e.g. "5m" for 5-minute bars.
+                </p>
               </div>
               <div className="strategy-config-page__field">
                 <label htmlFor="bt-start">Start</label>
@@ -245,6 +286,9 @@ export function BacktestingWorkbenchPage(): JSX.Element {
                   value={end}
                   onChange={(e) => setEnd(e.target.value)}
                 />
+                <p className="strategy-config-page__help-text">
+                  What date range: the historical window the simulation covers.
+                </p>
               </div>
               <div className="strategy-config-page__field">
                 <label htmlFor="bt-capital">Initial Capital</label>
@@ -254,6 +298,9 @@ export function BacktestingWorkbenchPage(): JSX.Element {
                   value={initialCapital}
                   onChange={(e) => setInitialCapital(e.target.value)}
                 />
+                <p className="strategy-config-page__help-text">
+                  How much simulated capital the backtest starts with - never real money.
+                </p>
               </div>
               <div className="strategy-config-page__field">
                 <label htmlFor="bt-sizing-mode">Position Size Model</label>
@@ -287,6 +334,10 @@ export function BacktestingWorkbenchPage(): JSX.Element {
                   value={brokeragePercent}
                   onChange={(e) => setBrokeragePercent(e.target.value)}
                 />
+                <p className="strategy-config-page__help-text">
+                  ASSUMPTION: a flat percentage cost per trade side - not a verified Indian
+                  brokerage/tax schedule.
+                </p>
               </div>
               <div className="strategy-config-page__field">
                 <label htmlFor="bt-slippage">Slippage (%, model assumption)</label>
@@ -296,7 +347,15 @@ export function BacktestingWorkbenchPage(): JSX.Element {
                   value={slippagePercent}
                   onChange={(e) => setSlippagePercent(e.target.value)}
                 />
+                <p className="strategy-config-page__help-text">
+                  ASSUMPTION: how much the fill price moves against you on every trade.
+                </p>
               </div>
+              <p className="strategy-config-page__help-text">
+                <strong>What does Run Backtest actually do?</strong> It replays the strategy above,
+                bar by bar, against the historical data selected here, and records every simulated
+                trade it would have made - it never places a real order.
+              </p>
             </fieldset>
 
             {canRun ? (
@@ -319,13 +378,54 @@ export function BacktestingWorkbenchPage(): JSX.Element {
   );
 }
 
+interface MtmPointRaw {
+  timestamp: string;
+  total_equity: string;
+  drawdown_percent: string;
+}
+
+interface ValidationSummaryRaw {
+  bar_count: number;
+  signal_count: number;
+  trade_count: number;
+  warmup_bars: number;
+  skipped_signals: number;
+  rejected_trades: number;
+  data_gaps_note: string;
+}
+
+/** Data-quality gate level (Part 14): FIXTURE/HISTORICAL is
+ * informational, SAMPLE_BAR is a warning (restricted - not suitable for
+ * trading-grade claims). Nothing this engine can produce today is
+ * BLOCKING (that would apply to corrupted/rejected data, which never
+ * reaches a result - the API rejects it before a result exists). */
+function dataQualityLevel(quality: string): "informational" | "warning" {
+  return quality === "SAMPLE_BAR" ? "warning" : "informational";
+}
+
 function BacktestResultsPanel({ result }: { result: BacktestResult }): JSX.Element {
   const m = result.metrics as Record<string, string | number | null>;
   const configuration = asConfigurationView(result);
   const dataQuality = asDataQualityView(result);
+  const validation = result.validation as unknown as ValidationSummaryRaw;
+  const trustLevel = String(result.trust_level ?? "POC");
+  const level = dataQualityLevel(dataQuality.data_quality);
+  const mtmPoints = (result.mark_to_market_curve as unknown as MtmPointRaw[]).map((p) => ({
+    timestamp: p.timestamp,
+    balance: p.total_equity,
+    drawdown_percent: p.drawdown_percent,
+  }));
+
   return (
     <section className="backtest-results" aria-label="Backtest Results">
       <h3>Results</h3>
+
+      <div className="callout callout--warn" role="note">
+        <strong>RESULT, not a promise.</strong> Backtest results are historical simulations and
+        are not guarantees of future performance. Trust level:{" "}
+        <span className="badge badge--pending">{trustLevel}</span> - see the Strategy &amp;
+        Backtesting guide for what this level means and does not mean.
+      </div>
 
       <div className="backtest-results__kpis">
         <div className="backtest-results__kpi">
@@ -353,11 +453,15 @@ function BacktestResultsPanel({ result }: { result: BacktestResult }): JSX.Eleme
           <strong>{m.profit_factor === null ? "—" : Number(m.profit_factor).toFixed(2)}</strong>
         </div>
         <div className="backtest-results__kpi">
-          <span>Max Drawdown</span>
+          <span>Max Drawdown (mark-to-market)</span>
           <strong>{formatPercent(String(m.max_drawdown_percent))}</strong>
         </div>
         <div className="backtest-results__kpi">
-          <span>Sharpe (trade-level)</span>
+          <span>Drawdown Duration</span>
+          <strong>{String(m.max_drawdown_duration_bars)} bars</strong>
+        </div>
+        <div className="backtest-results__kpi">
+          <span>Sharpe (trade-level, non-annualized)</span>
           <strong>{m.sharpe_ratio_trade_level === null ? "—" : Number(m.sharpe_ratio_trade_level).toFixed(2)}</strong>
         </div>
         <div className="backtest-results__kpi">
@@ -367,15 +471,22 @@ function BacktestResultsPanel({ result }: { result: BacktestResult }): JSX.Eleme
       </div>
 
       <div className="backtest-results__charts">
-        <EquityCurveChart points={result.equity_curve as never} />
-        <DrawdownChart points={result.equity_curve as never} />
+        <EquityCurveChart points={mtmPoints} />
+        <DrawdownChart points={mtmPoints} />
       </div>
+      <p className="strategy-config-page__help-text">
+        LIMITATION: the equity/drawdown curves above are mark-to-market (valued at each bar's own
+        close price while a position is open) - a real, but simplified, view of intrabar risk.
+      </p>
 
       <div className="backtest-results__data-quality">
         <h4>Data Quality &amp; Assumptions</h4>
         <ul>
           <li>
-            <strong>Data quality:</strong> {dataQuality.data_quality}
+            <strong>Data quality:</strong>{" "}
+            <span className={level === "warning" ? "badge badge--pending" : "badge badge--ok"}>
+              {dataQuality.data_quality}
+            </span>
             {dataQuality.data_quality === "SAMPLE_BAR" && (
               <strong className="backtest-results__warning">
                 {" "}
@@ -386,10 +497,50 @@ function BacktestResultsPanel({ result }: { result: BacktestResult }): JSX.Eleme
           <li>
             <strong>Bar count:</strong> {dataQuality.bar_count}
           </li>
-          <li>{dataQuality.transaction_cost_assumption}</li>
-          <li>{dataQuality.slippage_assumption}</li>
-          <li>{dataQuality.survivorship_bias_note}</li>
+          <li>ASSUMPTION: {dataQuality.transaction_cost_assumption}</li>
+          <li>ASSUMPTION: {dataQuality.slippage_assumption}</li>
+          <li>LIMITATION: {dataQuality.survivorship_bias_note}</li>
         </ul>
+      </div>
+
+      <div className="backtest-results__validation">
+        <h4>Research-Quality Validation</h4>
+        <p className="strategy-config-page__help-text">
+          Diagnostics to explain why two seemingly similar backtests can produce different
+          results.
+        </p>
+        <table>
+          <tbody>
+            <tr>
+              <td>Bars</td>
+              <td>{validation.bar_count}</td>
+            </tr>
+            <tr>
+              <td>Signals</td>
+              <td>{validation.signal_count}</td>
+            </tr>
+            <tr>
+              <td>Trades</td>
+              <td>{validation.trade_count}</td>
+            </tr>
+            <tr>
+              <td>Warm-up bars</td>
+              <td>{validation.warmup_bars}</td>
+            </tr>
+            <tr>
+              <td>Skipped signals (same-direction, position already open)</td>
+              <td>{validation.skipped_signals}</td>
+            </tr>
+            <tr>
+              <td>Rejected trades (insufficient capital)</td>
+              <td>{validation.rejected_trades}</td>
+            </tr>
+            <tr>
+              <td>Data gaps</td>
+              <td>{validation.data_gaps_note}</td>
+            </tr>
+          </tbody>
+        </table>
       </div>
 
       <TradeTable trades={result.trades as never} />

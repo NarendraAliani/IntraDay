@@ -7436,3 +7436,100 @@ intrabar mark-to-market of open positions (documented POC limitation).
 Brokerage/tax costs are a flat-percentage MODEL ASSUMPTION, not a
 verified Indian brokerage/STT/GST formula (no authoritative source was
 available to verify against).
+
+## Checkpoint 28 — Backtesting Validation, Portfolio Analytics, Mark-to-Market Equity & UX Validation (2026-08-14)
+
+### Audit conclusion (Part 1)
+
+Checkpoint 27's engine was a genuine, tested POC - safe to trust for
+architecture/reuse patterns and no-look-ahead correctness, but NOT yet
+safe as a strategy-selection input: drawdown was realized-only (blind to
+intrabar risk), only 1 concurrent position was supported, brokerage/
+slippage were inline flat-percent calculations (not abstracted, not
+verified), and "all tests pass" had never been distinguished from
+"quantitatively production-ready." This checkpoint addresses each gap
+directly, without promoting the result's own trust label.
+
+### What was built
+
+- **Backtest Trust Level** (`BacktestTrustLevel`: POC/RESEARCH_READY/
+  VALIDATION_READY/PRODUCTION_RESEARCH_READY) - every result today is
+  `POC`, with five documented, unmet promotion criteria (never
+  automatic).
+- **Mark-to-market equity** (`MarkToMarketPoint`, one per bar) -
+  separates realized/unrealized P&L, mark price = bar's own close
+  (documented convention). Kept the Checkpoint 27 realized-only curve
+  unchanged alongside it. `max_drawdown`/`.max_drawdown_percent`/new
+  `.max_drawdown_duration_bars` now derive from the MTM curve. Proven
+  adversarially: an intrabar dip that recovers before trade close still
+  registers a positive max drawdown.
+- **Multi-instrument portfolio backtesting** (`portfolio.py`) - shared
+  capital pool, `max_concurrent_positions` genuinely enforced (1 through
+  N), per-instrument strategy assignment (different strategies per
+  instrument, or the same strategy across instruments), full capital
+  accounting invariants (no negative cash, no over-allocation, no
+  duplicate same-instrument positions) - built entirely on primitives
+  factored out of the single-instrument engine (`execution.py`,
+  `cost_model.py`, `metrics.py`), zero duplicate P&L/sizing/metrics
+  logic (grep-verified).
+- **Cost model abstraction** (`cost_model.CostModel` Protocol +
+  `FlatPercentageCostModel`) - isolates the existing flat-percentage
+  brokerage/slippage calculation behind an interface so a future, more
+  realistic model can be added without an engine change. Still
+  explicitly labeled MODEL ASSUMPTION.
+- **Result validation summary** (`ResultValidationSummary`) - bar/
+  signal/trade/warm-up/skipped-signal/rejected-trade counts, attached to
+  every result.
+- **Reproducibility across the full stack** - proven through persistence
+  + API serialization + API retrieval, not just at the engine level.
+- **Frontend**: trust-level badge, disclaimer callout ("not guarantees
+  of future performance"), data-quality gate levels (informational/
+  warning badges), research-quality validation table, mark-to-market
+  charts, contextual help text throughout the Workbench form, Discover
+  card "View" action (parameter count/list), Comparison page extended
+  to warn on data-quality/cost-model mismatches (not just instrument/
+  timeframe).
+
+### Real defects/gaps found and fixed
+
+1. Drawdown was realized-only in Checkpoint 27 - materially incomplete
+   for intraday risk assessment. Fixed via mark-to-market curve, proven
+   by a dedicated adversarial test.
+2. `max_concurrent_positions` was hard-locked to 1 with no path to
+   support more, despite Part 7's requirement. Fixed via a genuinely
+   separate portfolio engine reusing (not duplicating) single-instrument
+   primitives.
+3. Brokerage/slippage math was inlined directly in `engine.py`, making
+   a future realistic cost model impossible without an engine rewrite.
+   Fixed via the `CostModel` Protocol.
+
+### Validation
+
+- Backend: `ruff format --check`/`ruff check` clean, `mypy` clean (185
+  source files), `lint-imports` 6/6 kept (a real earlier-draft violation
+  of contract 4 was caught and fixed during this checkpoint's own audit
+  - see ARCHITECTURE_DECISIONS.md decisions 130-134), `manage.py check`
+  clean, `makemigrations --check --dry-run` clean, `spectacular
+  --fail-on-warn` clean. `pytest` **806 passed / 0 failed / 0 skipped**
+  (real PostgreSQL, 22 new tests: mark-to-market 6, portfolio 8, MFE/MAE
+  semantics 3, bar semantics/bias audit 3, reproducibility round-trip 2).
+- Frontend: `tsc --noEmit`/`vite build` clean; `vitest` **76 passed / 0
+  failed** (3 new tests for trust-level/data-quality-warning/View
+  action).
+- Non-redundancy audit: zero duplicate P&L/sizing/MFE-MAE/metrics
+  formulas between the single-instrument and portfolio engines
+  (grep-verified after implementation).
+- Trading safety unchanged: `trading_engine/{risk_engine,order_management,
+  position_management,broker*,execution_management,session_management}`,
+  kill switch, TRADING_MODE all untouched.
+- No credentials/secrets introduced (repo-wide grep clean).
+
+### Not done in this checkpoint
+
+No live browser (Playwright/Selenium) end-to-end validation - tooling
+confirmed unavailable in this environment (`import playwright` fails,
+no `node_modules/.bin/playwright`); not claimed as performed, matching
+Checkpoint 27's own documented limitation. Brokerage/tax costs remain a
+flat-percentage MODEL ASSUMPTION - genuine Indian brokerage/STT/GST
+verification remains a promotion criterion for `RESEARCH_READY`, not
+implemented here.

@@ -43,8 +43,11 @@ class BacktestResultSerializer(serializers.Serializer[None]):
     configuration = serializers.JSONField()
     trades = serializers.JSONField()
     equity_curve = serializers.JSONField()
+    mark_to_market_curve = serializers.JSONField()
     metrics = serializers.JSONField()
     data_quality = serializers.JSONField()
+    validation = serializers.JSONField()
+    trust_level = serializers.CharField()
 
 
 class WatchlistSaveRequestSerializer(serializers.Serializer[None]):

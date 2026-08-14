@@ -11,7 +11,11 @@ import { useEffect, useState } from "react";
 import { ApiNetworkError, ApiRequestError } from "../../common/api/client";
 import { ErrorState } from "../../common/components/ErrorState";
 import { LoadingState } from "../../common/components/LoadingState";
-import { asConfigurationView, listBacktestResults } from "../../common/api/backtestingApi";
+import {
+  asConfigurationView,
+  asDataQualityView,
+  listBacktestResults,
+} from "../../common/api/backtestingApi";
 import { listStrategies } from "../../common/api/strategyApi";
 import type { BacktestResult } from "../../common/api/backtestingApi";
 import type { StrategySummary } from "../../common/api/strategyApi";
@@ -79,7 +83,19 @@ export function ComparisonPage(): JSX.Element {
 
   const instrumentSet = new Set(selectedResults.map((r) => asConfigurationView(r).instrument_id));
   const timeframeSet = new Set(selectedResults.map((r) => asConfigurationView(r).timeframe));
-  const incompatible = instrumentSet.size > 1 || timeframeSet.size > 1;
+  const dataQualitySet = new Set(
+    selectedResults.map((r) => asDataQualityView(r).data_quality),
+  );
+  const costModelSet = new Set(
+    selectedResults.map(
+      (r) => `${asDataQualityView(r).transaction_cost_assumption}|${asDataQualityView(r).slippage_assumption}`,
+    ),
+  );
+  const incompatible =
+    instrumentSet.size > 1 ||
+    timeframeSet.size > 1 ||
+    dataQualitySet.size > 1 ||
+    costModelSet.size > 1;
 
   return (
     <div className="comparison-page">
@@ -145,8 +161,8 @@ export function ComparisonPage(): JSX.Element {
 
           {incompatible && (
             <div className="callout callout--warn">
-              Selected results use different instruments/timeframes - comparison numbers are not
-              directly equivalent.
+              Selected results use different instruments, timeframes, data quality, or cost
+              assumptions - comparison numbers are not directly equivalent.
             </div>
           )}
 

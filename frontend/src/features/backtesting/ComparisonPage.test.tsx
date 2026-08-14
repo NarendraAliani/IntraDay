@@ -108,7 +108,7 @@ describe("ComparisonPage", () => {
     fireEvent.click(checkboxes[1]);
 
     await waitFor(() =>
-      expect(screen.getByText(/different instruments\/timeframes/)).toBeInTheDocument(),
+      expect(screen.getByText(/different instruments, timeframes/)).toBeInTheDocument(),
     );
   });
 });

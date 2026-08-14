@@ -583,10 +583,15 @@ What you see on screen</code></pre>
           <tr><td>Backtest</td><td>Running a strategy's rule against historical bars to see what it would have done.</td></tr>
           <tr><td>Trade simulation</td><td>One simulated buy-then-sell (or sell-then-buy) round trip the backtest generated — never a real order.</td></tr>
           <tr><td>Net P&amp;L</td><td>Profit or loss after subtracting modeled costs (brokerage, slippage) — the "bottom line" number.</td></tr>
-          <tr><td>Drawdown</td><td>How far the simulated account balance fell from its highest point so far — a measure of how painful the ride was, not just whether it ended in profit.</td></tr>
+          <tr><td>Drawdown</td><td>How far the simulated account balance fell from its highest point so far — a measure of how painful the ride was, not just whether it ended in profit. Calculated bar-by-bar (including while a trade is still open, "mark-to-market"), not only at the moment a trade closes — so a sharp dip that later recovered still shows up here.</td></tr>
           <tr><td>Profit Factor</td><td>Total simulated profit divided by total simulated loss — above 1 means more was won than lost; below 1 means the opposite.</td></tr>
+          <tr><td>Trust Level</td><td>A label (currently always <code>POC</code> — "proof of concept") stating how much weight to give a result. It is never promoted to a higher level automatically just because a backtest ran successfully — see the callout below.</td></tr>
         </tbody>
       </table>
+
+      <div class="callout callout--info">
+        <strong>Every result you see today is labeled <code>POC</code>.</strong> That is deliberate, not a bug: passing tests and producing numbers is not the same as being ready to guide real decisions. A result only earns a higher trust label after further, separately-documented validation work — never automatically.
+      </div>
 
       <h2>The workflow</h2>
       <ol>

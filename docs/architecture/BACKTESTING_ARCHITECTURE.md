@@ -207,3 +207,184 @@ pages for Parts 19-21 - never merged into a live-trading-flavored UI (no
 - `frontend/src/common/components/{ParameterSchemaFields,EquityChart}.tsx`
 - `tests/unit/research/test_backtesting_engine.py`
 - `tests/unit/architecture/test_backtesting_sample_bar_boundary.py`
+
+---
+
+# Checkpoint 28 additions: trust level, mark-to-market, portfolio, cost model
+
+## Backtest Trust Level (Part 3)
+
+`BacktestTrustLevel`: `POC` / `RESEARCH_READY` / `VALIDATION_READY` /
+`PRODUCTION_RESEARCH_READY`. Every result this engine produces today is
+`POC` - promotion is never automatic. Measurable criteria for the next
+level, `RESEARCH_READY`:
+
+1. Mark-to-market equity/drawdown implemented and tested (done, this
+   checkpoint).
+2. Multi-instrument portfolio capital accounting invariants proven
+   (done, this checkpoint).
+3. A verified (not assumed) Indian brokerage/STT/GST cost model,
+   checked against an authoritative published fee schedule.
+4. At least one backtest validated against an independent, trusted
+   reference (e.g. a well-known charting platform's own reported
+   trade-level outcome for the same instrument/period) to catch
+   systematic engine bugs no unit test would reveal.
+5. `TRADING_GRADE_BAR` data (Checkpoint 25.1's own six-condition
+   checklist) available as an alternative data source, so a result can
+   state it did NOT run on sampling-limited data.
+
+None of these five are satisfied yet. `VALIDATION_READY` and
+`PRODUCTION_RESEARCH_READY` are not yet defined in detail - defining
+them precisely before condition 1-5 above are met would be premature
+specification of an unreached milestone.
+
+## Mark-to-market equity (Part 4/5/6)
+
+`MarkToMarketPoint` - one per bar, separating `realized_pnl` (cumulative,
+from closed trades) from `unrealized_pnl` (0 unless a position is open
+at that bar). **Mark-price convention**: unrealized P&L is valued at
+that bar's own CLOSE (never intrabar high/low, which would silently
+pick a favorable/adverse price). The equity identity
+`initial_capital + realized_pnl + unrealized_pnl == total_equity` holds
+at every bar - proven by `test_equity_identity_holds_at_every_bar`.
+
+`max_drawdown`/`max_drawdown_percent` are now derived from this
+mark-to-market curve, not the realized-only trade-close `EquityPoint`
+curve (which is KEPT, unchanged, per Part 4's explicit instruction -
+still the authoritative realized-only view). `max_drawdown_duration_bars`
+is the longest streak of consecutive bars spent below the running peak.
+
+Proven adversarially: `test_intrabar_adverse_move_is_captured_even_if_
+trade_recovers_before_exit` injects a severe adverse bar into an
+otherwise-profitable trade and confirms `max_drawdown > 0` even though
+the trade itself never closes at a loss - the realized-only curve alone
+could never show this.
+
+## Portfolio / multi-instrument backtesting (Part 7/8/9)
+
+`research/backtesting/portfolio.py` - built entirely on the
+single-instrument primitives factored into `execution.py`/
+`cost_model.py`/`metrics.py` (Part 27 non-redundancy carried forward).
+`engine.run_backtest()` is completely unchanged and remains correct for
+`max_concurrent_positions == 1`.
+
+**Scope, explicit**: every instrument in one portfolio run must share
+identical bar timestamps (same timeframe, same aligned session) - the
+engine validates this and raises `InvalidBacktestConfigurationError`
+rather than guessing an alignment. Not a general multi-timeframe engine.
+
+**Capital accounting invariants** (Part 8, enforced, tested):
+- `available_cash` decreases by an entry's own notional at entry,
+  increases by `entry_notional + net_pnl` at exit (equivalent to the
+  single-instrument engine's realized net P&L).
+- An entry whose notional exceeds `available_cash` is REJECTED, never
+  partially filled, never allowed to drive cash negative - proven by
+  `test_capital_never_goes_negative_and_no_money_is_created`.
+- An entry is REJECTED once `max_concurrent_positions` positions are
+  already open, regardless of cash - proven by
+  `test_max_concurrent_positions_1_matches_single_instrument_style_behavior`
+  (no overlapping intervals) and
+  `test_max_concurrent_positions_5_allows_up_to_5_open_positions`.
+- Duplicate instrument assignments are rejected at configuration time -
+  one open position per instrument, never two simultaneous strategies on
+  the same instrument.
+
+**Attribution** (Part 9): `PortfolioBacktestResult.trades` reuses
+`SimulatedTrade` unchanged - no second trade type. Strategy A ->
+instrument X, Strategy B -> instrument Y, and "same strategy, multiple
+instruments" are all proven in
+`test_attribution_preserved_across_multi_strategy_multi_instrument`.
+
+## Cost model abstraction (Part 10/11)
+
+`cost_model.CostModel` (Protocol) + `FlatPercentageCostModel` (the only
+implementation, carried over unchanged from Checkpoint 27's inline
+calculation, now isolated behind the Protocol). Both `engine.py` and
+`portfolio.py` call `CostModel.brokerage()`/`.slippage_adjusted_price()`
+- neither inlines a formula. Explicitly labeled MODEL ASSUMPTION - not a
+verified Indian brokerage/STT/GST/exchange-charge schedule (no
+authoritative source was available to verify against in this
+checkpoint). Extension points identified but NOT implemented (Part 11's
+own scope limit): fixed-points slippage, spread-based, volatility-based,
+liquidity-aware models, and a verified Indian cost schedule - each would
+be a second `CostModel` implementation, requiring no engine change.
+
+## Bar semantics / quantitative bias audit (Part 12/13)
+
+Backtesting consumes bars exclusively through
+`HistoricalMarketDataService.get_bars()` (Checkpoint 14/18/27), which
+already calls `domain.market_data.quality.ensure_chronological()` -
+duplicate timestamps raise `DuplicateBarTimestampError`, out-of-order
+bars raise `OutOfOrderBarError`, BEFORE any bar reaches the engine.
+Proven (not merely asserted) by
+`tests/unit/research/test_bar_semantics_and_bias_audit.py`. No gap-
+filling or synthetic bar is ever fabricated (`ResultValidationSummary.
+data_gaps_note` honestly states gap detection is not performed, rather
+than reporting a false "0 gaps").
+
+Look-ahead audit, reconfirmed this checkpoint:
+- Signal computed from bar `i`'s close never fills before bar `i+1`'s
+  open (`test_entry_never_fills_at_the_signal_bars_own_price`).
+- Truncating the bar series never changes an earlier decision
+  (`test_future_bars_do_not_affect_earlier_signals`).
+- Indicator warm-up bars produce no signal at all
+  (`test_indicator_warmup_is_respected_no_trade_before_warmup`).
+- Portfolio decisions never see another instrument's future bars or
+  results - each instrument's signal series is precomputed independently
+  from its own bars only (`execution.compute_signals`), before any
+  cross-instrument capital-allocation decision is made.
+- Comparison (`ComparisonPage.tsx`) only ever reads already-persisted
+  `BacktestResult` rows - it cannot influence or re-trigger the original
+  simulation.
+
+## MFE/MAE semantic distinction (Part 25)
+
+Reconfirmed and now mechanically guarded:
+`tests/unit/research/test_mfe_mae_semantics.py` proves
+`research.backtesting.execution.mfe_mae` never imports
+`signal_intelligence.theoretical_outcome`, is a distinct function object,
+and has a structurally different signature (`holding_bars`, a variable-
+length trade-defined window, vs. `theoretical_outcome`'s own fixed
+`horizon_bars` integer) - the two computations can never be accidentally
+conflated.
+
+## Result validation summary (Part 15)
+
+`ResultValidationSummary` - `bar_count`, `signal_count`, `trade_count`,
+`warmup_bars`, `skipped_signals` (same-direction signal while a position
+was already open), `rejected_trades` (entry computed a zero quantity),
+and an honest `data_gaps_note`. Every field is COUNTED from the actual
+simulated path, never estimated.
+
+## Reproducibility across the full stack (Part 17)
+
+Proven not just at the engine level (Checkpoint 27) but through
+persistence + API serialization + API retrieval:
+`test_displayed_result_matches_stored_result_exactly_after_roundtrip`
+asserts the immediately-returned run response and the subsequently
+GET-fetched, persisted response are byte-for-byte dict-equal.
+`test_rerunning_same_configuration_produces_identical_persisted_payload`
+confirms re-running an identical configuration through the real API
+produces an identical `backtest_id`, trades, mark-to-market curve, and
+metrics.
+
+## Data quality gate levels (Part 14)
+
+Frontend (`BacktestingWorkbenchPage.tsx`): `FIXTURE_OR_HISTORICAL` is
+rendered as an informational badge; `SAMPLE_BAR` (unreachable today,
+since no live-data path is wired - see the safety-gate section above)
+would render as a warning badge plus the explicit "NOT SUITABLE FOR
+TRADING-GRADE PERFORMANCE CLAIMS" text. No BLOCKING level exists in the
+UI because corrupted/rejected data never reaches a result at all - the
+API rejects it (via `ensure_chronological`) before a `BacktestResult`
+is ever constructed, which is a stronger guarantee than a UI-level block.
+
+## Browser UX validation (Part 2/27)
+
+**Not available in this environment** - no Playwright/Selenium/browser-
+automation tooling is installed (`import playwright` fails; no
+`node_modules/.bin/playwright`). Not claimed as performed. Frontend
+correctness for this checkpoint's changes was validated via
+`vitest`/Testing Library against the real components (network mocked at
+the `fetch` boundary only) plus `tsc --noEmit`/`vite build`, matching
+Checkpoint 27's own documented limitation.

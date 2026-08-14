@@ -127,9 +127,44 @@ class SimulatedTrade:
 
 @dataclass(frozen=True, slots=True)
 class EquityPoint:
+    """Realized-only equity, sampled at each trade-close event (Checkpoint
+    27's original curve) - kept unchanged and still authoritative for
+    "what did the account actually realize and when". Superseded for
+    DRAWDOWN PURPOSES by `MarkToMarketPoint` below (Checkpoint 28 Part
+    5), but never removed (Part 4's own explicit instruction)."""
+
     timestamp: datetime
     balance: Decimal
     cumulative_pnl: Decimal
+    drawdown: Decimal
+    drawdown_percent: Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class MarkToMarketPoint:
+    """Checkpoint 28 Part 4: one point per bar in the series (not just
+    trade-close events), separating REALIZED from UNREALIZED P&L.
+
+    Mark-price convention (Part 6, explicit): unrealized P&L on an open
+    position is valued at that bar's own CLOSE price - the same
+    close-time convention `domain.market_data.contracts.Bar` already
+    documents for the bar itself. No intrabar high/low mark is used
+    (would silently pick a favorable/adverse price, not the bar's
+    settled price). Unrealized valuation excludes exit costs (those are
+    only ever realized when a trade actually closes) - a documented
+    simplification, not a hidden one.
+    """
+
+    timestamp: datetime
+    realized_pnl: Decimal
+    """Cumulative P&L from all trades closed up to and including this bar."""
+    unrealized_pnl: Decimal
+    """0 when no position is open at this bar (Part 6)."""
+    total_equity: Decimal
+    """initial_capital + realized_pnl + unrealized_pnl - the identity
+    Part 6 requires holds at every point (proven by
+    `test_equity_identity_holds_at_every_bar`)."""
+    peak_equity: Decimal
     drawdown: Decimal
     drawdown_percent: Decimal
 
@@ -156,7 +191,15 @@ class BacktestMetrics:
     """gross_profit / abs(gross_loss) - None if gross_loss is zero
     (undefined, never reported as infinity or 0)."""
     max_drawdown: Decimal
+    """Checkpoint 28 Part 5: computed from the MARK-TO-MARKET equity
+    curve, not merely from trade-close points - captures an intrabar
+    adverse excursion even on a position that ultimately closes at
+    break-even or a profit."""
     max_drawdown_percent: Decimal
+    max_drawdown_duration_bars: int
+    """Number of consecutive bars equity spent below its prior peak, at
+    the longest such episode - 0 if equity never fell below its running
+    peak."""
     average_trade: Decimal
     average_winner: Decimal | None
     average_loser: Decimal | None
@@ -164,6 +207,47 @@ class BacktestMetrics:
     sortino_ratio_trade_level: Decimal | None
     final_capital: Decimal
     return_percent: Decimal
+
+
+class BacktestTrustLevel(str, Enum):
+    """Checkpoint 28 Part 3: how much weight a backtest result should be
+    given - deliberately NOT inferred from "all tests pass". See
+    `docs/architecture/BACKTESTING_ARCHITECTURE.md`'s "Backtest Trust
+    Level" section for the full, measurable promotion criteria per
+    level. Every result produced by this engine today is `POC` -
+    promotion is a documented, future, evidence-based decision, never
+    automatic."""
+
+    POC = "POC"
+    RESEARCH_READY = "RESEARCH_READY"
+    VALIDATION_READY = "VALIDATION_READY"
+    PRODUCTION_RESEARCH_READY = "PRODUCTION_RESEARCH_READY"
+
+
+@dataclass(frozen=True, slots=True)
+class ResultValidationSummary:
+    """Checkpoint 28 Part 15: research-quality diagnostics attached to
+    every result - essential for explaining why two seemingly similar
+    backtests differ. Every field here is COUNTED from the actual
+    simulated path, never estimated."""
+
+    bar_count: int
+    signal_count: int
+    """Bars where the strategy produced a non-NEUTRAL/non-None signal."""
+    trade_count: int
+    warmup_bars: int
+    """Bars where a required feature was not yet available (indicator
+    warm-up) - the strategy could not evaluate at all."""
+    skipped_signals: int
+    """Non-NEUTRAL signals that did not result in a new entry because a
+    position was already open in the same direction."""
+    rejected_trades: int
+    """Entry signals that computed a zero quantity (insufficient
+    capital for the configured sizing) and were therefore never opened."""
+    data_gaps_note: str
+    """Gap detection requires an explicit session calendar cross-check,
+    not performed by this engine - honestly stated as not computed,
+    never fabricated as 0 with false confidence."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,9 +276,12 @@ class BacktestResult:
     configuration: BacktestConfiguration
     trades: tuple[SimulatedTrade, ...]
     equity_curve: tuple[EquityPoint, ...]
+    mark_to_market_curve: tuple[MarkToMarketPoint, ...]
     metrics: BacktestMetrics
     data_quality: DataQualityDisclosure
+    validation: ResultValidationSummary
     generated_at: datetime
+    trust_level: BacktestTrustLevel = BacktestTrustLevel.POC
 
     def __post_init__(self) -> None:
         ensure_utc(self.generated_at, field_name="BacktestResult.generated_at")

@@ -1005,8 +1005,11 @@ export interface components {
             configuration: unknown;
             trades: unknown;
             equity_curve: unknown;
+            mark_to_market_curve: unknown;
             metrics: unknown;
             data_quality: unknown;
+            validation: unknown;
+            trust_level: string;
         };
         BacktestRunRequest: {
             instrument_id: string;
