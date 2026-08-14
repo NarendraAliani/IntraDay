@@ -605,13 +605,24 @@ What you see on screen</code></pre>
 
       <h2>Why results are not guarantees</h2>
       <ul>
-        <li>Brokerage and slippage are modeled as simple flat percentages you choose — not a verified, exact Indian brokerage/tax formula. Every result labels this explicitly as a "model assumption".</li>
+        <li>Slippage is modeled as a simple flat percentage you choose — not a verified microstructure model. Every result labels this explicitly as a "model assumption".</li>
         <li>The historical data used does not track stocks that were later delisted, which can make a strategy look better than it would have on the full, real universe of stocks at the time (survivorship bias).</li>
         <li>If a result is ever built from <code>SAMPLE_BAR</code> data (see <a href="#sample-bar-explained">Why the current bars are SAMPLE_BAR, not trading-grade</a>), it is marked "NOT SUITABLE FOR TRADING-GRADE PERFORMANCE CLAIMS" — today's backtests use historical/fixture data instead, never live SAMPLE_BAR.</li>
       </ul>
 
+      <h2>Cost Model: what you're actually being charged in the simulation</h2>
+      <p>Before running a backtest, you choose a <strong>Cost Model</strong>:</p>
+      <table>
+        <thead><tr><th>Cost Model</th><th>What it means</th></tr></thead>
+        <tbody>
+          <tr><td>Flat Percentage</td><td><span class="badge badge--pending">MODEL ASSUMPTION</span> — a single percentage you set, applied to every trade. Simple, but not a real cost schedule.</td></tr>
+          <tr><td>Indian Cash-Equity Intraday</td><td><span class="badge badge--ok">VERIFIED COST MODEL</span> — the real NSE intraday charges: Securities Transaction Tax, exchange transaction charges, SEBI turnover fees, GST, and stamp duty, each calculated the way they actually apply (some only on buying, some only on selling). Brokerage itself stays a configurable estimate, since it varies broker to broker.</td></tr>
+        </tbody>
+      </table>
+      <p>Every trade's result includes a <strong>cost breakdown</strong> you can expand to see exactly what each charge came to — never just a single lump "costs" number.</p>
+
       <h2>Comparing strategies</h2>
-      <p>The <strong>Compare</strong> screen lists your past backtest results for a chosen strategy, lets you pick two or more, and ranks them by whichever metric you choose (Net P&amp;L, Profit Factor, Return %, or Max Drawdown). It warns you if you try to compare results run on different instruments or timeframes, since those numbers are not directly comparable.</p>
+      <p>The <strong>Compare</strong> screen lists your past backtest results for a chosen strategy, lets you pick two or more, and ranks them by whichever metric you choose (Net P&amp;L, Profit Factor, Return %, or Max Drawdown). It warns you if you try to compare results run on different instruments, timeframes, data quality, or <strong>cost models</strong> — comparing a Flat Percentage result against a Verified result would not be a fair comparison.</p>
 
       <h2>Watchlists</h2>
       <p>The <strong>Watchlists</strong> screen lets you save named lists of instruments for research use. This is not an order screen — there is no quantity, side, or order-related field anywhere on it.</p>

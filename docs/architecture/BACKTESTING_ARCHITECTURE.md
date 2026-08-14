@@ -388,3 +388,83 @@ correctness for this checkpoint's changes was validated via
 `vitest`/Testing Library against the real components (network mocked at
 the `fetch` boundary only) plus `tsc --noEmit`/`vite build`, matching
 Checkpoint 27's own documented limitation.
+
+---
+
+# Checkpoint 29 additions: verified Indian cash-equity intraday cost model
+
+## Authoritative source (Part 2)
+
+**Source**: Zerodha's official published charges page (`zerodha.com/charges`) - "official broker pricing documentation," one of Part 2's explicitly accepted source categories. Fetched and verified **2026-08-14**.
+
+| Charge | Legal/regulatory basis | Side | Basis | Rate/formula | Cap |
+|---|---|---|---|---|---|
+| Brokerage | Broker's own commercial rate (NOT statutory) | Both | Notional | 0.03% or Rs.20/order, whichever lower | Rs.20/order |
+| STT (Securities Transaction Tax) | Securities Transaction Tax Act, via Finance Act amendments (statutory, uniform across brokers) | Sell only | Notional | 0.025% | None |
+| Exchange transaction charges | NSEs own schedule (exchange-mandated, uniform across brokers routing through NSE) | Both | Notional | 0.00307% | None |
+| SEBI turnover fees | SEBI (regulator-mandated, uniform) | Both | Notional | Rs.10/crore = 0.0001% | None |
+| GST | Central/State GST Acts (statutory) | Both | brokerage + exchange charges + SEBI charges | 18% | None |
+| Stamp duty | Indian Stamp Act 1899, as amended 2019 (effective 1 Jul 2020, statutory, uniform across states/brokers post-amendment) | Buy only | Notional | 0.003% (Rs.300/crore) | None |
+
+**Honest limitation**: a second, independent cross-check against NSE's own primary published transaction-charge circular was attempted but timed out (`nseindia.com` - a known heavy-JS site); the rates above rest on the single Zerodha source. Brokerage is explicitly NOT part of the verified schedule - it is the broker's own commercial pricing (Part 11: representing Indian cash-equity economics, not any one broker's, including not asserting this is Dhan's actual rate, which was not researched this checkpoint) - kept as an independently configurable `BrokeragePolicy`, defaulting to the same representative structure documented above.
+
+## Verified Indian cost schedule (Part 3) - calculation order, exact
+
+For one leg (one fill) of `notional` value:
+
+1. `brokerage = min(notional * 0.03%, Rs.20)` (configurable via `BrokeragePolicy`)
+2. `exchange_transaction_charges = notional * 0.00307%`
+3. `sebi_charges = notional * 0.0001%`
+4. `gst = (brokerage + exchange_transaction_charges + sebi_charges) * 18%` - computed from the UNROUNDED sum of steps 1-3
+5. `stt = notional * 0.025%` **only if the leg is a SELL** (a long exit or a short entry) - independent of GST, never itself subject to GST
+6. `stamp_duty = notional * 0.003%` **only if the leg is a BUY** (a long entry or a short exit) - independent of GST, never itself subject to GST
+
+A whole trade's cost = entry leg breakdown `.combine()` exit leg breakdown (Part 6: `is_buy` is derived from `StrategyDirection`, never assumed symmetric - a BULLISH entry is BUY/no-STT/has-stamp-duty; its exit is SELL/has-STT/no-stamp-duty; a BEARISH (short) entry is SELL/has-STT/no-stamp-duty; its exit is BUY/no-STT/has-stamp-duty).
+
+## Rounding / precision (Part 7)
+
+`COST_DECIMAL_PLACES = Decimal("0.01")`, `ROUND_HALF_UP` - the ONE place this policy is defined (`cost_model._round_rupees`). Each of the six components (brokerage/STT/exchange/SEBI/GST/stamp duty) is computed at full Decimal precision internally, then rounded to 2 decimal places (rupee.paisa) exactly once, at the point it is returned in a `CostBreakdown` - never rounded again afterward, never computed from an already-rounded intermediate. Boundary case proven: `Decimal("4020") * 0.00025% = 1.005` exactly (a genuine .5-paisa tie) rounds to `1.01`, not `1.00` (`test_reference_fixture_e_rounding_boundary_case`) - proving `ROUND_HALF_UP`, not banker's rounding or truncation.
+
+## CostModel architecture (Part 4)
+
+```
+CostModel (Protocol: name, version, effective_from, cost_breakdown(), slippage_adjusted_price())
+    |
+    +-- FlatPercentageCostModel   (Checkpoint 27/28, UNCHANGED numerically)
+    |
+    +-- IndianCashEquityIntradayCostModel (Checkpoint 29, VERIFIED schedule above)
+```
+
+The engine (`engine.py`/`portfolio.py`) never inlines a fee formula - both call `CostModel.cost_breakdown(is_buy=..., notional=...)`. Neither `CostModel` implementation imports Dhan, a broker SDK, or an HTTP client (Part 11) - `research.backtesting` remains exactly as provider-neutral as Checkpoint 27/28.
+
+## Cost breakdown (Part 5)
+
+`SimulatedTrade.cost_breakdown: CostBreakdown` (brokerage/stt/exchange_transaction_charges/sebi_charges/gst/stamp_duty/other_statutory_charges/`.total` property) - `SimulatedTrade.costs` (kept for backward compatibility) always equals `cost_breakdown.total`. Never only gross/net.
+
+## Slippage stays distinct (Part 8)
+
+`CostModel.slippage_adjusted_price()` remains a SEPARATE method from `cost_breakdown()` - slippage moves the FILL PRICE itself (affecting `gross_pnl`), never appears as a cost line item, and is never summed into `CostBreakdown.total`. Both `FlatPercentageCostModel` and `IndianCashEquityIntradayCostModel` carry their own `slippage_percent` field, using the identical flat-percentage slippage formula - Part 8 explicitly kept this model, not replaced it.
+
+## Versioning / effective dates (Part 9/10)
+
+`CostModel.name`/`.version`/`.effective_from` are copied into every `BacktestResult.cost_model_identity` (`CostModelIdentity`, with an additional `is_verified: bool`). Both `engine._deterministic_backtest_id()` and `portfolio._deterministic_portfolio_id()` now include `cost_model.name`/`.version`/`.effective_from` in their hash payload - proven by `test_switching_cost_model_changes_the_backtest_id` (engine level) and `test_switching_cost_model_produces_a_different_backtest_id_via_api` (full API level). No historical-schedule-selection mechanism beyond a single `effective_from` field was built - the authoritative research this checkpoint performed found only the CURRENT schedule (Part 2's own honest limitation above); building a multi-period schedule-selector now would fabricate historical accuracy this checkpoint cannot support.
+
+## Single-instrument and portfolio validation (Part 15)
+
+`IndianCashEquityIntradayCostModel` plugs into both `engine.run_backtest()` and `portfolio.run_portfolio_backtest()` with ZERO engine code change - both already accepted an injected `cost_model: CostModel | None` parameter from Checkpoint 27/28. Portfolio net P&L identity proven: `sum(trade.net_pnl) == sum(trade.gross_pnl) - sum(trade.costs)` (`test_verified_indian_model_plugs_into_portfolio_engine_unchanged`).
+
+## API / frontend (Part 16/17)
+
+`BacktestRunRequestSerializer.cost_model_name` (`FLAT_PERCENTAGE` default / `INDIAN_CASH_EQUITY_INTRADAY`) - `application.services.backtesting._build_cost_model()` constructs the matching `CostModel`. `BacktestResultSerializer.cost_model_identity` exposes the identity on every response. Frontend (`BacktestingWorkbenchPage.tsx`): a Cost Model selector with a VERIFIED/ASSUMPTION badge shown before running; Results show Gross P&L / Total Costs / Net P&L as visually distinct KPIs, a cost-model identity badge, and a per-trade expandable cost breakdown table.
+
+## Comparison safety (Part 18)
+
+`ComparisonPage.tsx` now also compares `cost_model_identity.name:version:effective_from` and `data_quality.slippage_assumption` (in addition to Checkpoint 27/28's instrument/timeframe/data-quality checks) - warns rather than silently ranking results produced under different cost assumptions.
+
+## Reproducibility (Part 19)
+
+Two identical runs (same bars, same strategy, same cost model) produce byte-identical `backtest_id`/trades/metrics (`test_same_cost_model_produces_identical_backtest_id_reproducibly`). Changing ONLY the cost model produces a different `backtest_id` (`test_switching_cost_model_changes_the_backtest_id`) - both proven at the engine level and again through the real API (`test_backtesting_cost_model_api.py`).
+
+## Trust level (Part 20)
+
+**NOT promoted.** Every result remains `BacktestTrustLevel.POC`, unconditionally - implementing a verified cost model satisfies exactly ONE of the five `RESEARCH_READY` promotion criteria documented in the Checkpoint 28 addendum above (criterion 3). The other four (mark-to-market/portfolio invariants already done at Checkpoint 28; independent-reference validation; `TRADING_GRADE_BAR` availability) remain unmet.

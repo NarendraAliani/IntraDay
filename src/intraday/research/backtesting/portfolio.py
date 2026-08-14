@@ -40,12 +40,17 @@ from intraday.research.backtesting import (
 from intraday.research.backtesting.contracts import (
     BacktestMetrics,
     BacktestTrustLevel,
+    CostModelIdentity,
     DataQualityDisclosure,
     MarkToMarketPoint,
     PositionSizingMode,
     SimulatedTrade,
 )
-from intraday.research.backtesting.cost_model import CostModel, FlatPercentageCostModel
+from intraday.research.backtesting.cost_model import (
+    CostModel,
+    FlatPercentageCostModel,
+    IndianCashEquityIntradayCostModel,
+)
 from intraday.research.backtesting.errors import InvalidBacktestConfigurationError
 from intraday.research.backtesting.execution import (
     FeatureSeriesComputer,
@@ -127,12 +132,13 @@ class PortfolioBacktestResult:
     """Entries rejected by either the max_concurrent_positions cap or
     insufficient available cash (Part 8's own invariant)."""
     data_quality: DataQualityDisclosure
+    cost_model_identity: CostModelIdentity
     generated_at: datetime
     trust_level: BacktestTrustLevel = BacktestTrustLevel.POC
 
 
 def _deterministic_portfolio_id(
-    config: PortfolioBacktestConfiguration, bar_counts: tuple[int, ...]
+    config: PortfolioBacktestConfiguration, bar_counts: tuple[int, ...], cost_model: CostModel
 ) -> str:
     payload = "|".join(
         [
@@ -151,6 +157,9 @@ def _deterministic_portfolio_id(
             str(config.brokerage_percent),
             str(config.slippage_percent),
             ",".join(str(c) for c in bar_counts),
+            cost_model.name,
+            cost_model.version,
+            cost_model.effective_from.isoformat(),
         ]
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
@@ -194,7 +203,11 @@ def run_portfolio_backtest(
                 "backtesting requires bar-for-bar aligned timestamps"
             )
 
-    costs = cost_model or FlatPercentageCostModel(config.brokerage_percent, config.slippage_percent)
+    costs: CostModel
+    if cost_model is not None:
+        costs = cost_model
+    else:
+        costs = FlatPercentageCostModel(config.brokerage_percent, config.slippage_percent)
     n_bars = bar_counts[0]
 
     signals_by_instrument: dict[InstrumentId, list[StrategySignal | None]] = {}
@@ -239,7 +252,12 @@ def run_portfolio_backtest(
         )
         entry_notional = position.entry_price * quantity
         exit_notional = filled_exit * quantity
-        trade_costs = costs.brokerage(entry_notional) + costs.brokerage(exit_notional)
+        entry_is_buy = position.direction == StrategyDirection.BULLISH
+        exit_is_buy = not entry_is_buy
+        breakdown = costs.cost_breakdown(is_buy=entry_is_buy, notional=entry_notional).combine(
+            costs.cost_breakdown(is_buy=exit_is_buy, notional=exit_notional)
+        )
+        trade_costs = breakdown.total
         net_pnl = gross_pnl - trade_costs
         bars = bars_by_instrument[instrument_id]
         holding_bars = bars[position.entry_index : exit_index + 1]
@@ -266,6 +284,7 @@ def run_portfolio_backtest(
                 reason=reason,
                 mfe=mfe,
                 mae=mae,
+                cost_breakdown=breakdown,
             )
         )
         trade_intervals_by_instrument[instrument_id].append((position.entry_index, exit_index))
@@ -356,7 +375,7 @@ def run_portfolio_backtest(
         per_instrument_trade_counts[trade.instrument_id] += 1
 
     return PortfolioBacktestResult(
-        portfolio_id=_deterministic_portfolio_id(config, bar_counts),
+        portfolio_id=_deterministic_portfolio_id(config, bar_counts, costs),
         configuration=config,
         trades=tuple(trades),
         mark_to_market_curve=mtm_curve,
@@ -364,6 +383,12 @@ def run_portfolio_backtest(
         per_instrument_trade_counts=per_instrument_trade_counts,
         rejected_entries=rejected_entries,
         data_quality=data_quality,
+        cost_model_identity=CostModelIdentity(
+            name=costs.name,
+            version=costs.version,
+            effective_from=costs.effective_from,
+            is_verified=isinstance(costs, IndianCashEquityIntradayCostModel),
+        ),
         generated_at=generated_at,
         trust_level=BacktestTrustLevel.POC,
     )

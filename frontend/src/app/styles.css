@@ -787,3 +787,24 @@ dd {
   display: block;
   margin-bottom: 0.35rem;
 }
+
+.backtest-results__cost-model-identity {
+  margin: 0.75rem 0;
+  font-size: 0.9rem;
+}
+
+.backtest-results__kpi--cost strong {
+  color: var(--color-error-border, #b3261e);
+}
+
+.backtest-results__kpi--net strong {
+  font-size: 1.15rem;
+}
+
+.backtest-results__cost-breakdown {
+  display: grid;
+  grid-template-columns: max-content max-content;
+  gap: 0.25rem 1rem;
+  margin: 0.5rem 0;
+  font-size: 0.9rem;
+}

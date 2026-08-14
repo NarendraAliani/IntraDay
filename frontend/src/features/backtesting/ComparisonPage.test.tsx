@@ -58,6 +58,12 @@ function result(id: string, netPnl: string, instrument = "NSE:FIXTURE01", timefr
       slippage_assumption: "flat pct",
       survivorship_bias_note: "n/a",
     },
+    cost_model_identity: {
+      name: "FLAT_PERCENTAGE",
+      version: "v1",
+      effective_from: "2026-01-01",
+      is_verified: false,
+    },
   };
 }
 

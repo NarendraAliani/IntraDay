@@ -97,7 +97,10 @@ def run_backtest_view(request: Request) -> Response:
     service = _service()
     try:
         result = service.run(
-            config, dict(data["strategy_values"]), created_by=request.user.get_username()
+            config,
+            dict(data["strategy_values"]),
+            created_by=request.user.get_username(),
+            cost_model_name=data["cost_model_name"],
         )
     except UnknownStrategyError as exc:
         return unknown_strategy(exc)
@@ -107,6 +110,7 @@ def run_backtest_view(request: Request) -> Response:
         UnknownParameterError,
         UnknownFieldReferenceError,
         InsufficientHistoricalDataError,
+        InvalidBacktestConfigurationError,
     ) as exc:
         return invalid_configuration(exc)
 

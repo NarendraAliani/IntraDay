@@ -92,6 +92,16 @@ const BACKTEST_RESULT = {
       costs: "0.00",
       net_pnl: "20.00",
       reason: "signal_reversal",
+      cost_breakdown: {
+        brokerage: "0.00",
+        stt: "0.00",
+        exchange_transaction_charges: "0.00",
+        sebi_charges: "0.00",
+        gst: "0.00",
+        stamp_duty: "0.00",
+        other_statutory_charges: "0.00",
+        total: "0.00",
+      },
     },
   ],
   equity_curve: [
@@ -140,6 +150,12 @@ const BACKTEST_RESULT = {
     transaction_cost_assumption: "flat pct",
     slippage_assumption: "flat pct",
     survivorship_bias_note: "n/a",
+  },
+  cost_model_identity: {
+    name: "FLAT_PERCENTAGE",
+    version: "v1",
+    effective_from: "2026-01-01",
+    is_verified: false,
   },
 };
 
@@ -328,5 +344,59 @@ describe("BacktestingWorkbenchPage", () => {
       expect(screen.getByText("Parameters:", { exact: false })).toBeInTheDocument(),
     );
     expect(screen.getByText("Fast EMA Lookback")).toBeInTheDocument();
+  });
+
+  it("lets the user choose the verified Indian cost model and shows the VERIFIED badge in results", async () => {
+    const indianResult = {
+      ...BACKTEST_RESULT,
+      cost_model_identity: {
+        name: "INDIAN_CASH_EQUITY_INTRADAY",
+        version: "v1",
+        effective_from: "2026-08-14",
+        is_verified: true,
+      },
+    };
+    stubFetch({
+      "/strategy-engine/fields/": FIELDS,
+      "/strategy-engine/strategies/": STRATEGIES,
+      "/strategy-engine/strategies/ema_crossover/schema/": SCHEMA,
+      "/backtesting/run/": indianResult,
+    });
+    renderWithAuth(<BacktestingWorkbenchPage />);
+    await waitFor(() => expect(screen.getByText("EMA Crossover")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Configure" }));
+    await waitFor(() => expect(screen.getByLabelText(/Fast EMA Lookback/)).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText("Cost Model"), {
+      target: { value: "INDIAN_CASH_EQUITY_INTRADAY" },
+    });
+    expect(screen.getByText("VERIFIED COST MODEL")).toBeInTheDocument();
+    // the Flat-Percentage-only brokerage field must disappear once the
+    // verified model is selected (it does not use that assumption).
+    expect(screen.queryByLabelText(/Brokerage \(%/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Run Backtest" }));
+    await waitFor(() => expect(screen.getAllByText("VERIFIED COST MODEL").length).toBeGreaterThan(0));
+    expect(screen.getByText(/INDIAN_CASH_EQUITY_INTRADAY/)).toBeInTheDocument();
+  });
+
+  it("shows an expandable per-trade cost breakdown", async () => {
+    stubFetch({
+      "/strategy-engine/fields/": FIELDS,
+      "/strategy-engine/strategies/": STRATEGIES,
+      "/strategy-engine/strategies/ema_crossover/schema/": SCHEMA,
+      "/backtesting/run/": BACKTEST_RESULT,
+    });
+    renderWithAuth(<BacktestingWorkbenchPage />);
+    await waitFor(() => expect(screen.getByText("EMA Crossover")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Configure" }));
+    await waitFor(() => expect(screen.getByLabelText(/Fast EMA Lookback/)).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Run Backtest" }));
+
+    await waitFor(() => expect(screen.getByText("ema_crossover-1")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
+    expect(screen.getByText("Brokerage")).toBeInTheDocument();
+    expect(screen.getByText("STT")).toBeInTheDocument();
+    expect(screen.getByText("GST")).toBeInTheDocument();
   });
 });

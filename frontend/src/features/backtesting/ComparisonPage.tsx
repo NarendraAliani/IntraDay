@@ -87,15 +87,24 @@ export function ComparisonPage(): JSX.Element {
     selectedResults.map((r) => asDataQualityView(r).data_quality),
   );
   const costModelSet = new Set(
-    selectedResults.map(
-      (r) => `${asDataQualityView(r).transaction_cost_assumption}|${asDataQualityView(r).slippage_assumption}`,
-    ),
+    selectedResults.map((r) => {
+      const identity = r.cost_model_identity as unknown as {
+        name: string;
+        version: string;
+        effective_from: string;
+      };
+      return `${identity.name}:${identity.version}:${identity.effective_from}`;
+    }),
+  );
+  const slippageAssumptionSet = new Set(
+    selectedResults.map((r) => asDataQualityView(r).slippage_assumption),
   );
   const incompatible =
     instrumentSet.size > 1 ||
     timeframeSet.size > 1 ||
     dataQualitySet.size > 1 ||
-    costModelSet.size > 1;
+    costModelSet.size > 1 ||
+    slippageAssumptionSet.size > 1;
 
   return (
     <div className="comparison-page">

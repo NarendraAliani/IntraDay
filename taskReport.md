@@ -7533,3 +7533,27 @@ Checkpoint 27's own documented limitation. Brokerage/tax costs remain a
 flat-percentage MODEL ASSUMPTION - genuine Indian brokerage/STT/GST
 verification remains a promotion criterion for `RESEARCH_READY`, not
 implemented here.
+
+## Checkpoint 29 — Verified Indian Cash-Equity Intraday Cost Model (2026-08-14)
+
+### What was built
+
+- Authoritative research: NSE cash-equity intraday charges verified against Zerodha's official published pricing page (2026-08-14) - STT, exchange transaction charges, SEBI turnover fees, GST, stamp duty - each with legal basis, side, formula, and source recorded in BACKTESTING_ARCHITECTURE.md. An independent NSE-primary-source cross-check was attempted and timed out (honestly disclosed, not hidden).
+- `CostBreakdown` dataclass (brokerage/stt/exchange_transaction_charges/sebi_charges/gst/stamp_duty/other_statutory_charges + `.total`/`.combine()`), with non-negative invariant enforcement.
+- `CostModel` Protocol extended: `cost_breakdown(is_buy, notional)` replaces the old bare `brokerage()` method; `name`/`version`/`effective_from` identity properties added.
+- `FlatPercentageCostModel` preserved numerically unchanged (Part 12 regression proven by dedicated test).
+- `IndianCashEquityIntradayCostModel` - the verified schedule, side-specific (STT sell-only, stamp duty buy-only, both derived from `StrategyDirection`, never assumed symmetric), with a single, documented rounding policy (`ROUND_HALF_UP` to 2dp, applied once per component).
+- `BrokeragePolicy` - independently configurable, explicitly NOT asserted as any specific broker's (including Dhan's) verified rate.
+- `CostModelIdentity` on every `BacktestResult`/`PortfolioBacktestResult`, and included in both engines' deterministic backtest-ID hash - switching cost models changes the ID, same cost model reproduces it exactly.
+- API: `cost_model_name` request field (`FLAT_PERCENTAGE`/`INDIAN_CASH_EQUITY_INTRADAY`), `cost_model_identity` in every response, full persistence/serialization round-trip.
+- Frontend: Cost Model selector with VERIFIED/ASSUMPTION badges, Gross P&L/Total Costs/Net P&L shown as distinct KPIs, per-trade expandable cost breakdown, Comparison page extended to warn on cost-model/slippage-model mismatches.
+
+### Validation
+
+- Backend: ruff/mypy/lint-imports/manage.py check/makemigrations/spectacular all clean (no migration needed - cost breakdown lives inside the existing JSONField). pytest: 30 new tests (19 reference/invariant/rounding, 6 engine integration, 5 full-stack API) - all pass, including 5 hand-verified reference fixtures matching independent manual calculation exactly.
+- Frontend: tsc/build clean; vitest 78 passed (3 new tests: cost-model selector, verified badge, expandable breakdown).
+- Non-redundancy audit: every brokerage/STT/GST/stamp-duty/SEBI formula exists in exactly one place (`cost_model.py`); zero duplication in engine, portfolio, frontend, or docs (grep-verified).
+- Trust level: NOT promoted - every result remains `BacktestTrustLevel.POC`. One of five `RESEARCH_READY` promotion criteria (verified cost model) is now satisfied; four remain unmet (independent-reference validation, `TRADING_GRADE_BAR` availability, etc. - unchanged from Checkpoint 28).
+- Browser automation: re-confirmed unavailable in this environment (same as Checkpoint 27/28) - not claimed, not installed to hide the limitation.
+- Trading safety unchanged: zero orders, zero broker calls, zero live-authorization changes, TRADING_MODE/kill switch untouched.
+- No credentials/secrets introduced.

@@ -6,7 +6,7 @@
 // Reuses the SAME schema-driven parameter renderer
 // (`ParameterSchemaFields`) Checkpoint 26's Strategy Configuration
 // screen already uses - no duplicated strategy fields (Part 14).
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 
 import { ApiNetworkError, ApiRequestError } from "../../common/api/client";
 import { useAuth } from "../../common/auth/AuthContext";
@@ -76,8 +76,11 @@ export function BacktestingWorkbenchPage(): JSX.Element {
     "FIXED_QUANTITY",
   );
   const [positionSizeValue, setPositionSizeValue] = useState("10");
-  const [brokeragePercent, setBrokeragePercent] = useState("0");
+  const [brokeragePercent, setBrokeragePercent] = useState("0.03");
   const [slippagePercent, setSlippagePercent] = useState("0");
+  const [costModelName, setCostModelName] = useState<
+    "FLAT_PERCENTAGE" | "INDIAN_CASH_EQUITY_INTRADAY"
+  >("FLAT_PERCENTAGE");
 
   const [runState, setRunState] = useState<RunState>({ phase: "ready" });
   const [expandedStrategyId, setExpandedStrategyId] = useState<string | null>(null);
@@ -162,6 +165,7 @@ export function BacktestingWorkbenchPage(): JSX.Element {
         position_size_value: positionSizeValue,
         brokerage_percent: brokeragePercent,
         slippage_percent: slippagePercent,
+        cost_model_name: costModelName,
       });
       setRunState({ phase: "completed", result });
     } catch (error) {
@@ -327,20 +331,51 @@ export function BacktestingWorkbenchPage(): JSX.Element {
                 />
               </div>
               <div className="strategy-config-page__field">
-                <label htmlFor="bt-brokerage">Brokerage (%, model assumption)</label>
-                <input
-                  id="bt-brokerage"
-                  type="number"
-                  value={brokeragePercent}
-                  onChange={(e) => setBrokeragePercent(e.target.value)}
-                />
+                <label htmlFor="bt-cost-model">Cost Model</label>
+                <select
+                  id="bt-cost-model"
+                  value={costModelName}
+                  onChange={(e) =>
+                    setCostModelName(e.target.value as "FLAT_PERCENTAGE" | "INDIAN_CASH_EQUITY_INTRADAY")
+                  }
+                >
+                  <option value="FLAT_PERCENTAGE">Flat Percentage (model assumption)</option>
+                  <option value="INDIAN_CASH_EQUITY_INTRADAY">
+                    Indian Cash-Equity Intraday (verified NSE schedule)
+                  </option>
+                </select>
                 <p className="strategy-config-page__help-text">
-                  ASSUMPTION: a flat percentage cost per trade side - not a verified Indian
-                  brokerage/tax schedule.
+                  {costModelName === "INDIAN_CASH_EQUITY_INTRADAY" ? (
+                    <>
+                      <strong className="badge badge--ok">VERIFIED COST MODEL</strong> — real NSE
+                      STT/exchange charges/SEBI fees/GST/stamp duty. Brokerage itself remains a
+                      configurable, representative default (see below).
+                    </>
+                  ) : (
+                    <>
+                      <strong className="badge badge--pending">MODEL ASSUMPTION</strong> — a flat
+                      percentage cost, not a verified Indian cost schedule.
+                    </>
+                  )}
                 </p>
               </div>
+              {costModelName === "FLAT_PERCENTAGE" && (
+                <div className="strategy-config-page__field">
+                  <label htmlFor="bt-brokerage">Brokerage (%, model assumption)</label>
+                  <input
+                    id="bt-brokerage"
+                    type="number"
+                    value={brokeragePercent}
+                    onChange={(e) => setBrokeragePercent(e.target.value)}
+                  />
+                  <p className="strategy-config-page__help-text">
+                    ASSUMPTION: a flat percentage cost per trade side - not a verified Indian
+                    brokerage/tax schedule.
+                  </p>
+                </div>
+              )}
               <div className="strategy-config-page__field">
-                <label htmlFor="bt-slippage">Slippage (%, model assumption)</label>
+                <label htmlFor="bt-slippage">Slippage Model (%, model assumption)</label>
                 <input
                   id="bt-slippage"
                   type="number"
@@ -348,7 +383,9 @@ export function BacktestingWorkbenchPage(): JSX.Element {
                   onChange={(e) => setSlippagePercent(e.target.value)}
                 />
                 <p className="strategy-config-page__help-text">
-                  ASSUMPTION: how much the fill price moves against you on every trade.
+                  ASSUMPTION: how much the fill price moves against you on every trade - kept
+                  separate from the Cost Model above (statutory/broker costs never include
+                  slippage).
                 </p>
               </div>
               <p className="strategy-config-page__help-text">
@@ -403,11 +440,24 @@ function dataQualityLevel(quality: string): "informational" | "warning" {
   return quality === "SAMPLE_BAR" ? "warning" : "informational";
 }
 
+interface CostModelIdentityRaw {
+  name: string;
+  version: string;
+  effective_from: string;
+  is_verified: boolean;
+}
+
+interface TradeRawForCosts {
+  gross_pnl: string;
+  costs: string;
+}
+
 function BacktestResultsPanel({ result }: { result: BacktestResult }): JSX.Element {
   const m = result.metrics as Record<string, string | number | null>;
   const configuration = asConfigurationView(result);
   const dataQuality = asDataQualityView(result);
   const validation = result.validation as unknown as ValidationSummaryRaw;
+  const costModelIdentity = result.cost_model_identity as unknown as CostModelIdentityRaw;
   const trustLevel = String(result.trust_level ?? "POC");
   const level = dataQualityLevel(dataQuality.data_quality);
   const mtmPoints = (result.mark_to_market_curve as unknown as MtmPointRaw[]).map((p) => ({
@@ -415,6 +465,9 @@ function BacktestResultsPanel({ result }: { result: BacktestResult }): JSX.Eleme
     balance: p.total_equity,
     drawdown_percent: p.drawdown_percent,
   }));
+  const tradesForCosts = result.trades as unknown as TradeRawForCosts[];
+  const totalGrossPnl = tradesForCosts.reduce((sum, t) => sum + Number(t.gross_pnl), 0);
+  const totalCosts = tradesForCosts.reduce((sum, t) => sum + Number(t.costs), 0);
 
   return (
     <section className="backtest-results" aria-label="Backtest Results">
@@ -427,6 +480,16 @@ function BacktestResultsPanel({ result }: { result: BacktestResult }): JSX.Eleme
         Backtesting guide for what this level means and does not mean.
       </div>
 
+      <div className="backtest-results__cost-model-identity">
+        <span
+          className={costModelIdentity.is_verified ? "badge badge--ok" : "badge badge--pending"}
+        >
+          {costModelIdentity.is_verified ? "VERIFIED COST MODEL" : "MODEL ASSUMPTION"}
+        </span>{" "}
+        {costModelIdentity.name} v{costModelIdentity.version} (effective from{" "}
+        {costModelIdentity.effective_from})
+      </div>
+
       <div className="backtest-results__kpis">
         <div className="backtest-results__kpi">
           <span>Initial Capital</span>
@@ -437,6 +500,14 @@ function BacktestResultsPanel({ result }: { result: BacktestResult }): JSX.Eleme
           <strong>{formatMoney(String(m.final_capital))}</strong>
         </div>
         <div className="backtest-results__kpi">
+          <span>Gross P&amp;L</span>
+          <strong>{formatMoney(String(totalGrossPnl))}</strong>
+        </div>
+        <div className="backtest-results__kpi backtest-results__kpi--cost">
+          <span>Total Costs</span>
+          <strong>-{formatMoney(String(totalCosts))}</strong>
+        </div>
+        <div className="backtest-results__kpi backtest-results__kpi--net">
           <span>Net P&amp;L</span>
           <strong>{formatMoney(String(m.net_pnl))}</strong>
         </div>
@@ -548,6 +619,17 @@ function BacktestResultsPanel({ result }: { result: BacktestResult }): JSX.Eleme
   );
 }
 
+interface CostBreakdownRow {
+  brokerage: string;
+  stt: string;
+  exchange_transaction_charges: string;
+  sebi_charges: string;
+  gst: string;
+  stamp_duty: string;
+  other_statutory_charges: string;
+  total: string;
+}
+
 interface TradeRow {
   trade_id: string;
   direction: string;
@@ -560,11 +642,13 @@ interface TradeRow {
   costs: string;
   net_pnl: string;
   reason: string;
+  cost_breakdown: CostBreakdownRow;
 }
 
 function TradeTable({ trades }: { trades: TradeRow[] }): JSX.Element {
   const [directionFilter, setDirectionFilter] = useState<"ALL" | "BULLISH" | "BEARISH">("ALL");
   const [outcomeFilter, setOutcomeFilter] = useState<"ALL" | "PROFITABLE" | "LOSING">("ALL");
+  const [expandedTradeId, setExpandedTradeId] = useState<string | null>(null);
 
   const filtered = trades.filter((t) => {
     if (directionFilter !== "ALL" && t.direction !== directionFilter) return false;
@@ -612,23 +696,66 @@ function TradeTable({ trades }: { trades: TradeRow[] }): JSX.Element {
               <th>Costs</th>
               <th>Net P&amp;L</th>
               <th>Reason</th>
+              <th>Cost Breakdown</th>
             </tr>
           </thead>
           <tbody>
             {filtered.map((trade) => (
-              <tr key={trade.trade_id}>
-                <td>{trade.trade_id}</td>
-                <td>{new Date(trade.entry_timestamp).toLocaleString()}</td>
-                <td>{new Date(trade.exit_timestamp).toLocaleString()}</td>
-                <td>{trade.direction === "BULLISH" ? "Long" : "Short"}</td>
-                <td>{trade.quantity}</td>
-                <td>{formatMoney(trade.entry_price)}</td>
-                <td>{formatMoney(trade.exit_price)}</td>
-                <td>{formatMoney(trade.gross_pnl)}</td>
-                <td>{formatMoney(trade.costs)}</td>
-                <td>{formatMoney(trade.net_pnl)}</td>
-                <td>{trade.reason}</td>
-              </tr>
+              <Fragment key={trade.trade_id}>
+                <tr>
+                  <td>{trade.trade_id}</td>
+                  <td>{new Date(trade.entry_timestamp).toLocaleString()}</td>
+                  <td>{new Date(trade.exit_timestamp).toLocaleString()}</td>
+                  <td>{trade.direction === "BULLISH" ? "Long" : "Short"}</td>
+                  <td>{trade.quantity}</td>
+                  <td>{formatMoney(trade.entry_price)}</td>
+                  <td>{formatMoney(trade.exit_price)}</td>
+                  <td>{formatMoney(trade.gross_pnl)}</td>
+                  <td>{formatMoney(trade.costs)}</td>
+                  <td>{formatMoney(trade.net_pnl)}</td>
+                  <td>{trade.reason}</td>
+                  <td>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setExpandedTradeId((prev) =>
+                          prev === trade.trade_id ? null : trade.trade_id,
+                        )
+                      }
+                    >
+                      {expandedTradeId === trade.trade_id ? "Hide" : "Details"}
+                    </button>
+                  </td>
+                </tr>
+                {expandedTradeId === trade.trade_id && (
+                  <tr>
+                    <td colSpan={12}>
+                      <dl className="backtest-results__cost-breakdown">
+                        <dt>Brokerage</dt>
+                        <dd>{formatMoney(trade.cost_breakdown.brokerage)}</dd>
+                        <dt>STT</dt>
+                        <dd>{formatMoney(trade.cost_breakdown.stt)}</dd>
+                        <dt>Exchange transaction charges</dt>
+                        <dd>{formatMoney(trade.cost_breakdown.exchange_transaction_charges)}</dd>
+                        <dt>SEBI charges</dt>
+                        <dd>{formatMoney(trade.cost_breakdown.sebi_charges)}</dd>
+                        <dt>GST</dt>
+                        <dd>{formatMoney(trade.cost_breakdown.gst)}</dd>
+                        <dt>Stamp duty</dt>
+                        <dd>{formatMoney(trade.cost_breakdown.stamp_duty)}</dd>
+                        <dt>Other statutory charges</dt>
+                        <dd>{formatMoney(trade.cost_breakdown.other_statutory_charges)}</dd>
+                        <dt>
+                          <strong>Total</strong>
+                        </dt>
+                        <dd>
+                          <strong>{formatMoney(trade.cost_breakdown.total)}</strong>
+                        </dd>
+                      </dl>
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
             ))}
           </tbody>
         </table>

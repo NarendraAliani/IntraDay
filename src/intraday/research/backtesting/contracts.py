@@ -10,13 +10,14 @@
 # is introduced.
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, field
+from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
 
 from intraday.domain.shared_kernel.contracts import InstrumentId, Timeframe, ensure_utc
 from intraday.research.backtesting import StrategyDirection
+from intraday.research.backtesting.cost_model import CostBreakdown
 from intraday.research.backtesting.errors import InvalidBacktestConfigurationError
 
 TradeDirection = StrategyDirection
@@ -123,6 +124,9 @@ class SimulatedTrade:
     single bar with no intermediate bars to measure."""
     mae: Decimal | None = None
     """Maximum Adverse Excursion - see `mfe`."""
+    cost_breakdown: CostBreakdown = field(default_factory=CostBreakdown)
+    """Checkpoint 29 Part 5: the itemized entry+exit cost breakdown
+    whose `.total` equals `costs` above - never only gross/net."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -251,6 +255,24 @@ class ResultValidationSummary:
 
 
 @dataclass(frozen=True, slots=True)
+class CostModelIdentity:
+    """Checkpoint 29 Part 9: which cost schedule produced a result -
+    `name`/`version`/`effective_from` mirror the same fields every
+    `CostModel` implementation carries (`cost_model.CostModel`), copied
+    into the result so it survives serialization independently of the
+    live `CostModel` object that computed it."""
+
+    name: str
+    version: str
+    effective_from: date
+    is_verified: bool
+    """True for a verified statutory/exchange schedule
+    (`IndianCashEquityIntradayCostModel`), False for a MODEL ASSUMPTION
+    (`FlatPercentageCostModel`) - surfaced directly so the frontend never
+    has to infer this from the name string."""
+
+
+@dataclass(frozen=True, slots=True)
 class DataQualityDisclosure:
     """Part 24: mandatory, explicit disclosure attached to every
     `BacktestResult` - never left implicit."""
@@ -267,10 +289,11 @@ class DataQualityDisclosure:
 @dataclass(frozen=True, slots=True)
 class BacktestResult:
     """Canonical, immutable backtest result. `backtest_id` is derived
-    deterministically from the configuration + data identity (Part 10/11
-    reproducibility), never a random UUID - re-running the same
-    configuration against the same data always yields the same
-    `backtest_id`."""
+    deterministically from the configuration + data identity + cost
+    model identity (Part 10/11/Checkpoint 29 Part 9/19 reproducibility),
+    never a random UUID - re-running the same configuration against the
+    same data AND the same cost model always yields the same
+    `backtest_id`; changing only the cost model changes it."""
 
     backtest_id: str
     configuration: BacktestConfiguration
@@ -280,6 +303,7 @@ class BacktestResult:
     metrics: BacktestMetrics
     data_quality: DataQualityDisclosure
     validation: ResultValidationSummary
+    cost_model_identity: CostModelIdentity
     generated_at: datetime
     trust_level: BacktestTrustLevel = BacktestTrustLevel.POC
 

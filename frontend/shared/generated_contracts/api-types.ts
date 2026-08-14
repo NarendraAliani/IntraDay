@@ -1010,6 +1010,7 @@ export interface components {
             data_quality: unknown;
             validation: unknown;
             trust_level: string;
+            cost_model_identity: unknown;
         };
         BacktestRunRequest: {
             instrument_id: string;
@@ -1038,6 +1039,14 @@ export interface components {
              * @default 0.0000
              */
             slippage_percent: string;
+            /**
+             * @description FLAT_PERCENTAGE is a MODEL ASSUMPTION (brokerage_percent applied flat). INDIAN_CASH_EQUITY_INTRADAY is a VERIFIED NSE cash-equity intraday statutory/exchange cost schedule (STT/exchange charges/SEBI fees/GST/stamp duty) - see docs/architecture/BACKTESTING_ARCHITECTURE.md.
+             *
+             *     * `FLAT_PERCENTAGE` - FLAT_PERCENTAGE
+             *     * `INDIAN_CASH_EQUITY_INTRADAY` - INDIAN_CASH_EQUITY_INTRADAY
+             * @default FLAT_PERCENTAGE
+             */
+            cost_model_name: components["schemas"]["CostModelNameEnum"];
         };
         /**
          * @description Checkpoint 24A. `status` is always present and explicit
@@ -1096,6 +1105,12 @@ export interface components {
          * @enum {string}
          */
         ConnectionStatusResponseStatusEnum: "NOT_CONFIGURED" | "CONFIGURED" | "CONNECTING" | "CONNECTED" | "DISCONNECTED" | "AUTHENTICATION_FAILED" | "TOKEN_EXPIRED" | "CONNECTION_ERROR" | "DISABLED";
+        /**
+         * @description * `FLAT_PERCENTAGE` - FLAT_PERCENTAGE
+         *     * `INDIAN_CASH_EQUITY_INTRADAY` - INDIAN_CASH_EQUITY_INTRADAY
+         * @enum {string}
+         */
+        CostModelNameEnum: "FLAT_PERCENTAGE" | "INDIAN_CASH_EQUITY_INTRADAY";
         /**
          * @description Response shape for `GET /api/v1/auth/session/` and the successful
          *     result of `POST /api/v1/auth/login/`. Never includes a password,

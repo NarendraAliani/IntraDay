@@ -35,6 +35,16 @@ class BacktestRunRequestSerializer(serializers.Serializer[None]):
     slippage_percent = serializers.DecimalField(
         max_digits=8, decimal_places=4, default=Decimal("0")
     )
+    cost_model_name = serializers.ChoiceField(
+        choices=["FLAT_PERCENTAGE", "INDIAN_CASH_EQUITY_INTRADAY"],
+        default="FLAT_PERCENTAGE",
+        help_text=(
+            "FLAT_PERCENTAGE is a MODEL ASSUMPTION (brokerage_percent applied flat). "
+            "INDIAN_CASH_EQUITY_INTRADAY is a VERIFIED NSE cash-equity intraday "
+            "statutory/exchange cost schedule (STT/exchange charges/SEBI fees/GST/"
+            "stamp duty) - see docs/architecture/BACKTESTING_ARCHITECTURE.md."
+        ),
+    )
 
 
 class BacktestResultSerializer(serializers.Serializer[None]):
@@ -48,6 +58,7 @@ class BacktestResultSerializer(serializers.Serializer[None]):
     data_quality = serializers.JSONField()
     validation = serializers.JSONField()
     trust_level = serializers.CharField()
+    cost_model_identity = serializers.JSONField()
 
 
 class WatchlistSaveRequestSerializer(serializers.Serializer[None]):

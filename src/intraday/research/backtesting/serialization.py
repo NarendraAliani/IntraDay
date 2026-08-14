@@ -59,6 +59,18 @@ def to_json_dict(result: BacktestResult) -> dict[str, object]:
                 "reason": t.reason,
                 "mfe": _dec(t.mfe),
                 "mae": _dec(t.mae),
+                "cost_breakdown": {
+                    "brokerage": _dec(t.cost_breakdown.brokerage),
+                    "stt": _dec(t.cost_breakdown.stt),
+                    "exchange_transaction_charges": _dec(
+                        t.cost_breakdown.exchange_transaction_charges
+                    ),
+                    "sebi_charges": _dec(t.cost_breakdown.sebi_charges),
+                    "gst": _dec(t.cost_breakdown.gst),
+                    "stamp_duty": _dec(t.cost_breakdown.stamp_duty),
+                    "other_statutory_charges": _dec(t.cost_breakdown.other_statutory_charges),
+                    "total": _dec(t.cost_breakdown.total),
+                },
             }
             for t in result.trades
         ],
@@ -123,4 +135,10 @@ def to_json_dict(result: BacktestResult) -> dict[str, object]:
             "data_gaps_note": result.validation.data_gaps_note,
         },
         "trust_level": result.trust_level.value,
+        "cost_model_identity": {
+            "name": result.cost_model_identity.name,
+            "version": result.cost_model_identity.version,
+            "effective_from": result.cost_model_identity.effective_from.isoformat(),
+            "is_verified": result.cost_model_identity.is_verified,
+        },
     }

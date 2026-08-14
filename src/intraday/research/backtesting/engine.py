@@ -40,13 +40,18 @@ from intraday.research.backtesting.contracts import (
     BacktestConfiguration,
     BacktestResult,
     BacktestTrustLevel,
+    CostModelIdentity,
     DataQualityDisclosure,
     EquityPoint,
     MarkToMarketPoint,
     ResultValidationSummary,
     SimulatedTrade,
 )
-from intraday.research.backtesting.cost_model import CostModel, FlatPercentageCostModel
+from intraday.research.backtesting.cost_model import (
+    CostModel,
+    FlatPercentageCostModel,
+    IndianCashEquityIntradayCostModel,
+)
 from intraday.research.backtesting.errors import InsufficientHistoricalDataError
 from intraday.research.backtesting.execution import (
     OpenPosition,
@@ -60,9 +65,12 @@ from intraday.research.backtesting.metrics import compute_metrics
 FeatureSeriesComputer = Callable[[str, "tuple[Bar, ...]"], "tuple[FeatureValue, ...]"]
 
 
-def _deterministic_backtest_id(config: BacktestConfiguration, bars: tuple[Bar, ...]) -> str:
-    """Derived from configuration identity + data identity - never a
-    random UUID (Part 10/11 reproducibility)."""
+def _deterministic_backtest_id(
+    config: BacktestConfiguration, bars: tuple[Bar, ...], cost_model: CostModel
+) -> str:
+    """Derived from configuration identity + data identity + COST MODEL
+    identity (Checkpoint 29 Part 9/19) - never a random UUID. Same
+    strategy, same bars, different cost model must never collide."""
     first_ts = bars[0].timestamp.isoformat() if bars else "none"
     last_ts = bars[-1].timestamp.isoformat() if bars else "none"
     payload = "|".join(
@@ -82,6 +90,9 @@ def _deterministic_backtest_id(config: BacktestConfiguration, bars: tuple[Bar, .
             first_ts,
             last_ts,
             str(len(bars)),
+            cost_model.name,
+            cost_model.version,
+            cost_model.effective_from.isoformat(),
         ]
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
@@ -104,9 +115,13 @@ def run_backtest(
             f"{backtest_config.timeframe.value} in the requested range"
         )
 
-    costs = cost_model or FlatPercentageCostModel(
-        backtest_config.brokerage_percent, backtest_config.slippage_percent
-    )
+    costs: CostModel
+    if cost_model is not None:
+        costs = cost_model
+    else:
+        costs = FlatPercentageCostModel(
+            backtest_config.brokerage_percent, backtest_config.slippage_percent
+        )
 
     signals, warmup_bars, signal_count = compute_signals(
         bars, strategy, strategy_config, compute_feature_series
@@ -136,7 +151,12 @@ def run_backtest(
         )
         entry_notional = open_position.entry_price * quantity
         exit_notional = filled_exit * quantity
-        trade_costs = costs.brokerage(entry_notional) + costs.brokerage(exit_notional)
+        entry_is_buy = open_position.direction == StrategyDirection.BULLISH
+        exit_is_buy = not entry_is_buy
+        breakdown = costs.cost_breakdown(is_buy=entry_is_buy, notional=entry_notional).combine(
+            costs.cost_breakdown(is_buy=exit_is_buy, notional=exit_notional)
+        )
+        trade_costs = breakdown.total
         net_pnl = gross_pnl - trade_costs
         holding_bars = bars[open_position.entry_index : exit_index + 1]
         mfe, mae = mfe_mae(open_position.direction, open_position.entry_price, holding_bars)
@@ -162,6 +182,7 @@ def run_backtest(
                 reason=reason,
                 mfe=mfe,
                 mae=mae,
+                cost_breakdown=breakdown,
             )
         )
         trade_intervals.append((open_position.entry_index, exit_index))
@@ -229,8 +250,15 @@ def run_backtest(
         ),
     )
 
+    cost_model_identity = CostModelIdentity(
+        name=costs.name,
+        version=costs.version,
+        effective_from=costs.effective_from,
+        is_verified=isinstance(costs, IndianCashEquityIntradayCostModel),
+    )
+
     return BacktestResult(
-        backtest_id=_deterministic_backtest_id(backtest_config, bars),
+        backtest_id=_deterministic_backtest_id(backtest_config, bars, costs),
         configuration=backtest_config,
         trades=tuple(trades),
         equity_curve=equity_curve,
@@ -238,6 +266,7 @@ def run_backtest(
         metrics=metrics,
         data_quality=data_quality,
         validation=validation,
+        cost_model_identity=cost_model_identity,
         generated_at=generated_at,
         trust_level=BacktestTrustLevel.POC,
     )
