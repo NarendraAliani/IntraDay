@@ -162,6 +162,18 @@ promotion re-evaluated and still not yet justified. See
 for the full state model, expiry semantics, and the
 verification-independence rationale.
 
+**Theoretical outcome** (Checkpoint 21): the first real code in
+`signal_intelligence/theoretical_outcome` — measures maximum favorable/
+adverse price excursion (MFE/MAE) a `DirectionalIndication` experienced
+over an explicit observation window, clamped so MFE ≥ 0 and MAE ≤ 0
+always hold. Deliberately independent of both `signal_verification` and
+`signal_lifecycle`. Conditional expectancy explicitly deferred (requires
+a trading policy this bounded context has no authority to invent). A
+fourth intra-context consumer of `DirectionalIndication`; `domain/`
+promotion re-evaluated and still not yet justified. See
+[SIGNAL_THEORETICAL_OUTCOME_ARCHITECTURE.md](SIGNAL_THEORETICAL_OUTCOME_ARCHITECTURE.md)
+for the full MFE/MAE definition and the expectancy-deferral rationale.
+
 ## 3. Layering
 
 ```

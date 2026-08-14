@@ -647,3 +647,52 @@ Establishes the first real code in `signal_intelligence/signal_lifecycle`
   primitive - no second versioning system, kept explicitly distinct from
   `DirectionalIndication`'s and `VerificationResult`'s own definition
   fields.
+
+## Checkpoint 21 — Theoretical Outcome Foundation (2026-08-13)
+
+Establishes the first real code in `signal_intelligence/theoretical_outcome`
+- MFE/MAE price-excursion measurement for a `DirectionalIndication`.
+Full detail:
+[docs/architecture/SIGNAL_THEORETICAL_OUTCOME_ARCHITECTURE.md](SIGNAL_THEORETICAL_OUTCOME_ARCHITECTURE.md).
+
+| # | Decision | Reason | Alternatives Considered | Status |
+|---|---|---|---|---|
+| 95 | MFE/MAE are clamped at zero: `MFE = max(0, ...)`, `MAE = min(0, ...)` - not the checkpoint brief's raw illustrative formula. | MFE ("favorable excursion") can never legitimately be negative; MAE ("adverse excursion") can never legitimately be positive - a "negative favorable" or "positive adverse" value is a contradiction in terms, not a real measurement. Without clamping, a BULLISH indication whose price only ever rose would report a spuriously positive MAE (implying a favorable minimum) instead of correctly reporting "no adverse movement occurred" (0). Makes `MFE >= 0`/`MAE <= 0` universal invariants, directly testable as Hypothesis properties. | The brief's raw unclamped formula (rejected - produces a sign-inverted, misleading value exactly in the "price only moved one way" case, which is a common and important real scenario, not an edge case to ignore). | LOCKED |
+| 96 | Reference price is `indication.price` - the same value `VerificationResult` (Checkpoint 19) already uses - never a future bar's open/close. | Keeps every signal-intelligence measurement anchored to the one canonical "what price was known at signal time" value; a second reference-price convention would let two measurements silently disagree about what "the signal price" means. | "First future bar close/open" as reference (rejected - the checkpoint brief explicitly warned against inventing an entry price; the indication already carries the correct canonical value). | LOCKED |
+| 97 | `mfe`/`mae` are `None` for NEUTRAL indications and for `NO_DATA` completeness - never `0`. `PARTIAL` completeness still computes a real MFE/MAE from the bars that exist, explicitly flagged as partial. | `0` is a real, distinct measurement (genuine zero excursion) - collapsing "not applicable" (NEUTRAL) or "unknown" (no data) into the same value as "measured and found to be zero" would be dishonest and irreversibly lose information a consumer needs (Checkpoint 21 §14's own explicit warning). | Silently returning `0` for NEUTRAL/NO_DATA (rejected - explicitly forbidden by the brief); withholding PARTIAL results entirely until the full horizon completes (rejected - throws away a real, honestly-labeled measurement that is genuinely useful, e.g. for end-of-day signals). | LOCKED |
+| 98 | `theoretical_outcome` depends on neither `signal_verification` nor `signal_lifecycle` - mechanically enforced by a dedicated architecture test. | Verification asks a narrower single-point question; lifecycle asks a validity question; theoretical outcome measures windowed price-path extremes - three genuinely independent questions with independent answers (an EXPIRED indication's historical outcome remains fully measurable). Coupling any pair would force a consumer of one to depend on concepts it doesn't need. | Reusing `VerificationResult`'s `INCONCLUSIVE`/outcome shape for theoretical outcome's own completeness concept (rejected - the checkpoint brief's own explicit instruction: "do not import VerificationResult just to reuse its enum"; the two enums answer differently-shaped questions). | LOCKED |
+| 99 | Conditional expectancy is NOT implemented this checkpoint. | Expectancy requires a defined trading policy (entry/exit/position-size/costs/win-loss classification) this bounded context has no authority to invent - exactly the checkpoint brief's own mandatory architectural question. MFE/MAE are policy-free objective measurements; expectancy is a statistic ABOUT a policy's results. | Implementing a "generic" expectancy formula parameterized by an invented policy (rejected - would still require inventing the policy parameters, which is exactly what's forbidden; belongs to a future strategy/research-evaluation bounded context once `trading_engine/strategy_execution` exists). | LOCKED |
+
+## Notes (Checkpoint 21)
+
+- `domain/market_data/contracts.py`'s `Bar` (via `ensure_chronological`/
+  `timeframe_to_timedelta` reuse) required ZERO changes.
+  `domain/signal/contracts.py` was not touched at all - confirmed by
+  the new architecture test's own domain-import allowlist.
+- `import-linter` remains 6/6 kept (152 files analyzed, up from 147) -
+  no new contract needed. A dedicated static-scan architecture test
+  (`tests/unit/architecture/test_theoretical_outcome_boundaries.py`)
+  independently re-verifies that `theoretical_outcome` never imports
+  `signal_verification`, `signal_lifecycle`, `trading_engine`,
+  `feature_engine`, or infrastructure, and that its only
+  `signal_intelligence.*` import is `signal_generation`.
+- 45 new backend tests (38 core + 4 application-service + 3
+  architecture) pass genuinely (not skipped) - continuing the
+  100%-DB-free discipline of every prior signal-intelligence checkpoint.
+  Full suite: 509 passed / 0 failed / 0 skipped (up from Checkpoint 20's
+  464).
+- `application/services/theoretical_outcome.py` WAS created (unlike
+  Checkpoint 20's `signal_lifecycle`) - real orchestration (future-bar
+  retrieval via `HistoricalMarketDataService`) is genuinely needed here,
+  mirroring `SignalVerificationService`'s exact precedent.
+- Domain promotion re-assessed (§35): `theoretical_outcome` is now a
+  FOURTH intra-context consumer of `DirectionalIndication` - stronger
+  intra-context evidence, but still not a second bounded context, so
+  still not promoted. This remains an open question tracked across
+  Checkpoints 19-21, not resolved.
+- No API/persistence/frontend surface was added - confirmed via a
+  regenerated, byte-unchanged-in-substance OpenAPI schema.
+- Versioning: `pyproject.toml` and `SPECTACULAR_SETTINGS["VERSION"]`
+  both checked and left unchanged - no API surface changed. A new
+  `OUTCOME_DEFINITION_VERSION` ("v1") reuses the existing `Version`
+  primitive - no second versioning system.

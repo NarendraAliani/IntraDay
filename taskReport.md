@@ -5624,3 +5624,221 @@ a fourth `DirectionalIndication` consumer (e.g. a small
 research/backtesting replay harness) finally crosses the domain-
 promotion threshold this and the prior two checkpoints have each
 confirmed is not yet met. Not implemented — recommendation only.
+
+# Checkpoint 21 — Theoretical Outcome Foundation (2026-08-13)
+
+## Objective
+
+Establish the first real implementation in
+`signal_intelligence/theoretical_outcome`: MFE/MAE price-excursion
+measurement for a `DirectionalIndication` (Checkpoint 18) — what price
+objectively did, never a trading-strategy or profitability claim.
+
+## What Was Built
+
+- `signal_intelligence/theoretical_outcome/contracts.py`:
+  `ObservationCompleteness` (COMPLETE/PARTIAL/NO_DATA),
+  `TheoreticalOutcome` (frozen dataclass, full provenance via an
+  embedded `DirectionalIndication`).
+- `signal_intelligence/theoretical_outcome/errors.py`:
+  `InvalidHorizonError`, `MismatchedInstrumentError`,
+  `MismatchedTimeframeError`, `NonFutureObservationError`.
+- `signal_intelligence/theoretical_outcome/outcome.py`:
+  `compute_theoretical_outcome()`, `compute_theoretical_outcomes()`
+  (series-level). Imports only `domain/market_data`,
+  `domain/shared_kernel`, and `signal_intelligence.signal_generation` —
+  never `signal_verification`, `signal_lifecycle`, or `feature_engine`.
+- `application/services/theoretical_outcome.py`: `TheoreticalOutcomeService`
+  — real orchestration (future-bar retrieval), mirroring
+  `SignalVerificationService`'s exact shape.
+- `tests/unit/architecture/test_theoretical_outcome_boundaries.py` —
+  dedicated static-scan architecture test.
+
+## MFE / MAE Definition — Clamped Refinement of the Brief's Formula
+
+```
+BULLISH: MFE = max(0, max_i(high_i - reference)); MAE = min(0, min_i(low_i - reference))
+BEARISH: MFE = max(0, max_i(reference - low_i));  MAE = min(0, min_i(reference - high_i))
+```
+
+The brief's own raw formula is used as the basis but explicitly
+**clamped at zero** — a deliberate refinement, not an oversight: without
+clamping, a BULLISH indication whose price only ever rose would report
+a spuriously *positive* MAE (implying a favorable minimum) instead of
+correctly reporting "no adverse movement occurred" (0). Clamping makes
+`MFE >= 0`/`MAE <= 0` universal invariants, directly Hypothesis-tested.
+
+## Reference Price
+
+`indication.price` — reused verbatim from `VerificationResult`'s own
+convention (Checkpoint 19), never a future bar's open/close. Keeps
+every signal-intelligence measurement anchored to one canonical value.
+
+## NEUTRAL / Partial / Missing-Data Semantics
+
+`mfe`/`mae` are `None` (never `0`) for NEUTRAL indications and for
+`NO_DATA` completeness — `0` is a real, distinct measurement, and
+collapsing "not applicable"/"unknown" into it would be dishonest.
+`PARTIAL` completeness still computes real MFE/MAE from whatever bars
+exist, explicitly flagged so a consumer never mistakes it for a
+complete measurement.
+
+## Same-Bar High/Low Ambiguity
+
+A single future bar can legitimately drive both MFE and MAE — no claim
+is made about which occurred first (OHLC alone cannot answer that); no
+target-hit-before-stop inference exists anywhere in this module.
+
+## Relationship with VerificationResult and SignalLifecycle — Both Independent
+
+`theoretical_outcome` imports neither `signal_verification` nor
+`signal_lifecycle` (mechanically enforced). Verification asks a
+narrower single-point question; lifecycle asks a validity question;
+theoretical outcome measures windowed price-path extremes — three
+genuinely independent, differently-answerable questions. An indication
+can be `EXPIRED` (lifecycle) while its historical theoretical outcome
+remains perfectly measurable — signal validity and historical
+measurability are unrelated concepts.
+
+## Conditional Expectancy — Explicitly Deferred
+
+**Not implemented.** Expectancy requires a defined trading policy
+(entry/exit/position-size/costs/win-loss classification) this bounded
+context has no authority to invent — exactly the checkpoint's own
+mandatory architectural question. MFE/MAE are policy-free objective
+measurements; expectancy is a statistic *about* a policy's results,
+belonging to a future strategy/research-evaluation layer once
+`trading_engine/strategy_execution` and a real policy exist.
+
+## Domain Promotion Re-Assessment
+
+**Still not promoted.** `theoretical_outcome` is now a *fourth*
+intra-context consumer of `DirectionalIndication` (after
+`signal_generation`, `signal_verification`, `signal_lifecycle`) —
+strengthens the intra-context pattern further but doesn't change the
+underlying conclusion: still requires a second bounded context, not a
+fourth submodule within `signal_intelligence`. No consumer outside
+`signal_intelligence` exists yet — the same open question tracked since
+Checkpoint 19, now with a fourth data point, still unresolved.
+
+## Test Matrix (45 new tests, all PASSED — 0 skipped)
+
+Identity (2), BULLISH incl. hand-derived vector/zero-movement/clamping
+(3), BEARISH incl. hand-derived vector/zero-movement/clamping (3),
+NEUTRAL (1), horizon incl. no-data/partial/exact/beyond-horizon/invalid
+(5), future-bar boundary (2), instrument/timeframe integrity (2),
+chronology (2), precision incl. 4 float-trap values (1 parametrized ×
+4), same-bar ambiguity (1), determinism (1), immutability (1), contract
+validation (2), series-level (2), no-look-ahead incl. future-append/
+modification/same-timestamp/cross-instrument (4, +1 property),
+property-based MFE≥0/MAE≤0 + determinism (2); application service (4);
+architecture boundary (3).
+
+## Property-Based Testing
+
+Three Hypothesis tests: `MFE >= 0`/`MAE <= 0` hold for arbitrary
+reference/high/low/direction combinations (the universal invariant the
+clamping decision exists to guarantee); bars beyond the horizon never
+affect the result (generalizes the over-supply policy across arbitrary
+horizon/extra-bar counts); identical inputs produce identical output
+across arbitrary series.
+
+## No-Look-Ahead Validation
+
+Explicitly tested: appending bars beyond the horizon leaves the result
+unchanged; modifying bars beyond the horizon leaves the result
+unchanged; the reference price is never derived from any bar (only from
+`indication.price`), so no signal-time bar could influence it even in
+principle; cross-instrument data existing elsewhere cannot contaminate
+a computation that never receives it (enforced structurally by the
+function signature, confirmed by a dedicated test); a Hypothesis
+property generalizes the beyond-horizon non-influence claim.
+
+## Architecture Enforcement
+
+`lint-imports`: **6/6 kept**, 152 files (up from 147). New dedicated
+architecture test independently confirms `theoretical_outcome` never
+imports `signal_verification`/`signal_lifecycle`/`trading_engine`/
+`feature_engine`/infrastructure.
+
+## Full Regression
+
+- `pytest`: **509 passed, 0 failed, 0 skipped** (up from Checkpoint 20's
+  464 — the +45 is entirely new theoretical-outcome/architecture tests;
+  zero regressions, zero new skips).
+- `ruff format --check` / `ruff check`: clean, 203 files.
+- `mypy --strict`: success, 126 source files.
+- `lint-imports`: 6/6 kept.
+- `manage.py check`: clean. `makemigrations --check --dry-run`: "No
+  changes detected."
+- `manage.py spectacular --fail-on-warn`: success; regenerated schema
+  confirmed to contain zero MFE/MAE/theoretical-outcome content.
+- `pip-audit`: 8 findings, unchanged from Checkpoints 16-20 — no
+  dependency file touched; verified, not assumed.
+
+## Frontend Regression
+
+Untouched this checkpoint, per instruction. `typecheck`/`build`: clean.
+`test -- --run`: 32 passed, unchanged.
+
+## PostgreSQL / Redis
+
+Both remained available throughout — all 509 tests ran for real, none
+skipped. The core theoretical-outcome code itself remains 100% DB-free
+by design (verified by the same static AST-based no-Django test pattern
+used for every other application service).
+
+## Security / Trading Safety
+
+No credentials, API keys, `.env`, or network calls introduced.
+`trading_engine/`, `risk_engine`, `order_management`,
+`position_management`, `execution_management`, broker abstraction,
+`Dhan`, `kill_switch`, `TRADING_MODE`, `strategy_execution` — confirmed
+untouched. No order, broker call, or live configuration activation.
+`domain/signal/contracts.py` and `domain/strategy/contracts.py` both
+confirmed unchanged.
+
+## Documentation
+
+New `docs/architecture/SIGNAL_THEORETICAL_OUTCOME_ARCHITECTURE.md`
+(full contract: reference price, MFE/MAE definition, NEUTRAL/partial/
+missing-data semantics, same-bar ambiguity, Decimal precision,
+relationships with VerificationResult/SignalLifecycle, expectancy
+deferral, identity/versioning, immutability, promotion assessment,
+architecture enforcement). `docs/architecture/ARCHITECTURE.md` (one
+paragraph). `docs/architecture/ARCHITECTURE_DECISIONS.md` (decisions
+#95-#99 + Notes). `signal_intelligence/theoretical_outcome/README.md`
+(updated from the Checkpoint-1 placeholder). This `taskReport.md`
+section.
+
+## Versioning
+
+`pyproject.toml`/`SPECTACULAR_SETTINGS["VERSION"]` unchanged — no API
+surface changed. New `OUTCOME_DEFINITION_VERSION` ("v1") reuses the
+existing `Version` primitive.
+
+## Deferred
+
+Conditional expectancy (explicitly, with a named future owner), signal
+persistence, outcome API, frontend outcome viewer, path/MFE-timing
+storage, backtest/walk-forward/Monte Carlo engines, strategy execution,
+Dhan/live provider — all deliberately out of scope.
+
+## Recommended Checkpoint 22
+
+With `signal_generation`, `signal_verification`, `signal_lifecycle`, and
+`theoretical_outcome` all now real, the `signal_intelligence` bounded
+context's originally-scoped Checkpoint-1 responsibilities are
+substantially complete for the DirectionalIndication-based foundation.
+Recommend either (a) beginning `trading_engine/strategy_execution`'s
+first minimal, technology-neutral executable strategy shape — now that
+real feature/signal/verification/lifecycle/outcome primitives exist for
+one to actually consume, which would also be the moment
+`domain.signal.Signal` finally becomes producible and the
+`DirectionalIndication` domain-promotion question gets its first real
+test from a genuinely different bounded context; or (b) a research-side
+consumer (e.g. a minimal `research/backtesting` replay harness reusing
+`TheoreticalOutcome`/`VerificationResult` over historical data) as a
+lower-risk way to generate the cross-bounded-context evidence the
+promotion question has now waited four checkpoints for. Not
+implemented — recommendation only.
