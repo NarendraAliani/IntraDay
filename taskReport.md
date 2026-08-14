@@ -6887,3 +6887,216 @@ and/or historical-intraday-OHLC API shape directly against Dhan's
 official documentation, and decide which (or both) is the right
 foundation for trading-grade bars - before either CP24 or a streaming
 upgrade is implemented. Not implemented - recommendation only.
+
+# Checkpoint 25 — Dynamic Digital Tutorial Guide + User Operations Manual (2026-08-14)
+
+## Part 1 — CP24A Finalization Re-Verification
+
+Independently re-verified (not assumed from the prior report) before
+starting: `HEAD` = `d5d96f4`, branch `main`, `origin/main` unchanged,
+6 ahead / 0 behind, working tree clean. `app.bat` and
+`frontend/vite.config.ts` inspected directly and confirmed to contain
+the documented fixes (numbered `[1/8]`-`[8/8]` steps, health-check
+polling, `host: "127.0.0.1"`). `MARKET_DATA_QUALITY_ASSESSMENT.md`
+confirmed to classify current bars as `SAMPLE_BAR`.
+`trading_engine/*` re-confirmed untouched (every subpackage's
+`__init__.py` still 7-8 lines).
+
+    Orders placed: 0
+    Order API calls: 0
+    Position changes: 0
+    Signal execution: 0
+    Trading engine changes: 0
+
+All confirmed unchanged. No safety boundary was modified this
+checkpoint - it is documentation-only, plus one small pytest/validation
+addition.
+
+## Part 2 — Dynamic Tutorial Guide
+
+Built `docs/user-guide/` as a standalone, dependency-free HTML/CSS/JS
+tutorial - works by double-clicking `index.html`, no server or build
+step required.
+
+### Files created
+
+- `docs/user-guide/index.html` - 21 sections, single-page-app style
+  (sidebar nav + JS section switching), ~1,000 lines of real content
+  derived directly from the repository's actual code and configuration.
+- `docs/user-guide/css/style.css` - light/dark theme support, responsive
+  layout (desktop/tablet/mobile), print stylesheet, visible focus
+  states, reduced-motion support.
+- `docs/user-guide/js/main.js` - vanilla JS: section navigation,
+  client-side search (built from the DOM at runtime, no separate index
+  file to keep in sync), progress indicator, prev/next buttons, mobile
+  sidebar toggle, First-Day checklist persistence (localStorage).
+- `docs/user-guide/validate.py` - lightweight, dependency-free
+  structural/security validation (broken internal links, missing local
+  assets, credential-shaped strings, leftover placeholder markers).
+- `docs/user-guide/README.md` - directory README explaining the guide's
+  purpose and how to keep it honest as the app evolves.
+- `tests/unit/documentation/test_user_guide.py` - thin pytest wrapper
+  around `validate.py` so it runs as part of the normal `pytest` suite.
+
+### Files modified
+
+- `README.md` - added a prominent "New user? Start here" pointer at
+  the very top, before the existing status blurb; relabeled the
+  existing architecture-doc list "Start Here (Developers /
+  Architecture)" to disambiguate from the new pointer.
+- `docs/development/LOCAL_DEVELOPMENT.md` - added a pointer to the
+  digital guide for non-developer readers.
+
+### Major sections (all 21, verified 1:1 against sidebar nav links)
+
+Home/Start Here, What is IntraDay?, System Overview, I Know Nothing —
+Start Here, Before You Start, Installation, First Startup (app.bat),
+Login, Configuration Screens, Dhan Setup, Market Data Concepts, Live
+Market Data Monitor, Screen-by-Screen Guide, Trading Mode, Safety
+Rules, Troubleshooting, Safe Shutdown, My First Day Checklist, FAQ,
+Glossary, Developer Mode.
+
+### Interactive features
+
+Sidebar navigation with active-section highlighting; previous/next
+buttons; a progress indicator (`N / 21`); client-side search with live
+result snippets (no backend); a numbered 10-step "Start Here" wizard on
+the home page with What/Need/Result/Common-problem/Fix structure per
+step; collapsible FAQ (`<details>`); a persisted first-day checklist;
+deep-linkable sections via URL hash (`index.html#dhan-setup`).
+
+## Part 3 — New User Journey
+
+**Zero → installed:** the guide's "Before You Start" and "Installation"
+sections list the exact, real prerequisites (Python 3.12, Poetry,
+Node/npm, PostgreSQL 16) and the exact commands from this repository's
+own `docs/development/LOCAL_DEVELOPMENT.md` - no generic placeholders.
+
+**Installed → started:** "First Startup" makes `app.bat` the primary
+path, with a table mapping every one of its real `[1/8]`-`[8/8]` steps
+to what it actually does, plus explicit "if X is missing" guidance for
+every prerequisite and both ports.
+
+**Started → logged in:** "Login" explains session cookies, CSRF, 401
+vs. 403 in plain language, including the specific startup-timing 403
+cause fixed at the prior checkpoint - and shows the real account-
+creation command (with an obviously-placeholder password) rather than
+telling the user to "ask someone" with no further detail.
+
+**Logged in → configured:** "Configuration Screens" and "Dhan Setup"
+document the real Configuration/Settings screens and fields, the
+write-only secret pattern, and the real Test Connection states.
+
+**Configured → market-data observation:** "Market Data Concepts" and
+"Live Market Data Monitor" explain the real pipeline and every visible
+field, with the SAMPLE_BAR limitation given equal prominence to the
+happy path, not buried.
+
+**Observation → shutdown:** "Safe Shutdown" gives the real stop
+sequence and an orphaned-process check command.
+
+## Part 4 — Documentation Gaps Found (and corrected)
+
+Performed the requested "new user simulation" self-review after
+drafting:
+
+- **Gap:** the Login section originally deferred "how do I get an
+  account" to "ask an administrator" with no further detail, forcing a
+  genuinely new user to leave the guide entirely. **Fixed:** added the
+  real account-creation command (the same one `app.bat` itself prints),
+  with an explicit, obvious placeholder password - never a real
+  credential.
+- **Gap (caught by the IDE's own linter, not the self-review):** two
+  inline `style="..."` attributes in `index.html` (static layout
+  styling that belonged in the stylesheet, not the dynamic
+  progress-bar width, which correctly remains inline since JS sets it).
+  **Fixed:** moved to `css/style.css` as `.top-bar__left` and
+  `.safety-rules-list`.
+- **Gap:** an empty leftover `<p class="page-nav-hint">` element from
+  drafting, with no content and no purpose. **Fixed:** removed.
+- **False positive found in `validate.py` itself:** the guide's own
+  README, describing what the validator checks for, contained the
+  literal words "TODO"/"FIXME" as examples - correctly flagged by the
+  validator's own placeholder-marker check, then fixed by rephrasing
+  (the validator behaved correctly; the README's wording was the
+  issue).
+
+## Part 5 — Market Data Status
+
+Confirmed and prominently documented throughout the guide (Home page
+banner, dedicated Market Data Concepts section with its own anchor,
+Live Monitor section, FAQ, Glossary): current bars are classified
+**`SAMPLE_BAR`**. The guide explains, in plain language, why: the
+system only samples price on explicit request, so HIGH may under-report
+the true high, LOW may under-report the true low (both are
+structurally one-sided), OPEN/CLOSE are approximate, and VOLUME is
+never fabricated (shown as `—`). The guide never claims these bars are
+suitable for trading decisions.
+
+## Part 6 — Browser Validation
+
+**Browser click-through validation was not performed.** No browser
+automation tool is available in this environment (consistent with
+every prior checkpoint's finding). What was performed instead: full
+structural validation (`docs/user-guide/validate.py`, both standalone
+and via `pytest`) confirming every internal link resolves, every local
+asset exists, and no secrets/placeholders leaked; a manual line-by-line
+content review; and a 1:1 cross-check confirming all 21 sidebar nav
+links match exactly 21 real sections. No claim of visual rendering,
+click interaction, or responsive-layout testing in a real browser is
+made.
+
+## Part 7 — Tests
+
+- Backend: `ruff format --check` clean (266 files), `ruff check`
+  clean, `mypy` clean (156 files, via the project's own `packages =
+  ["intraday"]` scope - `docs/user-guide/validate.py` and
+  `tests/unit/documentation/` were additionally checked explicitly and
+  are also clean), `import-linter` 6/6 kept, `pytest` **697 passed / 0
+  failed / 0 skipped** (2 new documentation tests, up from 695),
+  `manage.py check` clean, `makemigrations --check --dry-run` clean,
+  `spectacular --fail-on-warn` clean.
+- Frontend (unchanged this checkpoint, re-run to confirm no
+  regression): `tsc -b` clean, `vite build` clean, `vitest run` **56
+  passed / 0 failed**.
+- `docs/user-guide/validate.py` (standalone): **passed** - no broken
+  links, no missing assets, no leaked secrets, no placeholder markers.
+
+## Part 8 — Security
+
+- No credentials exposed - repo-wide grep for JWT-shaped and
+  credential-assignment-shaped strings across every file touched this
+  checkpoint: none found.
+- No authentication bypass - the guide documents the real login flow
+  faithfully, including a real account-creation command with an
+  explicit placeholder password; no shortcut, bypass, or weakening is
+  suggested anywhere.
+- No trading bypass - the guide explicitly and repeatedly states that
+  no order-placement code exists and that real trading remains NOT
+  READY; it does not suggest any workaround.
+- No secrets committed - `.env`/`frontend/.env.local` remain untracked
+  and are explicitly called out as never-commit files within the guide
+  itself.
+
+## Part 9 — Trading Safety
+
+    Orders placed: 0
+    Order API calls: 0
+    Position changes: 0
+    Signal execution: 0
+    Trading engine changes: 0
+
+## Part 10 — Git
+
+Committed locally (see final report for hash). Not pushed.
+
+## Part 11 — Recommended Next Checkpoint
+
+Unchanged from the prior checkpoint's own conclusion, re-affirmed here
+since this checkpoint made no code change to the market-data pipeline:
+**a research/verification step** confirming Dhan's actual WebSocket
+live-feed and/or historical-intraday-OHLC API shape, to resolve the
+SAMPLE_BAR → TRADING_GRADE_BAR question, before either
+**Checkpoint 26 — Market Data Fidelity / Trading-Grade Bar
+Architecture** or **Checkpoint 26 — Live Signal Observation** can be
+correctly chosen. Not implemented - recommendation only.

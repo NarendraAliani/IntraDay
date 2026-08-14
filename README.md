@@ -1,5 +1,12 @@
 # IntraDay — Intraday Indian Cash-Equity Algorithmic Trading Platform
 
+> **New user? Start here → [docs/user-guide/index.html](docs/user-guide/index.html)**
+> A non-technical, interactive walkthrough covering installation, starting
+> the app with `app.bat`, logging in, configuring Dhan/Telegram/Discord,
+> observing live market data, and safe shutdown — written for developers,
+> technically comfortable users, and complete beginners alike. Double-click
+> the file to open it; no server required.
+
 > **Status: COMPLETE CONFIGURATION CONTROL-PLANE GOVERNANCE (Checkpoint
 > 13).** The project installs and boots (Django, Celery, Channels,
 > React/Vite), and is protected by CI-enforced formatting, linting, strict
@@ -33,7 +40,10 @@ overnight positions, commodity derivatives, currency derivatives, and crypto
 are permanently out of scope. Indices (e.g. NIFTY, SENSEX) may be used only
 for market context and research — never as tradable instruments.
 
-## Start Here
+## Start Here (Developers / Architecture)
+
+> Looking to install and run the app instead? See the new-user pointer
+> at the top of this page.
 
 - [docs/architecture/ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md) — architectural philosophy and layering
 - [docs/architecture/DOMAIN_BOUNDARIES.md](docs/architecture/DOMAIN_BOUNDARIES.md) — how the major domains relate

@@ -1,0 +1,779 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>IntraDay — User Guide</title>
+<meta name="description" content="Dynamic digital tutorial guide for installing, starting, and safely operating the IntraDay platform." />
+<link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+<a class="skip-link" href="#main-content">Skip to main content</a>
+
+<div class="app-shell">
+  <header class="top-bar">
+    <div class="top-bar__left">
+      <button class="menu-toggle" id="menu-toggle" type="button" aria-label="Toggle navigation menu" aria-controls="sidebar">☰</button>
+      <div class="top-bar__brand">IntraDay <small>User Guide</small></div>
+    </div>
+    <div class="top-bar__search">
+      <label class="skip-link" for="search-input">Search the guide</label>
+      <input type="search" id="search-input" placeholder="Search the guide… (try &quot;Dhan&quot;, &quot;403&quot;, &quot;volume&quot;)" autocomplete="off" />
+      <div class="search-results" id="search-results" role="listbox" aria-label="Search results"></div>
+    </div>
+    <div class="top-bar__progress">
+      <div class="progress-track"><div class="progress-fill" id="progress-fill" style="width:0%"></div></div>
+      <span id="progress-label">1 / 1</span>
+    </div>
+  </header>
+
+  <nav class="sidebar" id="sidebar" aria-label="Guide sections">
+    <ul>
+      <li class="sidebar__group-title">Getting Started</li>
+      <li><a class="nav-link" data-target="home" href="#home">Home / Start Here</a></li>
+      <li><a class="nav-link" data-target="what-is-intraday" href="#what-is-intraday">What is IntraDay?</a></li>
+      <li><a class="nav-link" data-target="system-overview" href="#system-overview">System Overview</a></li>
+      <li><a class="nav-link" data-target="beginner-mode" href="#beginner-mode">I Know Nothing — Start Here</a></li>
+
+      <li class="sidebar__group-title">Setup</li>
+      <li><a class="nav-link" data-target="before-you-start" href="#before-you-start">Before You Start</a></li>
+      <li><a class="nav-link" data-target="installation" href="#installation">Installation</a></li>
+      <li><a class="nav-link" data-target="first-startup" href="#first-startup">First Startup (app.bat)</a></li>
+      <li><a class="nav-link" data-target="login" href="#login">Login</a></li>
+
+      <li class="sidebar__group-title">Using the App</li>
+      <li><a class="nav-link" data-target="configuration" href="#configuration">Configuration Screens</a></li>
+      <li><a class="nav-link" data-target="dhan-setup" href="#dhan-setup">Dhan Setup</a></li>
+      <li><a class="nav-link" data-target="market-data" href="#market-data">Market Data Concepts</a></li>
+      <li><a class="nav-link" data-target="live-monitor" href="#live-monitor">Live Market Data Monitor</a></li>
+      <li><a class="nav-link" data-target="screens" href="#screens">Screen-by-Screen Guide</a></li>
+      <li><a class="nav-link" data-target="trading-mode" href="#trading-mode">Trading Mode</a></li>
+
+      <li class="sidebar__group-title">Safety &amp; Help</li>
+      <li><a class="nav-link" data-target="safety-rules" href="#safety-rules">Safety Rules</a></li>
+      <li><a class="nav-link" data-target="troubleshooting" href="#troubleshooting">Troubleshooting</a></li>
+      <li><a class="nav-link" data-target="safe-shutdown" href="#safe-shutdown">Safe Shutdown</a></li>
+      <li><a class="nav-link" data-target="first-day" href="#first-day">My First Day Checklist</a></li>
+
+      <li class="sidebar__group-title">Reference</li>
+      <li><a class="nav-link" data-target="faq" href="#faq">FAQ</a></li>
+      <li><a class="nav-link" data-target="glossary" href="#glossary">Glossary</a></li>
+      <li><a class="nav-link" data-target="developer-mode" href="#developer-mode">Developer Mode</a></li>
+    </ul>
+  </nav>
+
+  <main id="main-content" tabindex="-1">
+
+    <!-- ============================================================ HOME -->
+    <section class="section" id="home">
+      <h1>IntraDay — User Guide</h1>
+      <p class="lede">A guide to installing, starting, and safely operating the IntraDay local application — written from the actual repository, not a generic template.</p>
+
+      <div class="callout callout--warn">
+        <strong>Current status, honestly stated:</strong> this application can observe live market data (read-only) once a valid Dhan credential is configured. It <strong>cannot yet</strong> generate trading signals or place any order. See <a href="#safety-rules">Safety Rules</a> and <a href="#market-data">Market Data Concepts</a> before doing anything else.
+      </div>
+
+      <h2>START HERE</h2>
+      <p>Ten steps, in order, from "I just downloaded this" to "I safely shut it down." Each step links to its full section further in the guide.</p>
+
+      <div class="step-card">
+        <span class="step-card__number">1</span><strong>Check your computer</strong>
+        <dl>
+          <dt>What this means</dt><dd>Confirm you're on Windows with enough disk space and admin rights to install software.</dd>
+          <dt>Details</dt><dd>See <a href="#before-you-start">Before You Start</a>.</dd>
+        </dl>
+      </div>
+      <div class="step-card">
+        <span class="step-card__number">2</span><strong>Install prerequisites</strong>
+        <dl>
+          <dt>What this means</dt><dd>Install Python, Poetry, Node.js, npm, PostgreSQL, and Git if you don't already have them.</dd>
+          <dt>Details</dt><dd>See <a href="#installation">Installation</a>.</dd>
+        </dl>
+      </div>
+      <div class="step-card">
+        <span class="step-card__number">3</span><strong>Open the project folder</strong>
+        <dl>
+          <dt>What this means</dt><dd>Navigate to the folder containing <code>app.bat</code>, <code>manage.py</code>, and <code>frontend/</code>.</dd>
+        </dl>
+      </div>
+      <div class="step-card">
+        <span class="step-card__number">4</span><strong>Configure environment</strong>
+        <dl>
+          <dt>What this means</dt><dd>Copy <code>.env.example</code> to <code>.env</code> and set your PostgreSQL password. <code>app.bat</code> does the copy for you automatically if <code>.env</code> doesn't exist yet.</dd>
+          <dt>Details</dt><dd>See <a href="#installation">Installation</a>.</dd>
+        </dl>
+      </div>
+      <div class="step-card">
+        <span class="step-card__number">5</span><strong>Start the application</strong>
+        <dl>
+          <dt>What this means</dt><dd>Double-click <code>app.bat</code> in the project root. Wait for the numbered checks to finish.</dd>
+          <dt>Details</dt><dd>See <a href="#first-startup">First Startup</a>.</dd>
+        </dl>
+      </div>
+      <div class="step-card">
+        <span class="step-card__number">6</span><strong>Open the browser</strong>
+        <dl>
+          <dt>What this means</dt><dd>Go to <code>http://127.0.0.1:5173</code> once <code>app.bat</code> reports the frontend is ready.</dd>
+        </dl>
+      </div>
+      <div class="step-card">
+        <span class="step-card__number">7</span><strong>Log in</strong>
+        <dl>
+          <dt>What this means</dt><dd>Sign in with a development account created by an administrator (see <a href="#login">Login</a>). There is no default account — none is created automatically.</dd>
+        </dl>
+      </div>
+      <div class="step-card">
+        <span class="step-card__number">8</span><strong>Configure services</strong>
+        <dl>
+          <dt>What this means</dt><dd>Open <strong>Settings</strong> and enter your Dhan/Telegram/Discord details if you have them. None are required just to explore the app.</dd>
+          <dt>Details</dt><dd>See <a href="#dhan-setup">Dhan Setup</a>.</dd>
+        </dl>
+      </div>
+      <div class="step-card">
+        <span class="step-card__number">9</span><strong>Start market-data observation</strong>
+        <dl>
+          <dt>What this means</dt><dd>Open <strong>Market Data</strong> and click <strong>Refresh Quotes</strong> (requires a working Dhan credential and market hours).</dd>
+          <dt>Details</dt><dd>See <a href="#live-monitor">Live Market Data Monitor</a>.</dd>
+        </dl>
+      </div>
+      <div class="step-card">
+        <span class="step-card__number">10</span><strong>Stop the application safely</strong>
+        <dl>
+          <dt>What this means</dt><dd>Close the two server windows <code>app.bat</code> opened (or Ctrl+C inside them).</dd>
+          <dt>Details</dt><dd>See <a href="#safe-shutdown">Safe Shutdown</a>.</dd>
+        </dl>
+      </div>
+
+    </section>
+
+    <!-- ================================================= WHAT IS INTRADAY -->
+    <section class="section" id="what-is-intraday">
+      <h1>What is IntraDay?</h1>
+      <p class="lede">IntraDay is a control-plane application for Indian intraday cash-equity trading — currently a configuration, connectivity, and market-data <em>observation</em> platform, not yet a trading system.</p>
+
+      <h2>Scope</h2>
+      <p>The project is permanently limited to <strong>intraday trading of Indian cash equities</strong>. Futures, options, overnight positions, commodities, currencies, and crypto are explicitly out of scope. Indices (NIFTY, SENSEX) may appear only as market context, never as tradable instruments.</p>
+
+      <h2>What exists today</h2>
+      <table>
+        <thead><tr><th>Capability</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td>Login / sessions / role-based access</td><td><span class="badge badge--ready">Implemented</span></td></tr>
+          <tr><td>Risk / Universe / Strategy version configuration (read + activate)</td><td><span class="badge badge--ready">Implemented</span></td></tr>
+          <tr><td>Dhan / Telegram / Discord connection settings</td><td><span class="badge badge--ready">Implemented</span></td></tr>
+          <tr><td>Read-only Dhan market-quote connectivity</td><td><span class="badge badge--ready">Implemented</span></td></tr>
+          <tr><td>Live market-data observation (quotes, 1-minute bars)</td><td><span class="badge badge--ready">Implemented</span></td></tr>
+          <tr><td>Trading-grade OHLC data</td><td><span class="badge badge--not-ready">NOT IMPLEMENTED — data classified SAMPLE_BAR</span></td></tr>
+          <tr><td>Trading signal generation</td><td><span class="badge badge--not-ready">NOT IMPLEMENTED</span></td></tr>
+          <tr><td>Paper trading</td><td><span class="badge badge--not-ready">NOT IMPLEMENTED</span></td></tr>
+          <tr><td>Order placement / real trading</td><td><span class="badge badge--not-ready">NOT IMPLEMENTED</span></td></tr>
+        </tbody>
+      </table>
+      <p>This table reflects the actual code in the repository at the time this guide was written, not a roadmap or aspiration.</p>
+    </section>
+
+    <!-- =================================================== SYSTEM OVERVIEW -->
+    <section class="section" id="system-overview">
+      <h1>System Overview</h1>
+      <p class="lede">How a request actually flows through the running application, verified against the real code — not a generic diagram.</p>
+
+      <pre><code>You (browser)
+    ↓
+React frontend  — http://127.0.0.1:5173  (Vite dev server)
+    ↓  (fetch, with session cookie)
+Django backend  — http://127.0.0.1:8000  (REST API under /api/v1/)
+    ↓
+Application services  (business logic — configuration, settings, market data)
+    ↓
+PostgreSQL (all persisted data)  +  Redis (session cache / rate limiting)
+    ↓  (only when you click "Test Connection" or "Refresh Quotes")
+Dhan / Telegram / Discord  (read-only connectivity checks and quote fetches)</code></pre>
+
+      <h3>What's currently active vs. read-only vs. deferred</h3>
+      <ul>
+        <li><strong>Active, read-write:</strong> your login session, Settings (Dhan/Telegram/Discord credentials), Configuration (risk/universe/strategy activation).</li>
+        <li><strong>Active, read-only:</strong> Dhan connectivity test (calls Dhan's account-profile endpoint only), live market-quote refresh (calls Dhan's market-quote endpoint only). Neither can place an order — the code to do so does not exist in this application.</li>
+        <li><strong>Deferred / not implemented:</strong> Docker deployment, production hardening, WhatsApp notifications, signal generation, paper trading, real trading, WebSocket streaming market data.</li>
+      </ul>
+
+      <div class="callout callout--info">
+        For the full, authoritative architecture (bounded contexts, dependency rules, decision log), see <a href="#developer-mode">Developer Mode</a> — this page is intentionally a simplified summary for operating the app, not a substitute for those documents.
+      </div>
+    </section>
+
+    <!-- ==================================================== BEGINNER MODE -->
+    <section class="section" id="beginner-mode">
+      <h1>I Know Nothing — Start Here</h1>
+      <p class="lede">Plain-language explanations of every term you'll see while installing and running IntraDay. Just enough to operate the app — not a programming course.</p>
+
+      <dl class="glossary">
+        <dt>Python</dt><dd>The programming language the backend (server) is written in. You need it installed so the backend can run.</dd>
+        <dt>Poetry</dt><dd>A tool that installs the exact Python packages this project needs, in one command.</dd>
+        <dt>Node.js</dt><dd>A program that lets JavaScript (the frontend's language) run outside a browser — needed to build/serve the frontend.</dd>
+        <dt>npm</dt><dd>Node's package manager — installs the frontend's JavaScript packages, similar to what Poetry does for Python.</dd>
+        <dt>PostgreSQL</dt><dd>The database that stores everything permanently: your login, your settings, observed market data.</dd>
+        <dt>Redis</dt><dd>A fast, temporary memory store used for session/login handling and rate-limiting — not where permanent data lives.</dd>
+        <dt>Django</dt><dd>The framework the Python backend is built with — it's what serves the API your browser talks to.</dd>
+        <dt>React</dt><dd>The framework the frontend (what you see in your browser) is built with.</dd>
+        <dt>API</dt><dd>The set of URLs the frontend uses to ask the backend for data or tell it to do something — you never type these yourself, the frontend does it for you.</dd>
+        <dt>Dhan</dt><dd>An Indian stock broker. This app can connect to your Dhan account to read (never place) market prices.</dd>
+        <dt>Broker</dt><dd>A company (like Dhan) that gives you access to buy/sell stocks and provides market data.</dd>
+        <dt>Market data</dt><dd>Prices and related information about stocks — what this app currently observes.</dd>
+        <dt>Quote</dt><dd>One price reading for one stock, at one moment in time.</dd>
+        <dt>Bar</dt><dd>A summary of price movement over a fixed period (this app uses 1-minute bars) — Open/High/Low/Close.</dd>
+        <dt>SAMPLE_BAR</dt><dd>This app's honest label for its current bars: built from occasional samples, not a continuous feed — good for observing, not yet reliable enough for trading decisions. Full explanation in <a href="#market-data">Market Data Concepts</a>.</dd>
+        <dt>Signal</dt><dd>A computed suggestion ("price may be going up/down") a trading system would use to decide when to trade. <strong>Not implemented in this app yet.</strong></dd>
+        <dt>Trading mode</dt><dd>A safety switch this app uses internally so it can never accidentally place a real trade from a development environment. See <a href="#trading-mode">Trading Mode</a>.</dd>
+      </dl>
+    </section>
+
+    <!-- =================================================== BEFORE YOU START -->
+    <section class="section" id="before-you-start">
+      <h1>Before You Start</h1>
+      <p class="lede">What this application actually assumes about your computer, verified from the repository's own configuration.</p>
+
+      <h2>Assumptions</h2>
+      <ul>
+        <li><strong>Operating system:</strong> Windows (the launcher is <code>app.bat</code>, a Windows batch file). The backend/frontend themselves are cross-platform, but the single-click startup path documented here is Windows-specific.</li>
+        <li><strong>Disk space:</strong> a few hundred MB for Python/Node dependencies once installed.</li>
+        <li><strong>Network:</strong> only needed to install prerequisites and to reach Dhan/Telegram/Discord if you configure them — the app itself runs entirely on your own machine (<code>127.0.0.1</code>).</li>
+        <li><strong>Browser:</strong> any modern browser (Chrome, Edge, Firefox). No specific version is enforced by the project.</li>
+      </ul>
+
+      <h2>What you'll need before "First Startup" will succeed</h2>
+      <ul>
+        <li>Python 3.12 (exact requirement in <code>pyproject.toml</code>: <code>python = "^3.12"</code>)</li>
+        <li>Poetry (any recent version — manages the exact Python package versions from <code>poetry.lock</code>)</li>
+        <li>Node.js and npm (any current LTS Node release)</li>
+        <li>PostgreSQL (the project's own local-development guide uses PostgreSQL 16)</li>
+        <li>Git (to have obtained the project files in the first place)</li>
+      </ul>
+
+      <div class="callout callout--info">Redis is referenced in the project's configuration (<code>REDIS_URL</code> in <code>.env</code>) for caching/session support, but is <strong>not verified as a hard requirement for the exact commands documented in this guide</strong> — the authoritative source is <code>docs/development/LOCAL_DEVELOPMENT.md</code>, which documents installing it as optional native software alongside PostgreSQL. If a command in this guide fails with a Redis connection error, install and start Redis the same way as PostgreSQL.</div>
+    </section>
+
+    <!-- ======================================================= INSTALLATION -->
+    <section class="section" id="installation">
+      <h1>Installation</h1>
+      <p class="lede">Every command below is a real command from this repository's own documented workflow (<code>docs/development/LOCAL_DEVELOPMENT.md</code>) — not a generic placeholder.</p>
+
+      <h2>1. Prerequisite checks</h2>
+      <table>
+        <thead><tr><th>Tool</th><th>Why it's needed</th><th>Check it's installed</th></tr></thead>
+        <tbody>
+          <tr><td>Python 3.12</td><td>Runs the Django backend</td><td><code>python --version</code></td></tr>
+          <tr><td>Poetry</td><td>Installs backend dependencies exactly</td><td><code>poetry --version</code></td></tr>
+          <tr><td>Node.js / npm</td><td>Runs and builds the frontend</td><td><code>node --version</code> / <code>npm --version</code></td></tr>
+          <tr><td>PostgreSQL</td><td>Stores all persisted application data</td><td><code>psql --version</code></td></tr>
+        </tbody>
+      </table>
+      <p>If any command above says "not recognized" / "command not found", that tool isn't installed or isn't on your PATH — install it (or re-run its installer with "Add to PATH" checked) before continuing. <code>app.bat</code> also checks for these automatically and tells you exactly which one is missing.</p>
+
+      <h2>2. Backend and frontend dependencies</h2>
+      <pre><code>poetry install                  # installs backend dependencies (pyproject.toml)
+cd frontend
+npm install                     # installs frontend dependencies
+cd ..</code></pre>
+      <p><code>app.bat</code> runs both of these for you automatically the first time, if they haven't been run yet.</p>
+
+      <h2>3. Environment configuration</h2>
+      <pre><code>cp .env.example .env            # backend configuration — never commit this file
+cp frontend/.env.example frontend/.env.local   # frontend configuration</code></pre>
+      <p>Open <code>.env</code> and set at minimum your PostgreSQL password to match your local install. The other values (<code>DHAN_CLIENT_ID</code>, <code>TELEGRAM_BOT_TOKEN</code>, etc.) can stay blank — they can also be configured later through the app's own Settings screen, which is the recommended way. <code>app.bat</code> creates both files automatically from their <code>.example</code> templates if they don't exist yet.</p>
+
+      <div class="callout callout--danger"><strong>Never commit <code>.env</code> or <code>frontend/.env.local</code>.</strong> Both are already excluded from version control (<code>.gitignore</code>). Never paste real credentials into any file that isn't one of these two.</div>
+
+      <h2>4. Database setup</h2>
+      <pre><code>-- inside psql, using the values from your .env --
+CREATE USER intraday WITH PASSWORD 'changeme';
+CREATE DATABASE intraday OWNER intraday;
+GRANT ALL PRIVILEGES ON DATABASE intraday TO intraday;
+ALTER USER intraday CREATEDB;</code></pre>
+      <p>Then apply migrations (creates all the database tables the app needs):</p>
+      <pre><code>poetry run python manage.py migrate</code></pre>
+      <p><code>app.bat</code> also runs this automatically on every startup — it's safe to run repeatedly (already-applied changes are skipped).</p>
+
+      <h2>5. Verify before your first login</h2>
+      <p>Once the backend is running (see <a href="#first-startup">First Startup</a>), visit <code>http://127.0.0.1:8000/readyz</code> in a browser. It should report both <code>database</code> and <code>cache</code> as <code>"ok"</code>. If either says otherwise, that service (PostgreSQL or Redis) isn't reachable yet.</p>
+    </section>
+
+    <!-- ===================================================== FIRST STARTUP -->
+    <section class="section" id="first-startup">
+      <h1>First Startup — app.bat</h1>
+      <p class="lede"><code>app.bat</code>, in the project's root folder, is the intended way to start the whole application. You should not normally need to open separate terminals or type backend/frontend commands yourself.</p>
+
+      <div class="step-card">
+        <span class="step-card__number">1</span><strong>Locate <code>app.bat</code></strong>
+        <dl><dt>Where</dt><dd>The very top level of the project folder — same folder as <code>manage.py</code> and <code>README.md</code>.</dd></dl>
+      </div>
+      <div class="step-card">
+        <span class="step-card__number">2</span><strong>Double-click it</strong>
+        <dl><dt>What happens</dt><dd>A console window titled "IntraDay Launcher" opens and starts running numbered checks.</dd></dl>
+      </div>
+      <div class="step-card">
+        <span class="step-card__number">3</span><strong>Wait for the numbered checks</strong>
+        <dl><dt>What you'll see</dt><dd>See the exact meaning of each step below.</dd></dl>
+      </div>
+      <div class="step-card">
+        <span class="step-card__number">4</span><strong>Open the displayed frontend URL</strong>
+        <dl><dt>URL</dt><dd><code>http://127.0.0.1:5173</code> — shown in the launcher's final summary.</dd></dl>
+      </div>
+      <div class="step-card">
+        <span class="step-card__number">5</span><strong>Log in</strong>
+        <dl><dt>Next</dt><dd>See <a href="#login">Login</a>.</dd></dl>
+      </div>
+
+      <h2>What each startup step means</h2>
+      <table>
+        <thead><tr><th>Step</th><th>What it checks / does</th></tr></thead>
+        <tbody>
+          <tr><td><code>[1/8]</code></td><td>Confirms Python and Poetry are on your PATH.</td></tr>
+          <tr><td><code>[2/8]</code></td><td>Confirms Node.js and npm are on your PATH.</td></tr>
+          <tr><td><code>[3/8]</code></td><td>Installs backend dependencies if missing (<code>poetry install</code>), creates <code>.env</code> from the template if missing.</td></tr>
+          <tr><td><code>[4/8]</code></td><td>Installs frontend dependencies if missing (<code>npm install</code>), creates <code>frontend/.env.local</code> from the template if missing.</td></tr>
+          <tr><td><code>[5/8]</code></td><td>Applies database migrations (requires PostgreSQL to already be running and reachable).</td></tr>
+          <tr><td><code>[6/8]</code></td><td>Starts the backend in its own window, then waits (up to 30 seconds) until <code>http://127.0.0.1:8000/healthz</code> actually responds.</td></tr>
+          <tr><td><code>[7/8]</code></td><td>Starts the frontend in its own window, then waits (up to 30 seconds) until <code>http://127.0.0.1:5173/</code> actually responds.</td></tr>
+          <tr><td><code>[8/8]</code></td><td>Prints a summary with both URLs and instructions, then waits for a keypress before closing the launcher window (the two server windows keep running).</td></tr>
+        </tbody>
+      </table>
+
+      <h2>If something is missing</h2>
+      <ul>
+        <li><strong>Python missing:</strong> the launcher stops immediately at step 1 with a clear message and a link to install it.</li>
+        <li><strong>Poetry missing:</strong> same — stops at step 1.</li>
+        <li><strong>Node/npm missing:</strong> stops at step 2.</li>
+        <li><strong>PostgreSQL unreachable:</strong> step 5 (migrations) fails with a clear message; the launcher stops before starting either server.</li>
+        <li><strong>Port 8000 already in use:</strong> the backend window will show a Django error about the address already being in use; the health check at step 6 will then time out after 30 seconds and the launcher will warn you explicitly rather than pretending it succeeded. Close whatever is already using port 8000 (see <a href="#troubleshooting">Troubleshooting</a>) and re-run.</li>
+        <li><strong>Port 5173 already in use:</strong> same pattern as above, at step 7.</li>
+        <li><strong>Dependencies missing:</strong> steps 3/4 install them automatically the first time — this can take a few minutes, this is expected, not a hang.</li>
+      </ul>
+
+      <div class="callout callout--info">Closing the "IntraDay Launcher" window itself does <strong>not</strong> stop the app — the backend and frontend run in their own separate windows. See <a href="#safe-shutdown">Safe Shutdown</a> for how to actually stop them.</div>
+    </section>
+
+    <!-- =========================================================== LOGIN -->
+    <section class="section" id="login">
+      <h1>Login</h1>
+      <p class="lede">The app uses session-cookie based login — the same mechanism as most websites you already use, not a special or complicated system.</p>
+
+      <h2>What username and password mean here</h2>
+      <p>There is <strong>no default account</strong>. This is deliberate, so no fixed, guessable password ever ships with the project. If you're setting up your own local copy, create your own account (replace <code>yourname</code> and <code>changeme</code> below with your own values — this is a command <em>you</em> run and choose the password for, not a real shipped credential):</p>
+      <pre><code>poetry run python manage.py shell -c "from django.contrib.auth.models import User, Group; u = User.objects.create_user('yourname', password='changeme'); u.groups.add(Group.objects.get(name='configuration-operators'))"</code></pre>
+      <p>This creates an account that can both view and activate configuration (member of the "configuration-operators" group). Omit the <code>u.groups.add(...)</code> line for a read-only account. <code>app.bat</code> itself prints this exact command in its final summary, so you don't need to remember it.</p>
+      <div class="callout callout--danger">This guide never documents a real password — the <code>changeme</code> above is a placeholder you replace yourself. If someone else manages your environment and already created an account for you, ask them for the username/password directly; it is never written down in this guide or anywhere in the repository.</div>
+
+      <h2>What happens when you log in</h2>
+      <ol>
+        <li>The frontend asks the backend "who am I?" when the page first loads — this also sets a security cookie (CSRF token) used to protect the next step.</li>
+        <li>You submit your username and password.</li>
+        <li>The backend checks them and, if correct, starts a session — a small secure cookie your browser now carries automatically.</li>
+        <li>Every screen after that uses this session to know who you are and what you're allowed to do.</li>
+      </ol>
+
+      <h3>Why CSRF exists</h3>
+      <p>CSRF protection stops a malicious website from secretly submitting requests on your behalf using your logged-in session. It's a standard, expected part of how this kind of login works — not something specific to this project or something you need to configure.</p>
+
+      <h3>What a 401 means</h3>
+      <p><strong>401 Unauthorized</strong> — you're not logged in, or your session has expired. You'll be returned to the login screen.</p>
+
+      <h3>What a 403 means</h3>
+      <p><strong>403 Forbidden</strong> — the request was rejected for a permissions or security-check reason, distinct from "not logged in." On the login screen specifically, a 403 usually means the page loaded before the backend was ready, so the security cookie from step 1 above was never set. <code>app.bat</code> now waits for the backend to be confirmed healthy before you're told the app is ready, specifically to prevent this. If you still see it: reload the page once (this repeats step 1 above) and try again.</p>
+
+      <h2>Logging out</h2>
+      <p>Use the <strong>Sign out</strong> button in the top-right of the app once logged in.</p>
+    </section>
+
+    <!-- =================================================== CONFIGURATION -->
+    <section class="section" id="configuration">
+      <h1>Configuration Screens</h1>
+      <p class="lede">Two top-level screens exist for configuration, reachable from the navigation bar once logged in: <strong>Configuration</strong> and <strong>Settings</strong>. A third, <strong>Market Data</strong>, is covered separately in <a href="#live-monitor">Live Market Data Monitor</a>.</p>
+
+      <h2>Configuration screen</h2>
+      <p><strong>Purpose:</strong> view and activate versioned Risk / Universe / Strategy configuration. <strong>Who should use it:</strong> anyone can view; only users in the "configuration-operators" group can activate a version.</p>
+      <table>
+        <thead><tr><th>Tab</th><th>What it shows</th></tr></thead>
+        <tbody>
+          <tr><td>Risk Configuration</td><td>Every saved version of risk limits (max intraday loss, max position size, max per-trade risk), which one is currently active.</td></tr>
+          <tr><td>Universe</td><td>Every saved version of the tradable-instrument list.</td></tr>
+          <tr><td>Strategy Version</td><td>Every saved version of a strategy's specification/code/configuration identity. <em>(No actual strategy implementation exists yet — this tracks versioning only.)</em></td></tr>
+        </tbody>
+      </table>
+      <p><strong>Activation behavior:</strong> selecting a historical version and confirming makes it the active one; the previous active version becomes historical. Every activation is recorded permanently (audit trail) with who did it and when.</p>
+      <p><strong>Common errors:</strong> a 403 on activation means your account isn't in the operator group — this is enforced by the backend, not just hidden in the interface.</p>
+
+      <h2>Settings screen</h2>
+      <p><strong>Purpose:</strong> configure connectivity for Dhan (broker), Telegram, and Discord. <strong>Who should use it:</strong> viewing requires only being logged in; saving/testing requires the same operator group as Configuration activation.</p>
+      <p>Each of the three cards (Dhan, Telegram, Discord) follows the same pattern — see field-by-field detail in <a href="#dhan-setup">Dhan Setup</a> for Dhan specifically; Telegram and Discord follow the identical save/test/status pattern with their own fields (Bot Token + Channel ID for Telegram; Webhook URL for Discord).</p>
+
+      <div class="callout callout--info"><strong>Secrets are never shown once saved.</strong> Every credential field is always blank when you open the form — leaving it blank and saving means "keep the existing value unchanged." Typing a new value replaces it. This is intentional, not a display bug.</div>
+    </section>
+
+    <!-- ======================================================= DHAN SETUP -->
+    <section class="section" id="dhan-setup">
+      <h1>Dhan Setup</h1>
+      <p class="lede">Dhan is an Indian stock broker. This application can connect to your Dhan account to <strong>read</strong> account information and live market quotes — it cannot place, modify, or cancel any order. That capability does not exist in this codebase.</p>
+
+      <h2>Why the system needs Dhan</h2>
+      <p>Dhan is the only market-data source currently implemented. Without a working Dhan connection, the Market Data screen has nothing to show.</p>
+
+      <h2>What credential is required</h2>
+      <ul>
+        <li><strong>Client ID</strong> — your Dhan account identifier (not secret, but still shown only partially masked in the app).</li>
+        <li><strong>Access Token</strong> — a JWT token from Dhan's own developer portal. This <em>is</em> secret.</li>
+      </ul>
+      <p>Both field names match Dhan's own official API documentation exactly — nothing was invented.</p>
+
+      <h2>Where it is configured</h2>
+      <p>Open <strong>Settings → Dhan</strong>. Enter your Client ID and Access Token, then Save. Alternatively, these can be set as environment variables (<code>DHAN_CLIENT_ID</code>, <code>DHAN_ACCESS_TOKEN</code> in <code>.env</code>) as a fallback — the Settings screen always takes precedence once something is saved there.</p>
+
+      <h2>How credentials are protected</h2>
+      <ul>
+        <li>Stored encrypted at rest in the database — never in plain text.</li>
+        <li>Never returned by any API response, in any form — not even masked.</li>
+        <li>Never logged.</li>
+        <li>The Settings form always shows the field blank; blank + save = unchanged.</li>
+      </ul>
+
+      <h2>How to verify configuration</h2>
+      <p>After saving, click <strong>Test Connection</strong>. This performs exactly one real, read-only call to Dhan's account-profile endpoint (never a trading endpoint) and shows the result:</p>
+      <table>
+        <thead><tr><th>Result</th><th>Meaning</th></tr></thead>
+        <tbody>
+          <tr><td>Connected</td><td>Dhan accepted the credential.</td></tr>
+          <tr><td>Authentication Failed</td><td>Dhan rejected the Client ID / Access Token combination.</td></tr>
+          <tr><td>Connection Error</td><td>Could not reach Dhan (network issue, timeout).</td></tr>
+          <tr><td>Not Configured</td><td>No credential is saved yet.</td></tr>
+        </tbody>
+      </table>
+
+      <div class="callout callout--warn"><strong>Honest current status:</strong> during this project's own development and testing, the Dhan credential present in the local environment was rejected by Dhan (Authentication Failed). This guide does not claim live data is currently flowing — only that the connectivity code path itself works correctly end-to-end. If you see the same result, your credential needs to be checked/regenerated in Dhan's own developer portal — this is not something the application can fix for you.</div>
+
+      <div class="callout callout--danger">Never paste your real Access Token into any file in this repository, any chat message, or any documentation — including this guide. Configure it only through the Settings screen or your local <code>.env</code> file (which is never committed to version control).</div>
+    </section>
+
+    <!-- ===================================================== MARKET DATA -->
+    <section class="section" id="market-data">
+      <h1>Market Data Concepts</h1>
+      <p class="lede">What the Market Data screen actually shows, and — critically — what its limitations are.</p>
+
+      <h2>Key terms</h2>
+      <dl class="glossary">
+        <dt>Quote</dt><dd>One price reading for one stock at one instant, fetched from Dhan when you click Refresh.</dd>
+        <dt>Observation</dt><dd>Every quote the app has ever fetched is stored permanently as an "observation" — a historical record.</dd>
+        <dt>1-minute bar</dt><dd>A summary (Open/High/Low/Close) of all observations that fell within one minute.</dd>
+        <dt>FORMING bar</dt><dd>The current, still-in-progress minute — its values can still change.</dd>
+        <dt>CLOSED bar</dt><dd>A past minute that has fully elapsed — though see the note below about revisions.</dd>
+        <dt>OHLC</dt><dd>Open, High, Low, Close — the four prices that describe a bar.</dd>
+        <dt>Gap / missing interval</dt><dd>A minute with zero observations — the app reports this honestly rather than inventing a value.</dd>
+      </dl>
+
+      <h2>The actual pipeline</h2>
+      <pre><code>Dhan quote (one real HTTP call, only when you click Refresh)
+    ↓
+Quote normalization (converts Dhan's format into this app's own format)
+    ↓
+Stored permanently as an observation
+    ↓
+Aggregation (groups observations into 1-minute bars)
+    ↓
+Stored as a bar
+    ↓
+Recent Bars API (read-only)
+    ↓
+What you see on screen</code></pre>
+
+      <h2 id="sample-bar-explained">Why the current bars are SAMPLE_BAR, not trading-grade</h2>
+      <div class="callout callout--not-implemented">
+        Classification: <strong>SAMPLE_BAR</strong>. NOT <strong>TRADING_GRADE_BAR</strong>.
+      </div>
+      <p>This app fetches a price only when you (or an automated process) explicitly ask it to — there is no continuous, always-on price feed yet. Because of that:</p>
+      <ul>
+        <li><strong>HIGH</strong> may be <em>lower</em> than the true high of that minute — a price spike between two of your clicks is simply never seen.</li>
+        <li><strong>LOW</strong> may be <em>higher</em> than the true low, for the same reason.</li>
+        <li><strong>OPEN</strong> is only the price at whichever moment happened to be sampled first in that minute — not necessarily the true first trade.</li>
+        <li><strong>CLOSE</strong> is the last sampled price, which may be several seconds before the minute actually ended.</li>
+        <li><strong>VOLUME</strong> is not calculated at all — Dhan's own volume figure is a running daily total, and safely turning that into "volume traded in just this minute" isn't implemented. The app shows <code>—</code> instead of guessing.</li>
+      </ul>
+      <p>These bars are genuinely useful for watching prices move, testing the app itself, and understanding the system — they are <strong>not yet approved for computing trading signals or making trading decisions</strong>. Building signal logic on data with these gaps could silently produce wrong, misleading results.</p>
+    </section>
+
+    <!-- ================================================== LIVE MONITOR -->
+    <section class="section" id="live-monitor">
+      <h1>Live Market Data Monitor</h1>
+      <p class="lede">The screen reached via the <strong>Market Data</strong> navigation item. Observation-only — it contains no buy/sell/order/position controls anywhere, by design.</p>
+
+      <h2>What you'll see</h2>
+      <table>
+        <thead><tr><th>Section</th><th>What it shows</th></tr></thead>
+        <tbody>
+          <tr><td>Market Session</td><td>Whether the NSE market is currently Pre-Market, Open, or Closed, based on fixed exchange hours (09:15–15:30 IST). Does not yet account for market holidays.</td></tr>
+          <tr><td>Connection Health</td><td>Whether the last attempt to fetch data succeeded, and how long ago. States: Connected, Connected (Stale), Disconnected, Authentication Failed, Error, Market Closed.</td></tr>
+          <tr><td>Refresh Quotes button</td><td>Triggers exactly one real fetch from Dhan (only visible if your account can activate configuration). Clicking repeatedly within a few seconds is intentionally blocked.</td></tr>
+          <tr><td>Observed Instruments table</td><td>The latest known price per configured symbol, with how old that price is ("freshness").</td></tr>
+          <tr><td>Recent Bars table</td><td>1-minute bars built from all observations — see <a href="#market-data">Market Data Concepts</a> for what these mean and their limits.</td></tr>
+        </tbody>
+      </table>
+
+      <h2>Reading the badges</h2>
+      <ul>
+        <li><strong>● Fresh</strong> / <strong>◐ Stale</strong> — whether a quote is recent enough to trust as "current."</li>
+        <li><strong>◐ Forming</strong> / <strong>● Closed</strong> — whether a bar's minute has fully elapsed.</li>
+        <li>The screen auto-refreshes what it displays every 5 seconds — this only re-reads already-stored data, it never triggers a new call to Dhan by itself.</li>
+      </ul>
+
+      <h2>Why Volume shows "—"</h2>
+      <p>Not a bug or missing feature — a deliberate choice explained fully in <a href="#market-data">Market Data Concepts</a>: fabricating a plausible-looking number would be actively misleading, so the app shows nothing rather than guessing.</p>
+
+      <p>This screen requires a working Dhan connection (see <a href="#dhan-setup">Dhan Setup</a>) and, for real data, the NSE market to be open (weekdays, 09:15–15:30 IST).</p>
+    </section>
+
+    <!-- ========================================================= SCREENS -->
+    <section class="section" id="screens">
+      <h1>Screen-by-Screen Guide</h1>
+      <p class="lede">Every top-level screen this application currently has. <em>No screenshots are included — none were captured in this environment; the tables above/below describe the actual labels and controls verbatim from the code.</em></p>
+
+      <h2>Navigation bar (always visible once logged in)</h2>
+      <ul>
+        <li><strong>Configuration</strong> — see <a href="#configuration">Configuration Screens</a></li>
+        <li><strong>Settings</strong> — see <a href="#configuration">Configuration Screens</a> / <a href="#dhan-setup">Dhan Setup</a></li>
+        <li><strong>Market Data</strong> — see <a href="#live-monitor">Live Market Data Monitor</a></li>
+        <li><strong>Sign out</strong> button, top-right</li>
+      </ul>
+
+      <h2>Login screen</h2>
+      <p>Fields: <strong>Username</strong>, <strong>Password</strong>. Button: <strong>Sign in</strong>. Errors appear directly below the password field.</p>
+
+      <div class="callout callout--info">Screens not listed here (an audit-log viewer, a diagnostics dashboard, etc.) do not currently exist in the frontend — do not expect to find them.</div>
+    </section>
+
+    <!-- ===================================================== TRADING MODE -->
+    <section class="section" id="trading-mode">
+      <h1>Trading Mode</h1>
+      <p class="lede">A backend safety switch — not a screen you interact with — that makes it structurally impossible to accidentally start real trading from a development setup.</p>
+
+      <h2>The actual modes (from the code)</h2>
+      <table>
+        <thead><tr><th>Mode</th><th>What it means</th></tr></thead>
+        <tbody>
+          <tr><td><code>RESEARCH</code></td><td>Default. What you're running if you followed this guide.</td></tr>
+          <tr><td><code>PAPER</code></td><td>A dedicated settings profile exists for this in the code, but no simulated-order functionality has been built yet to actually use it for.</td></tr>
+          <tr><td><code>LIVE</code></td><td><span class="badge badge--not-ready">NOT USABLE</span> — the backend will <strong>refuse to start</strong> unless it is specifically running under production configuration AND real broker credentials are present, simultaneously. This is enforced in code, not just policy.</td></tr>
+        </tbody>
+      </table>
+
+      <div class="callout callout--danger">Do not attempt to set <code>TRADING_MODE=LIVE</code> in your local <code>.env</code> expecting it to enable real trading — it will not, and there is no trading/order code for it to enable even if it did. Understand the consequences fully (see <a href="#developer-mode">Developer Mode</a>) before ever changing this outside local development.</div>
+    </section>
+
+    <!-- ===================================================== SAFETY RULES -->
+    <section class="section" id="safety-rules">
+      <h1>Safety Rules</h1>
+      <div class="callout callout--danger">
+        <ul class="safety-rules-list">
+          <li>Do not enable LIVE trading.</li>
+          <li>Do not attempt to place orders — no order-placement code exists in this application.</li>
+          <li>Do not assume SAMPLE_BAR market data is trading-grade. It is not. See <a href="#market-data">Market Data Concepts</a>.</li>
+          <li>Do not paste credentials into source code, chat, or documentation.</li>
+          <li>Do not commit <code>.env</code> or <code>frontend/.env.local</code>.</li>
+          <li>Do not share your Dhan access token, Telegram bot token, or Discord webhook URL with anyone.</li>
+          <li>Do not change <code>TRADING_MODE</code> without understanding the consequences (see <a href="#trading-mode">Trading Mode</a>).</li>
+          <li>Do not attempt to bypass authentication or authorization checks.</li>
+          <li>Do not disable CSRF protection.</li>
+          <li>Do not modify risk controls just to make a test pass.</li>
+        </ul>
+      </div>
+      <p>These rules reflect the current, honest state of the software — not an arbitrary policy. Several of them (order placement, live trading) are backed by the simple fact that the corresponding code does not exist yet, not merely a setting that's turned off.</p>
+    </section>
+
+    <!-- =================================================== TROUBLESHOOTING -->
+    <section class="section" id="troubleshooting">
+      <h1>Troubleshooting</h1>
+
+      <h3>Application does not start / app.bat closes immediately</h3>
+      <p><strong>Cause:</strong> usually a missing prerequisite (Python/Poetry/Node/npm) causing an early, immediate exit. <strong>Fix:</strong> re-run <code>app.bat</code> — as of the current version it pauses on every failure with a clear message instead of closing silently. If it still closes instantly, open a regular terminal and run <code>app.bat</code> from there so the error text stays visible. <strong>Verify:</strong> the missing tool now shows up in <code>where python</code> / <code>where poetry</code> / <code>where node</code> / <code>where npm</code>.</p>
+
+      <h3>Python not found</h3>
+      <p><strong>Cause:</strong> Python isn't installed, or isn't on your PATH. <strong>Fix:</strong> install Python 3.12 and ensure "Add to PATH" was checked during install. <strong>Verify:</strong> <code>python --version</code> in a new terminal.</p>
+
+      <h3>Poetry not found</h3>
+      <p><strong>Cause:</strong> Poetry isn't installed. <strong>Fix:</strong> install it per its official instructions. <strong>Verify:</strong> <code>poetry --version</code>.</p>
+
+      <h3>Node/npm not found</h3>
+      <p><strong>Cause:</strong> Node.js isn't installed. <strong>Fix:</strong> install a current Node.js LTS release (npm is included). <strong>Verify:</strong> <code>node --version</code> and <code>npm --version</code>.</p>
+
+      <h3>PostgreSQL unavailable</h3>
+      <p><strong>Cause:</strong> PostgreSQL isn't installed, isn't running, or your <code>.env</code> credentials don't match. <strong>Fix:</strong> confirm the service is running, and that <code>POSTGRES_*</code> in <code>.env</code> matches the user/database you created. <strong>Verify:</strong> <code>http://127.0.0.1:8000/readyz</code> reports <code>"database": "ok"</code>.</p>
+
+      <h3>Redis unavailable</h3>
+      <p><strong>Cause:</strong> Redis isn't installed/running, or <code>REDIS_URL</code> is wrong. <strong>Fix:</strong> install/start Redis, confirm <code>REDIS_URL</code> in <code>.env</code>. <strong>Verify:</strong> <code>/readyz</code> reports <code>"cache": "ok"</code>.</p>
+
+      <h3>Port 8000 already in use</h3>
+      <p><strong>Cause:</strong> another process (possibly a previous, un-closed backend window) is already listening on 8000. <strong>Fix:</strong> close the other process, or find and stop it (in PowerShell: <code>Get-Process -Id (Get-NetTCPConnection -LocalPort 8000).OwningProcess | Stop-Process</code>). <strong>Verify:</strong> re-run <code>app.bat</code>; step <code>[6/8]</code> should succeed.</p>
+
+      <h3>Port 5173 already in use</h3>
+      <p>Same pattern as port 8000 above, at step <code>[7/8]</code>.</p>
+
+      <h3>Login gives 401</h3>
+      <p><strong>Cause:</strong> wrong username/password, or your session expired. <strong>Fix:</strong> re-enter your credentials; confirm your account exists and is active. <strong>Verify:</strong> a correct login returns you to the app, not the login screen.</p>
+
+      <h3>Login gives 403</h3>
+      <p><strong>Cause:</strong> almost always a timing issue — the page loaded before the backend was ready, so the security cookie was never set. See the full explanation in <a href="#login">Login</a>. <strong>Fix:</strong> reload the page once and try again; make sure you used <code>app.bat</code> and waited for its "both services are UP" message before opening the browser. <strong>Verify:</strong> the reload obtains a fresh cookie and login succeeds.</p>
+
+      <h3>Frontend cannot reach backend</h3>
+      <p><strong>Cause:</strong> the backend isn't running, or <code>frontend/.env.local</code>'s <code>VITE_API_BASE_URL</code> doesn't point at <code>http://127.0.0.1:8000</code>. <strong>Fix:</strong> confirm the backend window is running and <code>/healthz</code> responds; confirm the env value. <strong>Verify:</strong> the browser's network tab shows successful requests to <code>127.0.0.1:8000</code>.</p>
+
+      <h3>CORS error</h3>
+      <p><strong>Cause:</strong> you're accessing the frontend from a URL other than <code>http://localhost:5173</code> or <code>http://127.0.0.1:5173</code> — the only two origins the backend trusts in development. <strong>Fix:</strong> use exactly one of those two URLs.</p>
+
+      <h3>CSRF error</h3>
+      <p>See "Login gives 403" above — same underlying cause.</p>
+
+      <h3>Dhan authentication failure</h3>
+      <p><strong>Cause:</strong> the configured Client ID / Access Token was rejected by Dhan itself. <strong>Fix:</strong> regenerate/verify the credential in Dhan's own developer portal, then re-save it in Settings. This is not something the application can fix — it reflects Dhan's own response. <strong>Verify:</strong> Test Connection reports "Connected."</p>
+
+      <h3>No market data</h3>
+      <p><strong>Cause:</strong> either Dhan isn't configured/working (see above), or you haven't clicked Refresh Quotes yet, or the market is closed. <strong>Fix:</strong> check Connection Health first, then confirm market hours. <strong>Verify:</strong> the Observed Instruments table populates after a successful Refresh during market hours.</p>
+
+      <h3>Market data is stale</h3>
+      <p><strong>Cause:</strong> more than ~2 minutes have passed since the last successful Refresh. <strong>Fix:</strong> click Refresh Quotes again. This is expected behavior for an explicit-trigger system, not an error.</p>
+
+      <h3>Recent Bars are empty</h3>
+      <p><strong>Cause:</strong> no successful quote fetch has happened yet. <strong>Fix:</strong> click Refresh Quotes at least once during market hours.</p>
+
+      <h3>Volume shows —</h3>
+      <p>Not an error — see <a href="#market-data">Market Data Concepts</a>.</p>
+
+      <h3>Database migration error</h3>
+      <p><strong>Cause:</strong> PostgreSQL isn't reachable, or your database user lacks permissions. <strong>Fix:</strong> re-check the database setup steps in <a href="#installation">Installation</a>.</p>
+
+      <h3>npm dependency error</h3>
+      <p><strong>Cause:</strong> a corrupted or partial <code>node_modules</code> install. <strong>Fix:</strong> delete <code>frontend/node_modules</code> and re-run <code>npm install</code> (or just re-run <code>app.bat</code>, which detects the missing folder and reinstalls).</p>
+
+      <h3>Poetry dependency error</h3>
+      <p><strong>Cause:</strong> a corrupted virtual environment. <strong>Fix:</strong> delete the <code>.venv</code> folder and re-run <code>poetry install</code> (or re-run <code>app.bat</code>).</p>
+
+      <h3>Browser cannot open the application</h3>
+      <p><strong>Cause:</strong> the frontend server isn't actually running yet, or crashed. <strong>Fix:</strong> check the "IntraDay Frontend" window for error text; confirm <code>app.bat</code>'s step <code>[7/8]</code> reported success.</p>
+    </section>
+
+    <!-- ==================================================== SAFE SHUTDOWN -->
+    <section class="section" id="safe-shutdown">
+      <h1>Safe Shutdown</h1>
+      <ol>
+        <li><strong>Stop the frontend:</strong> close the "IntraDay Frontend" window, or click inside it and press <code>Ctrl+C</code>.</li>
+        <li><strong>Stop the backend:</strong> close the "IntraDay Backend" window, or click inside it and press <code>Ctrl+C</code>.</li>
+        <li><strong>PostgreSQL / Redis:</strong> only stop these yourself if you manage them as separate native services and want to free resources — the application does not require you to stop them between sessions, and other software on your machine may depend on them staying up.</li>
+      </ol>
+      <h2>Restarting everything</h2>
+      <p>Simply double-click <code>app.bat</code> again — it's safe to re-run any time.</p>
+      <h2>Checking for orphaned processes</h2>
+      <p>If a window was closed without stopping its process cleanly, in PowerShell:</p>
+      <pre><code>Get-NetTCPConnection -LocalPort 8000,5173 -ErrorAction SilentlyContinue</code></pre>
+      <p>If either port still shows a listener you didn't expect, find and stop that process by its PID with <code>Stop-Process</code>.</p>
+      <div class="callout callout--warn">Do not manually kill PostgreSQL or Redis processes unless you specifically manage them yourself and understand the consequences for any other software using them.</div>
+    </section>
+
+    <!-- ======================================================= FIRST DAY -->
+    <section class="section" id="first-day">
+      <h1>My First Day With IntraDay</h1>
+      <p>Check items off as you complete them — your progress is saved in this browser.</p>
+      <ul class="checklist">
+        <li><input type="checkbox" data-checklist-item="prereqs" id="cl-1"><label for="cl-1">Prerequisites installed (Python, Poetry, Node, npm, PostgreSQL)</label></li>
+        <li><input type="checkbox" data-checklist-item="repo" id="cl-2"><label for="cl-2">Repository available on my machine</label></li>
+        <li><input type="checkbox" data-checklist-item="env" id="cl-3"><label for="cl-3">Environment configured (<code>.env</code>, <code>frontend/.env.local</code>)</label></li>
+        <li><input type="checkbox" data-checklist-item="db" id="cl-4"><label for="cl-4">Database available and migrated</label></li>
+        <li><input type="checkbox" data-checklist-item="appbat" id="cl-5"><label for="cl-5"><code>app.bat</code> started successfully</label></li>
+        <li><input type="checkbox" data-checklist-item="frontend" id="cl-6"><label for="cl-6">Frontend opened in browser</label></li>
+        <li><input type="checkbox" data-checklist-item="login" id="cl-7"><label for="cl-7">Login successful</label></li>
+        <li><input type="checkbox" data-checklist-item="settings" id="cl-8"><label for="cl-8">Settings screen reviewed</label></li>
+        <li><input type="checkbox" data-checklist-item="dhan" id="cl-9"><label for="cl-9">Dhan configuration understood</label></li>
+        <li><input type="checkbox" data-checklist-item="marketdata" id="cl-10"><label for="cl-10">Market Data screen opened</label></li>
+        <li><input type="checkbox" data-checklist-item="health" id="cl-11"><label for="cl-11">Health status understood</label></li>
+        <li><input type="checkbox" data-checklist-item="samplebar" id="cl-12"><label for="cl-12">SAMPLE_BAR concept understood</label></li>
+        <li><input type="checkbox" data-checklist-item="safety" id="cl-13"><label for="cl-13">Safety rules read</label></li>
+        <li><input type="checkbox" data-checklist-item="shutdown" id="cl-14"><label for="cl-14">Application shut down correctly</label></li>
+      </ul>
+    </section>
+
+    <!-- ============================================================= FAQ -->
+    <section class="section" id="faq">
+      <h1>FAQ</h1>
+
+      <details class="faq-item"><summary>Do I need programming knowledge?</summary><p>Not to install and use the app day-to-day — <code>app.bat</code> handles the technical startup. Understanding what the screens mean helps, which is why this guide exists.</p></details>
+      <details class="faq-item"><summary>Do I need to run Django manually?</summary><p>No — <code>app.bat</code> starts it for you.</p></details>
+      <details class="faq-item"><summary>Do I need to open two terminals?</summary><p>No — <code>app.bat</code> opens both server windows for you automatically.</p></details>
+      <details class="faq-item"><summary>What is app.bat?</summary><p>A Windows script in the project root that checks prerequisites, installs dependencies if needed, and starts both the backend and frontend, verifying each is actually reachable before telling you it's ready.</p></details>
+      <details class="faq-item"><summary>Why are there multiple command windows?</summary><p>One runs the backend, one runs the frontend, and (briefly) one is the launcher itself. This is intentional — each server needs its own window since both run continuously.</p></details>
+      <details class="faq-item"><summary>Why can't I see live signals?</summary><p>Signal generation isn't implemented yet, and the current market data is classified SAMPLE_BAR — not reliable enough to build signals on. See <a href="#market-data">Market Data Concepts</a>.</p></details>
+      <details class="faq-item"><summary>Why can't I trade yet?</summary><p>No order-placement code exists anywhere in this application yet. This is a deliberate, staged approach to building the platform safely.</p></details>
+      <details class="faq-item"><summary>Why does volume show —?</summary><p>To avoid showing a fabricated number. See <a href="#market-data">Market Data Concepts</a>.</p></details>
+      <details class="faq-item"><summary>Why is Dhan authentication failing?</summary><p>Usually because the configured Access Token is invalid or expired — check it in Dhan's own developer portal.</p></details>
+      <details class="faq-item"><summary>Can I use fake data?</summary><p>The application never fabricates market data. Automated tests use clearly-fake data internally, but the running application only ever shows real data it actually fetched, or nothing.</p></details>
+      <details class="faq-item"><summary>Can I test without Dhan?</summary><p>Yes — Login, Configuration, and Settings all work without any Dhan credential. Only the Market Data screen's live-fetch feature needs one.</p></details>
+      <details class="faq-item"><summary>Is this production-ready?</summary><p>No. It has no Docker deployment, no order/trading capability, and its market data is explicitly not trading-grade yet. It is a real, working development-mode application, not a demo.</p></details>
+      <details class="faq-item"><summary>Can I run this on another Windows PC?</summary><p>Yes, as long as it has the prerequisites in <a href="#before-you-start">Before You Start</a> installed. <code>app.bat</code> resolves paths from its own location, so it doesn't need a fixed folder location.</p></details>
+    </section>
+
+    <!-- ========================================================= GLOSSARY -->
+    <section class="section" id="glossary">
+      <h1>Glossary</h1>
+      <dl class="glossary">
+        <dt>API</dt><dd>The set of URLs the frontend uses to talk to the backend.</dd>
+        <dt>Backend</dt><dd>The server-side application (Django) that stores data and enforces rules.</dd>
+        <dt>Frontend</dt><dd>The application running in your browser (React) that you actually see and click.</dd>
+        <dt>Django</dt><dd>The Python framework the backend is built with.</dd>
+        <dt>React</dt><dd>The JavaScript framework the frontend is built with.</dd>
+        <dt>PostgreSQL</dt><dd>The database storing all permanent application data.</dd>
+        <dt>Redis</dt><dd>Fast temporary storage used for sessions/caching, not permanent data.</dd>
+        <dt>Poetry</dt><dd>Backend (Python) dependency manager.</dd>
+        <dt>npm</dt><dd>Frontend (JavaScript) dependency manager.</dd>
+        <dt>Dhan</dt><dd>The broker this application connects to for market data.</dd>
+        <dt>Broker</dt><dd>A company providing access to markets and market data.</dd>
+        <dt>Quote</dt><dd>One price reading at one instant.</dd>
+        <dt>Observation</dt><dd>A permanently stored quote.</dd>
+        <dt>Bar</dt><dd>A summary of price movement over a time period.</dd>
+        <dt>OHLC</dt><dd>Open, High, Low, Close.</dd>
+        <dt>SAMPLE_BAR</dt><dd>This app's classification for its current, sample-based (not continuous) bars.</dd>
+        <dt>Trading-grade bar</dt><dd>A bar reliable enough to base trading decisions on — not yet achieved here.</dd>
+        <dt>Signal</dt><dd>A computed trading suggestion. Not implemented.</dd>
+        <dt>Strategy</dt><dd>A defined trading approach. Only version-tracking exists; no strategy logic exists yet.</dd>
+        <dt>Risk</dt><dd>Configured limits (max loss, position size) — tracked and versioned, not yet enforced by a live risk engine.</dd>
+        <dt>Session</dt><dd>Your logged-in state, tracked via a secure cookie.</dd>
+        <dt>CSRF</dt><dd>Cross-Site Request Forgery protection — stops malicious sites from acting as you.</dd>
+        <dt>CORS</dt><dd>Browser rule controlling which websites may talk to the backend.</dd>
+        <dt>RBAC</dt><dd>Role-Based Access Control — what your account is/isn't allowed to do.</dd>
+        <dt>Authentication</dt><dd>Proving who you are (logging in).</dd>
+        <dt>Authorization</dt><dd>What you're allowed to do once logged in.</dd>
+        <dt>Paper trading</dt><dd>Simulated trading with fake money. Not implemented.</dd>
+        <dt>Live trading</dt><dd>Real trading with real money. Not implemented; structurally blocked outside production configuration.</dd>
+      </dl>
+    </section>
+
+    <!-- =================================================== DEVELOPER MODE -->
+    <section class="section" id="developer-mode">
+      <h1>Developer Mode</h1>
+      <p class="lede">This guide is deliberately non-technical. For the full engineering detail, see the project's own authoritative documentation (not duplicated here):</p>
+      <ul>
+        <li><a href="../architecture/ARCHITECTURE.md">Architecture overview</a></li>
+        <li><a href="../architecture/TECHNOLOGY_MAPPING.md">Technology mapping</a></li>
+        <li><a href="../architecture/DOMAIN_BOUNDARIES.md">Domain boundaries</a></li>
+        <li><a href="../architecture/ARCHITECTURE_DECISIONS.md">Architecture decision log</a></li>
+        <li><a href="../architecture/AUTHENTICATION_AUTHORIZATION.md">Authentication &amp; authorization</a></li>
+        <li><a href="../architecture/LIVE_MARKET_DATA_ARCHITECTURE.md">Live market-data architecture</a></li>
+        <li><a href="../architecture/LIVE_BAR_AGGREGATION_ARCHITECTURE.md">Live bar aggregation architecture</a></li>
+        <li><a href="../architecture/MARKET_DATA_QUALITY_ASSESSMENT.md">Market data quality assessment</a></li>
+        <li><a href="../development/LOCAL_DEVELOPMENT.md">Local development commands</a></li>
+        <li><a href="../../taskReport.md">Full checkpoint-by-checkpoint task report</a></li>
+      </ul>
+    </section>
+
+    <div class="page-nav">
+      <button type="button" id="nav-prev">← Previous</button>
+      <button type="button" id="nav-next">Next →</button>
+    </div>
+  </main>
+</div>
+
+<script src="js/main.js"></script>
+</body>
+</html>

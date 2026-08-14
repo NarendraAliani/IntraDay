@@ -5,6 +5,14 @@ For *why* each tool was chosen, see
 [docs/architecture/TECHNOLOGY_MAPPING.md](../architecture/TECHNOLOGY_MAPPING.md)
 — this document is commands only, not rationale.
 
+> **Not a developer?** For a non-technical, interactive walkthrough of
+> installing and running the app (including the single-click `app.bat`
+> launcher), see
+> [docs/user-guide/index.html](../user-guide/index.html) instead — this
+> document assumes command-line familiarity and covers the full
+> developer toolchain (linting, type-checking, tests, Docker), not just
+> "get the app running."
+
 ## First-time setup
 
 ```bash
