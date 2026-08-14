@@ -23,8 +23,22 @@ if not SECRET_KEY:  # noqa: F405 - inherited from base
         "DJANGO_SECRET_KEY must be set via the environment in production. Refusing to boot."
     )
 
+if not SETTINGS_ENCRYPTION_KEY:  # noqa: F405 - inherited from base
+    raise RuntimeError(
+        "SETTINGS_ENCRYPTION_KEY must be set via the environment in production. Refusing to "
+        "boot - the development-only key-derivation fallback "
+        "(infrastructure/persistence/encryption.py) must never protect real provider "
+        "credentials."
+    )
+
+# Checkpoint 22: DHAN_CLIENT_ID is the correct field name per the
+# official DhanHQ v2 authentication scheme (`dhanClientId` header) - see
+# docs/architecture/PROVIDER_CONNECTIVITY_ARCHITECTURE.md. Renamed from
+# this file's own earlier `DHAN_API_KEY` placeholder (Checkpoint 3/4,
+# written before Dhan's real authentication fields had been confirmed
+# against official documentation).
 _live_broker_credentials_present = bool(
-    os.environ.get("DHAN_API_KEY") and os.environ.get("DHAN_ACCESS_TOKEN")
+    os.environ.get("DHAN_CLIENT_ID") and os.environ.get("DHAN_ACCESS_TOKEN")
 )
 
 TRADING_MODE = resolve_trading_mode(

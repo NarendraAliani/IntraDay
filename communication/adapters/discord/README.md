@@ -14,3 +14,11 @@ communication/contracts
 
 Trading logic
 
+## Checkpoint 22 update
+
+`src/intraday/communication/adapters/discord/client.py` now implements
+a minimal client: `check_discord_connectivity()` (`GET <webhook_url>`,
+posts nothing) and `send_discord_test_message()` (`POST <webhook_url>`)
+— connectivity checking and an explicit test message only. See
+[PROVIDER_CONNECTIVITY_ARCHITECTURE.md](../../../../docs/architecture/PROVIDER_CONNECTIVITY_ARCHITECTURE.md).
+

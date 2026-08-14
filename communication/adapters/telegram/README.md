@@ -14,3 +14,12 @@ communication/contracts
 
 Trading logic
 
+## Checkpoint 22 update
+
+`src/intraday/communication/adapters/telegram/client.py` now implements
+a minimal client: `check_telegram_connectivity()` (Bot API `getMe`) and
+`send_telegram_test_message()` (`sendMessage`) — connectivity checking
+and an explicit test message only, not a general notification-routing
+adapter. See
+[PROVIDER_CONNECTIVITY_ARCHITECTURE.md](../../../../docs/architecture/PROVIDER_CONNECTIVITY_ARCHITECTURE.md).
+

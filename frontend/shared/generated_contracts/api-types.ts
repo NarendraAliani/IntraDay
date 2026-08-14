@@ -225,6 +225,173 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/config/settings/{provider}/status/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Returns the LAST RECORDED status - never performs a live check
+         *     itself (Checkpoint 22 §22's explicit separation of "save settings"/
+         *     "test connection"/"read status" as three distinct operations; also
+         *     satisfies §23's "do not automatically test every provider every time
+         *     the Settings page loads").
+         */
+        get: operations["api_v1_config_settings_status_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config/settings/dhan/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["api_v1_config_settings_dhan_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config/settings/dhan/save/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["api_v1_config_settings_dhan_save_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config/settings/dhan/test/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["api_v1_config_settings_dhan_test_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config/settings/discord/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["api_v1_config_settings_discord_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config/settings/discord/save/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["api_v1_config_settings_discord_save_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config/settings/discord/test/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["api_v1_config_settings_discord_test_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config/settings/telegram/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["api_v1_config_settings_telegram_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config/settings/telegram/save/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["api_v1_config_settings_telegram_save_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config/settings/telegram/test/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["api_v1_config_settings_telegram_test_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/config/strategy/{strategy_id}/": {
         parameters: {
             query?: never;
@@ -450,6 +617,31 @@ export interface components {
             occurred_at: string;
             request_id: string;
         };
+        ConnectionStatusResponse: {
+            provider: components["schemas"]["ProviderEnum"];
+            status: components["schemas"]["ConnectionStatusResponseStatusEnum"];
+            /** Format: date-time */
+            last_checked_at: string | null;
+            /** Format: date-time */
+            last_success_at: string | null;
+            /** Format: date-time */
+            last_failure_at: string | null;
+            failure_reason_safe: string;
+            latency_ms: number | null;
+        };
+        /**
+         * @description * `NOT_CONFIGURED` - NOT_CONFIGURED
+         *     * `CONFIGURED` - CONFIGURED
+         *     * `CONNECTING` - CONNECTING
+         *     * `CONNECTED` - CONNECTED
+         *     * `DISCONNECTED` - DISCONNECTED
+         *     * `AUTHENTICATION_FAILED` - AUTHENTICATION_FAILED
+         *     * `TOKEN_EXPIRED` - TOKEN_EXPIRED
+         *     * `CONNECTION_ERROR` - CONNECTION_ERROR
+         *     * `DISABLED` - DISABLED
+         * @enum {string}
+         */
+        ConnectionStatusResponseStatusEnum: "NOT_CONFIGURED" | "CONFIGURED" | "CONNECTING" | "CONNECTED" | "DISCONNECTED" | "AUTHENTICATION_FAILED" | "TOKEN_EXPIRED" | "CONNECTION_ERROR" | "DISABLED";
         /**
          * @description Response shape for `GET /api/v1/auth/session/` and the successful
          *     result of `POST /api/v1/auth/login/`. Never includes a password,
@@ -461,6 +653,33 @@ export interface components {
             is_authenticated: boolean;
             username: string | null;
             capabilities: string[];
+        };
+        DhanSettingsResponse: {
+            client_id_masked: string;
+            client_id_source: components["schemas"]["ProviderConfigurationSourceEnum"];
+            access_token_configured: boolean;
+            access_token_source: components["schemas"]["ProviderConfigurationSourceEnum"];
+            enabled: boolean;
+            /** Format: date-time */
+            updated_at: string | null;
+            updated_by_username: string;
+        };
+        DhanSettingsSaveRequest: {
+            client_id?: string;
+            access_token?: string;
+            enabled?: boolean;
+        };
+        DiscordSettingsResponse: {
+            webhook_configured: boolean;
+            webhook_source: components["schemas"]["ProviderConfigurationSourceEnum"];
+            enabled: boolean;
+            /** Format: date-time */
+            updated_at: string | null;
+            updated_by_username: string;
+        };
+        DiscordSettingsSaveRequest: {
+            webhook_url?: string;
+            enabled?: boolean;
         };
         HealthzResponse: {
             status: components["schemas"]["HealthzResponseStatusEnum"];
@@ -486,6 +705,20 @@ export interface components {
          * @enum {string}
          */
         OutcomeEnum: "activated" | "already_active" | "rejected";
+        /**
+         * @description * `DATABASE` - DATABASE
+         *     * `ENVIRONMENT` - ENVIRONMENT
+         *     * `UNCONFIGURED` - UNCONFIGURED
+         * @enum {string}
+         */
+        ProviderConfigurationSourceEnum: "DATABASE" | "ENVIRONMENT" | "UNCONFIGURED";
+        /**
+         * @description * `dhan` - dhan
+         *     * `telegram` - telegram
+         *     * `discord` - discord
+         * @enum {string}
+         */
+        ProviderEnum: "dhan" | "telegram" | "discord";
         ReadyzResponse: {
             status: components["schemas"]["ReadyzResponseStatusEnum"];
             checks: {
@@ -503,7 +736,9 @@ export interface components {
          *     computed by the view (by comparing against the service's
          *     `get_active()` result), not stored on the domain/application record
          *     itself — "active" is a query-time relationship, not a property of
-         *     the immutable version.
+         *     the immutable version. See `RiskLimitsSerializer`'s docstring for why
+         *     this serializer's generic parameter (and actual usage) differs from
+         *     every sibling serializer in this codebase.
          */
         RiskConfigurationResponse: {
             risk_configuration_id: string;
@@ -518,6 +753,21 @@ export interface components {
          *     precision as `infrastructure/persistence/models.py`'s
          *     `RiskConfigurationVersion`, so a value that round-trips through the
          *     API matches exactly what's stored.
+         *
+         *     Checkpoint 17.2: unlike every other serializer in this codebase
+         *     (`serializers.Serializer[None]` — declared only for OpenAPI schema
+         *     generation via `@extend_schema`, never actually instantiated with a
+         *     real object), this one and `RiskConfigurationResponseSerializer`
+         *     below ARE now actually used to serialize a real response
+         *     (`infrastructure/api/risk_views.py`'s `_to_response_dict`) — the
+         *     generic parameter reflects that: the real instance passed in is a
+         *     plain `dict[str, object]` (nested dicts for `limits`), never `None`.
+         *     This was the fix for the Decimal-serialized-as-float defect: DRF's
+         *     `Response()` with a raw, un-serialized dict bypasses `DecimalField`/
+         *     `COERCE_DECIMAL_TO_STRING` entirely and falls back to its own
+         *     `JSONEncoder`, which converts `Decimal` to `float` — silently
+         *     reintroducing binary floating-point into a financial-precision
+         *     contract.
          */
         RiskLimits: {
             /** Format: decimal */
@@ -545,6 +795,21 @@ export interface components {
             /** Format: date-time */
             created_at: string;
             is_active: boolean;
+        };
+        TelegramSettingsResponse: {
+            channel_id_masked: string;
+            channel_id_source: components["schemas"]["ProviderConfigurationSourceEnum"];
+            bot_token_configured: boolean;
+            bot_token_source: components["schemas"]["ProviderConfigurationSourceEnum"];
+            enabled: boolean;
+            /** Format: date-time */
+            updated_at: string | null;
+            updated_by_username: string;
+        };
+        TelegramSettingsSaveRequest: {
+            bot_token?: string;
+            channel_id?: string;
+            enabled?: boolean;
         };
         /**
          * @description Mirrors `domain.universe.UniverseMember` — `instrument_id` is the
@@ -832,6 +1097,240 @@ export interface operations {
                 };
             };
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+        };
+    };
+    api_v1_config_settings_status_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                provider: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionStatusResponse"];
+                };
+            };
+        };
+    };
+    api_v1_config_settings_dhan_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DhanSettingsResponse"];
+                };
+            };
+        };
+    };
+    api_v1_config_settings_dhan_save_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["DhanSettingsSaveRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["DhanSettingsSaveRequest"];
+                "multipart/form-data": components["schemas"]["DhanSettingsSaveRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DhanSettingsResponse"];
+                };
+            };
+        };
+    };
+    api_v1_config_settings_dhan_test_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionStatusResponse"];
+                };
+            };
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+        };
+    };
+    api_v1_config_settings_discord_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiscordSettingsResponse"];
+                };
+            };
+        };
+    };
+    api_v1_config_settings_discord_save_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["DiscordSettingsSaveRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["DiscordSettingsSaveRequest"];
+                "multipart/form-data": components["schemas"]["DiscordSettingsSaveRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiscordSettingsResponse"];
+                };
+            };
+        };
+    };
+    api_v1_config_settings_discord_test_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionStatusResponse"];
+                };
+            };
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+        };
+    };
+    api_v1_config_settings_telegram_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TelegramSettingsResponse"];
+                };
+            };
+        };
+    };
+    api_v1_config_settings_telegram_save_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["TelegramSettingsSaveRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["TelegramSettingsSaveRequest"];
+                "multipart/form-data": components["schemas"]["TelegramSettingsSaveRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TelegramSettingsResponse"];
+                };
+            };
+        };
+    };
+    api_v1_config_settings_telegram_test_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionStatusResponse"];
+                };
+            };
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };

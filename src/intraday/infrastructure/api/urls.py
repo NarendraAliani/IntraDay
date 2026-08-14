@@ -12,11 +12,42 @@ from __future__ import annotations
 
 from django.urls import path
 
-from intraday.infrastructure.api import risk_views, strategy_views, universe_views
+from intraday.infrastructure.api import risk_views, settings_views, strategy_views, universe_views
 
 app_name = "config_api"
 
 urlpatterns = [
+    # --- Checkpoint 22: operational provider settings --------------------
+    path("settings/dhan/", settings_views.dhan_settings, name="settings-dhan"),
+    path("settings/dhan/save/", settings_views.dhan_settings_save, name="settings-dhan-save"),
+    path("settings/dhan/test/", settings_views.dhan_test_connection, name="settings-dhan-test"),
+    path("settings/telegram/", settings_views.telegram_settings, name="settings-telegram"),
+    path(
+        "settings/telegram/save/",
+        settings_views.telegram_settings_save,
+        name="settings-telegram-save",
+    ),
+    path(
+        "settings/telegram/test/",
+        settings_views.telegram_test_connection,
+        name="settings-telegram-test",
+    ),
+    path("settings/discord/", settings_views.discord_settings, name="settings-discord"),
+    path(
+        "settings/discord/save/",
+        settings_views.discord_settings_save,
+        name="settings-discord-save",
+    ),
+    path(
+        "settings/discord/test/",
+        settings_views.discord_test_connection,
+        name="settings-discord-test",
+    ),
+    path(
+        "settings/<str:provider>/status/",
+        settings_views.provider_status,
+        name="settings-provider-status",
+    ),
     # --- Risk configuration ---------------------------------------------
     path("risk/<str:configuration_id>/", risk_views.list_versions, name="risk-list"),
     path("risk/<str:configuration_id>/active/", risk_views.get_active, name="risk-active"),

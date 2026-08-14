@@ -662,6 +662,12 @@ Full detail:
 | 97 | `mfe`/`mae` are `None` for NEUTRAL indications and for `NO_DATA` completeness - never `0`. `PARTIAL` completeness still computes a real MFE/MAE from the bars that exist, explicitly flagged as partial. | `0` is a real, distinct measurement (genuine zero excursion) - collapsing "not applicable" (NEUTRAL) or "unknown" (no data) into the same value as "measured and found to be zero" would be dishonest and irreversibly lose information a consumer needs (Checkpoint 21 §14's own explicit warning). | Silently returning `0` for NEUTRAL/NO_DATA (rejected - explicitly forbidden by the brief); withholding PARTIAL results entirely until the full horizon completes (rejected - throws away a real, honestly-labeled measurement that is genuinely useful, e.g. for end-of-day signals). | LOCKED |
 | 98 | `theoretical_outcome` depends on neither `signal_verification` nor `signal_lifecycle` - mechanically enforced by a dedicated architecture test. | Verification asks a narrower single-point question; lifecycle asks a validity question; theoretical outcome measures windowed price-path extremes - three genuinely independent questions with independent answers (an EXPIRED indication's historical outcome remains fully measurable). Coupling any pair would force a consumer of one to depend on concepts it doesn't need. | Reusing `VerificationResult`'s `INCONCLUSIVE`/outcome shape for theoretical outcome's own completeness concept (rejected - the checkpoint brief's own explicit instruction: "do not import VerificationResult just to reuse its enum"; the two enums answer differently-shaped questions). | LOCKED |
 | 99 | Conditional expectancy is NOT implemented this checkpoint. | Expectancy requires a defined trading policy (entry/exit/position-size/costs/win-loss classification) this bounded context has no authority to invent - exactly the checkpoint brief's own mandatory architectural question. MFE/MAE are policy-free objective measurements; expectancy is a statistic ABOUT a policy's results. | Implementing a "generic" expectancy formula parameterized by an invented policy (rejected - would still require inventing the policy parameters, which is exactly what's forbidden; belongs to a future strategy/research-evaluation bounded context once `trading_engine/strategy_execution` exists). | LOCKED |
+| 100 | Configuration precedence is Database > Environment > Unconfigured, resolved fresh on every read; a database value is never overwritten by an environment value. | Matches how every prior configuration checkpoint (8-10) already treats the database as authoritative once a value exists there, while still letting `.env` bootstrap a fresh deployment. Resolving per-field (not per-provider) lets a partially-migrated provider (e.g. client id saved in the DB, access token still from `.env`) report its state honestly instead of forcing an all-or-nothing migration. | Environment always wins (rejected - would let a stale `.env` value silently override an operator's deliberate Settings-UI change); one-time migration from `.env` into the database on first read (rejected - an implicit write-back the checkpoint brief never authorized, and surprising if the sysadmin still expects `.env` to be authoritative). | LOCKED |
+| 101 | Provider credentials use a `get_or_create(pk=1)` singleton, an application-level convention, not a database uniqueness constraint. | Matches this codebase's own existing precedent (`AuditLogEntry`'s append-only invariant is likewise application-level, not DB-enforced) rather than introducing a second, inconsistent enforcement style. One account/bot/webhook per deployment is the only case this checkpoint's brief describes. | A `UNIQUE` constraint plus a `get_or_create`-style upsert (rejected as unnecessary complexity for a single-row table with no concurrent-insert race the application layer doesn't already serialize through Django's ORM); a dedicated `Singleton` base model/manager (rejected - three near-identical repository classes are clearer than a shared abstraction for exactly three uses). | LOCKED |
+| 102 | Secrets are never returned to the frontend in any form - not full, not partially-masked, not encrypted-but-decodable. Only booleans (`access_token_configured`) and a source enum are exposed. Non-secret identifiers (Dhan client id, Telegram channel id) ARE returned, but masked. | A masked-but-recognizable secret (e.g. `sk-***abc`) is still a partial leak an attacker with API access could use for social engineering or to confirm a guess; a boolean carries everything a legitimate UI needs (know that something is configured) with zero of what an attacker needs. | Returning a masked prefix/suffix for secrets, matching what's done for non-secret identifiers (rejected - explicitly forbidden by the checkpoint brief's "never" list; a secret and an account identifier have different threat models even though both get partial UI treatment). | LOCKED |
+| 103 | A blank/omitted field in a save request means "leave unchanged" (`None` at the repository layer); the frontend never pre-fills a secret field with a masked placeholder that looks real. | The alternative (pre-filling with a masked value, and treating an unedited pre-filled value as "no change") requires the frontend to distinguish "unedited masked placeholder" from "user typed something that happens to look similar" - a fragile, easy-to-get-wrong UX contract. An always-blank field with "blank = unchanged" is unambiguous in both directions. | Pre-filling with a masked placeholder and diffing on submit (rejected - fragile, and risks accidentally submitting the placeholder string itself as a new "secret" on a careless implementation); requiring an explicit "change credential" toggle before showing the input (rejected - extra click for no safety benefit the blank-means-unchanged convention doesn't already provide). | LOCKED |
+| 104 | No new RBAC capability tokens were introduced. Provider-settings read reuses `configuration.read`; save/test-connection reuse `configuration.activate`. | Provider credentials are exactly the class of security-sensitive configuration change `configuration.activate`/`IsConfigurationOperator` already exists to gate (risk/universe/strategy activation, Checkpoints 8-10) - a second permission system for functionally the same access-control question would fragment authorization logic without adding real precision. Verified compatible with existing capability-list assertions in `test_auth_api.py` before implementation. | New `settings.read`/`settings.write` capability tokens (rejected - the checkpoint brief's own explicit "reuse the existing RBAC model" instruction, and would have broken `test_auth_api.py`'s exact capability-list assertions for zero functional gain). | LOCKED |
+| 105 | Connection-test orchestration (calling concrete `infrastructure.brokers.dhan.client`/`communication.adapters.*.client` HTTP clients) lives in the DRF view layer (`infrastructure/api/settings_views.py`), not in `application/services/`. | `.importlinter` contract #6 ("Application must not depend on infrastructure") forbids `application/*` from importing `intraday.infrastructure.*` - confirmed by reading `application/gateways/health.py`, which clarified the contract only forbids importing this project's OWN infrastructure package, not third-party frameworks in general. `infrastructure/api` is documented as the layer that composes application + infrastructure (Checkpoint 8's own established pattern, e.g. `risk_views.py`'s `_service()`). | Adding an application-layer gateway Protocol the view implements with a concrete infrastructure adapter, mirroring `application/gateways/health.py`'s own pattern (considered, not implemented - the checkpoint's connectivity clients are simple enough, and few enough call sites, that the extra Protocol layer would be indirection without a second implementation ever needing to exist). | LOCKED |
 
 ## Notes (Checkpoint 21)
 
@@ -696,3 +702,75 @@ Full detail:
   both checked and left unchanged - no API surface changed. A new
   `OUTCOME_DEFINITION_VERSION` ("v1") reuses the existing `Version`
   primitive - no second versioning system.
+
+## Notes (Checkpoint 22)
+
+- First checkpoint to touch `infrastructure/brokers/dhan`,
+  `communication/adapters/telegram`, and `communication/adapters/discord`
+  with real code - all three had been unpopulated Checkpoint-1
+  placeholders until now.
+- `.env`/`.env.example`: `DHAN_API_KEY` (a Checkpoint 3/4-era misnamed
+  variable that never matched Dhan's real field name) was corrected to
+  `DHAN_CLIENT_ID`, matching the official `dhanClientId` field
+  confirmed via direct fetch of Dhan's own documentation. `production.py`
+  updated to match.
+- `pyproject.toml`: `httpx` and `cryptography` added as explicit direct
+  dependencies (both were already transitively available via existing
+  dependencies, but declared explicitly per this project's convention
+  of not relying on transitive-only availability for anything imported
+  directly).
+- `SPECTACULAR_SETTINGS["ENUM_NAME_OVERRIDES"]` added - the five
+  provider-settings fields sharing the identical `["DATABASE",
+  "ENVIRONMENT", "UNCONFIGURED"]` choice set otherwise produced a
+  spurious drf-spectacular "multiple names for the same choice set"
+  warning; the override collapses them to one canonical
+  `ProviderConfigurationSourceEnum` name. `spectacular --fail-on-warn`
+  is clean.
+- Migration `0005_provider_settings.py` adds `DhanCredential`,
+  `TelegramCredential`, `DiscordCredential`, `ProviderConnectionStatus`,
+  and widens `AuditLogEntry.outcome`'s choices with a new `"updated"`
+  value (alongside the existing `"activated"`/`"already_active"`/
+  `"rejected"`) - the first outcome value not tied to a
+  risk/universe/strategy activation workflow.
+- A real, non-synthetic defect was found and fixed via manual live-server
+  smoke testing (not first caught by an automated test, since none
+  existed yet at the time): each provider's `*_settings_save` POST view
+  originally called its sibling GET view function directly as a plain
+  Python function to reuse response-building logic - `@api_view`-wrapped
+  functions cannot be safely called this way (`AssertionError: The
+  'request' argument must be an instance of 'django.http.HttpRequest'`).
+  Fixed by extracting plain, undecorated `_dhan_settings_response()` /
+  `_telegram_settings_response()` / `_discord_settings_response()`
+  helpers that both the GET and POST-save views call directly.
+- The local sandbox's OS-level environment (distinct from `.env`, which
+  was blank) had a real `DHAN_ACCESS_TOKEN` and `TELEGRAM_BOT_TOKEN`
+  set. This was treated as sensitive throughout: never written to any
+  file, test, or log; used only to confirm the configuration-precedence
+  resolver's `ENVIRONMENT`-source behavior was correct (see Decision
+  100), never used to perform any real Dhan/Telegram action against a
+  live account.
+- `import-linter` remains 6/6 kept - no new contract needed. The
+  connectivity clients (`infrastructure/brokers/dhan/client.py`,
+  `communication/adapters/{telegram,discord}/client.py`) are called
+  only from `infrastructure/api/settings_views.py` (Decision 105),
+  never from `application/*`.
+- 66 new backend tests (17 encryption/repository + 12 application-service
+  precedence + 25 API vertical-slice + 12 connectivity-client) pass
+  genuinely. Full suite: 575 passed / 0 failed / 0 skipped (up from
+  Checkpoint 21's 509).
+- 13 new frontend tests (7 Dhan + 3 Telegram + 3 Discord card tests),
+  exercising the real generated OpenAPI contract types and the real
+  `settingsApi.ts` client functions against a mocked `fetch` boundary
+  only - matching `RiskConfigurationPanel.test.tsx`'s established
+  philosophy. Full frontend suite: 45 passed / 0 failed.
+- Frontend: one new top-level "Settings" navigation entry added to
+  `App.tsx` alongside the existing "Configuration" entry. No routing
+  library introduced - a single piece of local state toggles between
+  the two screens, consistent with the project's existing
+  no-heavy-framework convention for a small, fixed number of screens.
+- `app.bat` required no changes - it already runs `manage.py migrate`
+  unconditionally on every launch (added defensively at Checkpoint 12),
+  which picks up this checkpoint's new migration with no
+  checkpoint-specific edits.
+- Docker remains explicitly deferred, unchanged from every prior
+  checkpoint.

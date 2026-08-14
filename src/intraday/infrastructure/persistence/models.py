@@ -253,6 +253,12 @@ class AuditLogEntry(models.Model):
             ("activated", "activated"),
             ("already_active", "already_active"),
             ("rejected", "rejected"),
+            # Checkpoint 22: a fourth, narrowly-scoped outcome for
+            # provider-credential changes (a save is not a configuration
+            # "activation" - there is no version to activate - but is
+            # still exactly the kind of security-sensitive change this
+            # audit trail exists to record).
+            ("updated", "updated"),
         ],
     )
     request_id = models.CharField(max_length=36)
@@ -300,3 +306,122 @@ class AuditLogEntry(models.Model):
         outright — an audit trail with a working delete method is not an
         audit trail."""
         raise RuntimeError("AuditLogEntry rows cannot be deleted through the application.")
+
+
+# ---------------------------------------------------------------------------
+# Checkpoint 22: operational provider settings (Dhan broker connectivity,
+# Telegram/Discord notification channels). Deliberately THREE small,
+# concrete models — one per provider — rather than one generic
+# key-value/EAV credential table: each provider's field set is small,
+# fixed, and known from official documentation (Checkpoint 22 §2), so a
+# concrete model gives real columns, real types, and lets the database
+# itself express "this provider has exactly these fields" instead of an
+# untyped generic store that could hold anything.
+#
+# Each table is an application-level SINGLETON: exactly one row is ever
+# expected to exist (one Dhan account, one Telegram bot, one Discord
+# webhook per deployment — never per-user). Enforced by convention in
+# the repository layer (`infrastructure/persistence/repositories.py`'s
+# `get_or_create` pattern), not a database constraint — matching this
+# codebase's existing precedent of expressing some invariants at the
+# application layer (e.g. `AuditLogEntry`'s append-only `save()`
+# override) rather than reaching for triggers/constraints for every
+# rule.
+#
+# Secrets are never stored in plaintext — `encrypted_*` fields hold
+# `Fernet`-encrypted bytes (see `infrastructure/persistence/encryption.py`),
+# and are NEVER included in any API response or log line
+# (`infrastructure/api/settings_views.py` only ever returns
+# configured/not-configured booleans and masked display values).
+# ---------------------------------------------------------------------------
+
+
+class DhanCredential(models.Model):
+    """Dhan broker connectivity configuration. Field names match the
+    official DhanHQ v2 authentication scheme exactly
+    (https://dhanhq.co/docs/v2/authentication/): `dhanClientId` (not
+    secret — an account identifier, stored in plaintext) and
+    `access-token` (a JWT, genuinely secret — stored encrypted)."""
+
+    client_id = models.CharField(max_length=100, blank=True, default="")
+    encrypted_access_token = models.BinaryField(null=True, blank=True)
+    enabled = models.BooleanField(default=False)
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by_username = models.CharField(max_length=150, blank=True, default="")
+
+    class Meta:
+        app_label = "persistence"
+
+
+class TelegramCredential(models.Model):
+    """Telegram bot notification configuration. `bot_token` is secret
+    (stored encrypted); `channel_id` is a destination identifier, not
+    inherently secret, but still never exposed to the frontend beyond a
+    configured/not-configured indicator (Checkpoint 22 §15: "treat all
+    communication configuration as controlled configuration")."""
+
+    encrypted_bot_token = models.BinaryField(null=True, blank=True)
+    channel_id = models.CharField(max_length=100, blank=True, default="")
+    enabled = models.BooleanField(default=False)
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by_username = models.CharField(max_length=150, blank=True, default="")
+
+    class Meta:
+        app_label = "persistence"
+
+
+class DiscordCredential(models.Model):
+    """Discord webhook notification configuration. The webhook URL
+    itself (`https://discord.com/api/webhooks/{id}/{token}`) IS the
+    credential — stored encrypted in its entirety, never split into a
+    separate "id"/"token" pair the official API doesn't ask for."""
+
+    encrypted_webhook_url = models.BinaryField(null=True, blank=True)
+    enabled = models.BooleanField(default=False)
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by_username = models.CharField(max_length=150, blank=True, default="")
+
+    class Meta:
+        app_label = "persistence"
+
+
+class ProviderConnectionStatus(models.Model):
+    """Reusable connection-status tracking, shared structurally across
+    all three providers (Checkpoint 22 §12) — one row per provider,
+    keyed by `provider`. A "Test Connection" action
+    (`infrastructure/api/settings_views.py`) updates the matching row;
+    saving credentials does NOT (Checkpoint 22 §14: configured is never
+    conflated with connected).
+
+    `failure_reason_safe` is a human-readable, pre-sanitized string —
+    the writer is responsible for never putting a token/secret into it
+    (Checkpoint 22 §24); this column itself has no way to enforce that,
+    documented as the boundary responsibility of
+    `application/services/provider_connectivity.py`."""
+
+    PROVIDER_CHOICES = [("dhan", "dhan"), ("telegram", "telegram"), ("discord", "discord")]
+    STATUS_CHOICES = [
+        (value, value)
+        for value in (
+            "NOT_CONFIGURED",
+            "CONFIGURED",
+            "CONNECTING",
+            "CONNECTED",
+            "DISCONNECTED",
+            "AUTHENTICATION_FAILED",
+            "TOKEN_EXPIRED",
+            "CONNECTION_ERROR",
+            "DISABLED",
+        )
+    ]
+
+    provider = models.CharField(max_length=32, choices=PROVIDER_CHOICES, unique=True)
+    status = models.CharField(max_length=32, choices=STATUS_CHOICES, default="NOT_CONFIGURED")
+    last_checked_at = models.DateTimeField(null=True, blank=True)
+    last_success_at = models.DateTimeField(null=True, blank=True)
+    last_failure_at = models.DateTimeField(null=True, blank=True)
+    failure_reason_safe = models.CharField(max_length=255, blank=True, default="")
+    latency_ms = models.PositiveIntegerField(null=True, blank=True)
+
+    class Meta:
+        app_label = "persistence"

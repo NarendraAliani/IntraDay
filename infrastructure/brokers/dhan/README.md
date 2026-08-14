@@ -14,3 +14,14 @@ domain/broker
 
 Other bounded contexts' internals
 
+## Checkpoint 22 update
+
+`src/intraday/infrastructure/brokers/dhan/client.py` now implements a
+minimal, **read-only** connectivity client (`check_dhan_connectivity()`)
+— NOT the full `domain.broker.BrokerGateway` contract this README
+describes above, which remains deferred until order-placement is
+authorized. See
+[PROVIDER_CONNECTIVITY_ARCHITECTURE.md](../../../docs/architecture/PROVIDER_CONNECTIVITY_ARCHITECTURE.md)
+for the client's scope, the exact endpoint used
+(`GET /v2/profile`), and status-mapping details.
+

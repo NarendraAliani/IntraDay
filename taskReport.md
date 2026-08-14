@@ -5842,3 +5842,208 @@ consumer (e.g. a minimal `research/backtesting` replay harness reusing
 lower-risk way to generate the cross-bounded-context evidence the
 promotion question has now waited four checkpoints for. Not
 implemented — recommendation only.
+
+# Checkpoint 22 — Operational Settings & Provider Connectivity Foundation (2026-08-14)
+
+## Objective
+
+Establish a secure Settings UI and API for operational provider
+configuration — Dhan (broker, read-only connectivity only, NO order
+placement), Telegram, and Discord (notification channels). Encrypted-at-
+rest credential storage, configuration precedence (Database primary,
+`.env` fallback, never overwritten by env), masked/safe API responses,
+write-only secret replacement, real (mocked-in-tests, live-in-manual-
+validation) connection testing, honest connection-status model
+(Configured != Connected), RBAC reuse, audit trail, rate limiting, and a
+frontend Settings page. WhatsApp explicitly not implemented. Docker
+still deferred.
+
+## What Was Built — Backend
+
+- `infrastructure/persistence/encryption.py` — Fernet encryption at
+  rest, with a production-boot-refusing key-precedence model
+  (`SETTINGS_ENCRYPTION_KEY` env var; dev-only SHA-256-derived fallback
+  from `DJANGO_SECRET_KEY`).
+- `infrastructure/persistence/models.py` — `DhanCredential`,
+  `TelegramCredential`, `DiscordCredential` (singleton-by-convention,
+  encrypted secret fields), `ProviderConnectionStatus` (shared 9-state
+  status model); `AuditLogEntry.outcome` widened with `"updated"`.
+  Migration `0005_provider_settings.py`.
+- `application/repositories/provider_settings.py` — repository
+  Protocols; secret-free record types (`has_access_token: bool`, never
+  the value).
+- `infrastructure/persistence/provider_settings_repositories.py` —
+  Django ORM implementations; write-only `None`-means-unchanged
+  semantics; audited credential changes in the same transaction as the
+  write.
+- `application/services/provider_settings.py` — the one real business
+  rule (configuration precedence, `_resolve()`); per-provider settings
+  services (`get_display()`, `save()`, `effective_credentials()`).
+- `infrastructure/brokers/dhan/client.py` — read-only Dhan connectivity
+  client (`GET /v2/profile` only, confirmed via Dhan's own official
+  documentation).
+- `communication/adapters/telegram/client.py`,
+  `communication/adapters/discord/client.py` — connectivity-check +
+  explicit-test-message clients for each provider.
+- `communication/contracts/connectivity.py` — shared
+  `ConnectivityCheckResult` (Telegram/Discord only; Dhan keeps its own
+  separate result type to avoid a cross-bounded-context import).
+- `application/contracts/settings.py` — DRF serializers (response +
+  save-request) for all three providers plus the shared connection-
+  status response.
+- `infrastructure/api/settings_views.py` — GET/save/test-connection
+  views per provider, plus a shared status-read view; rate-limited
+  (`ScopedRateThrottle`, `10/min`) and debounced (5s) test-connection
+  endpoints.
+- `infrastructure/api/urls.py` — 10 new routes under
+  `/api/v1/config/settings/...`.
+- `settings/base.py` — `SETTINGS_ENCRYPTION_KEY`, new throttle rate,
+  `ENUM_NAME_OVERRIDES` (fixes a drf-spectacular warning from 5 fields
+  sharing one choice set); `settings/production.py` — boot-refusal if
+  `SETTINGS_ENCRYPTION_KEY` unset; `DHAN_API_KEY` renamed to the
+  correct `DHAN_CLIENT_ID`.
+- `pyproject.toml` — `httpx`, `cryptography` added as explicit direct
+  dependencies.
+
+## What Was Built — Frontend
+
+- `frontend/src/common/api/settingsApi.ts` — typed API client wrappers
+  (generated OpenAPI contract types only).
+- `frontend/src/common/components/ConnectionStatusBadge.tsx` — shared
+  status badge, visually distinguishing `CONFIGURED` from `CONNECTED`
+  (icon + text, never color alone).
+- `frontend/src/features/settings/{Dhan,Telegram,Discord}SettingsCard.tsx`
+  — three separate cards (matching the existing per-resource panel
+  convention), each with masked current-value display, a write-only
+  save form (secret fields always blank, cleared after submit), and a
+  Test Connection action — form hidden entirely for a reader without
+  `configuration.activate`.
+- `frontend/src/features/settings/SettingsPage.tsx` — container.
+- `App.tsx` — new "Settings" nav entry alongside "Configuration"; no
+  routing library introduced (two screens, local state toggle).
+- CSS additions to `app/styles.css` (settings cards, pending/danger
+  badge variants, nav links) — no new dependency.
+
+## Bug Found and Fixed via Manual Live-Server Smoke Testing
+
+Each provider's `*_settings_save` POST view originally called its
+sibling GET view function directly as a plain Python function to reuse
+response-building logic. `@api_view`-wrapped functions cannot be safely
+invoked this way — this crashed with `AssertionError: The 'request'
+argument must be an instance of 'django.http.HttpRequest', not
+'rest_framework.request.Request'` the moment a real save request hit
+the live dev server. Found before any automated test existed for this
+path (during the checkpoint's own required manual API validation step —
+consistent with this project's established pattern of manual testing
+surfacing real defects, e.g. Checkpoint 17.1's session-expiry mismatch).
+Fixed by extracting plain, undecorated `_dhan_settings_response()` /
+`_telegram_settings_response()` / `_discord_settings_response()`
+helpers; both GET and POST-save views now call the shared helper
+directly. Re-verified after the fix: a fresh save (fake credentials)
+returned a clean 200; a Dhan test-connection call with fake credentials
+genuinely reached the real Dhan API (`GET /v2/profile`) and correctly
+received HTTP 401 → mapped to `AUTHENTICATION_FAILED` with a safe,
+non-leaking error message — proving the full vertical slice end-to-end,
+not just against mocks. All fake test data was cleared from the dev
+database afterward.
+
+## Sandbox Environment Investigation (Resolved as Correct Behavior, Not a Bug)
+
+`GET /api/v1/config/settings/dhan/` initially returned
+`access_token_configured: true, access_token_source: "ENVIRONMENT"`
+despite `.env`'s `DHAN_ACCESS_TOKEN` being blank. Investigation found
+the local sandbox's OS-level environment (separate from `.env`) already
+had a real `DHAN_ACCESS_TOKEN` (and `TELEGRAM_BOT_TOKEN`) set —
+consistent with `python-dotenv`'s documented behavior of never
+overriding an already-set OS environment variable. This confirmed the
+configuration-precedence resolver behaves correctly against a genuine,
+non-synthetic case, not just test fixtures. This value was treated as
+sensitive throughout: never written to any file, test, log, or this
+report; never used for any real Dhan/Telegram action beyond confirming
+precedence source-reporting.
+
+## Configuration Precedence
+
+```
+Settings UI (database) value? YES -> source = "DATABASE"
+                               NO  -> Environment variable set?
+                                       YES -> source = "ENVIRONMENT"
+                                       NO  -> source = "UNCONFIGURED"
+```
+
+Resolved per-field, not per-provider; a database value is never
+overwritten by an environment value on any read.
+
+## RBAC, Audit, Rate Limiting — All Reused, Nothing New
+
+No new capability tokens (verified against `test_auth_api.py`'s exact
+capability-list assertions before implementation) — read uses
+`configuration.read`; save/test-connection use `configuration.activate`
+(existing `configuration-operators` Group). Every credential change is
+recorded in the existing `AuditLogEntry` table (never the secret value),
+in the same transaction as the write. Test-connection endpoints reuse
+`ScopedRateThrottle` (same mechanism as the login throttle) plus a
+separate 5-second debounce.
+
+## Full Documentation
+
+`docs/architecture/SETTINGS_ARCHITECTURE.md`,
+`docs/architecture/PROVIDER_CONNECTIVITY_ARCHITECTURE.md` (new);
+`docs/architecture/ARCHITECTURE_DECISIONS.md` decisions 100-105 +
+Notes (Checkpoint 22); READMEs updated:
+`infrastructure/brokers/dhan/README.md`,
+`communication/adapters/telegram/README.md`,
+`communication/adapters/discord/README.md`,
+`control_plane/broker_health/README.md`.
+
+## Validation
+
+- Backend: `ruff format --check` clean, `ruff check` clean, `mypy`
+  clean (142 files), `pytest` 575 passed / 0 failed / 0 skipped
+  (66 new tests: 17 encryption/repository, 12 application-service
+  precedence, 25 API vertical-slice, 12 connectivity-client),
+  `lint-imports` 6/6 kept (174 files), `manage.py check` clean,
+  `makemigrations --check --dry-run` clean, `spectacular --fail-on-warn`
+  clean, `pip-audit` — 8 pre-existing vulnerabilities in `pytest`/
+  `starlette` (transitive, unrelated to this checkpoint's `httpx`/
+  `cryptography` additions, neither of which is flagged).
+- OpenAPI schema regenerated; frontend TypeScript contracts
+  regenerated (`npm run generate:api`) — atomic completeness, no
+  backend-only or frontend-only fields.
+- Frontend: `tsc -b` clean, `vite build` clean, `vitest run` 45 passed
+  / 0 failed (13 new tests across the three provider cards).
+- Manual UX validation: performed directly against the live Django dev
+  server (real login as the existing `ux_test_operator` user, real
+  save/get/test-connection/status calls for all three providers, one
+  real defect found and fixed as above, dev database left clean
+  afterward). Browser-based frontend click-through was not additionally
+  performed this checkpoint (API-level manual validation was prioritized
+  given the number of new endpoints) - if a browser tool becomes
+  available, a full click-through of the new Settings page is the
+  natural next manual-validation step.
+- `app.bat` — assessed, no changes needed. It already runs
+  `manage.py migrate` unconditionally on every launch (added at
+  Checkpoint 12), which covers this checkpoint's new migration with
+  zero checkpoint-specific edits.
+- Docker — confirmed still deferred, no action taken.
+
+## Deferred
+
+WhatsApp (architecture allows a future adapter via the shared
+`ConnectivityCheckResult` contract, but no code); Docker; multi-account
+support; notification routing/templating
+(`communication/notification_router/` remains an unpopulated
+placeholder); the full `domain.broker.BrokerGateway` implementation
+(order placement, position queries) — this checkpoint's Dhan client is
+deliberately narrower and read-only only.
+
+## Recommended Checkpoint 23
+
+With provider connectivity now real (Dhan read-only, Telegram, Discord),
+a natural next step is `control_plane/broker_health`'s originally-scoped
+responsibility — continuous (not just on-demand) broker/channel health
+tracking, reusing `ProviderConnectionStatus` as its data model — or
+alternatively beginning `trading_engine/strategy_execution`'s first
+minimal executable strategy shape now that signal, verification,
+lifecycle, outcome, and provider-connectivity foundations all exist.
+Not implemented — recommendation only.

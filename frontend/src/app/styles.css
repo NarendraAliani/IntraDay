@@ -393,3 +393,153 @@ dd {
   white-space: nowrap;
   border: 0;
 }
+
+/* Checkpoint 22: Settings page + provider cards. */
+
+.app-shell__nav {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.nav-link {
+  padding: 0.4rem 0.9rem;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+
+.nav-link--active {
+  border-color: var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.badge--pending {
+  background: #fff8e1;
+  border-color: #b98900;
+  color: #8a6600;
+}
+
+.badge--danger {
+  background: var(--color-error-bg);
+  border-color: var(--color-error-border);
+  color: var(--color-error-border);
+}
+
+.settings-page__cards {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  margin-top: 1.5rem;
+}
+
+.settings-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 1.25rem 1.5rem;
+}
+
+.settings-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.settings-card__header h3 {
+  margin: 0;
+}
+
+.settings-card__description {
+  color: var(--color-text-muted);
+  margin: 0.35rem 0 1rem;
+}
+
+.settings-card__current {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.25rem 0.75rem;
+  margin: 0 0 1rem;
+}
+
+.settings-card__current dt {
+  color: var(--color-text-muted);
+}
+
+.settings-card__current dd {
+  margin: 0;
+}
+
+.settings-card__form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.settings-card__form label {
+  font-weight: 500;
+  font-size: 0.9rem;
+}
+
+.settings-card__form input[type="text"],
+.settings-card__form input[type="password"] {
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  font-size: 0.95rem;
+}
+
+.settings-card__checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-weight: 400;
+}
+
+.settings-card__actions {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}
+
+.settings-card__actions button {
+  padding: 0.45rem 1rem;
+  border-radius: 4px;
+  cursor: pointer;
+  border: 1px solid var(--color-active-border);
+}
+
+.settings-card__actions button[type="submit"] {
+  background: var(--color-active-border);
+  color: #fff;
+}
+
+.settings-card__actions button[type="button"] {
+  background: var(--color-surface);
+  color: var(--color-active-border);
+}
+
+.settings-card__actions button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.settings-card__status-detail {
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+  margin: 0.25rem 0 0;
+}
+
+.settings-card__readonly-note {
+  color: var(--color-text-muted);
+  font-style: italic;
+  padding-top: 1rem;
+  border-top: 1px solid var(--color-border);
+  margin-bottom: 0;
+}

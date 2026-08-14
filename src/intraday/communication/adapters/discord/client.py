@@ -1,0 +1,116 @@
+# File: src/intraday/communication/adapters/discord/client.py
+#
+# Checkpoint 22: a minimal Discord webhook client - connectivity check
+# and explicit test-message send only.
+#
+# Authoritative source: Discord's public webhook API
+# (https://discord.com/developers/docs/resources/webhook). A webhook
+# URL (`https://discord.com/api/webhooks/{id}/{token}`) IS the
+# credential - Discord's documented `GET` on that exact URL returns the
+# webhook's own metadata if valid (404 otherwise), which is the
+# connectivity check this client performs WITHOUT posting anything
+# (Checkpoint 22 §16's "prefer a safe connectivity/permission check").
+# `POST` to the same URL with a JSON body sends a real message and is
+# only ever called on explicit user action.
+from __future__ import annotations
+
+import time
+
+import httpx
+
+from intraday.communication.contracts.connectivity import ConnectivityCheckResult
+
+_REQUEST_TIMEOUT_SECONDS = 10.0
+
+
+def check_discord_connectivity(webhook_url: str) -> ConnectivityCheckResult:
+    """`GET <webhook_url>` - confirms the webhook exists and is valid
+    without posting any message."""
+    started = time.monotonic()
+    try:
+        response = httpx.get(webhook_url, timeout=_REQUEST_TIMEOUT_SECONDS)
+    except httpx.TimeoutException:
+        return ConnectivityCheckResult(
+            success=False,
+            status="CONNECTION_ERROR",
+            safe_error="Connection to Discord timed out.",
+            latency_ms=int((time.monotonic() - started) * 1000),
+        )
+    except httpx.HTTPError:
+        return ConnectivityCheckResult(
+            success=False,
+            status="CONNECTION_ERROR",
+            safe_error="Could not reach Discord.",
+            latency_ms=int((time.monotonic() - started) * 1000),
+        )
+
+    latency_ms = int((time.monotonic() - started) * 1000)
+
+    if response.status_code == 200:
+        return ConnectivityCheckResult(
+            success=True, status="CONNECTED", safe_error="", latency_ms=latency_ms
+        )
+    if response.status_code == 401 or response.status_code == 404:
+        return ConnectivityCheckResult(
+            success=False,
+            status="AUTHENTICATION_FAILED",
+            safe_error="Discord rejected the configured webhook URL.",
+            latency_ms=latency_ms,
+        )
+    return ConnectivityCheckResult(
+        success=False,
+        status="CONNECTION_ERROR",
+        safe_error=f"Discord returned an unexpected response (HTTP {response.status_code}).",
+        latency_ms=latency_ms,
+    )
+
+
+def send_discord_test_message(webhook_url: str) -> ConnectivityCheckResult:
+    """`POST <webhook_url>` - sends a real, visible test message to the
+    configured channel. Only ever invoked by an explicit, separate user
+    action (Checkpoint 22 §17)."""
+    started = time.monotonic()
+    try:
+        response = httpx.post(
+            webhook_url,
+            json={
+                "content": "IntraDay: this is a test message confirming your Discord "
+                "notification channel is connected."
+            },
+            timeout=_REQUEST_TIMEOUT_SECONDS,
+        )
+    except httpx.TimeoutException:
+        return ConnectivityCheckResult(
+            success=False,
+            status="CONNECTION_ERROR",
+            safe_error="Connection to Discord timed out.",
+            latency_ms=int((time.monotonic() - started) * 1000),
+        )
+    except httpx.HTTPError:
+        return ConnectivityCheckResult(
+            success=False,
+            status="CONNECTION_ERROR",
+            safe_error="Could not reach Discord.",
+            latency_ms=int((time.monotonic() - started) * 1000),
+        )
+
+    latency_ms = int((time.monotonic() - started) * 1000)
+
+    # Discord returns 204 No Content on a successful webhook post.
+    if response.status_code in (200, 204):
+        return ConnectivityCheckResult(
+            success=True, status="CONNECTED", safe_error="", latency_ms=latency_ms
+        )
+    if response.status_code in (401, 404):
+        return ConnectivityCheckResult(
+            success=False,
+            status="AUTHENTICATION_FAILED",
+            safe_error="Discord rejected the configured webhook URL.",
+            latency_ms=latency_ms,
+        )
+    return ConnectivityCheckResult(
+        success=False,
+        status="CONNECTION_ERROR",
+        safe_error=f"Discord returned an unexpected response (HTTP {response.status_code}).",
+        latency_ms=latency_ms,
+    )

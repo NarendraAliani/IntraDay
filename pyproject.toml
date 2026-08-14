@@ -22,6 +22,8 @@ drf-spectacular = "^0.27"
 python-dotenv = "^1.0"
 pyyaml = "^6.0"
 django-cors-headers = "^4.9.0"
+httpx = "^0.28.1"
+cryptography = "^50.0.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3"

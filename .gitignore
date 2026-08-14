@@ -73,3 +73,6 @@ logs/
 # `npm run generate:api`, never committed.
 /openapi.json
 frontend/openapi.json
+
+# TypeScript incremental build cache — machine/build-local, never committed.
+frontend/tsconfig.tsbuildinfo

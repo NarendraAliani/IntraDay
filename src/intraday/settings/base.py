@@ -34,6 +34,17 @@ load_dotenv(BASE_DIR / ".env")
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "")
 
 # ---------------------------------------------------------------------------
+# Checkpoint 22: encryption-at-rest key for operational provider
+# credentials (Dhan access token, Telegram bot token, Discord webhook
+# URL) — see infrastructure/persistence/encryption.py for the full key-
+# precedence policy (this value, or a development-only fallback derived
+# from SECRET_KEY). Empty by default; production.py enforces that it is
+# actually set before allowing the process to boot, mirroring
+# SECRET_KEY's own existing enforcement pattern.
+# ---------------------------------------------------------------------------
+SETTINGS_ENCRYPTION_KEY = os.environ.get("SETTINGS_ENCRYPTION_KEY", "")
+
+# ---------------------------------------------------------------------------
 # Installed apps: framework-level, plus (as of Checkpoint 7) the single
 # persistence app. `intraday.infrastructure.persistence` holds the ONLY
 # business-adjacent Django models in this codebase — versioned
@@ -215,7 +226,15 @@ REST_FRAMEWORK = {
     # No new dependency or distributed rate-limiting subsystem was added -
     # this reuses the CACHES backend already configured per environment
     # (Redis in production/development, LocMemCache in testing).
-    "DEFAULT_THROTTLE_RATES": {"login": "5/min"},
+    "DEFAULT_THROTTLE_RATES": {
+        "login": "5/min",
+        # Checkpoint 22 §23: protects external providers (Dhan/Telegram/
+        # Discord) from being hammered by repeated manual "Test
+        # Connection" clicks - not a health-monitoring system, just
+        # server-side abuse protection, same mechanism (DRF's own
+        # ScopedRateThrottle) and cache backend as the login throttle.
+        "provider_connection_test": "10/min",
+    },
 }
 
 SPECTACULAR_SETTINGS = {
@@ -230,6 +249,21 @@ SPECTACULAR_SETTINGS = {
     ),
     "VERSION": "0.11.0",
     "SERVE_INCLUDE_SCHEMA": False,
+    # Checkpoint 22: `client_id_source`/`access_token_source`/`channel_id_source`/
+    # `bot_token_source`/`webhook_source` all reuse the identical
+    # ["DATABASE", "ENVIRONMENT", "UNCONFIGURED"] choice set
+    # (ConfigurationSource in application/services/provider_settings.py) -
+    # drf-spectacular otherwise emits a spurious "multiple names for the
+    # same choice set" warning, since it can't tell which field-derived
+    # name should represent the shared set. Forcing one canonical name
+    # keeps `spectacular --fail-on-warn` clean.
+    "ENUM_NAME_OVERRIDES": {
+        "ProviderConfigurationSourceEnum": [
+            ("DATABASE", "DATABASE"),
+            ("ENVIRONMENT", "ENVIRONMENT"),
+            ("UNCONFIGURED", "UNCONFIGURED"),
+        ],
+    },
 }
 
 # ---------------------------------------------------------------------------

@@ -11,13 +11,25 @@
 // loading (initial session check in flight), anonymous (show
 // LoginScreen), authenticated (show the control-plane application with a
 // sign-out affordance).
+//
+// Checkpoint 22: a second top-level screen (Settings) is added alongside
+// Configuration Viewer. No routing library is introduced for two
+// screens - a single piece of local state toggles which one renders,
+// matching this project's existing "no heavy framework unless the
+// screen count actually needs it" convention (Checkpoint 9 §11).
+import { useState } from "react";
+
 import { useAuth } from "../common/auth/AuthContext";
 import { LoadingState } from "../common/components/LoadingState";
 import { ConfigurationViewer } from "../features/configuration/ConfigurationViewer";
 import { LoginScreen } from "../features/auth/LoginScreen";
+import { SettingsPage } from "../features/settings/SettingsPage";
+
+type Screen = "configuration" | "settings";
 
 function AppShell(): JSX.Element {
   const { state, logout } = useAuth();
+  const [screen, setScreen] = useState<Screen>("configuration");
 
   if (state.status === "loading") {
     return (
@@ -34,6 +46,24 @@ function AppShell(): JSX.Element {
   return (
     <main>
       <header className="app-shell__header">
+        <nav className="app-shell__nav" aria-label="Primary">
+          <button
+            type="button"
+            className={screen === "configuration" ? "nav-link nav-link--active" : "nav-link"}
+            aria-current={screen === "configuration" ? "page" : undefined}
+            onClick={() => setScreen("configuration")}
+          >
+            Configuration
+          </button>
+          <button
+            type="button"
+            className={screen === "settings" ? "nav-link nav-link--active" : "nav-link"}
+            aria-current={screen === "settings" ? "page" : undefined}
+            onClick={() => setScreen("settings")}
+          >
+            Settings
+          </button>
+        </nav>
         <span>
           Signed in as <strong>{state.username}</strong>
         </span>
@@ -41,7 +71,7 @@ function AppShell(): JSX.Element {
           Sign out
         </button>
       </header>
-      <ConfigurationViewer />
+      {screen === "configuration" ? <ConfigurationViewer /> : <SettingsPage />}
     </main>
   );
 }
