@@ -174,6 +174,45 @@ promotion re-evaluated and still not yet justified. See
 [SIGNAL_THEORETICAL_OUTCOME_ARCHITECTURE.md](SIGNAL_THEORETICAL_OUTCOME_ARCHITECTURE.md)
 for the full MFE/MAE definition and the expectancy-deferral rationale.
 
+**Operational settings & provider connectivity** (Checkpoint 22): the
+first real code in `infrastructure/brokers/dhan`,
+`communication/adapters/telegram`, and `communication/adapters/discord`
+— encrypted-at-rest credential storage (Dhan, Telegram, Discord),
+database-primary/environment-fallback configuration precedence, a
+write-only secret-replacement API contract, and an honest
+Configured-≠-Connected connection-status model, reusing the existing
+RBAC/audit-trail mechanisms verbatim. Dhan connectivity is strictly
+read-only this checkpoint (`GET /v2/profile` only) — no order/trading
+capability exists. See
+[SETTINGS_ARCHITECTURE.md](SETTINGS_ARCHITECTURE.md) and
+[PROVIDER_CONNECTIVITY_ARCHITECTURE.md](PROVIDER_CONNECTIVITY_ARCHITECTURE.md).
+
+**Live market data foundation** (Checkpoint 23): the first real code in
+`control_plane/market_data_health` and the first live (non-fixture)
+market-data path this platform has ever had — a small, configuration-
+driven observation universe (default RELIANCE/TCS/INFY/HDFCBANK) fetched
+via Dhan's read-only Market Quote REST endpoint, NSE cash-equity session
+awareness (`domain/session/calendar.py`, the first market-hours
+computation in this codebase), and a three-state-richer health model
+(Configured ≠ Connected ≠ Fresh) than Checkpoint 22's. Explicitly
+unwired from signal generation (`signal_intelligence.signal_generation`
+still consumes only the Checkpoint 14 synthetic fixture repository,
+unchanged) and from every `trading_engine/*` module, which remain empty
+Checkpoint-4 scaffolding. See
+[LIVE_MARKET_DATA_ARCHITECTURE.md](LIVE_MARKET_DATA_ARCHITECTURE.md)
+for the full REST-vs-WebSocket rationale, health model, and manual
+live-market validation record.
+
+**Roadmap note (post-Checkpoint 23):** the next named checkpoint is
+**Checkpoint 24 — Live Signal Observation** (wiring the existing
+`SignalGenerationService` to Checkpoint 23's live feed, display/log only,
+still zero order code). Paper trading, a real order API, and controlled
+live trading remain deliberately un-numbered — each depends on
+`trading_engine/*` components (order management, execution management,
+risk engine) that do not exist yet, and assigning checkpoint numbers to
+them before that dependency is real would misrepresent how much design
+work those numbers actually cover.
+
 ## 3. Layering
 
 ```

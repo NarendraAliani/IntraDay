@@ -774,3 +774,90 @@ Full detail:
   checkpoint-specific edits.
 - Docker remains explicitly deferred, unchanged from every prior
   checkpoint.
+| 106 | REST polling (explicit-trigger, rate-limited) was chosen over WebSocket streaming for live market-data ingestion. | This Django/WSGI app has no already-running persistent process to host a WebSocket client safely (asgi.py is an unused stub; no Celery beat schedule exists). Building that infrastructure purely for this checkpoint would exceed "the smallest production-safe implementation." Dhan's own documented rate limit (1000 instruments/request, 1/sec) comfortably fits the four-symbol universe. | A continuous WebSocket tick stream (rejected - requires new long-lived-process infrastructure this checkpoint should not introduce); an automatic Celery-beat polling schedule (rejected - no beat schedule exists yet in this repo, and an unattended, always-running external HTTP call is a larger safety surface than an explicit, rate-limited, operator-triggered one for a first live-data checkpoint). | LOCKED |
+| 107 | The Market Quote ("full quote") Dhan endpoint was used instead of the narrower LTP/OHLC variants. | Only the full quote variant includes `last_trade_time`, required by the checkpoint's explicit "preserve source timestamps" requirement - the narrower endpoints have no source timestamp at all. | `/marketfeed/ltp` or `/marketfeed/ohlc` (rejected - neither carries a source timestamp, which this checkpoint treats as a hard requirement, not a nice-to-have). | LOCKED |
+| 108 | The observation universe's symbol -> Dhan security_id mapping is a small, hand-maintained, explicitly-verified table (`infrastructure/market_data_providers/dhan/instruments.py`), not a full scrip-master ingestion pipeline. | A four-symbol, configuration-driven universe (per the checkpoint's own explicit brief) does not justify downloading/parsing Dhan's full instrument master CSV on every startup. Each entry was individually verified against Dhan's official published CSV during this checkpoint, not guessed. | A full scrip-master ingestion/caching pipeline (rejected as premature machinery for four symbols - explicitly named as the natural next increment if the universe grows); hard-coding security_ids directly into business logic rather than a configuration-driven symbol list (rejected - the checkpoint brief's own explicit "must be configuration-driven" instruction). | LOCKED |
+| 109 | Market-hours computation (`domain/session/calendar.py`) is fixed-hours (09:15-15:30 IST), with NO exchange holiday calendar. | The checkpoint brief explicitly asked for "the minimum market-session awareness necessary" - PRE_OPEN/OPEN/CLOSED classification does not require knowing which calendar dates are holidays, only what today's fixed hours are assumed to be. A holiday calendar is separate, larger, and independently useful work. | Integrating a real NSE holiday calendar (rejected as scope creep beyond "minimum... necessary" - explicitly named as a future increment, not silently dropped). | LOCKED |
+| 110 | "Not configured" (no Dhan credentials at all) is never recorded as a health failure - a refresh attempt with no credentials records nothing and simply reflects whatever the health record already was. | Mirrors Checkpoint 22's own Configured != Connected honesty principle: no attempt was made, so nothing failed. Recording a synthetic "failure" for a condition that isn't really an attempt would pollute `consecutive_failures` and misrepresent what actually happened. | Recording "Dhan is not configured" as a generic ERROR-classified failure (rejected during this checkpoint's own test-writing process - initially implemented this way, then corrected once the resulting DISCONNECTED-vs-ERROR precedence conflict was discovered via a failing test). | LOCKED |
+| 111 | `FRESHNESS_THRESHOLD_SECONDS = 120` (2 minutes) for CONNECTED_FRESH vs. CONNECTED_STALE classification. | This checkpoint's adapter is explicit-trigger REST polling, not a continuous stream - "staleness" means "the last successful Refresh is old enough a human should press Refresh again," not "a live feed silently stopped." 120s is short enough to flag a genuinely abandoned session, long enough that normal operator pacing (reading a quote, thinking) never falsely flags stale. | A much shorter threshold matched to a hypothetical continuous-stream cadence (rejected - this checkpoint has no continuous stream, so a sub-10-second threshold would flag CONNECTED_STALE almost immediately after every manual refresh, which is not useful information). | LOCKED |
+
+## Notes (Checkpoint 23)
+
+- First checkpoint to introduce real content in
+  `control_plane/market_data_health` and
+  `infrastructure/market_data_providers/dhan` - both were unpopulated
+  Checkpoint-1/22 placeholders until now.
+- First checkpoint to implement any market-hours computation
+  (`domain/session/calendar.py`) - `domain/session/contracts.py`'s own
+  docstring ("no market-hours computation exists here") was true
+  through Checkpoint 22; this checkpoint explicitly authorized the
+  minimum needed for session awareness.
+- `tzdata` added as an explicit direct dependency (was already
+  transitively available, likely via Django, but declared explicitly
+  per this project's convention, matching `httpx`/`cryptography` at
+  Checkpoint 22) - needed for `zoneinfo.ZoneInfo("Asia/Kolkata")` to
+  resolve correctly across platforms.
+- A real, pre-existing test-isolation gap (not introduced by this
+  checkpoint) was found and fixed while re-running the full regression
+  suite: `test_dhan_test_connection_when_unconfigured_returns_not_
+  configured_status` (Checkpoint 22) assumed a blank ambient
+  environment, which broke once real Dhan credentials became present
+  in `.env` (added by the project owner between sessions, exactly as
+  anticipated). Fixed via the same `monkeypatch.delenv()` isolation
+  pattern already used elsewhere in the Checkpoint 22 test suite - not
+  a Checkpoint 23 regression, a latent gap this checkpoint's own full
+  regression run surfaced.
+- A real design bug was found and fixed during this checkpoint's own
+  test-writing (not by manual testing this time): the health
+  evaluator's original precedence classified "never succeeded" as
+  DISCONNECTED unconditionally, which incorrectly swallowed a genuine
+  AUTHENTICATION_FAILED/ERROR result on the very first refresh attempt
+  (before any success has ever been recorded). Fixed by changing the
+  precedence to "never attempted at all" (no success AND no failure) ->
+  DISCONNECTED, with any recorded failure taking priority regardless of
+  whether a prior success exists (Decision 110's related fix).
+- `import-linter` remains 6/6 kept (188 files analyzed, up from 174) -
+  no new contract needed; `control_plane/market_data_health` and the
+  Dhan market-data adapter fit cleanly within the existing layering
+  contracts (application -> bounded contexts -> domain).
+- Two dedicated architecture boundary tests added
+  (`test_market_data_health_boundaries.py`,
+  `test_live_market_data_boundaries.py`), mirroring the
+  signal_intelligence checkpoints' own `ast`-based static-scan
+  technique - independently re-verifying that no file on the live
+  market-data path imports `trading_engine`, `domain.broker`,
+  `domain.order`, `domain.position`, or `signal_intelligence`, and that
+  the Dhan client's source contains no order/position/trading endpoint
+  reference.
+- 74 new backend tests (14 domain/session + 8 market_data_health
+  evaluator + 14 Dhan client + 5 instruments + 7 application-service +
+  9 persistence + 20 API vertical-slice + 7 architecture) pass
+  genuinely. Full suite: 651 passed / 0 failed / 0 skipped (up from
+  Checkpoint 22's 575) - includes the one pre-existing test-isolation
+  fix above.
+- 7 new frontend tests for `LiveMarketDataMonitor.tsx`, including a
+  dedicated test asserting no Buy/Sell/Order/Quantity/Stop Loss/Target/
+  Position/P&L/Execute/Trade text is ever rendered. Full frontend
+  suite: 52 passed / 0 failed (up from Checkpoint 22's 45).
+- OpenAPI schema regeneration proven deterministic (byte-identical
+  across two independent runs) and confirmed synchronized with the
+  regenerated frontend TypeScript contract.
+- Manual live-market validation was genuinely performed against the
+  real Dhan API during actual NSE market hours (13:31 IST, a trading
+  Friday) using the project owner's real credentials (already present
+  via `.env`, never requested or exposed) - session detection correctly
+  reported OPEN, debounce/RBAC were confirmed live end-to-end, and the
+  live connectivity path was proven working, though the specific
+  credential was rejected by Dhan (AUTHENTICATION_FAILED, HTTP 401) -
+  the identical result independently observed against Dhan's
+  `/v2/profile` endpoint at Checkpoint 22, confirming this is a fact
+  about the credential, not new Checkpoint-23 behavior.
+- `app.bat` required no changes - it already runs `manage.py migrate`
+  unconditionally on every launch, which picks up this checkpoint's new
+  `0006_live_market_data` migration automatically.
+- Docker remains explicitly deferred, unchanged from every prior
+  checkpoint.
+- Signal generation was verified, via a dedicated `ast`-based test, to
+  remain completely unwired from this checkpoint's live feed - it still
+  imports and consumes only the Checkpoint 14 synthetic fixture
+  repository, exactly as before this checkpoint.

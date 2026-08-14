@@ -234,6 +234,10 @@ REST_FRAMEWORK = {
         # server-side abuse protection, same mechanism (DRF's own
         # ScopedRateThrottle) and cache backend as the login throttle.
         "provider_connection_test": "10/min",
+        # Checkpoint 23 §9: protects Dhan's own documented market-quote
+        # rate limit (1 request/second) from repeated manual "Refresh"
+        # clicks - same mechanism as the two rates above.
+        "market_data_refresh": "10/min",
     },
 }
 

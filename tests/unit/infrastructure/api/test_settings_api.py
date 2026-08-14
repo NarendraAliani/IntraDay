@@ -233,7 +233,18 @@ def test_dhan_save_with_blank_access_token_leaves_existing_token_unchanged() -> 
 
 @requires_postgres
 @pytest.mark.django_db
-def test_dhan_test_connection_when_unconfigured_returns_not_configured_status() -> None:
+def test_dhan_test_connection_when_unconfigured_returns_not_configured_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Isolates this test from whatever the ambient OS/`.env` environment
+    # happens to contain (a real deployment may legitimately have real
+    # DHAN_CLIENT_ID/DHAN_ACCESS_TOKEN values loaded via python-dotenv at
+    # Django-settings-import time - this test's whole point is "nothing
+    # is configured," which must be true regardless of environment, the
+    # same isolation pattern already used in
+    # test_provider_settings.py's precedence tests).
+    monkeypatch.delenv("DHAN_CLIENT_ID", raising=False)
+    monkeypatch.delenv("DHAN_ACCESS_TOKEN", raising=False)
     client = _client_as_operator()
 
     response = client.post("/api/v1/config/settings/dhan/test/")

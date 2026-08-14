@@ -17,15 +17,19 @@
 // screens - a single piece of local state toggles which one renders,
 // matching this project's existing "no heavy framework unless the
 // screen count actually needs it" convention (Checkpoint 9 §11).
+//
+// Checkpoint 23: a third screen (Live Market Data Monitor) is added the
+// same way - still no routing library for three screens.
 import { useState } from "react";
 
 import { useAuth } from "../common/auth/AuthContext";
 import { LoadingState } from "../common/components/LoadingState";
 import { ConfigurationViewer } from "../features/configuration/ConfigurationViewer";
 import { LoginScreen } from "../features/auth/LoginScreen";
+import { LiveMarketDataMonitor } from "../features/market-data/LiveMarketDataMonitor";
 import { SettingsPage } from "../features/settings/SettingsPage";
 
-type Screen = "configuration" | "settings";
+type Screen = "configuration" | "settings" | "market-data";
 
 function AppShell(): JSX.Element {
   const { state, logout } = useAuth();
@@ -63,6 +67,14 @@ function AppShell(): JSX.Element {
           >
             Settings
           </button>
+          <button
+            type="button"
+            className={screen === "market-data" ? "nav-link nav-link--active" : "nav-link"}
+            aria-current={screen === "market-data" ? "page" : undefined}
+            onClick={() => setScreen("market-data")}
+          >
+            Market Data
+          </button>
         </nav>
         <span>
           Signed in as <strong>{state.username}</strong>
@@ -71,7 +83,9 @@ function AppShell(): JSX.Element {
           Sign out
         </button>
       </header>
-      {screen === "configuration" ? <ConfigurationViewer /> : <SettingsPage />}
+      {screen === "configuration" && <ConfigurationViewer />}
+      {screen === "settings" && <SettingsPage />}
+      {screen === "market-data" && <LiveMarketDataMonitor />}
     </main>
   );
 }

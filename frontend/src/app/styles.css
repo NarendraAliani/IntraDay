@@ -543,3 +543,93 @@ dd {
   border-top: 1px solid var(--color-border);
   margin-bottom: 0;
 }
+
+/* Checkpoint 23: Live Market Data Monitor. */
+
+.market-data-monitor__summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 1.25rem;
+  margin: 1.5rem 0 2rem;
+}
+
+.market-data-monitor__card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 1.25rem 1.5rem;
+}
+
+.market-data-monitor__card h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1.05rem;
+}
+
+.market-data-monitor__session-value {
+  font-size: 1.4rem;
+  font-weight: 600;
+  margin: 0.25rem 0 1rem;
+}
+
+.market-data-monitor__card dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.25rem 0.75rem;
+  margin: 1rem 0 0;
+}
+
+.market-data-monitor__card dt {
+  color: var(--color-text-muted);
+}
+
+.market-data-monitor__card dd {
+  margin: 0;
+  word-break: break-word;
+}
+
+.market-data-monitor__refresh-button {
+  margin-top: 1rem;
+  padding: 0.5rem 1.1rem;
+  border-radius: 4px;
+  border: 1px solid var(--color-active-border);
+  background: var(--color-active-border);
+  color: #fff;
+  cursor: pointer;
+}
+
+.market-data-monitor__refresh-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.market-data-monitor__empty {
+  color: var(--color-text-muted);
+}
+
+.market-data-monitor__table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.market-data-monitor__table th,
+.market-data-monitor__table td {
+  text-align: left;
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid var(--color-border);
+  font-variant-numeric: tabular-nums;
+}
+
+.market-data-monitor__table th {
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+.market-data-monitor__table tbody tr:last-child td {
+  border-bottom: none;
+}

@@ -425,3 +425,57 @@ class ProviderConnectionStatus(models.Model):
 
     class Meta:
         app_label = "persistence"
+
+
+class LiveQuoteObservation(models.Model):
+    """Checkpoint 23: an append-only observation log of live-fetched
+    quotes (Checkpoint 23 §10 - "persist enough live data to support
+    manual verification, debugging, replay later, auditability"). One
+    row per (instrument, refresh) - never overwritten, never updated -
+    so a full history of every observed price/timestamp for the
+    configured observation universe is preserved for replay/audit.
+
+    Retention (Checkpoint 23 §10's explicit "document the retention
+    assumptions"): NOT rotated or capped by this checkpoint. Given this
+    checkpoint's explicit-trigger, four-symbol, REST-polling design
+    (never a continuous multi-second stream - see
+    docs/architecture/LIVE_MARKET_DATA_ARCHITECTURE.md), row growth is
+    inherently bounded by how often an operator manually presses
+    Refresh - a few thousand rows per trading day at worst, not an
+    unbounded tick firehose. A retention/rotation policy is an explicit,
+    documented limitation to revisit before the observation universe or
+    refresh cadence grows (e.g. if a future checkpoint introduces
+    automatic/scheduled polling)."""
+
+    instrument_symbol = models.CharField(max_length=32)
+    exchange = models.CharField(max_length=8, default="NSE")
+    last_price = models.DecimalField(max_digits=14, decimal_places=4)
+    source_timestamp = models.DateTimeField()
+    fetched_at = models.DateTimeField()
+    open_price = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
+    high_price = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
+    low_price = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
+    close_price = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
+
+    class Meta:
+        app_label = "persistence"
+        indexes = [
+            models.Index(fields=["instrument_symbol", "-fetched_at"]),
+        ]
+
+
+class MarketDataHealthStatus(models.Model):
+    """Checkpoint 23: singleton (get_or_create(pk=1), matching Checkpoint
+    22's provider-credential singleton convention) tracking of the most
+    recent live market-data refresh attempt's outcome - raw facts only
+    (`control_plane.market_data_health.evaluator.evaluate_health()`
+    turns this into a classified state; this model makes no
+    classification judgement of its own)."""
+
+    last_success_at = models.DateTimeField(null=True, blank=True)
+    last_failure_at = models.DateTimeField(null=True, blank=True)
+    last_error_safe = models.CharField(max_length=255, blank=True, default="")
+    consecutive_failures = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        app_label = "persistence"

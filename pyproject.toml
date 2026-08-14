@@ -24,6 +24,7 @@ pyyaml = "^6.0"
 django-cors-headers = "^4.9.0"
 httpx = "^0.28.1"
 cryptography = "^50.0.0"
+tzdata = "^2026.3"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3"

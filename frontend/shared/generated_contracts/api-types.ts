@@ -161,6 +161,95 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/config/market-data/health/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Last-recorded live-market-data health - NEVER performs a live
+         *     fetch itself (Checkpoint 23 §22's read-vs-refresh separation,
+         *     matching Checkpoint 22's `provider_status` precedent exactly).
+         */
+        get: operations["api_v1_config_market_data_health_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config/market-data/quotes/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description The latest observed quote per configured instrument - reads
+         *     already-persisted data only, never triggers a live fetch.
+         */
+        get: operations["api_v1_config_market_data_quotes_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config/market-data/refresh/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Performs exactly ONE live `POST /v2/marketfeed/quote` call
+         *     against the configured observation universe (Checkpoint 23 §6/§7),
+         *     persists the result, and returns the freshly-recomputed health
+         *     snapshot. Rate-limited and debounced identically to Checkpoint 22's
+         *     `dhan_test_connection` (same mechanism, a distinct throttle scope).
+         *
+         *     No order, position, or trading endpoint is called anywhere in this
+         *     function (Checkpoint 23 §2's absolute safety boundary) - the only
+         *     external call is `fetch_quotes()`, itself scoped to the documented
+         *     read-only Market Quote endpoint.
+         */
+        post: operations["api_v1_config_market_data_refresh_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config/market-data/session/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Current NSE cash-equity trading session - computed live, no
+         *     persistence, no external call (Checkpoint 23 §8).
+         */
+        get: operations["api_v1_config_market_data_session_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/config/risk/{configuration_id}/": {
         parameters: {
             query?: never;
@@ -698,6 +787,19 @@ export interface components {
             username: string;
             password: string;
         };
+        MarketDataHealthResponse: {
+            state: components["schemas"]["StateEnum"];
+            /** Format: date-time */
+            last_success_at: string | null;
+            /** Format: date-time */
+            last_failure_at: string | null;
+            last_error_safe: string;
+            /** Format: double */
+            freshness_age_seconds: number | null;
+            consecutive_failures: number;
+            reconnect_count: number;
+            subscription_active: boolean;
+        };
         /**
          * @description * `activated` - activated
          *     * `already_active` - already_active
@@ -719,6 +821,17 @@ export interface components {
          * @enum {string}
          */
         ProviderEnum: "dhan" | "telegram" | "discord";
+        QuoteResponse: {
+            symbol: string;
+            exchange: string;
+            /** Format: decimal */
+            last_price: string;
+            /** Format: date-time */
+            source_timestamp: string;
+            /** Format: double */
+            freshness_age_seconds: number;
+            is_stale: boolean;
+        };
         ReadyzResponse: {
             status: components["schemas"]["ReadyzResponseStatusEnum"];
             checks: {
@@ -777,6 +890,35 @@ export interface components {
             /** Format: decimal */
             max_per_trade_risk: string;
         };
+        SessionResponse: {
+            /** Format: date */
+            session_date: string;
+            exchange: string;
+            /** Format: date-time */
+            market_open: string;
+            /** Format: date-time */
+            market_close: string;
+            /** Format: date-time */
+            square_off_deadline: string;
+            status: components["schemas"]["SessionResponseStatusEnum"];
+        };
+        /**
+         * @description * `PRE_OPEN` - PRE_OPEN
+         *     * `OPEN` - OPEN
+         *     * `CLOSED` - CLOSED
+         * @enum {string}
+         */
+        SessionResponseStatusEnum: "PRE_OPEN" | "OPEN" | "CLOSED";
+        /**
+         * @description * `CONNECTED_FRESH` - CONNECTED_FRESH
+         *     * `CONNECTED_STALE` - CONNECTED_STALE
+         *     * `DISCONNECTED` - DISCONNECTED
+         *     * `AUTHENTICATION_FAILED` - AUTHENTICATION_FAILED
+         *     * `ERROR` - ERROR
+         *     * `MARKET_CLOSED` - MARKET_CLOSED
+         * @enum {string}
+         */
+        StateEnum: "CONNECTED_FRESH" | "CONNECTED_STALE" | "DISCONNECTED" | "AUTHENTICATION_FAILED" | "ERROR" | "MARKET_CLOSED";
         /**
          * @description Response shape for a strategy version. Identity is the 3-tuple
          *     (specification_version, code_version, configuration_version), matching
@@ -984,6 +1126,90 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CurrentUserResponse"];
+                };
+            };
+        };
+    };
+    api_v1_config_market_data_health_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MarketDataHealthResponse"];
+                };
+            };
+        };
+    };
+    api_v1_config_market_data_quotes_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QuoteResponse"][];
+                };
+            };
+        };
+    };
+    api_v1_config_market_data_refresh_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MarketDataHealthResponse"];
+                };
+            };
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+        };
+    };
+    api_v1_config_market_data_session_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionResponse"];
                 };
             };
         };

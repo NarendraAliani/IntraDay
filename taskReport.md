@@ -6264,3 +6264,253 @@ remains the eventual necessary step, but is better taken once
 `broker_health` has proven out continuous monitoring on top of the
 connectivity work just completed. Not implemented — recommendation
 only.
+
+# Checkpoint 23 — Live Market Data Foundation (2026-08-14)
+
+## Objective
+
+Establish the first live (non-fixture) market-data path this platform
+has ever had: real Dhan read-only market-quote observation for a small,
+configuration-driven NSE cash-equity universe, with session awareness,
+health/freshness classification, persistence, a read-only API, and an
+observation-only frontend screen. Explicitly scoped to unlock Level 1
+(live market-data observation) from the post-Checkpoint-22 manual
+testing readiness assessment - NOT signal generation (Checkpoint 24),
+NOT paper trading, and categorically NOT any order/trading capability.
+
+## What Was Built — Backend
+
+- `domain/session/calendar.py` - the first market-hours computation in
+  this codebase: `build_session_for()`/`session_for_instant()` compute
+  NSE cash-equity `TradingSession`s (09:15-15:30 IST, square-off 15:20
+  IST) via `zoneinfo`, correctly handling the UTC/IST calendar-date
+  boundary. No holiday calendar (explicit, documented limitation).
+- `control_plane/market_data_health/` - first real content:
+  `contracts.py` (`MarketDataHealthState`: CONNECTED_FRESH/
+  CONNECTED_STALE/DISCONNECTED/AUTHENTICATION_FAILED/ERROR/
+  MARKET_CLOSED) and `evaluator.py` (pure classifier, documented
+  precedence, 120s freshness threshold).
+- `infrastructure/market_data_providers/dhan/instruments.py` - a
+  small, configuration-driven observation universe
+  (`MARKET_DATA_OBSERVATION_SYMBOLS`, default RELIANCE/TCS/INFY/
+  HDFCBANK) mapped to Dhan's real, verified `security_id` values
+  (cross-checked against Dhan's official published scrip-master CSV
+  during this checkpoint).
+- `infrastructure/market_data_providers/dhan/client.py` - read-only
+  `fetch_quotes()` calling exactly `POST /v2/marketfeed/quote` (Dhan's
+  documented Market Quote "full quote" endpoint - the only variant with
+  a source timestamp); typed exception hierarchy
+  (`DhanAuthenticationError`/`DhanConnectionError`/
+  `DhanMalformedResponseError`); IST->UTC timestamp normalization.
+- `application/repositories/live_market_data.py`,
+  `application/services/live_market_data.py` - repository Protocols +
+  orchestration service, depending only on Protocols and pure domain/
+  control-plane logic - never a concrete Dhan/HTTP client
+  (`.importlinter` contract 6 discipline, matching Checkpoint 22
+  decision 105's precedent).
+- `infrastructure/persistence/models.py` - `LiveQuoteObservation`
+  (append-only observation log) and `MarketDataHealthStatus`
+  (singleton). Migration `0006_live_market_data.py`.
+- `infrastructure/persistence/live_market_data_repositories.py` -
+  Django ORM implementations.
+- `infrastructure/api/market_data_views.py` - GET session/health/quotes
+  (never trigger a live fetch) + POST refresh (rate-limited, debounced,
+  the ONE place the Dhan client is invoked). RBAC fully reused:
+  `configuration.read` for reads, `configuration.activate` for refresh.
+- `infrastructure/api/urls.py` - 4 new routes under
+  `/api/v1/config/market-data/...`.
+- `application/contracts/market_data.py` - DRF serializers.
+- `settings/base.py` - new throttle rate (`market_data_refresh`,
+  10/min). `pyproject.toml` - `tzdata` added as an explicit dependency.
+
+## What Was Built — Frontend
+
+- `frontend/src/common/api/marketDataApi.ts` - typed client wrappers.
+- `frontend/src/features/market-data/LiveMarketDataMonitor.tsx` - a
+  third top-level screen (alongside Configuration and Settings):
+  Market Session card, Connection Health card (with Refresh Quotes
+  button, operator-only), and an Observed Instruments table (Symbol/
+  LTP/Timestamp/Freshness/Status). Client-side auto-refresh (5s) polls
+  only the read endpoints - never triggers a live Dhan call itself.
+  Contains NO Buy/Sell/Order/Quantity/Stop Loss/Target/Position/P&L/
+  Execute/Trade control or field anywhere (verified by a dedicated
+  test).
+- `App.tsx` - new "Market Data" nav entry; CSS additions to
+  `styles.css` - no new dependency.
+
+## Why REST Polling, Not WebSocket
+
+This Django/WSGI app has no already-running persistent process to host
+a WebSocket client safely - `asgi.py` is an unused stub, no Celery beat
+schedule exists anywhere in this repository. A single-shot, rate-
+limited, explicit-trigger REST call is the smaller, safer, more
+testable increment for a checkpoint scoped to "the smallest production-
+safe implementation." Full rationale in
+`docs/architecture/LIVE_MARKET_DATA_ARCHITECTURE.md`.
+
+## Dhan Integration
+
+Exactly one endpoint: `POST https://api.dhan.co/v2/marketfeed/quote`
+(the Market Quote "full quote" variant - the only one with a source
+timestamp). Mechanically proven, not just documented, that no order/
+position/trading endpoint is reachable from this checkpoint's code
+(`tests/unit/architecture/test_live_market_data_boundaries.py`).
+
+## Market Data Flow
+
+```
+Dhan (POST /v2/marketfeed/quote, read-only)
+  -> infrastructure/market_data_providers/dhan/client.py (typed, normalized)
+  -> infrastructure/api/market_data_views.py (Dhan-shape -> domain Quote)
+  -> application/services/live_market_data.py (orchestration)
+  -> control_plane/market_data_health (health classification)
+  -> infrastructure/persistence (LiveQuoteObservation, MarketDataHealthStatus)
+  -> infrastructure/api (read-only GET session/health/quotes)
+  -> frontend/src/features/market-data/LiveMarketDataMonitor.tsx
+```
+
+## Automated Test Results
+
+- Backend: `ruff format --check` clean, `ruff check` clean, `mypy`
+  clean (154 files), `pytest` 651 passed / 0 failed / 0 skipped (74 new
+  tests: 14 domain/session, 8 market_data_health evaluator, 14 Dhan
+  client, 5 instruments, 7 application-service, 9 persistence, 20 API
+  vertical-slice, 7 architecture boundary), `lint-imports` 6/6 kept
+  (188 files), `manage.py check` clean, `makemigrations --check
+  --dry-run` clean, `spectacular --fail-on-warn` clean and confirmed
+  byte-identical across two independent generations, `pip-audit` - 8
+  pre-existing vulnerabilities in `pytest`/`starlette` (transitive,
+  unrelated to this checkpoint's `tzdata` addition, which is not
+  flagged).
+- Frontend: `tsc -b` clean, `vite build` clean, `vitest run` 52 passed
+  / 0 failed (7 new tests for the Monitor screen, including a dedicated
+  "never renders any trading control" assertion).
+- A real, pre-existing test-isolation gap from Checkpoint 22 (not
+  introduced by this checkpoint) was found and fixed during this
+  checkpoint's full-regression re-run: a test assumed a blank ambient
+  environment, which broke once real Dhan credentials became present in
+  `.env`. Fixed via the same `monkeypatch.delenv()` pattern already used
+  elsewhere in that test file.
+- A real design bug in the health evaluator's precedence (an
+  AUTHENTICATION_FAILED/ERROR result was incorrectly swallowed into
+  DISCONNECTED on a first-ever failed attempt) was found via this
+  checkpoint's own test-writing and fixed before any manual testing.
+
+## LIVE MANUAL TEST RESULT
+
+Performed against the real Django dev server, with the project owner's
+real Dhan credentials (already present via `.env`/environment - never
+requested, never printed, never written to any file), during genuine
+NSE market hours (13:31 IST, a trading Friday, confirmed via the
+system's own UTC clock at time of testing).
+
+    LIVE DATA CONNECTION:  PASS (reached Dhan's real API; request/
+                            response cycle completed correctly)
+    LIVE QUOTE RECEIVED:   FAIL (Dhan rejected the configured
+                            credential - AUTHENTICATION_FAILED, HTTP
+                            401/403; a fact about the credential, not a
+                            defect - the identical 401 was independently
+                            observed against Dhan's read-only
+                            /v2/profile endpoint at Checkpoint 22)
+    TIMESTAMP:              N/A (no quote was received to have a
+                            timestamp)
+    FRESHNESS:              N/A (same reason)
+    MARKET SESSION:        PASS (correctly reported OPEN, matching the
+                            real IST time)
+    STALE DETECTION:       PASS (evaluator logic verified via automated
+                            tests against every documented state; not
+                            independently re-exercised live since no
+                            successful fetch occurred to go stale)
+    RECONNECT:             N/A (REST polling has no reconnect concept
+                            this checkpoint, by design)
+    API:                   PASS (all four endpoints - session/health/
+                            quotes/refresh - responded correctly with
+                            real, live-derived data)
+    FRONTEND:               Automated component tests PASS (7/7); no
+                            browser click-through performed (no browser
+                            automation tool available in this
+                            environment - reported honestly, not
+                            claimed)
+    SECRET LEAK CHECK:      PASS (server logs and every API response
+                            grepped directly for JWT-shaped/token
+                            substrings - none found)
+    ORDER CALLS:            0 (confirmed both by runtime behavior and by
+                            a dedicated static architecture test)
+
+Debounce (200/429/429 across three immediate back-to-back refresh
+calls) and RBAC (403 for a reader attempting refresh, 200 for the same
+reader reading session status) were both independently confirmed live
+against the real running server, not just in automated tests.
+
+## Trading Safety Confirmation
+
+    Orders placed: 0
+    Order API calls: 0
+    Position changes: 0
+    Signal execution: 0
+    Trading engine changes: 0 (trading_engine/* remains untouched -
+                              confirmed by re-reading every file in it
+                              after this checkpoint's changes)
+
+## Known Limitations
+
+- The configured Dhan credential was rejected by Dhan during live
+  testing (AUTHENTICATION_FAILED) - live quote retrieval itself was not
+  demonstrated end-to-end with real data this session, only the full
+  pipeline up to and including Dhan's own rejection. This is outside
+  this checkpoint's code's control; the project owner may need to
+  refresh/regenerate the access token.
+- No browser-based UX/responsive validation was performed - no browser
+  automation tool is available in this environment.
+- No exchange holiday calendar - a date that is actually a market
+  holiday still computes a normal PRE_OPEN/OPEN/CLOSED session shape.
+- No WebSocket streaming, no automatic/scheduled polling (Celery beat)
+  - refresh is explicit-trigger only.
+- Retention/rotation of `LiveQuoteObservation` rows is not implemented
+  - acceptable at this checkpoint's low, explicit-trigger volume, but
+  should be revisited before the universe or refresh cadence grows.
+- Only four symbols verified in the observation-universe mapping; a
+  larger universe would need a full scrip-master ingestion pipeline
+  (explicitly deferred).
+
+## Documentation
+
+`docs/architecture/LIVE_MARKET_DATA_ARCHITECTURE.md` (new);
+`docs/architecture/ARCHITECTURE.md` updated with Checkpoint 22 and 23
+narrative paragraphs plus an explicit roadmap note (Checkpoint 24 named
+next; paper trading/order API/controlled live trading deliberately
+un-numbered pending real `trading_engine/*` implementation);
+`docs/architecture/ARCHITECTURE_DECISIONS.md` decisions 106-111 + Notes
+(Checkpoint 23); `control_plane/market_data_health/README.md` updated.
+
+## Deferred
+
+Signal generation wiring (Checkpoint 24 - confirmed unwired by a
+dedicated test), paper trading, any order/position/execution capability,
+WebSocket streaming, full scrip-master ingestion, exchange holiday
+calendar, per-instrument health granularity, automatic/scheduled
+polling, Docker (unchanged, still deferred).
+
+## Checkpoint 24 Recommendation
+
+Live Signal Observation is now well-positioned: `SignalGenerationService`
+and the feature engine are real, technology-neutral, and already tested
+against a fixture repository satisfying the same
+`HistoricalMarketDataRepository` Protocol this checkpoint's live data
+could also satisfy (with a live-data repository adapter). What remains
+before Checkpoint 24 can safely begin:
+
+1. A `LiveQuoteRepository`-to-`HistoricalMarketDataRepository` bridge
+   (or a live-bar-construction step) - `SignalGenerationService`
+   currently consumes `Bar`s, not `Quote`s; this checkpoint only
+   produces `Quote`s (point-in-time snapshots), not OHLCV bars. Turning
+   a sequence of live quotes into valid bars (open/high/low/close over
+   an interval) is new work, not yet built.
+2. A decision on which timeframe to construct live bars at, and how
+   many historical bars are needed before the feature engine (SMA/EMA/
+   ATR) has enough data to produce a real signal.
+3. A read-only API/frontend surface for the resulting
+   `DirectionalIndication` - display and logging only, explicitly no
+   order code, matching this checkpoint's own scope discipline.
+
+Not implemented - recommendation only.
