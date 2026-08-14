@@ -54,6 +54,33 @@ describe("LoginScreen", () => {
     expect(login).toHaveBeenCalledWith({ username: "reader", password: "wrong" });
   });
 
+  it("shows an actionable reload message for a CSRF-cookie-not-ready 403, distinct from a real credential failure", async () => {
+    // A 403 with the generic "unknown_error" code on the login endpoint
+    // specifically means the CSRF cookie was never set (the session-
+    // priming request never completed, usually because the backend
+    // wasn't reachable yet when the app loaded) - Django rejects the
+    // request before credentials are ever checked. A real credential
+    // failure instead returns 401 with "invalid_credentials" (covered
+    // by the test above) and must keep showing its own message.
+    const login = vi.fn().mockRejectedValue(
+      new ApiRequestError(403, {
+        error_code: "unknown_error",
+        message: "Request failed with status 403.",
+      }),
+    );
+    renderWithAuth(<LoginScreen />, { state: { status: "anonymous" }, login });
+
+    fireEvent.change(screen.getByLabelText("Username"), { target: { value: "operator" } });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "correct" } });
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent(/reload this page/i),
+    );
+    // Never shows the raw, unhelpful status-code fallback text.
+    expect(screen.queryByText(/request failed with status 403/i)).not.toBeInTheDocument();
+  });
+
   it("submits the real generated LoginRequest shape to the login function on success", async () => {
     const login = vi.fn().mockResolvedValue(undefined);
     renderWithAuth(<LoginScreen />, { state: { status: "anonymous" }, login });

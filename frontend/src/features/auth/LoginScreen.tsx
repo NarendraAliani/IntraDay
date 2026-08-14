@@ -9,7 +9,23 @@ import { ApiNetworkError, ApiRequestError } from "../../common/api/client";
 import { useAuth } from "../../common/auth/AuthContext";
 
 function describeLoginError(error: unknown): string {
-  if (error instanceof ApiRequestError || error instanceof ApiNetworkError) {
+  if (error instanceof ApiRequestError) {
+    // A 403 with the generic "unknown_error" code on the login endpoint
+    // specifically means Django's CSRF check rejected the request
+    // before credentials were ever checked (almost always: no
+    // `csrftoken` cookie was present yet, because the app loaded before
+    // the backend was reachable, or a stale tab was left open across a
+    // backend restart) - a real login failure (wrong password) instead
+    // returns a proper 401 with a specific message. Distinguishing the
+    // two here means an operator sees an actionable instruction instead
+    // of a bare status code, without changing any authentication or
+    // CSRF behavior itself.
+    if (error.status === 403 && error.errorCode === "unknown_error") {
+      return "Your session isn't ready yet. Please reload this page and try signing in again.";
+    }
+    return error.message;
+  }
+  if (error instanceof ApiNetworkError) {
     return error.message;
   }
   return "An unexpected error occurred.";

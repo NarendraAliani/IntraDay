@@ -15,6 +15,18 @@ import { defineConfig } from "vite";
 export default defineConfig({
   plugins: [react()],
   server: {
+    // Explicit host (Checkpoint 24A-finalization): without this, Vite
+    // binds to whatever "localhost" resolves to on the host OS - on
+    // this machine that is the IPv6 loopback ([::1]) only, NOT
+    // 127.0.0.1. That silently broke both app.bat's own startup health
+    // check (which correctly caught it) and, more importantly, matches
+    // a real class of user-facing connectivity failure: the backend's
+    // CORS_ALLOWED_ORIGINS/CSRF_TRUSTED_ORIGINS (settings/development.py)
+    // explicitly trust BOTH "localhost:5173" and "127.0.0.1:5173" -
+    // binding only to the IPv6 loopback silently made one of those two
+    // documented, supported URLs simply unreachable rather than merely
+    // untrusted.
+    host: "127.0.0.1",
     port: 5173,
   },
   test: {

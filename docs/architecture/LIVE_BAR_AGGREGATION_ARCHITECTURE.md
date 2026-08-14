@@ -147,11 +147,28 @@ P&L control exists anywhere, verified by the same dedicated
 "never renders any trading control" test extended to cover the new
 section.
 
+## Data-quality classification: SAMPLE_BAR, not TRADING_GRADE_BAR
+
+A dedicated quantitative review
+([MARKET_DATA_QUALITY_ASSESSMENT.md](MARKET_DATA_QUALITY_ASSESSMENT.md),
+produced at Checkpoint 24A finalization) concluded these bars are
+`SAMPLE_BAR` grade: real, honest, non-fabricated aggregations of
+discrete point samples, but structurally unable to guarantee a true
+OPEN/HIGH/LOW/CLOSE the way continuous tick data or exchange-computed
+candles could. This is the primary reason
+`SignalGenerationService`/`FeatureEngineService` remain unwired beyond
+this checkpoint - not merely scope discipline, but because the data
+itself does not yet honestly support that use. See that document for
+the full field-by-field analysis and the open (unverified,
+not-implemented) decision on whether Dhan's WebSocket feed or a
+historical-OHLC endpoint is the right path to trading-grade fidelity.
+
 ## Deferred / explicitly out of scope
 
 Wiring bars to `FeatureEngineService`/`SignalGenerationService`
-(Checkpoint 24), any other timeframe besides 1-minute, real traded
-volume, WebSocket-driven incremental aggregation, per-instrument
-retention/rotation policy for `AggregatedBarObservation` (inherits
-Checkpoint 23's "revisit before scaling" limitation), a full exchange
-holiday calendar (still deferred from Checkpoint 23).
+(Checkpoint 24 - explicitly gated on the data-quality classification
+above being resolved first), any other timeframe besides 1-minute,
+real traded volume, WebSocket-driven incremental aggregation,
+per-instrument retention/rotation policy for `AggregatedBarObservation`
+(inherits Checkpoint 23's "revisit before scaling" limitation), a full
+exchange holiday calendar (still deferred from Checkpoint 23).

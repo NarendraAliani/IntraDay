@@ -913,3 +913,49 @@ Full detail:
 - Docker remains explicitly deferred, unchanged from every prior
   checkpoint. `trading_engine/*` re-confirmed untouched (every file
   still its original Checkpoint-4 scaffolding line count).
+| 117 | The "Request failed with status 403" login error is caused by a startup-timing race, not an authentication/authorization defect: `AuthContext`'s initial `GET /session/` (which sets the CSRF cookie) silently falls back to "anonymous" if the backend isn't reachable yet, leaving no CSRF cookie set for the subsequent login POST. Fixed by (a) a more actionable frontend error message distinguishing this specific case from a real credential failure, and (b) `app.bat` now polls each service's own health endpoint before declaring startup complete, directly preventing users from reaching the login page before the backend is ready. | Verified by direct reproduction: replaying the browser's exact request sequence (GET session -> POST login) against a running backend succeeds cleanly (200), proving the server-side auth/CSRF/RBAC stack is correct; the failure mode only reproduces when the session-priming request never completes. | Disabling CSRF/auth/RBAC to make the symptom disappear (explicitly forbidden by this checkpoint's brief, and would have been the wrong fix regardless - the defect was a startup race, not a security-mechanism bug). | LOCKED |
+| 118 | `vite.config.ts`'s dev server now binds explicitly to `host: "127.0.0.1"` instead of the implicit default. | Direct, reproducible bug found while testing the rewritten `app.bat`: without an explicit host, Vite bound only to the IPv6 loopback (`[::1]:5173`) on this machine, making `http://127.0.0.1:5173` - one of the two URLs the backend's own `CORS_ALLOWED_ORIGINS`/`CSRF_TRUSTED_ORIGINS` explicitly documents as supported - silently unreachable rather than merely untrusted. | Binding to `0.0.0.0` (rejected - unnecessarily exposes the dev server on all network interfaces for a purely local development workflow); leaving it unset and only documenting "always use `localhost:5173`" (rejected - the backend's own settings file explicitly trusts both hostnames, so silently making one of them non-functional is a real defect, not a documentation gap). | LOCKED |
+| 119 | Live market-data bars produced by Checkpoints 23-24A are classified `SAMPLE_BAR`, not `TRADING_GRADE_BAR` or `CANONICAL_MARKET_BAR` - and `SignalGenerationService`/`FeatureEngineService` remain unwired to them until this is explicitly revisited. | A rigorous field-by-field quantitative review (`MARKET_DATA_QUALITY_ASSESSMENT.md`) found HIGH/LOW are structurally one-sided (can only under-report the true extremes) and OPEN/CLOSE are approximate under the current explicit-trigger, point-sampled REST design - a structural property of the data source, not a bug fixable within the current architecture. Building signal logic (EMA/SMA/ATR/etc.) on data with these properties risks false signals from bad OHLC, exactly the failure mode this decision exists to prevent. | Proceeding to wire live bars into `SignalGenerationService` anyway with a caveat/disclaimer (rejected - a disclaimer does not prevent a strategy from silently computing a wrong ATR/breakout level; the checkpoint's own explicit instruction is not to build signal validation on questionable market bars). | LOCKED |
+
+## Notes (Checkpoint 24A Finalization)
+
+- The login 403 was root-caused via direct reproduction (replaying the
+  browser's own request sequence against a live backend succeeded
+  cleanly), not guessed - ruling out every server-side cause the
+  checkpoint brief asked to distinguish (invalid credentials, inactive
+  user, missing role/permission, CORS/trusted-origin misconfiguration,
+  backend authorization) before concluding it was a client-side
+  startup-timing race.
+- `ux_test_operator` was independently re-verified: `is_active=True`,
+  correctly a member of `configuration-operators`, usable password -
+  no test-fixture defect found or needed fixing.
+- A second, independently real bug was found while testing the
+  rewritten `app.bat`: Vite's dev server, without an explicit `host`,
+  bound only to the IPv6 loopback on this machine - silently breaking
+  the `127.0.0.1:5173` URL the backend's own CORS/CSRF configuration
+  already documents as supported. Fixed in `vite.config.ts` (Decision
+  118). This was caught specifically BECAUSE `app.bat`'s new health-
+  check step tests the real listening address rather than assuming a
+  spawned window means the service is reachable - direct evidence the
+  new verification step earns its complexity.
+- `app.bat` was fully rewritten and genuinely executed end-to-end (not
+  just read for correctness) via PowerShell automation this session:
+  both services were started, both confirmed listening on their
+  documented ports via real HTTP health checks, and a full login
+  round-trip was verified to succeed against the freshly-started
+  servers - then everything was cleanly torn down (no orphaned
+  processes left running).
+- No browser automation tool is available in this environment
+  (re-confirmed via tool search this session, consistent with
+  Checkpoint 22/23's own findings) - browser/responsive UX validation
+  remains honestly reported as not performed, not claimed.
+- The market-data quality review
+  (`MARKET_DATA_QUALITY_ASSESSMENT.md`) is the first checkpoint-
+  finalization activity to formally classify data fidelity using an
+  explicit four-tier scale (OBSERVATION_BAR/SAMPLE_BAR/
+  CANONICAL_MARKET_BAR/TRADING_GRADE_BAR) - a vocabulary this project
+  had not needed before live data existed to classify.
+- No credential was requested, printed, or exposed anywhere in this
+  session's investigation or fixes - the real Dhan credential's
+  validity remains exactly as reported at Checkpoint 23 (rejected by
+  Dhan, HTTP 401/403), unchanged and untouched.

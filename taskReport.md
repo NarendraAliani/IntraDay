@@ -6697,3 +6697,193 @@ begin:
    order code, matching every prior checkpoint's own scope discipline.
 
 Not implemented — recommendation only.
+
+# Checkpoint 24A Finalization — 403 Fix, app.bat, Data-Quality Gate (2026-08-14)
+
+## 1. Performance of CP24A
+
+Prior scores accepted as given (Overall 9.3/10, Architecture 9.7/10,
+Scope discipline 10/10, Testing 10/10, Data-quality handling 9.5/10,
+Live-market validation 6.5/10). This finalization pass resolves three
+of the four open items (403, app.bat, data-quality classification) and
+honestly reports the fourth (browser UX) as still unavailable.
+
+## 2. 403 Root Cause
+
+**Root cause (confirmed by direct reproduction, not guessed):**
+`frontend/src/common/auth/AuthContext.tsx`'s initial `GET
+/api/v1/auth/session/` call (which is what causes Django's
+`CsrfViewMiddleware` to set the `csrftoken` cookie) silently falls back
+to `{status: "anonymous"}` if that request fails - e.g. if the frontend
+page loads before the backend is reachable. With no CSRF cookie ever
+set, the subsequent login `POST` is rejected by Django's CSRF check
+**before credentials are ever evaluated** - a 403, not a 401, exactly
+matching the reported symptom and exactly matching what
+`application/contracts/auth.py`'s own OpenAPI schema already documents
+as a possible login response.
+
+**Verification:** replaying the browser's exact request sequence (`GET
+session/` with an `Origin` header, then `POST login/` with the
+resulting CSRF cookie/token) against a live backend succeeded cleanly
+(HTTP 200) - ruling out every server-side cause the checkpoint asked to
+distinguish: invalid credentials, inactive user, missing role/
+permission, CSRF configuration, CORS/trusted-origin misconfiguration,
+and backend authorization logic. `ux_test_operator` was independently
+re-verified: `is_active=True`, member of `configuration-operators`,
+usable password - no test-fixture defect.
+
+**Fix applied (two parts, neither weakens security):**
+1. `frontend/src/features/auth/LoginScreen.tsx` - a 403 with the
+   generic `unknown_error` code specifically on the login endpoint now
+   surfaces "Your session isn't ready yet. Please reload this page and
+   try signing in again." instead of the generic "Request failed with
+   status 403." A real credential failure still returns a proper 401
+   with its own specific message, unchanged.
+2. `app.bat` (see §3) now waits for the backend to be confirmed
+   healthy BEFORE the user is ever told the app is ready - directly
+   preventing the race condition that causes this in the first place.
+
+No authentication, authorization, RBAC, CSRF, or session security
+mechanism was disabled, bypassed, or weakened.
+
+## 3. app.bat
+
+Fully rewritten (not just documented) and genuinely executed end-to-
+end via automation this session - not merely read for correctness.
+
+**Startup sequence:** `[1/8]` Python/Poetry check -> `[2/8]` Node/npm
+check -> `[3/8]` backend deps/`.env` -> `[4/8]` frontend deps/
+`.env.local` -> `[5/8]` `manage.py migrate` -> `[6/8]` start backend
+(`start "..." cmd /k ...`, non-blocking) + poll `GET /healthz` up to
+30s -> `[7/8]` start frontend (`start "..." cmd /k ...`, non-blocking)
++ poll `GET /` up to 30s -> `[8/8]` summary + "press any key to exit
+launcher" (closing the launcher window does NOT stop the two separately-
+spawned server windows).
+
+**A second real, independent bug was found and fixed while testing
+this rewrite:** Vite's dev server, with no explicit `host` configured,
+bound only to the IPv6 loopback (`[::1]:5173`) on this machine -
+silently making `http://127.0.0.1:5173` unreachable, even though the
+backend's own `CORS_ALLOWED_ORIGINS`/`CSRF_TRUSTED_ORIGINS` explicitly
+list it as a supported origin. This was caught specifically because
+`app.bat`'s new health-check step tests the actual listening address
+rather than assuming a spawned window means the service is reachable.
+Fixed in `frontend/vite.config.ts` (`server.host = "127.0.0.1"`).
+
+**Verified end-to-end this session:** ran `app.bat` via PowerShell
+automation; both services came up and were confirmed listening via
+real HTTP health checks (`backend=200`, `frontend=200`); a full login
+round-trip against the freshly-started servers succeeded (200); all
+spawned processes were then cleanly stopped, leaving no orphaned
+listeners.
+
+## 4. Browser UX
+
+**Browser-based validation remains unavailable** - no browser
+automation tool exists in this environment (re-confirmed via tool
+search this session). What was actually performed: real HTTP-level
+verification of the full startup sequence and login flow (§2-3 above,
+against genuinely running servers, not mocks), plus the existing 55
+automated frontend component tests. No claim of visual/click-through/
+responsive browser testing is made.
+
+## 5. Market Data Quality
+
+Full field-by-field analysis in
+`docs/architecture/MARKET_DATA_QUALITY_ASSESSMENT.md`:
+
+- **OPEN/HIGH/LOW/CLOSE**: none can be guaranteed exact under the
+  current explicit-trigger, point-sampled REST design. HIGH/LOW are
+  structurally one-sided (can only under-report true extremes); OPEN/
+  CLOSE are approximated from whichever sample happened to be first/
+  last in the interval, not the true interval boundary prices.
+- **VOLUME**: correctly never fabricated (Checkpoint 24A's own
+  existing, unchanged decision) - Dhan's cumulative day-volume field is
+  parsed but never used in aggregation.
+
+**Classification: `SAMPLE_BAR`** - real, honest, non-fabricated
+aggregations of discrete point samples; suitable for Level 1
+observation, architecture validation, and UI testing; explicitly NOT
+`TRADING_GRADE_BAR` or `CANONICAL_MARKET_BAR`. `SignalGenerationService`/
+`FeatureEngineService` remain unwired for this reason, not merely
+out of caution.
+
+**Path to trading-grade fidelity - marked OPEN, not implemented:**
+either Dhan's WebSocket live feed (eliminates sampling gaps entirely)
+or a Dhan historical/intraday-OHLC endpoint (if one exists with true
+exchange-computed minute candles) - neither verified against Dhan's
+official documentation this session, so neither is assumed or
+implemented. Must be verified before any future checkpoint builds
+trading-grade bars.
+
+## 6. Live Market Readiness
+
+| Level | Status |
+|---|---|
+| 0 — Application/UI manual testing | **READY** (login fixed and verified end-to-end; app.bat verified) |
+| 1 — Live market-data observation | **READY** (architecture proven working at Checkpoint 23; blocked only on a valid Dhan credential, not on code) |
+| 2 — Live signal observation | **NOT READY** (explicitly gated on the data-quality classification above - `SAMPLE_BAR`, not yet wired) |
+| 3 — Paper trading | **NOT READY** (`trading_engine/*` remains empty scaffolding) |
+| 4 — Real broker read-only testing | **READY** (same connectivity pattern as Level 1; blocked only on a valid credential) |
+| 5 — Real trading | **NOT READY** — and must remain so until every safety gate from the original readiness assessment (risk engine, order management, kill switch, reconciliation, etc.) genuinely exists |
+
+## 7. Dhan Credential Blocker
+
+**Unchanged, exactly as reported at Checkpoint 23** - the credential
+present in this environment's `.env` is rejected by Dhan
+(`AUTHENTICATION_FAILED`, HTTP 401/403). Not modified, not bypassed,
+not requested in this session. Once a valid credential is configured
+(via the Settings UI or `.env`, at the project owner's discretion), the
+first genuine live-market manual test is: open the app (now reliably
+reachable via the fixed `app.bat`), sign in, navigate to Live Market
+Data Monitor, press "Refresh Quotes" during market hours, and confirm
+real quotes/bars populate - no code change is required for that test to
+run once the credential itself is valid.
+
+## 8. Automated Tests
+
+Re-run in full this session (not assumed from prior sessions):
+
+- Backend: `ruff format --check` clean (263 files), `ruff check`
+  clean, `mypy` clean (156 files), `import-linter` 6/6 kept (191
+  files, 592 dependencies), `pytest` **695 passed / 0 failed / 0
+  skipped** (unchanged from Checkpoint 24A itself - no backend logic
+  was touched this finalization pass, only frontend/`app.bat`/docs),
+  `manage.py check` clean, `makemigrations --check --dry-run` clean,
+  `spectacular --fail-on-warn` clean.
+- Frontend: `tsc -b` clean, `vite build` clean, `vitest run` **56
+  passed / 0 failed** (1 new test added specifically for the 403
+  reload-message branch, distinguishing it from a real credential
+  failure - up from 55).
+
+## 9. Safety
+
+    Orders placed: 0
+    Order API calls: 0
+    Position changes: 0
+    Signal execution: 0
+
+No file touched this session imports `trading_engine`, `domain.broker`,
+or wires anything into `SignalGenerationService`.
+
+## 10. Recommended Next Checkpoint
+
+**Neither CP24 (Live Signal Observation) nor a data-quality/streaming
+upgrade is recommended for immediate implementation** - both remain
+correctly gated:
+
+- CP24 is gated on the `SAMPLE_BAR` classification above being
+  resolved first (§5) - proceeding now would mean building signal
+  logic on data this review found cannot guarantee correct HIGH/LOW.
+- A data-quality/streaming upgrade (WebSocket feed or historical-OHLC
+  endpoint) is itself gated on verifying Dhan's actual documented
+  capability first (§5's "marked OPEN, not implemented") - implementing
+  a mechanism before confirming it exists in the form assumed would
+  violate this project's own "never invent an endpoint" discipline.
+
+The evidence-based next step is therefore a **research/verification
+step** (not a code checkpoint): confirm Dhan's WebSocket live-feed
+and/or historical-intraday-OHLC API shape directly against Dhan's
+official documentation, and decide which (or both) is the right
+foundation for trading-grade bars - before either CP24 or a streaming
+upgrade is implemented. Not implemented - recommendation only.
