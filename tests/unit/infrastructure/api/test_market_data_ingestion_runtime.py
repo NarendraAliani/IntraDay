@@ -91,3 +91,16 @@ def test_configured_credentials_trigger_a_real_fetch_call(monkeypatch: pytest.Mo
     assert called_with["client_id"] == "fake-client-id"
     assert called_with["instruments"] == observation_universe()
     assert outcome.bars_aggregated == 0  # no observations supplied - nothing to aggregate yet
+
+
+def test_tick_skips_when_the_ingestion_lock_is_already_held() -> None:
+    """Checkpoint 42 Part 10: proves two overlapping ticks cannot both
+    run - the second sees the lock held and skips, never runs
+    concurrently."""
+    from intraday.infrastructure.scheduling.distributed_lock import acquire
+
+    with acquire("market-data-ingestion-tick"):
+        outcome = run_market_data_ingestion_tick(now=MARKET_OPEN_INSTANT)
+
+    assert outcome.ran is False
+    assert outcome.skipped_reason == "lock_held_by_another_tick"

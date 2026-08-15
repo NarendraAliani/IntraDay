@@ -35,9 +35,11 @@ from intraday.domain.market_data.aggregation import AggregatedBar, BarQualityGra
 from intraday.domain.market_data.contracts import Quote
 from intraday.domain.market_data.promotion import evaluate_bar_promotion
 from intraday.domain.session.calendar import session_for_instant
-from intraday.domain.session.contracts import SessionStatus
+from intraday.domain.session.contracts import SessionStatus, TradingSession
 from intraday.domain.shared_kernel.contracts import Exchange
 from intraday.infrastructure.api.active_loop_runtime import run_active_loop_tick
+from intraday.infrastructure.api.paper_reconciliation_runtime import reconcile_paper_state
+from intraday.infrastructure.api.paper_trading_runtime import get_paper_broker
 from intraday.infrastructure.market_data_providers.dhan.client import (
     DhanAuthenticationError,
     DhanConnectionError,
@@ -51,15 +53,22 @@ from intraday.infrastructure.persistence.live_market_data_repositories import (
     DjangoLiveQuoteRepository,
     DjangoMarketDataHealthRepository,
 )
+from intraday.infrastructure.persistence.paper_ledger_repository import (
+    DjangoPaperLedgerRepository,
+)
 from intraday.infrastructure.persistence.provider_settings_repositories import (
     DjangoDhanCredentialRepository,
 )
+from intraday.infrastructure.scheduling.distributed_lock import acquire
 from intraday.trading_engine.strategy_execution.contracts import StrategyConfigurationValues
 
 logger = structlog.get_logger(__name__)
 
 DEFAULT_STRATEGY_ID = "ema_crossover"
 DEFAULT_QUANTITY = Decimal("1")
+
+
+INGESTION_LOCK_NAME = "market-data-ingestion-tick"
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +79,10 @@ class IngestionTickOutcome:
     bars_aggregated: int = 0
     bars_promoted: int = 0
     active_loop_invocations: int = 0
+    reconciliation_divergence_count: int | None = None
+    """`None` when reconciliation was not run this tick (nothing was
+    promoted, so there is nothing new to reconcile); an integer
+    (possibly 0) once it was."""
 
 
 def _observation_to_quote(observation: DhanQuoteObservation) -> Quote:
@@ -100,6 +113,20 @@ def run_market_data_ingestion_tick(*, now: dt.datetime | None = None) -> Ingesti
             session_status=session.status,
         )
 
+    with acquire(INGESTION_LOCK_NAME) as lock_acquired:
+        if not lock_acquired:
+            # Checkpoint 42 Part 10: another tick (a slow-running
+            # previous invocation, or a second worker) already holds
+            # this lock - skip rather than run concurrently. This is
+            # an ORDINARY outcome for a scheduled tick, not an error.
+            logger.info("market_data_ingestion.skipped", reason="lock_held_by_another_tick")
+            return IngestionTickOutcome(
+                ran=False, skipped_reason="lock_held_by_another_tick", session_status=session.status
+            )
+        return _run_locked(session=session, clock=clock)
+
+
+def _run_locked(*, session: TradingSession, clock: dt.datetime) -> IngestionTickOutcome:
     dhan_service = DhanSettingsService(repository=DjangoDhanCredentialRepository())
     credentials = dhan_service.effective_credentials()
     if credentials is None:
@@ -183,6 +210,26 @@ def run_market_data_ingestion_tick(*, now: dt.datetime | None = None) -> Ingesti
             )
             active_loop_invocations += 1
 
+    reconciliation_divergence_count: int | None = None
+    if active_loop_invocations > 0:
+        # Checkpoint 42 Part 11: reconciliation runs automatically
+        # "after order/fill events" - a tick that actually submitted a
+        # paper order is exactly that trigger. Never lets a
+        # reconciliation failure mask the ingestion tick's own success -
+        # logged, not re-raised, mirroring `market_data_views.py::refresh()`'s
+        # own "aggregation must never break refresh" precedent.
+        try:
+            report = reconcile_paper_state(
+                broker=get_paper_broker(), ledger=DjangoPaperLedgerRepository(), now=clock
+            )
+            reconciliation_divergence_count = report.total_divergence_count
+            logger.info(
+                "market_data_ingestion.reconciliation_completed",
+                divergence_count=reconciliation_divergence_count,
+            )
+        except Exception:  # noqa: BLE001 - reconciliation must never break ingestion
+            logger.exception("market_data_ingestion.reconciliation_failed")
+
     logger.info(
         "market_data_ingestion.completed",
         instrument_count=len(quotes),
@@ -198,4 +245,5 @@ def run_market_data_ingestion_tick(*, now: dt.datetime | None = None) -> Ingesti
         bars_aggregated=len(closed_bars),
         bars_promoted=promoted_count,
         active_loop_invocations=active_loop_invocations,
+        reconciliation_divergence_count=reconciliation_divergence_count,
     )
