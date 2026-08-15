@@ -52,6 +52,17 @@ CHECKPOINT_23_FILES = (
     / "infrastructure"
     / "persistence"
     / "live_market_data_repositories.py",
+    # Checkpoint 57: the new `run_market_data_worker` management
+    # command and its async runtime - both sit on the live market-data
+    # path and both claim, in their own docstrings, to have no order-
+    # placement code path. Mechanically enforced here rather than
+    # merely asserted in prose.
+    Path(__file__).resolve().parents[3]
+    / "src"
+    / "intraday"
+    / "infrastructure"
+    / "persistence"
+    / "management",
 )
 
 
