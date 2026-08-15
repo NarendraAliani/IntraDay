@@ -69,14 +69,27 @@ def send_discord_test_message(webhook_url: str) -> ConnectivityCheckResult:
     """`POST <webhook_url>` - sends a real, visible test message to the
     configured channel. Only ever invoked by an explicit, separate user
     action (Checkpoint 22 §17)."""
+    return _post_message(
+        webhook_url,
+        "IntraDay: this is a test message confirming your Discord "
+        "notification channel is connected.",
+    )
+
+
+def send_discord_message(webhook_url: str, text: str) -> ConnectivityCheckResult:
+    """Checkpoint 37 Part 3/7: sends an ARBITRARY, caller-rendered
+    message - the generic send path the communication engine's Discord
+    provider adapter uses. See the Telegram equivalent's docstring for
+    the shared rationale."""
+    return _post_message(webhook_url, text)
+
+
+def _post_message(webhook_url: str, text: str) -> ConnectivityCheckResult:
     started = time.monotonic()
     try:
         response = httpx.post(
             webhook_url,
-            json={
-                "content": "IntraDay: this is a test message confirming your Discord "
-                "notification channel is connected."
-            },
+            json={"content": text},
             timeout=_REQUEST_TIMEOUT_SECONDS,
         )
     except httpx.TimeoutException:

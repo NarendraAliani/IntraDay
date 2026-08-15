@@ -45,6 +45,7 @@ class ReportType(str, Enum):
     PRODUCTION_REPORT = "PRODUCTION_REPORT"
     AUDIT_REPORT = "AUDIT_REPORT"
     SYSTEM_HEALTH_REPORT = "SYSTEM_HEALTH_REPORT"
+    COMMUNICATION_DELIVERY_REPORT = "COMMUNICATION_DELIVERY_REPORT"
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,6 +178,19 @@ REPORT_CATALOGUE: tuple[ReportCatalogueEntry, ...] = (
         future_data_dependencies="a report assembler once more subsystems exist "
         "to aggregate (risk engine, order management, etc.)",
         ui_surface="Reports Overview page (placeholder only, this checkpoint)",
+    ),
+    ReportCatalogueEntry(
+        report_type=ReportType.COMMUNICATION_DELIVERY_REPORT,
+        status=ReportStatus.AVAILABLE,
+        purpose="Was a signal actually communicated? Aggregate delivery "
+        "outcomes (sent/failed/skipped-duplicate) by channel and template, "
+        "distinguishing communication truth from execution truth - a signal "
+        "can be fully communicated whether or not any order ever resulted.",
+        owner="communication / infrastructure.persistence.communication_ledger_repository",
+        required_data="CommunicationLedgerRecord (Checkpoint 37 Part 7) - real "
+        "delivery attempts, not placeholders",
+        future_data_dependencies="none beyond what already exists",
+        ui_surface="Reports Overview page (new, this checkpoint)",
     ),
 )
 

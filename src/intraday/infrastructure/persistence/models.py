@@ -752,3 +752,38 @@ class PaperFundsRecord(models.Model):
 
     class Meta:
         app_label = "persistence"
+
+
+class CommunicationLedgerRecord(models.Model):
+    """Checkpoint 37 Part 7: one row per delivery ATTEMPT (not per
+    event) - a `SignalCommunicationEvent` fanned out to N configured
+    providers produces N rows. Answers "was this signal communicated?"
+    without ever storing a secret (bot tokens/webhook URLs never touch
+    this table - only `destination_masked`, mirroring `TelegramCredential`/
+    `DiscordCredential`'s own encrypted-elsewhere, masked-here pattern).
+    `(signal_id, event_id, channel)` is the natural idempotency key -
+    `already_sent()` (infrastructure/persistence/communication_ledger_repository.py)
+    queries on it before ever calling a provider's `send()`."""
+
+    communication_id = models.CharField(max_length=64, primary_key=True)
+    signal_id = models.CharField(max_length=100)
+    event_id = models.CharField(max_length=64)
+    channel = models.CharField(max_length=32)
+    provider = models.CharField(max_length=32)
+    destination_masked = models.CharField(max_length=100, blank=True, default="")
+    template_id = models.CharField(max_length=64)
+    template_version = models.CharField(max_length=16)
+    created_at = models.DateTimeField()
+    attempted_at = models.DateTimeField(null=True, blank=True)
+    delivery_status = models.CharField(max_length=32)
+    provider_message_id = models.CharField(max_length=100, blank=True, default="")
+    error_code = models.CharField(max_length=64, blank=True, default="")
+    error_message = models.CharField(max_length=500, blank=True, default="")
+    retry_count = models.PositiveIntegerField(default=0)
+    correlation_id = models.CharField(max_length=64, blank=True, default="")
+
+    class Meta:
+        app_label = "persistence"
+        indexes = [
+            models.Index(fields=["signal_id", "event_id", "channel"]),
+        ]

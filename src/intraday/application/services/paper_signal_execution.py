@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from decimal import Decimal
 
@@ -35,9 +35,18 @@ from intraday.application.services.paper_trading import (
     PaperOrderSubmissionResult,
     PaperTradingService,
 )
+from intraday.application.services.signal_communication import SignalCommunicationService
+from intraday.communication.contracts.signal_communication import (
+    ExecutionStatus,
+    MessageTemplateId,
+    SignalCommunicationContext,
+    derive_execution_status,
+)
 from intraday.domain.market_data.contracts import Bar
-from intraday.domain.order.contracts import OrderIntent, OrderType, TimeInForce
+from intraday.domain.order.contracts import OrderIntent, OrderStatus, OrderType, TimeInForce
+from intraday.domain.risk.contracts import RiskDecisionOutcome
 from intraday.domain.shared_kernel.contracts import InstrumentId, Side, SignalId
+from intraday.domain.signal.contracts import SignalStatus
 from intraday.trading_engine.strategy_execution.contracts import (
     StrategyConfigurationValues,
     StrategyDirection,
@@ -89,10 +98,12 @@ class PaperSignalExecutionService:
         coordinator: StrategyExecutionCoordinator,
         paper_trading_service: PaperTradingService,
         quantity: Decimal,
+        communication: SignalCommunicationService | None = None,
     ) -> None:
         self._coordinator = coordinator
         self._paper_trading_service = paper_trading_service
         self._quantity = quantity
+        self._communication = communication
 
     def evaluate_and_submit(
         self,
@@ -159,6 +170,26 @@ class PaperSignalExecutionService:
             )
 
         side = _side_for_direction(signal.direction)
+        context = _build_context(
+            instrument_id=instrument_id,
+            strategy_id=strategy_id,
+            configuration=configuration,
+            signal_id=signal_id,
+            side=side,
+            signal_price=signal.price,
+            signal_timestamp=signal.timestamp,
+            timeframe=str(signal.timeframe),
+        )
+        # SIGNAL TRUTH != EXECUTION TRUTH: this fires unconditionally,
+        # before risk/broker involvement - a strategically audited
+        # signal is a valid product event regardless of what happens
+        # next (Checkpoint 37 Part 3/6).
+        self._communicate(
+            signal_id=signal_id,
+            template_id=MessageTemplateId.VALIDATED_SIGNAL,
+            context=context,
+        )
+
         order = OrderIntent(
             order_id=str(uuid.uuid4()),  # type: ignore[arg-type]
             instrument_id=instrument_id,
@@ -180,6 +211,7 @@ class PaperSignalExecutionService:
             estimated_order_notional=self._quantity * signal.price,
             already_submitted_idempotency_keys=already_submitted_idempotency_keys,
         )
+        self._communicate_outcome(signal_id=signal_id, context=context, order_result=order_result)
 
         return PaperSignalExecutionResult(
             strategy_id=strategy_id,
@@ -188,6 +220,111 @@ class PaperSignalExecutionService:
             skipped_reason=None,
             order_result=order_result,
         )
+
+    def _communicate(
+        self,
+        *,
+        signal_id: SignalId,
+        template_id: MessageTemplateId,
+        context: SignalCommunicationContext,
+    ) -> None:
+        if self._communication is None:
+            return
+        self._communication.communicate(
+            signal_id=signal_id,
+            template_id=template_id,
+            context=context,
+            correlation_id=str(signal_id),
+        )
+
+    def _communicate_outcome(
+        self,
+        *,
+        signal_id: SignalId,
+        context: SignalCommunicationContext,
+        order_result: PaperOrderSubmissionResult,
+    ) -> None:
+        risk_decision = order_result.risk_decision
+        broker_report = order_result.broker_report
+        order_status = broker_report.status if broker_report is not None else None
+        execution_status = derive_execution_status(
+            risk_outcome=risk_decision.outcome, order_status=order_status
+        )
+        outcome_context = _with_execution_status(context, execution_status)
+
+        if risk_decision.outcome is RiskDecisionOutcome.REJECTED:
+            blocked_context = _replace_block_reason(
+                outcome_context, risk_decision.explanation or "Risk engine rejected order"
+            )
+            self._communicate(
+                signal_id=signal_id,
+                template_id=MessageTemplateId.VALIDATED_SIGNAL_EXECUTION_BLOCKED,
+                context=blocked_context,
+            )
+            return
+
+        if broker_report is None:
+            self._communicate(
+                signal_id=signal_id,
+                template_id=MessageTemplateId.ORDER_SUBMITTED,
+                context=outcome_context,
+            )
+            return
+
+        if order_status is OrderStatus.REJECTED:
+            template = MessageTemplateId.ORDER_REJECTED
+        elif order_status is OrderStatus.PARTIALLY_FILLED:
+            template = MessageTemplateId.PARTIAL_FILL
+        elif order_status is OrderStatus.FILLED:
+            template = MessageTemplateId.ORDER_FILLED
+        else:
+            template = MessageTemplateId.ORDER_SUBMITTED
+
+        self._communicate(signal_id=signal_id, template_id=template, context=outcome_context)
+
+
+def _build_context(
+    *,
+    instrument_id: InstrumentId,
+    strategy_id: str,
+    configuration: StrategyConfigurationValues,
+    signal_id: SignalId,
+    side: Side,
+    signal_price: Decimal,
+    signal_timestamp: datetime,
+    timeframe: str,
+) -> SignalCommunicationContext:
+    exchange, _, symbol = str(instrument_id).partition(":")
+    return SignalCommunicationContext(
+        strategy_id=strategy_id,  # type: ignore[arg-type]
+        strategy_version=configuration.configuration_version,
+        signal_id=signal_id,
+        symbol=symbol or str(instrument_id),
+        exchange=exchange,
+        signal_time=signal_timestamp,
+        timeframe=timeframe,
+        spot_price=signal_price,
+        direction=side,
+        entry_price=signal_price,
+        stop_loss=None,  # ema_crossover does not compute a stop loss - never fabricated
+        targets=(),  # ema_crossover does not compute targets - never fabricated
+        trailing_stop_enabled=False,
+        confidence=None,
+        signal_status=SignalStatus.VALIDATED,
+        execution_status=ExecutionStatus.NOT_EVALUATED,
+    )
+
+
+def _with_execution_status(
+    context: SignalCommunicationContext, execution_status: ExecutionStatus
+) -> SignalCommunicationContext:
+    return replace(context, execution_status=execution_status)
+
+
+def _replace_block_reason(
+    context: SignalCommunicationContext, reason: str
+) -> SignalCommunicationContext:
+    return replace(context, block_reason=reason)
 
 
 def _side_for_direction(direction: StrategyDirection) -> Side:

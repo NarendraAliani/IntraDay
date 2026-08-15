@@ -179,8 +179,11 @@ def test_report_metadata_requires_utc_generated_at() -> None:
 # --- REPORT_CATALOGUE ------------------------------------------------------
 
 
-def test_report_catalogue_has_exactly_ten_entries() -> None:
-    assert len(REPORT_CATALOGUE) == 10
+def test_report_catalogue_has_exactly_eleven_entries() -> None:
+    """Ten from Checkpoint 32, plus COMMUNICATION_DELIVERY_REPORT added
+    Checkpoint 37 Part 8 - a real, AVAILABLE report backed by the new
+    communication ledger, not a placeholder."""
+    assert len(REPORT_CATALOGUE) == 11
 
 
 def test_report_catalogue_covers_every_report_type_exactly_once() -> None:

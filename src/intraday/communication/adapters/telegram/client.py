@@ -74,15 +74,31 @@ def send_telegram_test_message(bot_token: str, channel_id: str) -> ConnectivityC
     message. Only ever invoked by an explicit, separate user action
     (Checkpoint 22 §16) - never called automatically or as part of
     `check_telegram_connectivity()`/a page-load status check."""
+    return _send_message(
+        bot_token,
+        channel_id,
+        "IntraDay: this is a test message confirming your Telegram "
+        "notification channel is connected.",
+    )
+
+
+def send_telegram_message(bot_token: str, channel_id: str, text: str) -> ConnectivityCheckResult:
+    """Checkpoint 37 Part 3/7: sends an ARBITRARY, caller-rendered
+    message (a signal/execution communication) - the generic send path
+    the communication engine's Telegram provider adapter uses. Distinct
+    from `send_telegram_test_message()` above only in that the text is
+    supplied by the caller (already rendered by
+    `communication.contracts.templates.render_message()`) rather than
+    fixed - same endpoint, same error handling, no new API surface."""
+    return _send_message(bot_token, channel_id, text)
+
+
+def _send_message(bot_token: str, channel_id: str, text: str) -> ConnectivityCheckResult:
     started = time.monotonic()
     try:
         response = httpx.post(
             f"{_TELEGRAM_API_BASE}/bot{bot_token}/sendMessage",
-            json={
-                "chat_id": channel_id,
-                "text": "IntraDay: this is a test message confirming your Telegram "
-                "notification channel is connected.",
-            },
+            json={"chat_id": channel_id, "text": text},
             timeout=_REQUEST_TIMEOUT_SECONDS,
         )
     except httpx.TimeoutException:

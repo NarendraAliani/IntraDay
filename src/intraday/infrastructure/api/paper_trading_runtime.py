@@ -39,11 +39,31 @@ from decimal import Decimal
 
 from intraday.application.services.kill_switch import KillSwitchService
 from intraday.application.services.paper_trading import PaperTradingService
+from intraday.application.services.provider_settings import (
+    DiscordSettingsService,
+    TelegramSettingsService,
+)
+from intraday.application.services.signal_communication import (
+    CommunicationProvider,
+    NotificationRouter,
+    SignalCommunicationService,
+)
 from intraday.domain.risk.contracts import RiskLimits, TradingHaltStatus
 from intraday.infrastructure.brokers.paper.broker import PaperBroker
+from intraday.infrastructure.communication.providers import (
+    DiscordCommunicationProvider,
+    TelegramCommunicationProvider,
+)
+from intraday.infrastructure.persistence.communication_ledger_repository import (
+    DjangoCommunicationLedgerRepository,
+)
 from intraday.infrastructure.persistence.kill_switch_repository import DjangoKillSwitchRepository
 from intraday.infrastructure.persistence.paper_ledger_repository import (
     DjangoPaperLedgerRepository,
+)
+from intraday.infrastructure.persistence.provider_settings_repositories import (
+    DjangoDiscordCredentialRepository,
+    DjangoTelegramCredentialRepository,
 )
 from intraday.research.backtesting.cost_model import verified_nse_cash_equity_intraday_cost_model
 
@@ -150,6 +170,46 @@ def expire_end_of_session() -> tuple[str, ...]:
     ledger.sync_positions(broker.get_positions())
     ledger.sync_funds(broker.get_funds())
     return tuple(affected)
+
+
+def get_signal_communication_service() -> SignalCommunicationService:
+    """Checkpoint 37 Part 3/7: composes the REAL communication engine -
+    one `CommunicationProvider` per configured AND enabled channel
+    (Telegram/Discord), reading credentials the exact same way
+    `settings_views.py` already does (`effective_credentials()`/
+    `effective_webhook_url()`), plus the durable
+    `DjangoCommunicationLedgerRepository`. If NEITHER channel is
+    configured/enabled, `providers` is empty and `communicate()` is a
+    safe no-op (proven by `test_no_providers_configured_produces_no_attempts_and_never_raises`)
+    - never an error.
+
+    HONEST, DOCUMENTED LIMITATION: this factory exists and is fully
+    composable, but nothing in the current API surface calls it yet -
+    mirrors Checkpoint 36's own deliberate deferral of an automatic
+    trigger for `PaperSignalExecutionService`. Wiring either into a
+    live/scheduled pathway is a separate, reviewed decision, not a
+    consequence of this factory existing."""
+    providers: list[CommunicationProvider] = []
+
+    telegram_service = TelegramSettingsService(repository=DjangoTelegramCredentialRepository())
+    telegram_display = telegram_service.get_display()
+    if telegram_display.enabled:
+        credentials = telegram_service.effective_credentials()
+        if credentials is not None:
+            bot_token, channel_id = credentials
+            providers.append(TelegramCommunicationProvider(bot_token, channel_id))
+
+    discord_service = DiscordSettingsService(repository=DjangoDiscordCredentialRepository())
+    discord_display = discord_service.get_display()
+    if discord_display.enabled:
+        webhook_url = discord_service.effective_webhook_url()
+        if webhook_url:
+            providers.append(DiscordCommunicationProvider(webhook_url))
+
+    router = NotificationRouter(
+        providers=tuple(providers), ledger=DjangoCommunicationLedgerRepository()
+    )
+    return SignalCommunicationService(router=router)
 
 
 def reset_paper_broker_for_testing() -> None:
