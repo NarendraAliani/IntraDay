@@ -23,13 +23,21 @@ from decimal import Decimal
 
 from intraday.application.services.paper_trading import PaperTradingService
 from intraday.domain.order.contracts import OrderIntent, OrderType, TimeInForce
+from intraday.domain.position.contracts import PositionStatus
 from intraday.domain.shared_kernel.contracts import Side
 from intraday.infrastructure.api.paper_trading_runtime import get_paper_trading_service
 from intraday.infrastructure.persistence.paper_ledger_repository import (
     DjangoPaperLedgerRepository,
 )
-from intraday.trading_engine.position_management.contracts import ExitDecision, ManagedPosition
+from intraday.trading_engine.position_management.contracts import (
+    ExitDecision,
+    ExitReason,
+    ManagedPosition,
+    PositionLifecycleStatus,
+)
 from intraday.trading_engine.position_management.monitor import evaluate_position_exit
+
+EMERGENCY_SQUARE_OFF_ACTOR = "system_emergency_square_off"
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,4 +139,109 @@ def _submit_exit_order(
         data_quality_is_stale=False,
         estimated_order_notional=decision.exit_quantity * decision.exit_price,
         already_submitted_idempotency_keys=frozenset(),
+        # Checkpoint 45 Part 6: this order can only ever SHRINK the
+        # existing position (opposite side, exit_quantity <= what is
+        # currently open) - never open a new one, never increase one -
+        # so it must remain closable even while the kill switch is
+        # engaged.
+        is_position_reducing=True,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class EmergencySquareOffOutcome:
+    positions_found: int
+    positions_closed: int
+    positions_failed: tuple[str, ...]
+    """position_id values that could not be closed - e.g. no current
+    price recorded for that instrument. NEVER silently dropped - a
+    failed emergency exit is exactly the kind of thing an operator
+    must be told about immediately."""
+
+
+def run_emergency_square_off(
+    *, current_prices: dict[str, Decimal], now: datetime | None = None
+) -> EmergencySquareOffOutcome:
+    """Checkpoint 45 Part 6: EMERGENCY_SQUARE_OFF, distinct from
+    HALT_NEW_ENTRIES (the kill switch's own existing, unchanged
+    behavior - see `KillSwitchService`). Closes EVERY currently open
+    broker position, unconditionally, at MARKET, regardless of whether
+    that position has an `ExitPlan` attached (unlike
+    `run_position_monitor_tick()`, which only monitors positions WITH
+    a real exit plan - an emergency square-off must close ALL open
+    exposure, plan or no plan). Each exit order is submitted with
+    `is_position_reducing=True`, so it is NOT blocked by the very kill
+    switch that is presumably engaged when this is called - proving
+    the fix from this checkpoint's own Decision 195 in the one
+    scenario it exists for.
+
+    This function does NOT itself check or engage the kill switch -
+    that remains `KillSwitchService`'s job (`HALT_NEW_ENTRIES`,
+    unchanged). `run_emergency_square_off()` is the SEPARATE,
+    explicit `EMERGENCY_SQUARE_OFF` action an operator (or a future
+    automated EOD/kill-switch-engagement hook, not built this
+    checkpoint) triggers deliberately.
+
+    `current_prices` (keyed by `str(instrument_id)`) is CALLER-supplied
+    - matching `run_position_monitor_tick()`'s own established
+    discipline (Checkpoint 44) - rather than this function reading a
+    broker-specific `get_latest_price()` method `domain.broker.
+    BrokerGateway` does not declare (Decision 149: `PaperBroker` and a
+    future `DhanBroker` are siblings under the SAME interface; this
+    module must only call what that shared interface actually
+    guarantees)."""
+    clock = now or datetime.now(tz=UTC)
+    trading_service = get_paper_trading_service()
+    ledger = DjangoPaperLedgerRepository()
+
+    open_positions = [
+        p for p in trading_service.broker.get_positions() if p.status is PositionStatus.OPEN
+    ]
+    closed = 0
+    failed: list[str] = []
+
+    for position in open_positions:
+        current_price = current_prices.get(str(position.instrument_id))
+        if current_price is None:
+            failed.append(str(position.position_id))
+            continue
+
+        exit_side = Side.SELL if position.direction is Side.BUY else Side.BUY
+        order = OrderIntent(
+            order_id=str(uuid.uuid4()),  # type: ignore[arg-type]
+            instrument_id=position.instrument_id,
+            side=exit_side,
+            quantity=position.quantity,
+            order_type=OrderType.MARKET,
+            time_in_force=TimeInForce.DAY,
+            strategy_id=EMERGENCY_SQUARE_OFF_ACTOR,  # type: ignore[arg-type]
+            created_at=clock,
+            idempotency_key=f"emergency_square_off:{position.position_id}:{clock.isoformat()}",
+        )
+        result = trading_service.submit_order(
+            order,
+            strategy_is_active=True,
+            market_session_is_open=True,
+            data_quality_is_stale=False,
+            estimated_order_notional=position.quantity * current_price,
+            already_submitted_idempotency_keys=frozenset(),
+            is_position_reducing=True,
+        )
+        if result.broker_report is None:
+            failed.append(str(position.position_id))
+            continue
+
+        ledger.update_position_lifecycle(
+            position_id=str(position.position_id),
+            lifecycle_status=PositionLifecycleStatus.STOPPED,
+            remaining_quantity=Decimal("0"),
+            highest_favorable_price=current_price,
+            exit_reason=ExitReason.RISK_HALT.value,
+        )
+        closed += 1
+
+    return EmergencySquareOffOutcome(
+        positions_found=len(open_positions),
+        positions_closed=closed,
+        positions_failed=tuple(failed),
     )

@@ -99,6 +99,18 @@ class RiskEvaluationContext:
     `test_per_trade_risk_gap_closure.py`) - it is simply not yet the
     default for every call site, an honest, named limitation rather
     than a hidden gap."""
+    is_position_reducing: bool = False
+    """Checkpoint 45 Part 6: `True` ONLY for an order the caller can
+    prove will exclusively SHRINK an existing position (an exit order
+    submitted by `PositionMonitorService`/emergency square-off,
+    quantity <= the position's own open quantity, opposite side) -
+    NEVER for an order that could open a new position or increase an
+    existing one. The caller (`application.services.paper_trading`'s
+    own call sites) is entirely responsible for this being true;
+    `evaluate_order_risk()` itself does not and cannot verify it (it
+    has no broker-side position lookup of its own, by design - Part 1's
+    own "pure function over an explicit context" discipline). Defaults
+    `False` so every pre-Checkpoint-45 call site is unaffected."""
 
 
 def evaluate_order_risk(order: OrderIntent, context: RiskEvaluationContext) -> OrderRiskDecision:
@@ -118,8 +130,19 @@ def evaluate_order_risk(order: OrderIntent, context: RiskEvaluationContext) -> O
             risk_configuration_version=context.risk_configuration_version,
         )
 
-    # 1. Kill switch - checked first, unconditionally overrides everything else.
-    if context.kill_switch_status is TradingHaltStatus.HALTED:
+    # 1. Kill switch - checked first, overrides everything else EXCEPT
+    #    a position-REDUCING order (Checkpoint 45 Part 6). The kill
+    #    switch's job is "stop taking on new risk," never "make an
+    #    already-open position impossible to close" - a halted system
+    #    that cannot close its own positions is LESS safe, not more.
+    #    `is_position_reducing` defaults to `False` (Decision 195) so
+    #    every existing entry-order call site is completely unaffected;
+    #    only a caller that explicitly asserts "this order can only
+    #    shrink an existing position" (never open one, never increase
+    #    one) gets this exception - proven by
+    #    `test_reducing_order_bypasses_a_halted_kill_switch` and
+    #    `test_non_reducing_order_is_still_blocked_by_a_halted_kill_switch`.
+    if context.kill_switch_status is TradingHaltStatus.HALTED and not context.is_position_reducing:
         return _reject(
             RiskRejectionReason.KILL_SWITCH_ENGAGED,
             "The kill switch is engaged - no new order may be submitted while halted.",

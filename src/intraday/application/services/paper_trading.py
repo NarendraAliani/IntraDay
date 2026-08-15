@@ -88,6 +88,7 @@ class PaperTradingService:
         data_quality_is_stale: bool,
         estimated_order_notional: Decimal,
         already_submitted_idempotency_keys: frozenset[str],
+        is_position_reducing: bool = False,
     ) -> PaperOrderSubmissionResult:
         """The one, non-bypassable entry point for a paper order -
         NEVER calls `self.broker.submit_order()` without first
@@ -140,6 +141,7 @@ class PaperTradingService:
                 for report in self.broker.get_orders()
                 if not is_terminal(report.status)
             ),
+            is_position_reducing=is_position_reducing,
         )
 
         decision = evaluate_order_risk(order, context)

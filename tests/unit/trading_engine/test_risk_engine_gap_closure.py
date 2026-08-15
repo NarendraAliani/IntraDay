@@ -191,3 +191,52 @@ def test_kill_switch_still_overrides_every_new_check() -> None:
         ),
     )
     assert decision.reason_code is RiskRejectionReason.KILL_SWITCH_ENGAGED
+
+
+# --- Emergency square-off: kill switch vs. position-reducing orders --------
+# (Checkpoint 45 Part 6)
+
+
+def test_non_reducing_order_is_still_blocked_by_a_halted_kill_switch() -> None:
+    """The default, unchanged behavior - a normal entry order is
+    blocked exactly as before."""
+    decision = evaluate_order_risk(
+        _order(), _context(kill_switch_status=TradingHaltStatus.HALTED, is_position_reducing=False)
+    )
+    assert decision.outcome is RiskDecisionOutcome.REJECTED
+    assert decision.reason_code is RiskRejectionReason.KILL_SWITCH_ENGAGED
+
+
+def test_reducing_order_bypasses_a_halted_kill_switch() -> None:
+    """The whole point of Part 6: a position-CLOSING order must not be
+    blocked by the same kill switch that exists to stop NEW risk."""
+    decision = evaluate_order_risk(
+        _order(), _context(kill_switch_status=TradingHaltStatus.HALTED, is_position_reducing=True)
+    )
+    assert decision.outcome is RiskDecisionOutcome.APPROVED
+
+
+def test_reducing_order_is_still_blocked_by_a_non_kill_switch_reason() -> None:
+    """The exception is SCOPED to the kill switch specifically - a
+    reducing order is still subject to every other real safety check
+    (market closed, stale data, etc.)."""
+    decision = evaluate_order_risk(
+        _order(),
+        _context(
+            kill_switch_status=TradingHaltStatus.ACTIVE,
+            is_position_reducing=True,
+            market_session_is_open=False,
+        ),
+    )
+    assert decision.outcome is RiskDecisionOutcome.REJECTED
+    assert decision.reason_code is RiskRejectionReason.MARKET_SESSION_CLOSED
+
+
+def test_reducing_order_when_kill_switch_is_active_behaves_normally() -> None:
+    """`is_position_reducing=True` when the kill switch is NOT engaged
+    changes nothing - proves the flag only ever matters for the one
+    specific check it targets."""
+    decision = evaluate_order_risk(
+        _order(), _context(kill_switch_status=TradingHaltStatus.ACTIVE, is_position_reducing=True)
+    )
+    assert decision.outcome is RiskDecisionOutcome.APPROVED
