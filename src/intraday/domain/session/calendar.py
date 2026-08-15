@@ -33,6 +33,48 @@ from intraday.domain.shared_kernel.contracts import Exchange, ensure_utc
 
 INDIA_STANDARD_TIME = ZoneInfo("Asia/Kolkata")
 
+# Checkpoint 39 Part D: NSE cash-equity trading holidays for calendar
+# year 2026 - `VERIFIED_SECONDARY` (a direct fetch of nseindia.com's own
+# "Exchange Communication - Holidays" page timed out this session; this
+# list was retrieved via a secondary source, groww.in's own published
+# NSE 2026 equity-segment holiday calendar, cross-corroborated by a
+# separate search confirming "15 full trading holidays" for the equity
+# segment in 2026 - MATCHES the 15 dates below). NOT primary-verified
+# against nseindia.com directly - flagged for confirmation before this
+# list is relied on for anything beyond PAPER-mode session gating.
+# Deliberately a closed, checkpoint-scoped list (2026 only) rather than
+# a generic multi-year calendar service - extending to future years is
+# a future checkpoint's job once a reliable primary source is fetchable.
+NSE_HOLIDAYS_2026: frozenset[date] = frozenset(
+    {
+        date(2026, 1, 26),  # Republic Day
+        date(2026, 3, 3),  # Holi
+        date(2026, 3, 26),  # Shri Ram Navami
+        date(2026, 3, 31),  # Shri Mahavir Jayanti
+        date(2026, 4, 3),  # Good Friday
+        date(2026, 4, 14),  # Dr. Baba Saheb Ambedkar Jayanti
+        date(2026, 5, 1),  # Maharashtra Day
+        date(2026, 5, 28),  # Bakri Id
+        date(2026, 6, 26),  # Muharram
+        date(2026, 9, 14),  # Ganesh Chaturthi
+        date(2026, 10, 2),  # Mahatma Gandhi Jayanti
+        date(2026, 10, 20),  # Dussehra
+        date(2026, 11, 10),  # Diwali-Balipratipada
+        date(2026, 11, 24),  # Prakash Gurpurb Sri Guru Nanak Dev
+        date(2026, 12, 25),  # Christmas
+    }
+)
+
+
+def is_trading_day(session_date: date) -> bool:
+    """A trading day is a weekday that is not an `NSE_HOLIDAYS_2026`
+    date. Dates outside 2026 are NOT covered by this checkpoint's
+    holiday list - `is_trading_day()` still correctly excludes weekends
+    for any year, but a holiday outside 2026 will NOT be detected
+    (documented limitation, not silently assumed correct)."""
+    return session_date.weekday() < 5 and session_date not in NSE_HOLIDAYS_2026
+
+
 # NSE/BSE cash-equity intraday hours (Checkpoint 23 §8) — fixed, not
 # configuration-driven: these are exchange-mandated hours, not an
 # operational parameter this platform's operator should be able to
@@ -54,12 +96,15 @@ SQUARE_OFF_DEADLINE_IST = time(15, 20)
 
 
 def build_session_for(session_date: date, as_of: datetime) -> TradingSession:
-    """Computes the (fixed-hours, no-holiday-aware) NSE cash-equity
-    `TradingSession` for `session_date`, with `status` classified against
-    `as_of` (must be UTC). This is the one place IST wall-clock hours are
-    converted to the UTC instants `TradingSession` requires internally
-    (Checkpoint 5's original decision, unchanged) - no other module
-    should perform this conversion."""
+    """Computes the NSE cash-equity `TradingSession` for `session_date`,
+    with `status` classified against `as_of` (must be UTC) - now
+    holiday/weekend-aware (Checkpoint 39 Part D, closing Checkpoint 23's
+    own documented "no holiday calendar" limitation for 2026 dates; see
+    `NSE_HOLIDAYS_2026`'s own docstring for what remains unverified).
+    `market_open`/`market_close`/`square_off_deadline` are still always
+    computed (a `TradingSession` requires them structurally) even on a
+    holiday - `status` is what tells a caller the date isn't actually
+    tradable, never the shape's own presence/absence."""
     ensure_utc(as_of, field_name="as_of")
 
     market_open_ist = datetime.combine(session_date, MARKET_OPEN_IST, tzinfo=INDIA_STANDARD_TIME)
@@ -78,15 +123,32 @@ def build_session_for(session_date: date, as_of: datetime) -> TradingSession:
         market_open=market_open,
         market_close=market_close,
         square_off_deadline=square_off_deadline,
-        status=_classify(market_open, market_close, as_of),
+        status=_classify(
+            session_date=session_date,
+            market_open=market_open,
+            square_off_deadline=square_off_deadline,
+            market_close=market_close,
+            as_of=as_of,
+        ),
     )
 
 
-def _classify(market_open: datetime, market_close: datetime, as_of: datetime) -> SessionStatus:
+def _classify(
+    *,
+    session_date: date,
+    market_open: datetime,
+    square_off_deadline: datetime,
+    market_close: datetime,
+    as_of: datetime,
+) -> SessionStatus:
+    if not is_trading_day(session_date):
+        return SessionStatus.HOLIDAY
     if as_of < market_open:
         return SessionStatus.PRE_OPEN
     if as_of > market_close:
         return SessionStatus.CLOSED
+    if as_of >= square_off_deadline:
+        return SessionStatus.CLOSING
     return SessionStatus.OPEN
 
 

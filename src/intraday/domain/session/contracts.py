@@ -14,9 +14,21 @@ from intraday.domain.shared_kernel.contracts import Exchange, ensure_utc
 
 
 class SessionStatus(enum.Enum):
+    """Checkpoint 39 Part D: extended from 3 to 5 states - `CLOSING`
+    (the square-off window, `[square_off_deadline, market_close]`) and
+    `HOLIDAY` (a calendar date with no session at all) are new. Every
+    consumer of this enum (market-data ingestion, the risk engine,
+    paper/future live execution, position monitoring, reporting) must
+    treat `HOLIDAY` and `CLOSED` as BOTH meaning "no new order may be
+    submitted" - they are distinguished only for operator/reporting
+    clarity (why isn't the market open today?), never for different
+    trading permissions."""
+
     PRE_OPEN = "PRE_OPEN"
     OPEN = "OPEN"
+    CLOSING = "CLOSING"
     CLOSED = "CLOSED"
+    HOLIDAY = "HOLIDAY"
 
 
 @dataclass(frozen=True, slots=True)

@@ -191,6 +191,24 @@ class DjangoPaperLedgerRepository:
         state, is what survives a process restart."""
         return {OrderId(row.order_id): row.status for row in PaperOrderRecord.objects.all()}
 
+    def load_processed_signal_ids(self) -> frozenset[str]:
+        """Checkpoint 39 Part F: the RESTART-SAFE half of idempotent
+        strategy triggering. `PaperSignalExecutionService.
+        evaluate_and_submit()`'s own `already_processed_signal_ids`
+        parameter (Checkpoint 36) only prevents duplicates within a
+        single caller's in-memory set - across a process restart, that
+        set is empty again. This method reloads every `signal_id` that
+        already produced a persisted order, so a caller (a scheduler
+        task, Checkpoint 39) can pass a RESTART-SURVIVING dedup set on
+        every invocation, closing the "restart does not duplicate
+        processing" requirement with real persisted evidence, not an
+        in-memory assumption. Blank `signal_id`s (manually-submitted
+        orders, Checkpoint 36) are excluded - they were never a
+        strategy-generated signal to begin with."""
+        return frozenset(
+            PaperOrderRecord.objects.exclude(signal_id="").values_list("signal_id", flat=True)
+        )
+
     def load_order_statuses_for_reconciliation(self) -> dict[OrderId, OrderStatus]:
         """Checkpoint 38 Part 13: the "local expected state" half of
         paper-mode reconciliation - the SAME shape

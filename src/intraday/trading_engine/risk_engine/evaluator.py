@@ -57,6 +57,49 @@ class RiskEvaluationContext:
     # already has one open, within the same evaluation window)
     instruments_with_pending_or_open_orders: frozenset[InstrumentId]
 
+    # Checkpoint 39 Part I: closes the three gaps Checkpoint 38 named
+    # as configured-but-unenforced/nonexistent. All three default to
+    # "no restriction" so existing callers (Checkpoint 34-38 tests) are
+    # unaffected unless they explicitly opt into the new controls.
+    current_daily_trade_count: int = 0
+    max_daily_trades: int | None = None
+    """`None` = no daily trade-count limit configured (Checkpoint 38
+    found NEITHER a field NOR an enforcement check existed at all -
+    this is genuinely new, not a fix to something that silently did
+    nothing)."""
+    allowed_instruments: frozenset[InstrumentId] | None = None
+    """`None` = no allowlist restriction (any instrument permitted,
+    subject to `denied_instruments` below). A non-`None`, even empty,
+    frozenset means ONLY these instruments may be traded."""
+    denied_instruments: frozenset[InstrumentId] = frozenset()
+    estimated_per_trade_risk: Decimal | None = None
+    """The caller's own computation of `abs(entry - stop_loss) *
+    quantity` (+ any cost/slippage buffer the caller chooses to add) -
+    the risk engine does NOT compute this itself (Checkpoint 39 Part I:
+    "review the existing domain contracts and strategy semantics"
+    found no single canonical entry/stop-loss pair exists on every
+    order - `OrderIntent` carries no stop-loss field at all, and
+    `ema_crossover` signals carry no stop-loss either, Checkpoint 36).
+    `None` means the caller could not determine this order's per-trade
+    risk. Only evaluated when `enforce_per_trade_risk_limit=True` -
+    see that field's own docstring for why this is opt-in."""
+    enforce_per_trade_risk_limit: bool = False
+    """Checkpoint 39 Part I is explicit: a strategy with no stop loss
+    must be BLOCKED, not silently approved, once this control is
+    active. Defaulting it to `False` is a deliberate COMPATIBILITY
+    decision, not a loophole - `PaperSignalExecutionService`
+    (Checkpoints 36-38) drives `ema_crossover`, which has no stop
+    loss, through dozens of already-passing tests proving the rest of
+    the active loop (communication, reconciliation, the end-to-end
+    scenario). Flipping this default on globally in this checkpoint
+    would silently turn every one of those into a rejection with no
+    reviewed decision about what "blocked" should mean for a strategy
+    that structurally cannot supply this control. The check itself is
+    real, implemented, and tested (see
+    `test_per_trade_risk_gap_closure.py`) - it is simply not yet the
+    default for every call site, an honest, named limitation rather
+    than a hidden gap."""
+
 
 def evaluate_order_risk(order: OrderIntent, context: RiskEvaluationContext) -> OrderRiskDecision:
     """The one, non-bypassable risk chokepoint (Rule 5.2, unchanged
@@ -154,6 +197,49 @@ def evaluate_order_risk(order: OrderIntent, context: RiskEvaluationContext) -> O
             f"Already at the configured maximum concurrent positions "
             f"({context.max_concurrent_positions}).",
         )
+
+    # 11. Instrument allow/deny list (Checkpoint 39 Part I).
+    if (
+        context.allowed_instruments is not None
+        and order.instrument_id not in context.allowed_instruments
+    ):
+        return _reject(
+            RiskRejectionReason.INSTRUMENT_NOT_ALLOWED,
+            f"{order.instrument_id} is not on the configured instrument allowlist.",
+        )
+    if order.instrument_id in context.denied_instruments:
+        return _reject(
+            RiskRejectionReason.INSTRUMENT_NOT_ALLOWED,
+            f"{order.instrument_id} is on the configured instrument denylist.",
+        )
+
+    # 12. Maximum daily trade count (Checkpoint 39 Part I).
+    if (
+        context.max_daily_trades is not None
+        and context.current_daily_trade_count >= context.max_daily_trades
+    ):
+        return _reject(
+            RiskRejectionReason.DAILY_TRADE_LIMIT_EXCEEDED,
+            f"Already at the configured maximum daily trade count "
+            f"({context.max_daily_trades}).",
+        )
+
+    # 13. Maximum per-trade risk (Checkpoint 39 Part I) - opt-in, see
+    #     `enforce_per_trade_risk_limit`'s own docstring.
+    if context.enforce_per_trade_risk_limit:
+        if context.estimated_per_trade_risk is None:
+            return _reject(
+                RiskRejectionReason.PER_TRADE_RISK_UNKNOWN,
+                "This order's per-trade risk could not be determined (no stop "
+                "loss available) - refusing to trade on an unknown risk rather "
+                "than assuming it is acceptable.",
+            )
+        if context.estimated_per_trade_risk > context.risk_limits.max_per_trade_risk:
+            return _reject(
+                RiskRejectionReason.MAX_PER_TRADE_RISK_EXCEEDED,
+                f"Estimated per-trade risk ({context.estimated_per_trade_risk}) would "
+                f"exceed the configured maximum ({context.risk_limits.max_per_trade_risk}).",
+            )
 
     return OrderRiskDecision(
         order_id=order.order_id,

@@ -85,7 +85,15 @@ def test_session_allowed_for_authenticated_reader() -> None:
 
     assert response.status_code == 200
     body = response.json()
-    assert body["status"] in ("PRE_OPEN", "OPEN", "CLOSED")
+    # Checkpoint 39: SessionStatus is now holiday/weekend-aware
+    # (CLOSING/HOLIDAY added) - this test runs against the REAL current
+    # date, which may genuinely be a weekend or NSE holiday when the
+    # suite runs, so every valid status must be accepted here. Fixed-
+    # date behavior (e.g. "is 2026-01-26 correctly HOLIDAY") is proven
+    # deterministically in tests/unit/domain/session/test_calendar.py
+    # instead - this endpoint test only proves the API wires the real
+    # session engine through correctly, not a specific status value.
+    assert body["status"] in ("PRE_OPEN", "OPEN", "CLOSING", "CLOSED", "HOLIDAY")
     assert body["exchange"] == "NSE"
 
 

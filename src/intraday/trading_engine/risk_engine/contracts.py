@@ -35,6 +35,19 @@ class RiskRejectionReason(enum.Enum):
     STRATEGY_NOT_ACTIVE = "STRATEGY_NOT_ACTIVE"
     MARKET_SESSION_CLOSED = "MARKET_SESSION_CLOSED"
     KILL_SWITCH_ENGAGED = "KILL_SWITCH_ENGAGED"
+    # Checkpoint 39 Part I: closes gaps Checkpoint 38 found (configured
+    # but unenforced/nonexistent controls).
+    INSTRUMENT_NOT_ALLOWED = "INSTRUMENT_NOT_ALLOWED"
+    DAILY_TRADE_LIMIT_EXCEEDED = "DAILY_TRADE_LIMIT_EXCEEDED"
+    PER_TRADE_RISK_UNKNOWN = "PER_TRADE_RISK_UNKNOWN"
+    """The caller could not determine this order's per-trade risk (e.g.
+    the originating strategy computes no stop loss - `ema_crossover`,
+    Checkpoint 36). Per Checkpoint 39 Part I's explicit instruction,
+    "execution should be BLOCKED rather than pretending the risk can be
+    calculated" - this is NOT the same as MAX_PER_TRADE_RISK_EXCEEDED
+    (a KNOWN risk that exceeds the limit); it is "unknown, therefore
+    refused," a distinct and equally auditable reason."""
+    MAX_PER_TRADE_RISK_EXCEEDED = "MAX_PER_TRADE_RISK_EXCEEDED"
 
 
 @dataclass(frozen=True, slots=True)

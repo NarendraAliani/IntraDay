@@ -14,7 +14,9 @@ import pytest
 from intraday.domain.session.calendar import (
     MARKET_CLOSE_IST,
     MARKET_OPEN_IST,
+    NSE_HOLIDAYS_2026,
     build_session_for,
+    is_trading_day,
     session_for_instant,
 )
 from intraday.domain.session.contracts import SessionStatus
@@ -58,8 +60,11 @@ def test_exchange_is_nse() -> None:
         (9, 15, SessionStatus.OPEN),  # Checkpoint 31 Part 6: exact market-open boundary
         (9, 20, SessionStatus.OPEN),  # Checkpoint 31 Part 6: five minutes into the session
         (12, 0, SessionStatus.OPEN),
-        (15, 25, SessionStatus.OPEN),  # Checkpoint 31 Part 6: five minutes before close
-        (15, 30, SessionStatus.OPEN),  # Checkpoint 31 Part 6: exact market-close boundary
+        # Checkpoint 39 Part D: 15:20-15:30 IST is now the CLOSING
+        # (square-off) window, not OPEN - a real behavior change, not a
+        # regression; see SessionStatus's own docstring.
+        (15, 25, SessionStatus.CLOSING),  # five minutes before close, inside square-off window
+        (15, 30, SessionStatus.CLOSING),  # exact market-close boundary - still square-off window
         (15, 31, SessionStatus.CLOSED),
         (20, 0, SessionStatus.CLOSED),
     ],
@@ -107,3 +112,35 @@ def _ist_offset():  # type: ignore[no-untyped-def]
     from datetime import timedelta
 
     return timedelta(hours=5, minutes=30)
+
+
+# --- Checkpoint 39 Part D: holiday/weekend awareness ------------------------
+
+
+def test_republic_day_2026_is_a_holiday() -> None:
+    assert date(2026, 1, 26) in NSE_HOLIDAYS_2026
+    session = build_session_for(date(2026, 1, 26), datetime(2026, 1, 26, 6, 0, tzinfo=UTC))
+    assert session.status is SessionStatus.HOLIDAY
+
+
+def test_a_saturday_is_not_a_trading_day_even_though_not_in_the_holiday_list() -> None:
+    saturday = date(2026, 1, 3)
+    assert saturday.weekday() == 5
+    assert saturday not in NSE_HOLIDAYS_2026
+    assert not is_trading_day(saturday)
+
+    session = build_session_for(saturday, datetime(2026, 1, 3, 6, 0, tzinfo=UTC))
+    assert session.status is SessionStatus.HOLIDAY
+
+
+def test_an_ordinary_weekday_not_in_the_holiday_list_is_a_trading_day() -> None:
+    ordinary_weekday = date(2026, 1, 5)  # Monday, not in NSE_HOLIDAYS_2026
+    assert is_trading_day(ordinary_weekday)
+
+
+def test_holiday_status_takes_priority_over_time_of_day() -> None:
+    """Even during what would otherwise be market hours, a holiday date
+    is HOLIDAY, never PRE_OPEN/OPEN/CLOSED."""
+    republic_day_market_hours = datetime(2026, 1, 26, 9, 0, tzinfo=UTC)  # ~14:30 IST
+    session = build_session_for(date(2026, 1, 26), republic_day_market_hours)
+    assert session.status is SessionStatus.HOLIDAY
