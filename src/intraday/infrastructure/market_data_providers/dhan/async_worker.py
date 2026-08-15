@@ -32,6 +32,8 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
+from websockets.exceptions import ConnectionClosedError
+
 from intraday.domain.market_data.contracts import Quote
 from intraday.infrastructure.market_data_providers.dhan.packet_decoder import (
     DhanDisconnectPacket,
@@ -43,6 +45,9 @@ from intraday.infrastructure.market_data_providers.dhan.packet_to_quote import (
 )
 from intraday.infrastructure.market_data_providers.dhan.stream_framing import (
     read_one_packet_from_stream,
+)
+from intraday.infrastructure.market_data_providers.dhan.websocket_transport import (
+    DhanWebSocketTransport,
 )
 from intraday.infrastructure.market_data_providers.dhan.worker_state import (
     WorkerEvent,
@@ -132,6 +137,89 @@ async def run_worker_against_stream(
             callback_result = on_quote(conversion.quote)
             if callback_result is not None:
                 await callback_result
+
+    result.final_state = state
+    return result
+
+
+async def run_worker_against_websocket(
+    transport: DhanWebSocketTransport,
+    *,
+    security_id_to_symbol: dict[int, str],
+    on_quote: QuoteCallback | None = None,
+) -> AsyncWorkerRunResult:
+    """Checkpoint 61: the REAL-WebSocket sibling of
+    `run_worker_against_stream()` - reuses the EXACT SAME decode
+    (`decode_packet`) / conversion (`convert_packet_to_quote`) / state-
+    machine (`apply_event`) logic, never reimplemented, only the
+    packet SOURCE differs (`transport.receive_packets()`'s async
+    iteration of already-framed WebSocket messages, instead of manual
+    header-then-body byte counting off a raw TCP stream). This is the
+    concrete proof that `async_worker.py`'s packet-processing core was
+    genuinely transport-agnostic, as it was designed to be (Checkpoint
+    57's own module docstring) - no rewrite was needed to add a second
+    real transport, only a second thin loop around the same core
+    logic.
+
+    `transport` must already be connected (`await transport.connect()`)
+    before this function is called - matches
+    `run_worker_against_stream()`'s own "assumes the transport is
+    already past its handshake" scope note exactly."""
+    state = WorkerState.STOPPED
+    result = AsyncWorkerRunResult(final_state=state)
+
+    def transition(event: WorkerEvent) -> None:
+        nonlocal state
+        outcome = apply_event(state, event)
+        if outcome.accepted:
+            state = outcome.new_state
+
+    for startup_event in (
+        WorkerEvent.START_REQUESTED,
+        WorkerEvent.AUTH_SUCCEEDED,
+        WorkerEvent.CONNECTED,
+        WorkerEvent.SUBSCRIBED,
+    ):
+        transition(startup_event)
+
+    try:
+        async for raw in transport.receive_packets():
+            decoded = decode_packet(raw)
+            if isinstance(decoded, PacketDecodeFailure):
+                result.decode_failures += 1
+                continue
+            if isinstance(decoded, DhanDisconnectPacket):
+                result.reconnect_relevant_disconnects += 1
+                transition(WorkerEvent.CONNECTION_LOST)
+                break
+
+            conversion = convert_packet_to_quote(
+                decoded, security_id_to_symbol=security_id_to_symbol
+            )
+            if not conversion.accepted:
+                result.rejected_packets += 1
+                continue
+            assert conversion.quote is not None
+            result.quotes_processed += 1
+            if on_quote is not None:
+                callback_result = on_quote(conversion.quote)
+                if callback_result is not None:
+                    await callback_result
+        else:
+            # The async generator finished on its own - the peer
+            # closed the WebSocket connection normally (a clean
+            # end-of-stream, the WebSocket-path equivalent of
+            # `read_one_packet_from_stream()` returning `None`).
+            transition(WorkerEvent.STOP_REQUESTED)
+            transition(WorkerEvent.STOPPED_CLEANLY)
+    except ConnectionClosedError:
+        # An ABNORMAL close (the real `websockets` library's own
+        # signal for this, distinct from a clean close) - treated the
+        # same as a Disconnect packet on the raw-TCP path: a
+        # connection problem the worker's own state machine must know
+        # about, never silently swallowed.
+        result.reconnect_relevant_disconnects += 1
+        transition(WorkerEvent.CONNECTION_LOST)
 
     result.final_state = state
     return result

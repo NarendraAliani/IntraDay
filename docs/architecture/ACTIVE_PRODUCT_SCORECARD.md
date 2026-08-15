@@ -120,10 +120,22 @@ built - it needs to be fed.
    the worker runs, not only at stream end. **What did CP60 resolve?**
    The WebSocket technology decision itself (`websockets` library),
    with real primary-source research - not yet implemented.
-7. **What should CP61 implement?** `DhanWebSocketTransport` against the
-   now-locked `websockets` decision, plus a real `websockets`-based
-   fake server replacing/supplementing the raw-TCP one for integration
-   tests - the actual next unblocking step.
+7. **CP61 update**: `DhanWebSocketTransport` was built and tested
+   against a REAL RFC 6455 handshake (`FakeDhanWebSocketServer`, a
+   genuine local `websockets` server) - 9 new tests, all passing, all
+   exercising a real handshake and real frame protocol, not a mock.
+   `run_worker_against_websocket()` reuses the exact same decode/
+   convert/state-machine core as the raw-TCP path, proving that core
+   was genuinely transport-agnostic. **Not done**: no `--provider
+   fake-ws` CLI wiring, no token lifecycle, no watchdog, no reconnect-
+   with-backoff, no correct minute-boundary bar semantics (still
+   batch-of-5), no performance/load/long-run testing, no real Dhan
+   connection.
+8. **What should CP62 implement?** Wire the real WebSocket path into
+   `manage.py run_market_data_worker` (a `--provider fake-ws` mode),
+   then reconnect-with-backoff integrated with the worker state
+   machine, then token lifecycle - in that order, since each depends
+   on the previous being real.
 8. **What should NOT be worked on yet?** Frontend polish, additional
    report types, multi-broker expansion - all P2, all premature while
    the live-data critical path is still open.
