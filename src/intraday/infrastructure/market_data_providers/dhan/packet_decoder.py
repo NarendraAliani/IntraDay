@@ -32,7 +32,13 @@ from enum import IntEnum
 # (VERIFIED_PRIMARY, see research doc): byte 0 = feed response code,
 # bytes 1-2 = message length (payload, little-endian int16), byte 3 =
 # exchange segment code, bytes 4-7 = security ID (little-endian int32).
-_HEADER_SIZE = 8
+HEADER_SIZE = 8
+"""Public re-export of the header size - `stream_framing.py` (Checkpoint
+56) needs this to know how many bytes to read off a real socket before
+it can even see the `message_length` field that tells it how much more
+to read for the body. Every OTHER reference in this module still uses
+the module-local alias below to keep existing code unchanged."""
+_HEADER_SIZE = HEADER_SIZE
 _HEADER_STRUCT = struct.Struct("<BHBi")  # < = little-endian (VERIFIED_PRIMARY)
 
 # Ticker packet (code 2): header + float32 LTP + int32 LTT (epoch seconds).
