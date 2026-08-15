@@ -181,12 +181,12 @@ def test_3_retry_after_failed_retryable_actually_closes_the_position() -> None:
 
     halt_identity = _engage_kill_switch()
 
-    original_get_latest_price = trading_service.broker.get_latest_price
-    trading_service.broker.get_latest_price = lambda instrument_id: None  # type: ignore[method-assign]
+    original_get_latest_price = trading_service.broker.get_latest_price  # type: ignore[attr-defined]
+    trading_service.broker.get_latest_price = lambda instrument_id: None  # type: ignore[attr-defined]
     try:
         first = check_and_trigger_automatic_square_off(current_prices={}, now=NOW)
     finally:
-        trading_service.broker.get_latest_price = original_get_latest_price  # type: ignore[method-assign]
+        trading_service.broker.get_latest_price = original_get_latest_price  # type: ignore[attr-defined]
 
     assert first.square_off is not None
     assert first.square_off.positions_closed == 0
@@ -225,6 +225,53 @@ def test_4_completed_event_is_never_reclaimed_or_rerun() -> None:
     assert second.already_handled is True
     assert second.square_off is None
     assert PaperOrderRecord.objects.count() == 2  # entry + exactly one exit, never duplicated
+
+
+def test_6_reconciliation_required_when_square_off_succeeds_but_reconciliation_still_diverges(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Checkpoint 49 Part 23: closes the ONE honest gap Checkpoint 48
+    named and left untested. `run_emergency_square_off()` can report
+    every attempted position closed (`positions_failed` empty) while
+    the POST-square-off reconciliation call still finds a divergence -
+    a real, distinct failure mode from "a position could not be
+    closed" (FAILED_RETRYABLE). Constructing this without artificially
+    breaking `PaperBroker`'s own internal consistency is not possible
+    through the real API (a correctly-closed position IS reconciled
+    correctly) - so this test monkeypatches `reconcile_paper_state`
+    itself (imported by name into the trigger module) to return a
+    divergence, isolating exactly the branch under test rather than
+    faking broker state in a way that could mask an unrelated bug."""
+    import intraday.infrastructure.api.emergency_square_off_trigger as trigger_module
+
+    _open_a_position()
+    halt_identity = _engage_kill_switch()
+
+    class _FakeReport:
+        total_divergence_count = 1
+
+    monkeypatch.setattr(trigger_module, "reconcile_paper_state", lambda **_kwargs: _FakeReport())
+
+    outcome = check_and_trigger_automatic_square_off(
+        current_prices={str(RELIANCE): Decimal("101")}, now=NOW
+    )
+
+    assert outcome.square_off is not None
+    assert outcome.square_off.positions_closed == 1
+    assert outcome.square_off.positions_failed == ()
+    assert outcome.reconciliation_divergence_count == 1
+
+    row = EmergencySquareOffEvent.objects.get(halt_identity=halt_identity)
+    assert row.status == SquareOffEventStatus.RECONCILIATION_REQUIRED.value
+    assert row.reconciliation_divergence_count == 1
+
+    # Not terminal - a later retry (once reconciliation genuinely
+    # recovers) must still be able to reclaim and complete this event.
+    retry_claim = DjangoEmergencySquareOffEventRepository().claim(
+        halt_identity=halt_identity, now=NOW + dt.timedelta(minutes=1)
+    )
+    assert retry_claim.claimed is True
+    assert retry_claim.already_terminal is False
 
 
 def test_5_two_concurrent_claims_for_the_same_halt_event_only_one_wins() -> None:
