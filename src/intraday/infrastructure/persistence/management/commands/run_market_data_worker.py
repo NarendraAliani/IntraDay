@@ -28,20 +28,27 @@
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import struct
 
+from asgiref.sync import sync_to_async
 from django.core.management.base import BaseCommand, CommandParser
+from django.db import close_old_connections
 
+from intraday.application.services.bar_aggregation import BarAggregationService
 from intraday.domain.market_data.contracts import Quote
 from intraday.infrastructure.market_data_providers.dhan.async_worker import (
     run_worker_against_stream,
 )
 from intraday.infrastructure.market_data_providers.dhan.fake_tcp_server import FakeDhanTcpServer
 from intraday.infrastructure.market_data_providers.dhan.instruments import observation_universe
+from intraday.infrastructure.persistence.live_market_data_repositories import (
+    DjangoAggregatedBarRepository,
+    DjangoLiveQuoteRepository,
+)
 
 _HEADER_STRUCT = struct.Struct("<BHBi")
 _DEFAULT_PACKET_COUNT = 20
-_DEFAULT_BASE_EPOCH = 1735900800
 
 
 def _synthetic_ticker_packet(*, security_id: int, ltp: float, ltt_epoch: int) -> bytes:
@@ -60,8 +67,18 @@ def _build_synthetic_script(packet_count: int) -> tuple[bytes, ...]:
     23's own `observation_universe()` - never a separately hard-coded
     list), producing a small, deterministic, gently-varying price per
     packet so a human watching the command's output sees plausibly
-    real-looking ticks rather than one repeated static value."""
+    real-looking ticks rather than one repeated static value.
+
+    Checkpoint 58: timestamps are anchored to the REAL current instant
+    (seconds in the past, one per packet), not a fixed historical
+    epoch - `BarAggregationService.aggregate_and_persist()` only looks
+    back `DEFAULT_LOOKBACK` (8 hours) from `as_of`, so a fixed
+    2025-dated epoch would silently produce ZERO bars regardless of
+    how many quotes were persisted. Anchoring to "now" is what makes
+    the new quote-to-bar wiring this checkpoint adds actually produce
+    a real, non-empty aggregation result."""
     instruments = observation_universe()
+    base_epoch = int(dt.datetime.now(tz=dt.UTC).timestamp()) - packet_count
     packets: list[bytes] = []
     for i in range(packet_count):
         instrument = instruments[i % len(instruments)]
@@ -69,7 +86,7 @@ def _build_synthetic_script(packet_count: int) -> tuple[bytes, ...]:
             _synthetic_ticker_packet(
                 security_id=instrument.security_id,
                 ltp=100.0 + (i % 10),
-                ltt_epoch=_DEFAULT_BASE_EPOCH + i,
+                ltt_epoch=base_epoch + i,
             )
         )
     return tuple(packets)
@@ -127,19 +144,38 @@ class Command(BaseCommand):
         security_id_to_symbol = {i.security_id: i.symbol for i in instruments}
         script = _build_synthetic_script(packet_count)
 
+        # Checkpoint 58: the ONE concrete missing link the fresh
+        # product-readiness reassessment identified - every quote this
+        # worker decodes is now actually PERSISTED and AGGREGATED
+        # through the REAL, unchanged `BarAggregationService`
+        # (Checkpoint 24A), never a second bar engine. Prior to this
+        # checkpoint, `on_quote` only printed to stdout - the quotes
+        # never reached anything the rest of the system could use.
+        quote_repository = DjangoLiveQuoteRepository()
+        bar_service = BarAggregationService(
+            quote_repository=quote_repository, bar_repository=DjangoAggregatedBarRepository()
+        )
+
         server = FakeDhanTcpServer(scripted_packets=script)
         await server.start()
         try:
             reader, writer = await asyncio.open_connection(server.host, server.port)
             try:
 
-                def _on_quote(quote: Quote) -> None:
+                async def _on_quote(quote: Quote) -> None:
+                    # Django's ORM refuses synchronous DB access from
+                    # inside an async context (`SynchronousOnlyOperation`)
+                    # - `sync_to_async` is the standard, documented
+                    # bridge, not a workaround unique to this module.
+                    await sync_to_async(quote_repository.save_all)(
+                        (quote,), fetched_at=dt.datetime.now(tz=dt.UTC)
+                    )
                     self.stdout.write(
                         f"  quote: {quote.instrument_id} last_price={quote.last_price} "
                         f"at={quote.timestamp.isoformat()}"
                     )
 
-                return await run_worker_against_stream(
+                result = await run_worker_against_stream(
                     reader,
                     security_id_to_symbol=security_id_to_symbol,
                     on_quote=_on_quote,
@@ -149,3 +185,26 @@ class Command(BaseCommand):
                 await writer.wait_closed()
         finally:
             await server.stop()
+
+        # With every quote now persisted, aggregate them into REAL
+        # 1-minute bars through the REAL, unchanged aggregation engine
+        # - the exact wiring the Checkpoint 58 scorecard identified as
+        # the single concrete missing link between "live data arrives"
+        # and "the rest of the system can use it."
+        aggregation = await sync_to_async(bar_service.aggregate_and_persist)(
+            as_of=dt.datetime.now(tz=dt.UTC)
+        )
+        self.stdout.write(
+            f"  aggregated {len(aggregation.bars)} bar(s) from the synthetic feed "
+            f"(missing_intervals={len(aggregation.missing_intervals)} "
+            f"anomalous_observations={len(aggregation.anomalous_observations)})"
+        )
+        # `sync_to_async` runs each DB call in its own worker thread,
+        # each opening its own real DB connection - Django only closes
+        # those automatically at the end of an HTTP request, which this
+        # bare `asyncio.run()` process never has. Closing explicitly
+        # here avoids leaking a connection past the command's own
+        # lifetime (surfaced as a real test-teardown warning during
+        # this checkpoint's own verification, not a hypothetical).
+        await sync_to_async(close_old_connections)()
+        return result
