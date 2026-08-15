@@ -17,7 +17,7 @@ from typing import Protocol
 
 from intraday.domain.order.contracts import OrderIntent, OrderStatus
 from intraday.domain.position.contracts import Position
-from intraday.domain.shared_kernel.contracts import OrderId, ensure_utc
+from intraday.domain.shared_kernel.contracts import InstrumentId, OrderId, ensure_utc
 from intraday.domain.trade.contracts import Trade
 
 
@@ -31,9 +31,17 @@ class BrokerConnectionState(enum.Enum):
 class BrokerOrderStatusReport:
     """A broker's report of one order's current status, already translated
     into domain vocabulary (`OrderStatus`) by the adapter — this contract
-    never carries a broker-specific status code or field."""
+    never carries a broker-specific status code or field.
+
+    Checkpoint 35 Part 9: `instrument_id` was added (Checkpoint 34 shipped
+    without it, an acknowledged gap — `PRODUCT_READINESS_GAP_ANALYSIS.md`/
+    `PAPER_TRADING_ARCHITECTURE.md`'s own "Gaps" section) specifically so
+    the risk engine's `instruments_with_pending_or_open_orders` duplicate
+    check can be populated correctly from `BrokerGateway.get_orders()`
+    without a second lookup."""
 
     order_id: OrderId
+    instrument_id: InstrumentId
     status: OrderStatus
     filled_quantity: Decimal
     average_fill_price: Decimal | None

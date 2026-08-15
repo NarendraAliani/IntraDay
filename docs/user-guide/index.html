@@ -167,7 +167,7 @@
           <tr><td>Live market-data observation (quotes, 1-minute bars)</td><td><span class="badge badge--ready">Implemented</span></td></tr>
           <tr><td>Trading-grade OHLC data</td><td><span class="badge badge--not-ready">NOT IMPLEMENTED — data classified SAMPLE_BAR</span></td></tr>
           <tr><td>Trading signal generation</td><td><span class="badge badge--not-ready">NOT IMPLEMENTED</span></td></tr>
-          <tr><td>Paper trading (backend: order state machine, risk engine, kill switch, simulated execution)</td><td><span class="badge badge--not-ready">PARTIAL — backend implemented and tested; no order-submission UI control yet</span></td></tr>
+          <tr><td>Paper trading (order state machine, risk engine, kill switch, simulated execution, order-entry UI, order/trade/position monitor)</td><td><span class="badge badge--not-ready">PARTIAL — end-to-end loop implemented and tested; scheduled auto-expiry and an automatic live-price feed remain manual/undone</span></td></tr>
           <tr><td>Order placement / real trading</td><td><span class="badge badge--not-ready">NOT IMPLEMENTED — LIVE mode does not exist</span></td></tr>
         </tbody>
       </table>
@@ -852,7 +852,7 @@ What you see on screen</code></pre>
         <dt>RBAC</dt><dd>Role-Based Access Control — what your account is/isn't allowed to do.</dd>
         <dt>Authentication</dt><dd>Proving who you are (logging in).</dd>
         <dt>Authorization</dt><dd>What you're allowed to do once logged in.</dd>
-        <dt>Paper trading</dt><dd>Simulated trading with fake money. Not implemented.</dd>
+        <dt>Paper trading</dt><dd>Simulated trading with fake money. Partially implemented — order submission, risk gating, and position tracking work; automatic scheduling and a live-price feed are not yet wired.</dd>
         <dt>Live trading</dt><dd>Real trading with real money. Not implemented; structurally blocked outside production configuration.</dd>
       </dl>
     </section>

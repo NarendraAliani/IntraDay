@@ -29,6 +29,7 @@ NOW = datetime(2026, 1, 5, 4, 0, tzinfo=UTC)
 def _broker_order(order_id: str, status: OrderStatus) -> BrokerOrderStatusReport:
     return BrokerOrderStatusReport(
         order_id=order_id,
+        instrument_id=RELIANCE,
         status=status,
         filled_quantity=Decimal("0"),
         average_fill_price=None,

@@ -369,6 +369,116 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/config/paper-trading/expire-session/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Checkpoint 35 Part 7: manually triggers end-of-session expiry -
+         *     see `expire_end_of_session()`'s own docstring for the honest,
+         *     disclosed limitation that this is not yet invoked automatically by
+         *     a scheduler.
+         */
+        post: operations["api_v1_config_paper_trading_expire_session_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config/paper-trading/funds/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["api_v1_config_paper_trading_funds_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config/paper-trading/orders/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["api_v1_config_paper_trading_orders_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config/paper-trading/orders/submit/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Submits ONE PAPER order (never a real broker order - see this
+         *     module's own docstring). Risk-gated by
+         *     `PaperTradingService.submit_order()` - a REJECTED risk decision is
+         *     still an HTTP 200 (the request was handled correctly; the ORDER
+         *     was rejected, which is a normal, expected, fully-informative
+         *     outcome, not a request error).
+         */
+        post: operations["api_v1_config_paper_trading_orders_submit_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config/paper-trading/positions/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["api_v1_config_paper_trading_positions_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config/paper-trading/trades/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["api_v1_config_paper_trading_trades_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/config/risk/{configuration_id}/": {
         parameters: {
             query?: never;
@@ -1256,12 +1366,111 @@ export interface components {
             subscription_active: boolean;
         };
         /**
+         * @description * `MARKET` - MARKET
+         *     * `LIMIT` - LIMIT
+         *     * `SL` - SL
+         *     * `SL-M` - SL-M
+         * @enum {string}
+         */
+        OrderTypeEnum: "MARKET" | "LIMIT" | "SL" | "SL-M";
+        /**
          * @description * `activated` - activated
          *     * `already_active` - already_active
          *     * `rejected` - rejected
          * @enum {string}
          */
         OutcomeEnum: "activated" | "already_active" | "rejected";
+        PaperExpireSessionResponse: {
+            expired_order_ids: string[];
+        };
+        PaperFundsResponse: {
+            /** Format: decimal */
+            available_balance: string;
+            /** Format: decimal */
+            utilized_margin: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        PaperOrderResponse: {
+            order_id: string;
+            idempotency_key: string;
+            correlation_id: string;
+            instrument_id: string;
+            strategy_id: string;
+            side: string;
+            order_type: string;
+            /** Format: decimal */
+            quantity: string;
+            /** Format: decimal */
+            filled_quantity: string;
+            /** Format: decimal */
+            limit_price: string | null;
+            /** Format: decimal */
+            trigger_price: string | null;
+            status: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+            state_history: {
+                [key: string]: unknown;
+            }[];
+        };
+        PaperOrderSubmitRequest: {
+            instrument_id: string;
+            side: components["schemas"]["SideEnum"];
+            /** Format: decimal */
+            quantity: string;
+            order_type: components["schemas"]["OrderTypeEnum"];
+            strategy_id: string;
+            /** Format: decimal */
+            limit_price?: string | null;
+            /** Format: decimal */
+            trigger_price?: string | null;
+        };
+        PaperOrderSubmitResponse: {
+            risk_outcome: components["schemas"]["RiskOutcomeEnum"];
+            risk_reason_code: string | null;
+            risk_explanation: string;
+            order_status: string | null;
+        };
+        PaperPositionResponse: {
+            position_id: string;
+            instrument_id: string;
+            direction: string;
+            /** Format: decimal */
+            quantity: string;
+            /** Format: decimal */
+            average_entry_price: string;
+            /** Format: decimal */
+            realized_pnl: string;
+            /** Format: decimal */
+            unrealized_pnl: string;
+            /** Format: date-time */
+            opened_at: string;
+            /** Format: date-time */
+            closed_at: string | null;
+            status: string;
+        };
+        PaperTradeResponse: {
+            trade_id: string;
+            strategy_id: string;
+            instrument_id: string;
+            direction: string;
+            order_ids: string[];
+            /** Format: decimal */
+            entry_price: string;
+            /** Format: decimal */
+            exit_price: string;
+            /** Format: decimal */
+            quantity: string;
+            /** Format: decimal */
+            realized_pnl: string;
+            /** Format: date-time */
+            opened_at: string;
+            /** Format: date-time */
+            closed_at: string;
+        };
         ParameterDefinition: {
             parameter_id: string;
             label: string;
@@ -1378,6 +1587,12 @@ export interface components {
             /** Format: decimal */
             max_per_trade_risk: string;
         };
+        /**
+         * @description * `APPROVED` - APPROVED
+         *     * `REJECTED` - REJECTED
+         * @enum {string}
+         */
+        RiskOutcomeEnum: "APPROVED" | "REJECTED";
         SessionResponse: {
             /** Format: date */
             session_date: string;
@@ -1397,6 +1612,12 @@ export interface components {
          * @enum {string}
          */
         SessionResponseStatusEnum: "PRE_OPEN" | "OPEN" | "CLOSED";
+        /**
+         * @description * `BUY` - BUY
+         *     * `SELL` - SELL
+         * @enum {string}
+         */
+        SideEnum: "BUY" | "SELL";
         /**
          * @description * `CONNECTED_FRESH` - CONNECTED_FRESH
          *     * `CONNECTED_STALE` - CONNECTED_STALE
@@ -1913,6 +2134,133 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionResponse"];
+                };
+            };
+        };
+    };
+    api_v1_config_paper_trading_expire_session_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaperExpireSessionResponse"];
+                };
+            };
+        };
+    };
+    api_v1_config_paper_trading_funds_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaperFundsResponse"];
+                };
+            };
+        };
+    };
+    api_v1_config_paper_trading_orders_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaperOrderResponse"][];
+                };
+            };
+        };
+    };
+    api_v1_config_paper_trading_orders_submit_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PaperOrderSubmitRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["PaperOrderSubmitRequest"];
+                "multipart/form-data": components["schemas"]["PaperOrderSubmitRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaperOrderSubmitResponse"];
+                };
+            };
+            /** @description Invalid order parameters */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    api_v1_config_paper_trading_positions_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaperPositionResponse"][];
+                };
+            };
+        };
+    };
+    api_v1_config_paper_trading_trades_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaperTradeResponse"][];
                 };
             };
         };

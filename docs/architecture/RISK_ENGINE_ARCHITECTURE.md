@@ -118,7 +118,20 @@ that silently reorders the two calls fails immediately.
 Per-symbol/sector exposure limits, price-band/liquidity/spread checks,
 volatility halt, a repeated-loss circuit breaker distinct from the flat
 daily-loss limit, maximum order/modification frequency, end-of-day
-forced exit (this checkpoint's `PaperBroker.force_expire_end_of_session()`
-handles PENDING orders, but nothing calls it on a schedule yet), and
-emergency square-off (closing OPEN positions, not just rejecting new
-orders) are all still unimplemented.
+forced exit (`PaperBroker.force_expire_end_of_session()` handles
+PENDING orders and is now exposed via `POST .../paper-trading/expire-session/`,
+Checkpoint 35 - but nothing calls it on a schedule yet), and emergency
+square-off (closing OPEN positions, not just rejecting new orders) are
+all still unimplemented.
+
+## Checkpoint 35 update — instrument-level duplicate protection closed
+
+`domain.broker.BrokerOrderStatusReport` now carries `instrument_id`
+(it did not at Checkpoint 34 - a named, disclosed gap). `PaperTradingService`
+now correctly populates `instruments_with_pending_or_open_orders` from
+`BrokerGateway.get_orders()`, filtered by `domain.order.state_machine.is_terminal()`
+- a genuinely enforced second layer of duplicate-order protection,
+independent of the idempotency-key check. Proven by 4 new tests:
+a pending order blocks a second order on the same instrument (even
+with a different idempotency key); a different instrument is
+unaffected; a filled or cancelled order no longer blocks.

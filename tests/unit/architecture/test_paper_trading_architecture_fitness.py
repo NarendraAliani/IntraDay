@@ -61,7 +61,7 @@ def test_risk_evaluation_runs_before_broker_submission_in_service_source() -> No
     two calls fails this test immediately."""
     source = inspect.getsource(PaperTradingService.submit_order)
     risk_call_index = source.index("evaluate_order_risk(")
-    broker_call_index = source.rindex("self._broker.submit_order(")
+    broker_call_index = source.rindex("self.broker.submit_order(")
     assert risk_call_index < broker_call_index
 
 
@@ -74,7 +74,7 @@ def test_kill_switch_is_read_before_risk_evaluation() -> None:
     context from `self._kill_switch_status_provider()`."""
     source = inspect.getsource(PaperTradingService.submit_order)
     kill_switch_index = source.index("self._kill_switch_status_provider()")
-    broker_call_index = source.rindex("self._broker.submit_order(")
+    broker_call_index = source.rindex("self.broker.submit_order(")
     assert kill_switch_index < broker_call_index
 
 

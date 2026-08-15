@@ -1,10 +1,21 @@
 /* frontend/src/app/styles.css
  *
  * Checkpoint 9: minimal, dependency-free stylesheet for the Configuration
- * Viewer. Desktop-first, professional/clean. Active/historical status is
- * conveyed by icon + text (see ActiveBadge), never color alone.
+ * Viewer. Professional/clean. Active/historical status is conveyed by
+ * icon + text (see ActiveBadge), never color alone.
+ *
+ * Checkpoint 35 Part 10/11: design-token and responsive-strategy pass
+ * (docs/architecture/FRONTEND_DESIGN_SYSTEM.md). EXTENDS the existing
+ * token set rather than replacing it - Checkpoint 9's original 11
+ * color tokens remain unchanged, every new token fills a genuine gap
+ * the audit found (no spacing scale, no radius/shadow/focus/z-index
+ * tokens, and - the most consequential finding - ZERO `@media` rules
+ * anywhere in this file before this checkpoint, meaning the entire
+ * frontend was desktop-only). See the design-system doc for the full
+ * audit findings and what remains unaddressed.
  */
 :root {
+  /* --- Colors (Checkpoint 9, unchanged) ------------------------------ */
   --color-bg: #f7f8fa;
   --color-surface: #ffffff;
   --color-border: #d7dbe0;
@@ -16,6 +27,81 @@
   --color-historical-border: #7a8290;
   --color-error-bg: #fdecea;
   --color-error-border: #c0392b;
+
+  /* --- Colors (Checkpoint 35: filling documented gaps) --------------- */
+  --color-warning-bg: #fff4e0;
+  --color-warning-border: #b7791f;
+  --color-info-bg: #e8f1fc;
+  --color-info-border: #2b6cb0;
+  --color-danger-bg: var(--color-error-bg);
+  --color-danger-border: var(--color-error-border);
+  --color-success-bg: var(--color-active-bg);
+  --color-success-border: var(--color-active-border);
+  --color-on-accent: #ffffff;
+  --color-overlay: rgba(20, 24, 29, 0.5);
+  --color-equity-line: #2f7d4f;
+
+  /* Paper/live safety - a DELIBERATELY distinct hue from both success
+     (green) and danger (red), so "this is a simulation" never reads as
+     "this succeeded" or "this failed" - see FRONTEND_DESIGN_SYSTEM.md
+     "Paper vs. Live visual conventions". */
+  --color-paper-bg: #eef0ff;
+  --color-paper-border: #4c51bf;
+  --color-paper-text: #363c96;
+
+  /* --- Spacing scale (4px base unit) ---------------------------------- */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+  --space-8: 4rem;
+
+  /* --- Typography scale ------------------------------------------------ */
+  --font-size-xs: 0.75rem;
+  --font-size-sm: 0.85rem;
+  --font-size-base: 1rem;
+  --font-size-lg: 1.15rem;
+  --font-size-xl: 1.4rem;
+  --font-size-2xl: 1.75rem;
+  --line-height-tight: 1.25;
+  --line-height-base: 1.5;
+
+  /* --- Radius / shadow / border ---------------------------------------- */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-pill: 999px;
+  --shadow-sm: 0 1px 2px rgba(28, 37, 48, 0.06);
+  --shadow-md: 0 4px 12px rgba(28, 37, 48, 0.1);
+  --shadow-lg: 0 8px 30px rgba(0, 0, 0, 0.25);
+
+  /* --- Focus ring (WCAG: visible for keyboard users) -------------------- */
+  --focus-ring: 0 0 0 3px rgba(43, 108, 176, 0.45);
+  --focus-ring-color: #2b6cb0;
+
+  /* --- Motion ------------------------------------------------------------ */
+  --transition-fast: 120ms ease;
+  --transition-base: 200ms ease;
+
+  /* --- Z-index scale ------------------------------------------------------ */
+  --z-nav: 10;
+  --z-dropdown: 20;
+  --z-modal: 30;
+  --z-toast: 40;
+
+  /* --- Layout ------------------------------------------------------------- */
+  --page-max-width: 960px;
+  --page-max-width-wide: 1200px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 * {
@@ -30,19 +116,75 @@ body {
     -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
 
+/* Checkpoint 35: visible focus state for every keyboard-focusable
+   element - WCAG 2.4.7. Applied globally rather than per-component so
+   no interactive element can ship without one by omission. */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[tabindex]:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-sm);
+}
+
 main {
-  max-width: 960px;
+  max-width: var(--page-max-width);
   margin: 0 auto;
-  padding: 2rem 1.5rem 4rem;
+  padding: var(--space-6) var(--space-5) var(--space-8);
+}
+
+/* Checkpoint 35 Part 10: responsive base - tablet and mobile gutters/
+   type-scale, applied globally. Every page that uses `main`, `.badge`,
+   `.callout`, cards, and tables (i.e. every page in this app) inherits
+   this without per-page media queries. */
+@media (max-width: 768px) {
+  main {
+    padding: var(--space-5) var(--space-4) var(--space-6);
+  }
+}
+
+@media (max-width: 480px) {
+  main {
+    padding: var(--space-4) var(--space-3) var(--space-5);
+  }
+
+  h1 {
+    font-size: var(--font-size-xl);
+  }
+}
+
+/* Checkpoint 35: any table wider than its container scrolls inside
+   itself - the page body must never scroll horizontally. Wrap a
+   `<table>` in `.table-scroll` to opt in (see PaperTradingPage/
+   ReportsOverviewPage for usage). */
+.table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .app-shell__header {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
   padding-bottom: 1rem;
   margin-bottom: 0.5rem;
   border-bottom: 1px solid var(--color-border);
+}
+
+@media (max-width: 640px) {
+  .app-shell__header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .app-shell__nav {
+    order: 2;
+  }
 }
 
 .app-shell__header button {
@@ -111,7 +253,7 @@ main {
   padding: 0.55rem 1rem;
   border: 1px solid var(--color-active-border);
   background: var(--color-active-border);
-  color: #fff;
+  color: var(--color-on-accent);
   border-radius: 4px;
   cursor: pointer;
   font-weight: 600;
@@ -190,7 +332,7 @@ main {
   padding: 0.45rem 1rem;
   border: 1px solid var(--color-active-border);
   background: var(--color-active-border);
-  color: #fff;
+  color: var(--color-on-accent);
   border-radius: 4px;
   cursor: pointer;
 }
@@ -308,7 +450,7 @@ dd {
   margin-top: 0.75rem;
   padding: 0.4rem 0.9rem;
   border: 1px solid var(--color-active-border);
-  background: #fff;
+  background: var(--color-on-accent);
   color: var(--color-active-border);
   border-radius: 4px;
   cursor: pointer;
@@ -322,7 +464,7 @@ dd {
 .dialog-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(20, 24, 29, 0.5);
+  background: var(--color-overlay);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -335,7 +477,7 @@ dd {
   padding: 1.5rem;
   max-width: 480px;
   width: 90%;
-  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.25);
+  box-shadow: var(--shadow-lg);
 }
 
 .dialog h3 {
@@ -374,7 +516,7 @@ dd {
 .dialog__actions button:last-child {
   border: 1px solid var(--color-active-border);
   background: var(--color-active-border);
-  color: #fff;
+  color: var(--color-on-accent);
 }
 
 .dialog__actions button:disabled {
@@ -398,6 +540,7 @@ dd {
 
 .app-shell__nav {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
 }
 
@@ -418,9 +561,25 @@ dd {
 }
 
 .badge--pending {
-  background: #fff8e1;
-  border-color: #b98900;
-  color: #8a6600;
+  background: var(--color-warning-bg);
+  border-color: var(--color-warning-border);
+  color: var(--color-warning-border);
+}
+
+.badge--info {
+  background: var(--color-info-bg);
+  border-color: var(--color-info-border);
+  color: var(--color-info-border);
+}
+
+/* Checkpoint 35: the ONE paper-mode badge style - used everywhere a
+   screen needs to say "this is simulated," visually distinct from
+   both success (green) and danger (red) so it can never be misread as
+   either. See FRONTEND_DESIGN_SYSTEM.md. */
+.badge--paper {
+  background: var(--color-paper-bg);
+  border-color: var(--color-paper-border);
+  color: var(--color-paper-text);
 }
 
 .badge--danger {
@@ -517,7 +676,7 @@ dd {
 
 .settings-card__actions button[type="submit"] {
   background: var(--color-active-border);
-  color: #fff;
+  color: var(--color-on-accent);
 }
 
 .settings-card__actions button[type="button"] {
@@ -593,7 +752,7 @@ dd {
   border-radius: 4px;
   border: 1px solid var(--color-active-border);
   background: var(--color-active-border);
-  color: #fff;
+  color: var(--color-on-accent);
   cursor: pointer;
 }
 
@@ -756,7 +915,7 @@ dd {
 }
 
 .equity-chart__line {
-  stroke: #2f7d4f;
+  stroke: var(--color-equity-line);
   stroke-width: 2;
 }
 
@@ -766,7 +925,7 @@ dd {
 }
 
 .backtest-results__warning {
-  color: var(--color-error-border, #b3261e);
+  color: var(--color-error-border);
 }
 
 .backtest-results__filters {
@@ -794,7 +953,7 @@ dd {
 }
 
 .backtest-results__kpi--cost strong {
-  color: var(--color-error-border, #b3261e);
+  color: var(--color-error-border);
 }
 
 .backtest-results__kpi--net strong {
@@ -857,4 +1016,85 @@ dd {
 
 .capability-status-section h2 {
   margin-bottom: 0.75rem;
+}
+
+/* Checkpoint 35: Paper Trading page - reuses the same KPI/form/table
+   patterns already established for Backtest Results and Settings
+   forms (design-system §Layout), not a bespoke one-off layout. */
+.paper-trading__kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--space-4);
+  margin: var(--space-3) 0;
+}
+
+.paper-trading__kpi {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.paper-trading__kpi span {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.paper-trading__kpi strong {
+  font-size: var(--font-size-lg);
+  font-variant-numeric: tabular-nums;
+}
+
+.paper-trading__pnl--positive {
+  color: var(--color-success-border);
+  font-variant-numeric: tabular-nums;
+}
+
+.paper-trading__pnl--negative {
+  color: var(--color-danger-border);
+  font-variant-numeric: tabular-nums;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--space-3) var(--space-4);
+  margin: var(--space-3) 0;
+}
+
+.form-grid label,
+.form-row label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.form-grid input,
+.form-grid select,
+.form-row input {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-base);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.form-row {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+@media (max-width: 640px) {
+  .form-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
 }

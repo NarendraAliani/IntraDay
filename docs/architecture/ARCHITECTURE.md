@@ -414,3 +414,16 @@ untouched scaffolding - this checkpoint's new code lives in
 and `control_plane/reconciliation`, `infrastructure/brokers/paper`, and
 `application/services/paper_trading.py`. No real order has been placed;
 LIVE mode does not exist anywhere in this codebase.
+
+Checkpoint 35 completes the paper-trading loop end-to-end (durable
+ledger persistence, read APIs, a real order-entry UI, order/trade/
+position/funds monitors, instrument-level duplicate-order protection,
+and a manually-triggerable end-of-session expiry) and performs a
+system-wide frontend/CSS audit - see
+`docs/architecture/FRONTEND_DESIGN_SYSTEM.md`. Headline finding: the
+frontend had zero responsive (`@media`) rules before this checkpoint;
+a token-level responsive base and a machine-checked CSS quality gate
+now exist. Automatic (scheduled) end-of-session expiry and an
+automatic live-market-data feed into the paper broker remain
+deliberate, documented gaps - see `docs/architecture/
+PAPER_TRADING_ARCHITECTURE.md`'s Checkpoint 35 update.

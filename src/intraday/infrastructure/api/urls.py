@@ -16,6 +16,7 @@ from intraday.infrastructure.api import (
     backtesting_views,
     kill_switch_views,
     market_data_views,
+    paper_trading_views,
     risk_views,
     settings_views,
     strategy_configuration_views,
@@ -43,6 +44,21 @@ urlpatterns = [
     path("kill-switch/", kill_switch_views.kill_switch_status, name="kill-switch-status"),
     path("kill-switch/engage/", kill_switch_views.kill_switch_engage, name="kill-switch-engage"),
     path("kill-switch/reset/", kill_switch_views.kill_switch_reset, name="kill-switch-reset"),
+    # --- Checkpoint 35: paper trading read APIs + order submission -------
+    path("paper-trading/orders/", paper_trading_views.paper_orders, name="paper-orders"),
+    path("paper-trading/trades/", paper_trading_views.paper_trades, name="paper-trades"),
+    path("paper-trading/positions/", paper_trading_views.paper_positions, name="paper-positions"),
+    path("paper-trading/funds/", paper_trading_views.paper_funds, name="paper-funds"),
+    path(
+        "paper-trading/orders/submit/",
+        paper_trading_views.paper_order_submit,
+        name="paper-order-submit",
+    ),
+    path(
+        "paper-trading/expire-session/",
+        paper_trading_views.paper_expire_session,
+        name="paper-expire-session",
+    ),
     path("settings/telegram/", settings_views.telegram_settings, name="settings-telegram"),
     path(
         "settings/telegram/save/",

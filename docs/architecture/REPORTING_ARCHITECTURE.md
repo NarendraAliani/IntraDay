@@ -137,7 +137,32 @@ via the existing results API for a future export endpoint to read).
 ## Deferred / explicitly out of scope
 
 Report persistence (a `ReportRecord` model), a report-generation
-service/scheduler, PDF/CSV/JSON export implementation, `SIGNAL_REPORT`/
-`RISK_REPORT` (no underlying data exists for either yet — risk_engine
-remains empty scaffolding, signal reports have no assembler),
+service/scheduler, PDF/CSV/JSON export implementation, `SIGNAL_REPORT`
+(no underlying data exists — signal reports have no assembler),
 `PRODUCTION_REPORT` (no live trading exists).
+
+## Checkpoint 35 update
+
+`RISK_REPORT`'s catalogue status was upgraded `NOT_YET_IMPLEMENTED` ->
+`PARTIAL`: `trading_engine.risk_engine.evaluate_order_risk()` now
+produces real, auditable `OrderRiskDecision` records for every paper
+order (Checkpoint 34/35) — a genuine risk-breach data source now
+exists, even though no dedicated report-presentation surface reads it
+yet beyond the Paper Trading page's own kill-switch/risk-status
+sections. `PORTFOLIO_REPORT` remains `PARTIAL` (portfolio *backtesting*
+data exists; paper-trading positions are a separate, newer data source
+not yet unified into one portfolio view). No new report TYPE was added
+to `REPORT_CATALOGUE` this checkpoint — Checkpoint 32's original ten
+report types remain the complete, fixed catalogue; this checkpoint only
+updated existing entries' `status`/`required_data` to reflect newly-
+available data, per the reporting architecture's own non-duplication
+discipline (Part 15's "use the existing reporting architecture... do
+not create a second reporting framework").
+
+The Paper Trading page (`PaperTradingPage.tsx`) is, in effect, a live
+operational view over the same paper-order/trade/position/funds data a
+future `Order Lifecycle Report`/`Trade Report`/`Position Report`/`P&L
+Report` would present in report form — the underlying API
+(`/api/v1/config/paper-trading/...`) is shared and report-ready; only
+the report-specific presentation (filtering by date/session/strategy/
+instrument, export) remains unbuilt.

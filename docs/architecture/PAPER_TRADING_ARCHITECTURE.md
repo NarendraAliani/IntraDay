@@ -107,23 +107,66 @@ non-bypassable entry point: kill switch → risk engine →
 
 - **No frontend order-submission control.** The Paper Trading page
   (`frontend/src/features/paper-trading/PaperTradingPage.tsx`) shows
-  real, wired kill-switch controls and honest `CapabilityStatus`
-  placeholders for everything else — no UI action constructs and
-  submits an `OrderIntent` yet.
-- **No automatic ledger persistence.** `PaperOrderRecord`/etc. exist as
-  schema; nothing writes to them automatically after a
-  `PaperTradingService.submit_order()` call yet.
-- **No scheduled `force_expire_end_of_session()` trigger.**
-- **No live market-data feed into `record_price()`.** A real
-  integration would need to wire the existing (SAMPLE_BAR-quality)
-  live quote/bar pipeline (Checkpoints 23-24A) into
-  `PaperBroker.record_price()` — not done this checkpoint.
-- **`BrokerOrderStatusReport` does not carry `instrument_id`** — so
-  the risk engine's "instrument already has a pending order" check
-  (`instruments_with_pending_or_open_orders`) is currently always
-  empty when called from `PaperTradingService`; the idempotency-key
-  check remains the real, enforced duplicate-order protection. Honestly
-  disclosed in the service's own code comment, not silently ignored.
+  real, wired kill-switch controls - Checkpoint 35 closed this gap,
+  see below.
 
-None of these gaps allow a real order to be placed — every safety rule
-this checkpoint operated under remains intact.
+## Checkpoint 35 update — the loop closed
+
+Every gap named above at Checkpoint 34 was addressed this checkpoint,
+except one deliberately deferred item:
+
+- **Automatic ledger persistence: DONE.** `application/services/paper_trading.py::PaperTradingService`
+  now accepts an optional `ledger` (`application/repositories/paper_ledger.py::PaperLedgerRepository`)
+  and resyncs the FULL current broker state (order + events, every
+  trade, every position, funds) after every `submit_order()` call, in
+  one atomic transaction (`infrastructure/persistence/paper_ledger_repository.py::DjangoPaperLedgerRepository`).
+  Proven with dedicated tests: persistence, reload via a brand-new
+  repository instance (simulating a process restart), duplicate-sync
+  idempotency, and "ledger is optional, never required."
+- **Frontend order submission: DONE.** `PaperTradingPage.tsx` has a
+  real order-entry form (MARKET/LIMIT/SL/SL-M, instrument/side/
+  quantity/limit/trigger/strategy) wired to `POST .../paper-trading/orders/submit/`.
+- **Order/trade/position/funds monitor: DONE.** Real, persisted-data
+  tables reading `GET .../paper-trading/{orders,trades,positions,funds}/`.
+- **`instrument_id` on `BrokerOrderStatusReport`: DONE.** Added to the
+  domain contract; `PaperBroker`/`PaperTradingService` both updated;
+  the risk engine's `instruments_with_pending_or_open_orders` check is
+  now correctly populated (4 new tests: same-instrument-blocks,
+  different-instrument-allowed, filled/cancelled-no-longer-blocks,
+  different-idempotency-keys-cannot-bypass).
+- **Scheduled end-of-session expiry: PARTIALLY DONE.** The underlying
+  function (`PaperBroker.force_expire_end_of_session()`, Checkpoint 34)
+  is now exposed via `POST .../paper-trading/expire-session/` and
+  persists the resulting state - genuinely usable and tested
+  (`test_expire_session_expires_pending_orders`). **What remains
+  undone**: no scheduler (Celery beat or equivalent) calls this
+  automatically at the market-session boundary - it must be manually
+  triggered. This is a direct consequence of the still-unresolved
+  Checkpoint 32 runtime-architecture decision (a persistent worker
+  process is designed, not implemented) - see
+  `docs/architecture/RUNTIME_ARCHITECTURE_DECISION.md`.
+- **Live market-data feed into `record_price()`: NOT DONE, by
+  deliberate decision, documented per Part 8's own explicit
+  instruction.** `PaperBroker.record_price()` remains callable by any
+  caller with a real price - this checkpoint did NOT wire the existing
+  live quote/bar pipeline (Checkpoints 23-24A) to call it
+  automatically. **Reasoning:** that pipeline produces `SAMPLE_BAR`-
+  quality data (Checkpoint 25.1/31), and Part 8 explicitly warned
+  "do NOT promote SAMPLE_BAR to TRADING_GRADE_BAR merely because paper
+  trading needs prices." Wiring it automatically would create an
+  implicit, easy-to-miss coupling between an admittedly-imperfect data
+  source and the paper broker's fills - acceptable for occasional
+  manual/test use (which is how this checkpoint's own test suite and
+  the order-entry form's notional-estimate logic use `get_latest_price()`),
+  but a genuine automatic feed deserves its own reviewed design (retry/
+  staleness/gap handling, mirroring the live-market-data health model
+  already built for observation) rather than a quick wire-up under this
+  checkpoint's time constraints. **Data used today**: whatever value a
+  caller (a test, or an operator manually recording a reference price)
+  passes to `record_price()` - explicitly NOT a continuous, automatic
+  subscription. **Never used for anything but paper simulation** - no
+  code path connects this to LIVE execution, which does not exist.
+
+None of the remaining gaps (unscheduled expiry, no automatic price
+feed) allow a real order to be placed — every safety rule this project
+operates under remains intact.

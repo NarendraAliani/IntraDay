@@ -249,6 +249,13 @@ class PaperBroker:
     def get_order_status(self, order_id: OrderId) -> BrokerOrderStatusReport:
         return self._report(self._require(order_id))
 
+    def get_order_events(self, order_id: OrderId) -> tuple[OrderEvent, ...]:
+        """Checkpoint 35 Part 3: not part of `BrokerGateway` - the full,
+        ordered event history for one order, so a caller (the ledger
+        persistence layer) can record every material state transition,
+        not only the latest snapshot."""
+        return tuple(self._require(order_id).events)
+
     def get_orders(self) -> tuple[BrokerOrderStatusReport, ...]:
         return tuple(self._report(record) for record in self._orders.values())
 
@@ -266,6 +273,14 @@ class PaperBroker:
         )
 
     # --- Paper-specific surface (not part of BrokerGateway) --------------
+
+    def get_latest_price(self, instrument_id: InstrumentId) -> Decimal | None:
+        """Checkpoint 35 Part 4: the last price `record_price()` observed
+        for `instrument_id`, or `None` if none has ever been recorded -
+        used by the order-entry API to estimate notional for risk
+        evaluation before a MARKET order is actually filled. Never
+        fabricates a price."""
+        return self._latest_prices.get(instrument_id)
 
     def record_price(
         self, instrument_id: InstrumentId, price: Decimal, timestamp: datetime
@@ -481,6 +496,7 @@ class PaperBroker:
     def _report(self, record: _PaperOrder) -> BrokerOrderStatusReport:
         return BrokerOrderStatusReport(
             order_id=record.intent.order_id,
+            instrument_id=record.intent.instrument_id,
             status=record.status,
             filled_quantity=record.filled_quantity,
             average_fill_price=record.average_fill_price,

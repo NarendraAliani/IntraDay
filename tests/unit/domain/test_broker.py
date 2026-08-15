@@ -22,6 +22,7 @@ def test_order_status_report_rejects_negative_fill_quantity() -> None:
     with pytest.raises(ValueError):
         BrokerOrderStatusReport(
             order_id="ord-1",
+            instrument_id="NSE:RELIANCE",
             status=OrderStatus.FILLED,
             filled_quantity=Decimal("-1"),
             average_fill_price=Decimal("100"),
@@ -33,6 +34,7 @@ def test_order_status_report_rejects_naive_timestamp() -> None:
     with pytest.raises(ValueError):
         BrokerOrderStatusReport(
             order_id="ord-1",
+            instrument_id="NSE:RELIANCE",
             status=OrderStatus.PENDING,
             filled_quantity=Decimal("0"),
             average_fill_price=None,

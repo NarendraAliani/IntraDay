@@ -26,8 +26,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
+from intraday.application.repositories.paper_ledger import PaperLedgerRepository
 from intraday.domain.broker.contracts import BrokerGateway, BrokerOrderStatusReport
 from intraday.domain.order.contracts import OrderIntent
+from intraday.domain.order.idempotency import derive_correlation_id
+from intraday.domain.order.state_machine import is_terminal
 from intraday.domain.position.contracts import PositionStatus
 from intraday.domain.risk.contracts import RiskDecisionOutcome, RiskLimits, TradingHaltStatus
 from intraday.trading_engine.risk_engine.contracts import OrderRiskDecision
@@ -65,14 +68,16 @@ class PaperTradingService:
         max_total_exposure: Decimal,
         kill_switch_status_provider: KillSwitchStatusProvider,
         clock: Clock,
+        ledger: PaperLedgerRepository | None = None,
     ) -> None:
-        self._broker = broker
+        self.broker = broker
         self._risk_limits = risk_limits
         self._risk_configuration_version = risk_configuration_version
         self._max_concurrent_positions = max_concurrent_positions
         self._max_total_exposure = max_total_exposure
         self._kill_switch_status_provider = kill_switch_status_provider
         self._clock = clock
+        self._ledger = ledger
 
     def submit_order(
         self,
@@ -85,14 +90,14 @@ class PaperTradingService:
         already_submitted_idempotency_keys: frozenset[str],
     ) -> PaperOrderSubmissionResult:
         """The one, non-bypassable entry point for a paper order -
-        NEVER calls `self._broker.submit_order()` without first
+        NEVER calls `self.broker.submit_order()` without first
         checking the kill switch and calling `evaluate_order_risk()`
         (Part 19's architecture-fitness requirement, proven by a
         dedicated test, not only by this docstring)."""
         now = self._clock()
         kill_switch_status = self._kill_switch_status_provider()
 
-        positions = self._broker.get_positions()
+        positions = self.broker.get_positions()
         open_positions = [p for p in positions if p.status is PositionStatus.OPEN]
         position_for_instrument = next(
             (p for p in open_positions if p.instrument_id == order.instrument_id), None
@@ -120,22 +125,48 @@ class PaperTradingService:
             strategy_is_active=strategy_is_active,
             data_quality_is_stale=data_quality_is_stale,
             already_submitted_idempotency_keys=already_submitted_idempotency_keys,
-            # Checkpoint 34's `BrokerOrderStatusReport` (the only
-            # broker-side order view this service reads) does not carry
-            # `instrument_id` - so instrument-level duplicate-pending-
-            # order detection is NOT populated here; the idempotency-key
-            # check above is the real, enforced duplicate-order
-            # protection this checkpoint provides. Honestly left as an
-            # empty set rather than fabricating instrument coverage the
-            # data does not actually support - a future checkpoint
-            # extending `BrokerOrderStatusReport` (or querying the
-            # persisted ledger instead) can close this gap properly.
-            instruments_with_pending_or_open_orders=frozenset(),
+            # Checkpoint 35 Part 9: `BrokerOrderStatusReport` now carries
+            # `instrument_id` (Checkpoint 34's own acknowledged gap,
+            # closed this checkpoint) - every order in a non-terminal
+            # state (CREATED/SUBMITTED/TRANSIT/ACKNOWLEDGED/PENDING/
+            # PARTIALLY_FILLED/CANCEL_REQUESTED) blocks new orders on
+            # the same instrument; a terminal order (FILLED/CANCELLED/
+            # REJECTED/EXPIRED/ERROR) never does, reusing
+            # `domain.order.state_machine.is_terminal` as the single
+            # source of truth for "is this order still open," never a
+            # second, hand-maintained status list.
+            instruments_with_pending_or_open_orders=frozenset(
+                report.instrument_id
+                for report in self.broker.get_orders()
+                if not is_terminal(report.status)
+            ),
         )
 
         decision = evaluate_order_risk(order, context)
         if decision.outcome is RiskDecisionOutcome.REJECTED:
             return PaperOrderSubmissionResult(risk_decision=decision, broker_report=None)
 
-        report = self._broker.submit_order(order)
+        report = self.broker.submit_order(order)
+        self._persist(order, report)
         return PaperOrderSubmissionResult(risk_decision=decision, broker_report=report)
+
+    def _persist(self, order: OrderIntent, report: BrokerOrderStatusReport) -> None:
+        """Checkpoint 35 Part 3: after every broker mutation, resync the
+        FULL current broker-reported state into the durable ledger -
+        never a partial/best-effort write. A no-op (never raises,
+        never silently swallows a real persistence error - only skips
+        entirely) when no `ledger` was injected, so this service
+        remains usable in tests/contexts that don't need durability."""
+        if self._ledger is None:
+            return
+        get_events = getattr(self.broker, "get_order_events", None)
+        events = get_events(order.order_id) if get_events is not None else ()
+        self._ledger.sync_snapshot(
+            order=order,
+            report=report,
+            correlation_id=derive_correlation_id(order.idempotency_key),
+            events=events,
+            trades=self.broker.get_trades(),
+            positions=self.broker.get_positions(),
+            funds=self.broker.get_funds(),
+        )
