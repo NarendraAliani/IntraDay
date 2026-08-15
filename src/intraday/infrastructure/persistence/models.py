@@ -674,6 +674,12 @@ class PaperOrderRecord(models.Model):
     correlation_id = models.CharField(max_length=30)
     instrument_id = models.CharField(max_length=100)
     strategy_id = models.CharField(max_length=100)
+    signal_id = models.CharField(max_length=100, blank=True, default="")
+    """Checkpoint 36 Part 6: strategy-generated orders carry a
+    `signal_id` for full lineage (strategy version -> signal ID -> order
+    ID -> trade ID -> position ID). Blank for manually-submitted paper
+    orders (Checkpoint 35's order-entry form has no strategy signal
+    behind it) - never fabricated."""
     side = models.CharField(max_length=10)
     order_type = models.CharField(max_length=20)
     quantity = models.DecimalField(max_digits=18, decimal_places=4)

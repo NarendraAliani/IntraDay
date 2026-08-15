@@ -170,3 +170,30 @@ except one deliberately deferred item:
 None of the remaining gaps (unscheduled expiry, no automatic price
 feed) allow a real order to be placed — every safety rule this project
 operates under remains intact.
+
+## Checkpoint 36 update — strategy-driven paper orders, deliberately not auto-triggered
+
+`application/services/paper_signal_execution.py::PaperSignalExecutionService`
+adds the missing last mile: turning one `StrategySignal` (produced by the
+existing `StrategyExecutionCoordinator`, Checkpoint 26 — reused verbatim,
+never a parallel evaluation framework) into a risk-gated
+`PaperTradingService.submit_order()` call, with a deterministic
+`signal_id` giving full lineage (strategy version -> signal_id -> order_id
+-> trade_id/position_id; see `docs/research/STRATEGY_TO_PAPER_SELECTION.md`
+for the complete design and evidence).
+
+**Deliberately NOT built this checkpoint: any automatic trigger.** Nothing
+calls `evaluate_and_submit()` against live or aggregated bars on a
+schedule or in response to a market-data event. Bars are supplied entirely
+by the caller (today: only the test suite). This was a conscious decision,
+not an oversight — building an automatic trigger means deciding where the
+bars come from, and the only bar source that currently exists for live
+instruments is the `SAMPLE_BAR`-quality aggregation pipeline referenced
+above. Wiring that pipeline into an operator-triggerable strategy-
+execution pathway without a dedicated design review (staleness handling,
+what happens mid-evaluation if the feed gaps, how the market-data-quality
+classification from Part 8 gets enforced rather than silently ignored)
+would be exactly the "premature feature" this checkpoint's own governing
+principle says to block. `PaperSignalExecutionService` is real, tested
+backend capability; it is not yet a reachable operator or scheduled
+action, and this document says so plainly rather than implying otherwise.

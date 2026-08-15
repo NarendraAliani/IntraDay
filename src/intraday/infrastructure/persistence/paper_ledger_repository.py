@@ -75,6 +75,7 @@ class DjangoPaperLedgerRepository:
                 "correlation_id": correlation_id,
                 "instrument_id": str(order.instrument_id),
                 "strategy_id": str(order.strategy_id),
+                "signal_id": str(order.signal_id) if order.signal_id else "",
                 "side": order.side.value,
                 "order_type": order.order_type.value,
                 "quantity": order.quantity,
