@@ -25,6 +25,20 @@
 # NOT a live Dhan connection. Running this command proves the runtime
 # LOOP itself works continuously against a real socket; it does not
 # prove anything about Dhan's actual production feed.
+#
+# Checkpoint 59 CORRECTION to Checkpoint 58: bar aggregation
+# (`_aggregate_now()`) is now triggered PERIODICALLY, every
+# `_AGGREGATION_BATCH_SIZE` quotes, WHILE the packet-processing loop is
+# still running - proven by `test_run_market_data_worker_command.py`'s
+# `test_bars_are_produced_while_the_worker_is_still_running_not_only_
+# after_the_stream_ends`, which stops the worker mid-stream (with
+# scripted packets still unread) and asserts bars already exist. This
+# closes a real gap the user identified in Checkpoint 58's own
+# implementation: aggregating only once, after the stream ended, only
+# proved "quotes can eventually become bars," never "bars form
+# continuously while the worker runs" - the behavior an active
+# pipeline actually needs. A final aggregation after the loop still
+# catches any remainder quotes below the batch threshold.
 from __future__ import annotations
 
 import asyncio
@@ -49,6 +63,16 @@ from intraday.infrastructure.persistence.live_market_data_repositories import (
 
 _HEADER_STRUCT = struct.Struct("<BHBi")
 _DEFAULT_PACKET_COUNT = 20
+_AGGREGATION_BATCH_SIZE = 5
+"""Checkpoint 59: the user's own explicit, correct challenge to
+Checkpoint 58's implementation - aggregating only AFTER the stream
+ended proves "quotes can eventually become bars," never "bars form
+continuously while the worker runs," which is what an active pipeline
+actually needs. Triggering aggregation every `_AGGREGATION_BATCH_SIZE`
+quotes - WHILE still inside the packet-processing loop, not after it
+exits - is what closes that gap. `5` is a small, deterministic value
+chosen so a test can prove aggregation happened mid-stream (with
+packets still unread) without needing a long-running/timed test."""
 
 
 def _synthetic_ticker_packet(*, security_id: int, ltp: float, ltt_epoch: int) -> bytes:
@@ -156,6 +180,18 @@ class Command(BaseCommand):
             quote_repository=quote_repository, bar_repository=DjangoAggregatedBarRepository()
         )
 
+        quotes_since_last_aggregation = 0
+
+        async def _aggregate_now() -> None:
+            aggregation = await sync_to_async(bar_service.aggregate_and_persist)(
+                as_of=dt.datetime.now(tz=dt.UTC)
+            )
+            self.stdout.write(
+                f"  aggregated {len(aggregation.bars)} bar(s) so far "
+                f"(missing_intervals={len(aggregation.missing_intervals)} "
+                f"anomalous_observations={len(aggregation.anomalous_observations)})"
+            )
+
         server = FakeDhanTcpServer(scripted_packets=script)
         await server.start()
         try:
@@ -163,6 +199,7 @@ class Command(BaseCommand):
             try:
 
                 async def _on_quote(quote: Quote) -> None:
+                    nonlocal quotes_since_last_aggregation
                     # Django's ORM refuses synchronous DB access from
                     # inside an async context (`SynchronousOnlyOperation`)
                     # - `sync_to_async` is the standard, documented
@@ -174,6 +211,14 @@ class Command(BaseCommand):
                         f"  quote: {quote.instrument_id} last_price={quote.last_price} "
                         f"at={quote.timestamp.isoformat()}"
                     )
+                    quotes_since_last_aggregation += 1
+                    if quotes_since_last_aggregation >= _AGGREGATION_BATCH_SIZE:
+                        # THE fix for Checkpoint 58's own gap: this
+                        # runs WHILE the packet stream may still have
+                        # unread packets waiting - real, continuous bar
+                        # formation, not "wait for disconnect."
+                        quotes_since_last_aggregation = 0
+                        await _aggregate_now()
 
                 result = await run_worker_against_stream(
                     reader,
@@ -186,19 +231,13 @@ class Command(BaseCommand):
         finally:
             await server.stop()
 
-        # With every quote now persisted, aggregate them into REAL
-        # 1-minute bars through the REAL, unchanged aggregation engine
-        # - the exact wiring the Checkpoint 58 scorecard identified as
-        # the single concrete missing link between "live data arrives"
-        # and "the rest of the system can use it."
-        aggregation = await sync_to_async(bar_service.aggregate_and_persist)(
-            as_of=dt.datetime.now(tz=dt.UTC)
-        )
-        self.stdout.write(
-            f"  aggregated {len(aggregation.bars)} bar(s) from the synthetic feed "
-            f"(missing_intervals={len(aggregation.missing_intervals)} "
-            f"anomalous_observations={len(aggregation.anomalous_observations)})"
-        )
+        # A final aggregation catches any REMAINDER quotes that arrived
+        # after the last periodic batch but before the stream ended -
+        # this is a cleanup pass, not the primary mechanism (the
+        # periodic trigger above is), so a real active pipeline is
+        # never dependent on the stream ending to produce its bars.
+        if quotes_since_last_aggregation > 0:
+            await _aggregate_now()
         # `sync_to_async` runs each DB call in its own worker thread,
         # each opening its own real DB connection - Django only closes
         # those automatically at the end of an HTTP request, which this

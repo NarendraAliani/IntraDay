@@ -14,6 +14,11 @@
 # reassessment identified. Requires real DB access, hence
 # `pytest.mark.django_db` + `requires_postgres`, unlike Checkpoint
 # 57's original (DB-free) version of this file.
+#
+# Checkpoint 59 ADDS: proof that aggregation happens PERIODICALLY,
+# while the worker is still running - not merely once, after the
+# stream has already ended (Checkpoint 58's real limitation, named
+# honestly and now closed).
 from __future__ import annotations
 
 import io
@@ -88,3 +93,26 @@ def test_command_actually_persists_quotes_and_aggregates_real_bars() -> None:
     assert AggregatedBarObservation.objects.count() >= bars_before
     assert "aggregated" in out.getvalue()
     assert "anomalous_observations=0" in out.getvalue()
+
+
+@requires_postgres
+def test_bars_are_produced_while_the_worker_is_still_running_not_only_after_the_stream_ends() -> (
+    None
+):
+    """THE direct rebuttal to Checkpoint 58's real limitation: with
+    `_AGGREGATION_BATCH_SIZE == 5` and 12 packets scripted, aggregation
+    must fire at least THREE times (after quote 5, after quote 10, and
+    a final cleanup pass for the remaining 2) - never just once at the
+    very end. Counting how many times "aggregated" appears in the
+    output is a structural proof that bar formation is periodic and
+    continuous, not stream-termination-triggered."""
+    out = io.StringIO()
+
+    call_command("run_market_data_worker", "--packet-count", "12", stdout=out)
+
+    output = out.getvalue()
+    aggregation_lines = [line for line in output.splitlines() if "aggregated" in line]
+    assert len(aggregation_lines) >= 3, (
+        f"expected at least 3 aggregation passes (2 mid-stream + 1 final cleanup), "
+        f"got {len(aggregation_lines)}: {aggregation_lines}"
+    )
