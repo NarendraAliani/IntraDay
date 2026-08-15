@@ -38,6 +38,9 @@ from intraday.domain.session.calendar import session_for_instant
 from intraday.domain.session.contracts import SessionStatus, TradingSession
 from intraday.domain.shared_kernel.contracts import Exchange
 from intraday.infrastructure.api.active_loop_runtime import run_active_loop_tick
+from intraday.infrastructure.api.emergency_square_off_trigger import (
+    check_and_trigger_automatic_square_off,
+)
 from intraday.infrastructure.api.paper_reconciliation_runtime import reconcile_paper_state
 from intraday.infrastructure.api.paper_trading_runtime import get_paper_broker
 from intraday.infrastructure.api.position_monitor_runtime import (
@@ -188,6 +191,24 @@ def _run_locked(*, session: TradingSession, clock: dt.datetime) -> IngestionTick
             "market_data_ingestion.position_exits_triggered",
             exits_triggered=monitor_outcome.exits_triggered,
         )
+
+    # Checkpoint 46 Part 2: THE named P0 gap from Checkpoint 45's own
+    # register - a HALTED kill switch now automatically drives the
+    # system toward zero open exposure, every tick, idempotently (a
+    # no-op after the first tick that handles a given halt event).
+    # Cheap and safe to call unconditionally - it internally checks
+    # whether the kill switch is even engaged before doing anything.
+    try:
+        square_off_outcome = check_and_trigger_automatic_square_off(
+            current_prices=current_prices, now=clock
+        )
+        if square_off_outcome.kill_switch_engaged and not square_off_outcome.already_handled:
+            logger.warning(
+                "market_data_ingestion.automatic_square_off_ran",
+                zero_exposure_confirmed=square_off_outcome.zero_exposure_confirmed,
+            )
+    except Exception:  # noqa: BLE001 - must never break ingestion, but always logged
+        logger.exception("market_data_ingestion.automatic_square_off_check_failed")
 
     bar_service = BarAggregationService(
         quote_repository=DjangoLiveQuoteRepository(),
