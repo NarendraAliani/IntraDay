@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 
 from intraday.infrastructure.market_data_providers.dhan.packet_decoder import (
     DhanDisconnectPacket,
+    DhanQuotePacket,
     DhanTickerPacket,
     PacketDecodeFailure,
     PacketDecodeFailureReason,
@@ -25,6 +26,40 @@ _HEADER_STRUCT = struct.Struct("<BHBi")
 def _ticker_bytes(*, security_id: int, ltp: float, ltt_epoch: int, segment: int = 1) -> bytes:
     body = struct.pack("<fi", ltp, ltt_epoch)
     header = _HEADER_STRUCT.pack(2, len(body), segment, security_id)
+    return header + body
+
+
+def _quote_bytes(
+    *,
+    security_id: int,
+    ltp: float,
+    ltq: int,
+    ltt_epoch: int,
+    atp: float,
+    volume: int,
+    total_sell_qty: int,
+    total_buy_qty: int,
+    day_open: float,
+    day_close: float,
+    day_high: float,
+    day_low: float,
+    segment: int = 1,
+) -> bytes:
+    body = struct.pack(
+        "<fhifiiiffff",
+        ltp,
+        ltq,
+        ltt_epoch,
+        atp,
+        volume,
+        total_sell_qty,
+        total_buy_qty,
+        day_open,
+        day_close,
+        day_high,
+        day_low,
+    )
+    header = _HEADER_STRUCT.pack(4, len(body), segment, security_id)
     return header + body
 
 
@@ -78,18 +113,75 @@ def test_truncated_body_never_raises_and_is_classified_correctly() -> None:
 
 
 def test_unsupported_but_syntactically_valid_packet_type_never_raises() -> None:
-    """Feed response code 4 (Quote) is a REAL, documented Dhan packet
-    type this checkpoint's decoder does not implement - it must be
+    """Feed response code 5 (OI) is a REAL, documented Dhan packet type
+    this checkpoint's decoder does not implement - it must be
     recognized and refused explicitly, never silently misread as a
-    Ticker or crash the caller."""
-    body = b"\x00" * 42  # Quote packet's real documented body size - irrelevant here
-    header = _HEADER_STRUCT.pack(4, len(body), 1, 1333)
+    Ticker/Quote or crash the caller."""
+    body = b"\x00" * 4  # OI packet's real documented body size - irrelevant here
+    header = _HEADER_STRUCT.pack(5, len(body), 1, 1333)
     raw = header + body
 
     result = decode_packet(raw)
 
     assert isinstance(result, PacketDecodeFailure)
     assert result.reason is PacketDecodeFailureReason.UNSUPPORTED_PACKET_TYPE
+    assert result.feed_response_code == 5
+
+
+def test_decodes_a_valid_quote_packet() -> None:
+    raw = _quote_bytes(
+        security_id=1333,
+        ltp=1650.25,
+        ltq=10,
+        ltt_epoch=1735900800,
+        atp=1648.5,
+        volume=125000,
+        total_sell_qty=5000,
+        total_buy_qty=6000,
+        day_open=1640.0,
+        day_close=1635.0,
+        day_high=1655.0,
+        day_low=1630.0,
+    )
+
+    result = decode_packet(raw)
+
+    assert isinstance(result, DhanQuotePacket)
+    assert result.header.security_id == 1333
+    assert abs(result.last_traded_price - 1650.25) < 0.01
+    assert result.last_traded_quantity == 10
+    assert result.last_trade_time == datetime.fromtimestamp(1735900800, tz=UTC)
+    assert abs(result.average_trade_price - 1648.5) < 0.01
+    assert result.volume == 125000
+    assert result.total_sell_quantity == 5000
+    assert result.total_buy_quantity == 6000
+    assert abs(result.day_open - 1640.0) < 0.01
+    assert abs(result.day_close - 1635.0) < 0.01
+    assert abs(result.day_high - 1655.0) < 0.01
+    assert abs(result.day_low - 1630.0) < 0.01
+
+
+def test_truncated_quote_body_is_classified_correctly() -> None:
+    full = _quote_bytes(
+        security_id=1333,
+        ltp=100.0,
+        ltq=1,
+        ltt_epoch=1735900800,
+        atp=100.0,
+        volume=1,
+        total_sell_qty=1,
+        total_buy_qty=1,
+        day_open=100.0,
+        day_close=100.0,
+        day_high=100.0,
+        day_low=100.0,
+    )
+    raw = full[:20]  # valid header, body cut short
+
+    result = decode_packet(raw)
+
+    assert isinstance(result, PacketDecodeFailure)
+    assert result.reason is PacketDecodeFailureReason.TRUNCATED_BODY
     assert result.feed_response_code == 4
 
 

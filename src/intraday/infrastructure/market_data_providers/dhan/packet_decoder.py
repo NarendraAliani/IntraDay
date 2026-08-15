@@ -15,12 +15,12 @@
 # this decoder's output (Checkpoint 53's own explicit "no malformed
 # packet may crash the entire worker" requirement).
 #
-# HONEST SCOPE LIMIT: only the Ticker (code 2) and Disconnect (code 50)
-# packet shapes are decoded this checkpoint. Quote/OI/PrevClose/Full are
-# documented (see the research doc) but NOT implemented - extending to
-# them is mechanical once this architecture is proven correct against
-# two real shapes, not attempted here to avoid spreading effort thin
-# across seven packet types with shallow testing on all of them.
+# HONEST SCOPE LIMIT: Checkpoint 54 adds the Quote packet (code 4) to
+# Checkpoint 53's original Ticker (code 2) and Disconnect (code 50).
+# OI/PrevClose/Full remain documented (see the research doc) but NOT
+# implemented - extending to them is mechanical once this architecture
+# is proven correct against three real shapes, not attempted here to
+# avoid spreading effort thin across all seven packet types.
 from __future__ import annotations
 
 import struct
@@ -39,19 +39,30 @@ _HEADER_STRUCT = struct.Struct("<BHBi")  # < = little-endian (VERIFIED_PRIMARY)
 _TICKER_BODY_STRUCT = struct.Struct("<fi")
 _TICKER_PACKET_SIZE = _HEADER_SIZE + _TICKER_BODY_STRUCT.size
 
+# Quote packet (code 4, VERIFIED_PRIMARY - see research doc): header +
+# float32 LTP + int16 LTQ + int32 LTT (epoch) + float32 ATP + int32
+# volume + int32 total sell qty + int32 total buy qty + float32 open +
+# float32 close + float32 high + float32 low, in exactly that order -
+# format string built field-by-field against the documented byte
+# ranges (f=float32, h=int16, i=int32), not assumed from a repeated
+# pattern.
+_QUOTE_BODY_STRUCT = struct.Struct("<fhifiiiffff")
+_QUOTE_PACKET_SIZE = _HEADER_SIZE + _QUOTE_BODY_STRUCT.size
+
 # Disconnect packet (code 50): header + int16 disconnect reason code.
 _DISCONNECT_BODY_STRUCT = struct.Struct("<h")
 _DISCONNECT_PACKET_SIZE = _HEADER_SIZE + _DISCONNECT_BODY_STRUCT.size
 
 
 class DhanFeedResponseCode(IntEnum):
-    """Only the codes this checkpoint's decoder actually acts on are
-    named as members - every OTHER documented code (4/5/6/8/...) is
-    still correctly recognized as UNSUPPORTED_PACKET_TYPE by
+    """Only the codes this decoder actually acts on are named as
+    members - every OTHER documented code (5/6/8/...) is still
+    correctly recognized as UNSUPPORTED_PACKET_TYPE by
     `decode_packet()` below, never silently misinterpreted as one of
-    these two."""
+    these three."""
 
     TICKER = 2
+    QUOTE = 4
     DISCONNECT = 50
 
 
@@ -60,7 +71,7 @@ class PacketDecodeFailureReason(IntEnum):
     """Fewer than 8 bytes total - cannot even read the header."""
     UNSUPPORTED_PACKET_TYPE = 2
     """A syntactically valid header, but a feed response code this
-    decoder does not implement this checkpoint (e.g. Quote/OI/Full)."""
+    decoder does not implement this checkpoint (e.g. OI/PrevClose/Full)."""
     TRUNCATED_BODY = 3
     """The header parsed and named a supported packet type, but fewer
     bytes remain than that packet type's own documented body size."""
@@ -85,6 +96,22 @@ class DhanTickerPacket:
 
 
 @dataclass(frozen=True, slots=True)
+class DhanQuotePacket:
+    header: DhanPacketHeader
+    last_traded_price: float
+    last_traded_quantity: int
+    last_trade_time: datetime
+    average_trade_price: float
+    volume: int
+    total_sell_quantity: int
+    total_buy_quantity: int
+    day_open: float
+    day_close: float
+    day_high: float
+    day_low: float
+
+
+@dataclass(frozen=True, slots=True)
 class DhanDisconnectPacket:
     header: DhanPacketHeader
     disconnect_reason_code: int
@@ -99,7 +126,7 @@ class PacketDecodeFailure:
     even read the code byte)."""
 
 
-DecodedDhanPacket = DhanTickerPacket | DhanDisconnectPacket | PacketDecodeFailure
+DecodedDhanPacket = DhanTickerPacket | DhanQuotePacket | DhanDisconnectPacket | PacketDecodeFailure
 
 
 def decode_header(raw: bytes) -> DhanPacketHeader | None:
@@ -144,6 +171,41 @@ def decode_packet(raw: bytes) -> DecodedDhanPacket:
             header=header,
             last_traded_price=ltp,
             last_trade_time=datetime.fromtimestamp(ltt_epoch, tz=UTC),
+        )
+
+    if header.feed_response_code == DhanFeedResponseCode.QUOTE:
+        if len(raw) < _QUOTE_PACKET_SIZE:
+            return PacketDecodeFailure(
+                reason=PacketDecodeFailureReason.TRUNCATED_BODY,
+                raw_length=len(raw),
+                feed_response_code=header.feed_response_code,
+            )
+        (
+            ltp,
+            ltq,
+            ltt_epoch,
+            atp,
+            volume,
+            total_sell_qty,
+            total_buy_qty,
+            day_open,
+            day_close,
+            day_high,
+            day_low,
+        ) = _QUOTE_BODY_STRUCT.unpack(raw[_HEADER_SIZE:_QUOTE_PACKET_SIZE])
+        return DhanQuotePacket(
+            header=header,
+            last_traded_price=ltp,
+            last_traded_quantity=ltq,
+            last_trade_time=datetime.fromtimestamp(ltt_epoch, tz=UTC),
+            average_trade_price=atp,
+            volume=volume,
+            total_sell_quantity=total_sell_qty,
+            total_buy_quantity=total_buy_qty,
+            day_open=day_open,
+            day_close=day_close,
+            day_high=day_high,
+            day_low=day_low,
         )
 
     if header.feed_response_code == DhanFeedResponseCode.DISCONNECT:
