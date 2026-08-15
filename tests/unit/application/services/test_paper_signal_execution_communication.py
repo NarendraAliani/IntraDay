@@ -76,9 +76,9 @@ class FakeProvider:
     destination_masked: str = "****abcd"
     sent: list[str] = field(default_factory=list)
 
-    def send(self, text: str) -> tuple[bool, str | None, str | None, str | None]:
+    def send(self, text: str) -> tuple[bool, str | None, str | None, str | None, bool]:
         self.sent.append(text)
-        return True, "msg-1", None, None
+        return True, "msg-1", None, None, False
 
 
 def _bridge(

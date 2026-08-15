@@ -60,12 +60,52 @@ def derive_signal_id(
     configuration_version: str,
     instrument_id: InstrumentId,
     timestamp: datetime,
+    timeframe: str = "",
+    specification_version: str = "",
+    code_version: str = "",
 ) -> SignalId:
     """Deterministic - the SAME strategy evaluated against the SAME bar
     always derives the SAME signal_id, which is exactly what makes
     duplicate-evaluation protection possible (re-running the coordinator
-    against a bar it already saw must never produce a second order)."""
-    payload = f"{strategy_id}:{configuration_version}:{instrument_id}:{timestamp.isoformat()}"
+    against a bar it already saw must never produce a second order).
+
+    Checkpoint 38 Part 6 identity model - the full component list a
+    signal's identity is justified against, and why each is/isn't in
+    the hash:
+
+    - `strategy_id`, `specification_version`, `code_version`,
+      `configuration_version`: identifies WHICH decision logic
+      produced this signal - two different strategy versions
+      evaluating the identical bar are, by definition, different
+      signals (a strategy upgrade must not be silently deduplicated
+      against its predecessor's signal).
+    - `instrument_id`: which instrument.
+    - `timeframe`: which bar granularity - without this, a
+      (hypothetical, not yet built) multi-timeframe strategy
+      evaluating the SAME instrument at the SAME wall-clock timestamp
+      on two different timeframes would collide.
+    - `timestamp`: the BAR/EVENT identity proxy - `StrategySignal.
+      timestamp` is the bar's own timestamp (Checkpoint 26), which is
+      already a genuine per-instrument-per-timeframe unique key by
+      construction (`domain.market_data.contracts.Bar`'s own
+      timestamp-uniqueness discipline) - a second, separate "bar ID"
+      field is not needed since the bar's timestamp already serves
+      that role.
+    - `direction` is DELIBERATELY EXCLUDED: it is an OUTPUT of
+      evaluating (strategy, config, instrument, timeframe, bar), not
+      an independent input - two evaluations of the identical inputs
+      are REQUIRED to always produce the identical direction (strategy
+      evaluation is a pure function over the bar series), so including
+      it in the hash would be redundant, never additionally
+      discriminating. Including a NON-deterministic input (direction,
+      if evaluation were ever non-deterministic) would be a signal
+      that determinism itself is broken - the correct fix is
+      restoring determinism, not hashing around it.
+    """
+    payload = (
+        f"{strategy_id}:{specification_version}:{code_version}:{configuration_version}:"
+        f"{instrument_id}:{timeframe}:{timestamp.isoformat()}"
+    )
     return SignalId(hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32])
 
 
@@ -158,6 +198,9 @@ class PaperSignalExecutionService:
             configuration_version=configuration.configuration_version,
             instrument_id=instrument_id,
             timestamp=signal.timestamp,
+            timeframe=str(signal.timeframe),
+            specification_version=configuration.specification_version,
+            code_version=configuration.code_version,
         )
 
         if str(signal_id) in already_processed_signal_ids:

@@ -25,10 +25,16 @@ from __future__ import annotations
 from django.db import transaction
 
 from intraday.domain.broker.contracts import BrokerOrderStatusReport, Funds
-from intraday.domain.order.contracts import OrderIntent
+from intraday.domain.order.contracts import OrderIntent, OrderStatus
 from intraday.domain.order.events import OrderEvent
-from intraday.domain.position.contracts import Position
-from intraday.domain.shared_kernel.contracts import OrderId
+from intraday.domain.position.contracts import Position, PositionStatus
+from intraday.domain.shared_kernel.contracts import (
+    InstrumentId,
+    OrderId,
+    PositionId,
+    Side,
+    TradeId,
+)
 from intraday.domain.trade.contracts import Trade
 from intraday.infrastructure.persistence.models import (
     PaperFundsRecord,
@@ -184,3 +190,63 @@ class DjangoPaperLedgerRepository:
         - proves the durable ledger, not `PaperBroker`'s in-memory
         state, is what survives a process restart."""
         return {OrderId(row.order_id): row.status for row in PaperOrderRecord.objects.all()}
+
+    def load_order_statuses_for_reconciliation(self) -> dict[OrderId, OrderStatus]:
+        """Checkpoint 38 Part 13: the "local expected state" half of
+        paper-mode reconciliation - the SAME shape
+        `control_plane.reconciliation.reconcile_orders()` already
+        requires (`dict[OrderId, OrderStatus]`), so that function is
+        reused verbatim, never re-implemented for the paper broker."""
+        return {
+            OrderId(row.order_id): OrderStatus(row.status) for row in PaperOrderRecord.objects.all()
+        }
+
+    def load_trades_for_reconciliation(self) -> dict[TradeId, Trade]:
+        result: dict[TradeId, Trade] = {}
+        for row in PaperTradeRecord.objects.all():
+            trade_id = TradeId(row.trade_id)
+            result[trade_id] = Trade(
+                trade_id=trade_id,
+                strategy_id=row.strategy_id,  # type: ignore[arg-type]
+                instrument_id=InstrumentId(row.instrument_id),
+                direction=Side(row.direction),
+                order_ids=tuple(OrderId(oid) for oid in row.order_ids),
+                entry_price=row.entry_price,
+                exit_price=row.exit_price,
+                quantity=row.quantity,
+                realized_pnl=row.realized_pnl,
+                opened_at=row.opened_at,
+                closed_at=row.closed_at,
+            )
+        return result
+
+    def load_positions_for_reconciliation(self) -> dict[str, Position]:
+        """Keyed by `instrument_id` string, matching
+        `reconcile_positions()`'s own expected key shape - one position
+        per instrument, mirroring `PaperPositionRecord`'s own "one open
+        row per instrument" invariant (Checkpoint 34 Part 12)."""
+        result: dict[str, Position] = {}
+        for row in PaperPositionRecord.objects.filter(status="OPEN"):
+            result[row.instrument_id] = Position(
+                position_id=PositionId(row.position_id),
+                instrument_id=InstrumentId(row.instrument_id),
+                direction=Side(row.direction),
+                quantity=row.quantity,
+                average_entry_price=row.average_entry_price,
+                realized_pnl=row.realized_pnl,
+                unrealized_pnl=row.unrealized_pnl,
+                opened_at=row.opened_at,
+                status=PositionStatus(row.status),
+                closed_at=row.closed_at,
+            )
+        return result
+
+    def load_funds_for_reconciliation(self) -> Funds | None:
+        row = PaperFundsRecord.objects.first()
+        if row is None:
+            return None
+        return Funds(
+            available_balance=row.available_balance,
+            utilized_margin=row.utilized_margin,
+            as_of=row.updated_at,
+        )

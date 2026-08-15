@@ -111,14 +111,23 @@ REPORT_CATALOGUE: tuple[ReportCatalogueEntry, ...] = (
     ),
     ReportCatalogueEntry(
         report_type=ReportType.SIGNAL_REPORT,
-        status=ReportStatus.NOT_YET_IMPLEMENTED,
-        purpose="Summarize generated/verified signals and their theoretical "
-        "outcomes for a period.",
-        owner="signal_intelligence",
-        required_data="signal_generation/signal_verification records exist, but "
-        "no report assembler reads them yet",
-        future_data_dependencies="a report assembler over existing signal records",
-        ui_surface="Reports Overview page (placeholder only, this checkpoint)",
+        status=ReportStatus.AVAILABLE,
+        purpose="Signals Generated -> Validated -> Communicated -> Execution "
+        "Approved/Blocked -> Orders Submitted/Filled/Rejected, reconciled "
+        "against real ledger rows so the funnel's truth is never fabricated "
+        "(Checkpoint 38 Part 16).",
+        owner="communication / application.services.paper_trading (via their "
+        "respective persisted ledgers)",
+        required_data="CommunicationLedgerRecord (Checkpoint 37) + "
+        "PaperOrderRecord.signal_id (Checkpoint 36) - no dedicated Signal "
+        "persistence table exists yet (see ACTIVE_PRODUCT_GAP_REGISTER.md); "
+        "'signals generated/validated' is honestly derived from "
+        "VALIDATED_SIGNAL communication events, not a separate signal ledger",
+        future_data_dependencies="a dedicated Signal persistence table would let "
+        "this report distinguish REJECTED signals (never communicated at all) "
+        "from ones that were communicated - currently indistinguishable from "
+        "'no signal fired'",
+        ui_surface="Reports Overview page (new, this checkpoint)",
     ),
     ReportCatalogueEntry(
         report_type=ReportType.PORTFOLIO_REPORT,

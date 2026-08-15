@@ -16,8 +16,10 @@
 # exactly like `paper_trading_runtime.py` composes `PaperTradingService`.
 from __future__ import annotations
 
+import time
 import uuid
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Protocol
 
@@ -37,9 +39,13 @@ from intraday.domain.shared_kernel.contracts import SignalId
 class CommunicationProvider(Protocol):
     """One configured, enabled destination for one channel. `send()`
     returns `(success, provider_message_id_or_None, error_code,
-    error_message)` - never raises for an ordinary delivery failure
-    (a rejected webhook, an invalid token); only a genuinely
-    unexpected condition may raise.
+    error_message, is_retryable)` - never raises for an ordinary
+    delivery failure (a rejected webhook, an invalid token); only a
+    genuinely unexpected condition may raise. `is_retryable`
+    (Checkpoint 38 Part 8) classifies the failure per each provider's
+    own documented semantics - a 429/5xx is transient (worth retrying);
+    401/403/404 is permanent (retrying can never succeed, so the
+    router must not waste attempts on it).
 
     Fields are declared as read-only `@property`-shaped members (not
     plain settable attributes) so that frozen dataclass implementations
@@ -56,7 +62,7 @@ class CommunicationProvider(Protocol):
     @property
     def destination_masked(self) -> str: ...
 
-    def send(self, text: str) -> tuple[bool, str | None, str | None, str | None]: ...
+    def send(self, text: str) -> tuple[bool, str | None, str | None, str | None, bool]: ...
 
 
 class CommunicationLedger(Protocol):
@@ -71,15 +77,36 @@ class CommunicationLedger(Protocol):
     ) -> bool: ...
 
 
+def _default_backoff_seconds(attempt_number: int) -> float:
+    """Exponential backoff, capped - `attempt_number` is 1-indexed (the
+    delay BEFORE the 2nd attempt, 3rd attempt, etc.). Capped at 4
+    seconds so a bounded retry loop (max 3 attempts total, see
+    `NotificationRouter.max_attempts`) can never itself become a
+    multi-minute stall - Checkpoint 38 Part 8's explicit "do not create
+    infinite retry loops... do not allow retry storms.\" """
+    return min(0.5 * (2 ** (attempt_number - 1)), 4.0)  # type: ignore[no-any-return]
+
+
 @dataclass(frozen=True, slots=True)
 class NotificationRouter:
     """Fans one event out across every configured provider. Contains
     NO template knowledge and NO signal/execution-status knowledge -
     its only job is "render once, send to every provider, record every
-    attempt.\" """
+    attempt.\"
+
+    Bounded retry (Checkpoint 38 Part 8): a TRANSIENT failure (rate
+    limit, 5xx, timeout) is retried up to `max_attempts` times total
+    with exponential backoff; a PERMANENT failure (bad token/webhook)
+    is never retried. The ledger records only the FINAL outcome per
+    provider, with `retry_count` set to how many attempts it actually
+    took - the ledger stays the authoritative answer to "was this
+    delivered?" without exploding into one row per attempt."""
 
     providers: tuple[CommunicationProvider, ...]
     ledger: CommunicationLedger | None = None
+    max_attempts: int = 3
+    backoff_seconds: Callable[[int], float] = field(default=_default_backoff_seconds)
+    sleep: Callable[[float], None] = field(default=time.sleep)
 
     def dispatch(self, event: SignalCommunicationEvent) -> tuple[DeliveryAttempt, ...]:
         if not self.providers:
@@ -120,11 +147,25 @@ class NotificationRouter:
                 retry_count=0,
                 correlation_id=event.correlation_id,
             )
-            if self.ledger is not None:
-                self.ledger.record_attempt(attempt)
+            self.ledger.record_attempt(attempt)
             return attempt
 
-        success, provider_message_id, error_code, error_message = provider.send(text)
+        attempt_number = 0
+        success = False
+        provider_message_id: str | None = None
+        error_code: str | None = None
+        error_message: str | None = None
+        is_retryable = True
+        while attempt_number < self.max_attempts:
+            attempt_number += 1
+            success, provider_message_id, error_code, error_message, is_retryable = provider.send(
+                text
+            )
+            if success or not is_retryable:
+                break
+            if attempt_number < self.max_attempts:
+                self.sleep(self.backoff_seconds(attempt_number))
+
         attempt = DeliveryAttempt(
             communication_id=communication_id,
             signal_id=event.signal_id,
@@ -140,7 +181,7 @@ class NotificationRouter:
             provider_message_id=provider_message_id,
             error_code=error_code,
             error_message=error_message,
-            retry_count=0,
+            retry_count=attempt_number - 1,
             correlation_id=event.correlation_id,
         )
         if self.ledger is not None:

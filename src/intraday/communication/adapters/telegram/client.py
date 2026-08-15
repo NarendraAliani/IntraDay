@@ -69,6 +69,65 @@ def check_telegram_connectivity(bot_token: str) -> ConnectivityCheckResult:
     )
 
 
+def send_telegram_message_with_id(
+    bot_token: str, channel_id: str, text: str
+) -> tuple[bool, str | None, str | None, str | None, bool]:
+    """Checkpoint 38 Part 8: like `send_telegram_message()`, but parses
+    Telegram's own JSON response body (`{"ok": true, "result": {
+    "message_id": ...}}`) to capture the REAL provider message ID -
+    closing Checkpoint 37's named gap. Returns `(success,
+    provider_message_id, error_code, error_message, is_retryable)`.
+    `is_retryable` classifies the failure per Telegram's own documented
+    behavior: HTTP 429 (rate limited) and 5xx are transient/retryable;
+    401/403/404 (bad token/chat) are permanent - retrying a permanent
+    failure would only waste attempts and never succeed."""
+    try:
+        response = httpx.post(
+            f"{_TELEGRAM_API_BASE}/bot{bot_token}/sendMessage",
+            json={"chat_id": channel_id, "text": text},
+            timeout=_REQUEST_TIMEOUT_SECONDS,
+        )
+    except httpx.TimeoutException:
+        return False, None, "CONNECTION_ERROR", "Connection to Telegram timed out.", True
+    except httpx.HTTPError:
+        return False, None, "CONNECTION_ERROR", "Could not reach Telegram.", True
+
+    if response.status_code == 200:
+        try:
+            body = response.json()
+        except ValueError:
+            body = {}
+        message_id = None
+        result = body.get("result") if isinstance(body, dict) else None
+        if isinstance(result, dict) and "message_id" in result:
+            message_id = str(result["message_id"])
+        return True, message_id, None, None, False
+
+    if response.status_code in (401, 403, 404):
+        return (
+            False,
+            None,
+            "AUTHENTICATION_FAILED",
+            "Telegram rejected the configured bot token or channel.",
+            False,
+        )
+    if response.status_code == 429 or response.status_code >= 500:
+        return (
+            False,
+            None,
+            "TRANSIENT_ERROR",
+            f"Telegram returned a transient error (HTTP {response.status_code}).",
+            True,
+        )
+    return (
+        False,
+        None,
+        "CONNECTION_ERROR",
+        f"Telegram returned an unexpected response (HTTP {response.status_code}).",
+        False,
+    )
+
+
 def send_telegram_test_message(bot_token: str, channel_id: str) -> ConnectivityCheckResult:
     """`POST /bot<token>/sendMessage` - sends a real, visible test
     message. Only ever invoked by an explicit, separate user action

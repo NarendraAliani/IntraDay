@@ -43,13 +43,18 @@ class FakeProvider:
     provider_name: str
     destination_masked: str = "****abcd"
     should_fail: bool = False
+    is_retryable: bool = False
+    fail_first_n_attempts: int = 0
     sent: list[str] = field(default_factory=list)
 
-    def send(self, text: str) -> tuple[bool, str | None, str | None, str | None]:
+    def send(self, text: str) -> tuple[bool, str | None, str | None, str | None, bool]:
         self.sent.append(text)
+        if self.fail_first_n_attempts > 0:
+            self.fail_first_n_attempts -= 1
+            return False, None, "TRANSIENT_ERROR", "simulated transient failure", True
         if self.should_fail:
-            return False, None, "PROVIDER_ERROR", "simulated failure"
-        return True, "msg-1", None, None
+            return False, None, "PROVIDER_ERROR", "simulated failure", self.is_retryable
+        return True, "msg-1", None, None, False
 
 
 @dataclass
@@ -302,3 +307,69 @@ def test_no_providers_configured_produces_no_attempts_and_never_raises() -> None
     )
     assert outcome.attempts == ()
     assert ledger.attempts == []
+
+
+# --------------------------------------------------------------------
+# Bounded retry (Checkpoint 38 Part 8)
+# --------------------------------------------------------------------
+
+
+def test_transient_failure_is_retried_and_eventually_succeeds() -> None:
+    """Fails twice with a TRANSIENT error, succeeds on the 3rd (final)
+    attempt - proves the bounded retry loop actually retries."""
+    telegram = FakeProvider(CommunicationChannel.TELEGRAM, "telegram", fail_first_n_attempts=2)
+    sleeps: list[float] = []
+    router = NotificationRouter(providers=(telegram,), max_attempts=3, sleep=sleeps.append)
+    service = SignalCommunicationService(router=router)
+
+    outcome = service.communicate(
+        signal_id=SignalId("sig-retry"),
+        template_id=MessageTemplateId.VALIDATED_SIGNAL,
+        context=_context(signal_id=SignalId("sig-retry")),
+        correlation_id="corr-retry",
+    )
+
+    assert outcome.attempts[0].delivery_status is DeliveryStatus.SENT
+    assert outcome.attempts[0].retry_count == 2  # 2 failed attempts before success
+    assert len(telegram.sent) == 3  # 3 real send() calls total
+    assert len(sleeps) == 2  # slept before the 2nd and 3rd attempts only
+
+
+def test_retry_is_bounded_and_gives_up_after_max_attempts() -> None:
+    telegram = FakeProvider(
+        CommunicationChannel.TELEGRAM, "telegram", should_fail=True, is_retryable=True
+    )
+    router = NotificationRouter(providers=(telegram,), max_attempts=3, sleep=lambda _: None)
+    service = SignalCommunicationService(router=router)
+
+    outcome = service.communicate(
+        signal_id=SignalId("sig-give-up"),
+        template_id=MessageTemplateId.VALIDATED_SIGNAL,
+        context=_context(signal_id=SignalId("sig-give-up")),
+        correlation_id="corr-give-up",
+    )
+
+    assert outcome.attempts[0].delivery_status is DeliveryStatus.FAILED
+    assert outcome.attempts[0].retry_count == 2  # 3 attempts total, 2 retries
+    assert len(telegram.sent) == 3  # never more than max_attempts - no retry storm
+
+
+def test_permanent_failure_is_never_retried() -> None:
+    """A permanent failure (bad token/webhook, is_retryable=False) must
+    not waste attempts - one send() call, no retries."""
+    telegram = FakeProvider(
+        CommunicationChannel.TELEGRAM, "telegram", should_fail=True, is_retryable=False
+    )
+    router = NotificationRouter(providers=(telegram,), max_attempts=3, sleep=lambda _: None)
+    service = SignalCommunicationService(router=router)
+
+    outcome = service.communicate(
+        signal_id=SignalId("sig-permanent"),
+        template_id=MessageTemplateId.VALIDATED_SIGNAL,
+        context=_context(signal_id=SignalId("sig-permanent")),
+        correlation_id="corr-permanent",
+    )
+
+    assert outcome.attempts[0].delivery_status is DeliveryStatus.FAILED
+    assert outcome.attempts[0].retry_count == 0
+    assert len(telegram.sent) == 1  # never retried a permanent failure
