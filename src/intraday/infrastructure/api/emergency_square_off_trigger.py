@@ -5,16 +5,19 @@
 # but nothing automatically invoked it when the kill switch engaged.
 # This module is that automatic trigger.
 #
-# Idempotency (Part 2's explicit requirement #2/#3/#4): keyed off the
-# kill switch's own `changed_at` timestamp - the ONE moment a
-# particular halt event occurred. Uses the same Django-cache
-# atomic-add primitive `infrastructure/scheduling/distributed_lock.py`
-# already established (Decision 187) - a SEPARATE cache key namespace
-# (`intraday:square_off_handled:`) so it does not collide with the
-# ingestion-tick concurrency lock, and a long timeout (24h) since a
-# halt event's identity (`changed_at`) never changes for that event -
-# once handled, it must never be re-handled, unlike the 90s
-# ingestion-tick lock which is deliberately short-lived.
+# Checkpoint 48 Part 3 REPLACES the original cache-only idempotency
+# (`cache.add()`, 24h TTL) with the durable
+# `DjangoEmergencySquareOffEventRepository` state machine. The bug in
+# the old design, named honestly in Checkpoint 47's own report and NOT
+# allowed to disappear into Checkpoint 48: `cache.add()` marked a halt
+# event "handled" the INSTANT it was claimed, not when square-off
+# actually finished - a crash between claim and completion left the
+# event permanently "handled" with positions possibly still open, and
+# nothing would ever retry it. The new design claims IN_PROGRESS
+# first, and only reaches COMPLETED after square-off ran AND
+# reconciliation confirmed zero exposure - see
+# `emergency_square_off_event_repository.py`'s module docstring for
+# the full state machine and its crash-recovery mechanism.
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -22,7 +25,6 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 import structlog
-from django.core.cache import cache
 
 from intraday.application.services.kill_switch import KillSwitchService
 from intraday.domain.risk.contracts import TradingHaltStatus
@@ -32,15 +34,15 @@ from intraday.infrastructure.api.position_monitor_runtime import (
     EmergencySquareOffOutcome,
     run_emergency_square_off,
 )
+from intraday.infrastructure.persistence.emergency_square_off_event_repository import (
+    DjangoEmergencySquareOffEventRepository,
+)
 from intraday.infrastructure.persistence.kill_switch_repository import DjangoKillSwitchRepository
 from intraday.infrastructure.persistence.paper_ledger_repository import (
     DjangoPaperLedgerRepository,
 )
 
 logger = structlog.get_logger(__name__)
-
-_SQUARE_OFF_HANDLED_KEY_PREFIX = "intraday:square_off_handled:"
-_SQUARE_OFF_HANDLED_TIMEOUT_SECONDS = 24 * 60 * 60  # 24h - see module docstring
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,11 +62,19 @@ def check_and_trigger_automatic_square_off(
     *, current_prices: dict[str, Decimal], now: datetime | None = None
 ) -> AutomaticSquareOffCheckOutcome:
     """Checkpoint 46's own required chain, in one function:
-    KILL_SWITCH_ENGAGED -> DETECT -> (if not already handled)
-    AUTOMATIC SQUARE-OFF -> RECONCILIATION -> VERIFY ZERO EXPOSURE.
-    Called from the scheduled ingestion tick (Part 8/24's "the
-    backend/control plane must own this behavior," never a UI-only
-    action)."""
+    KILL_SWITCH_ENGAGED -> DETECT -> (if claimable) AUTOMATIC
+    SQUARE-OFF -> RECONCILIATION -> VERIFY ZERO EXPOSURE -> record
+    outcome durably. Called from BOTH the scheduled ingestion tick and
+    the independent 15s task (Checkpoint 47 Part 4) - both routes go
+    through the SAME `claim()` call below, which is what makes it safe
+    for both to exist at once.
+
+    Checkpoint 48 Part 3: `already_handled=True` now means exactly what
+    it says - the halt event reached `COMPLETED` (square-off ran AND
+    reconciliation confirmed zero exposure), not merely "an attempt was
+    claimed." A `FAILED_RETRYABLE` or `RECONCILIATION_REQUIRED` row, or
+    a stale `IN_PROGRESS` row from a crashed attempt, is reclaimed and
+    retried here instead of being reported as handled."""
     clock = now or datetime.now(tz=UTC)
     kill_switch_service = KillSwitchService(DjangoKillSwitchRepository())
     state = kill_switch_service.status()
@@ -79,25 +89,46 @@ def check_and_trigger_automatic_square_off(
         )
 
     halt_identity = state.changed_at.isoformat() if state.changed_at else "unknown"
-    cache_key = f"{_SQUARE_OFF_HANDLED_KEY_PREFIX}{halt_identity}"
-    claimed = cache.add(cache_key, "1", timeout=_SQUARE_OFF_HANDLED_TIMEOUT_SECONDS)
+    event_repository = DjangoEmergencySquareOffEventRepository()
+    claim = event_repository.claim(halt_identity=halt_identity, now=clock)
 
-    if not claimed:
-        # This exact halt event was already square-off'd - never
-        # re-run it (Part 2's explicit "must not create duplicate
-        # exits" / "exactly once for a given halt event").
+    if not claim.claimed:
+        # Either COMPLETED already (genuinely done - report handled),
+        # or a fresh IN_PROGRESS claim held by a concurrent caller right
+        # now (not terminal - just nothing to do THIS call).
         return AutomaticSquareOffCheckOutcome(
             kill_switch_engaged=True,
-            already_handled=True,
+            already_handled=claim.already_terminal,
             square_off=None,
             reconciliation_divergence_count=None,
             zero_exposure_confirmed=None,
         )
 
     logger.warning(
-        "emergency_square_off.auto_triggered", reason=state.reason, changed_at=halt_identity
+        "emergency_square_off.auto_triggered",
+        reason=state.reason,
+        changed_at=halt_identity,
+        attempt_count=claim.attempt_count,
     )
-    square_off = run_emergency_square_off(current_prices=current_prices, now=clock)
+
+    try:
+        square_off = run_emergency_square_off(current_prices=current_prices, now=clock)
+    except Exception as exc:  # noqa: BLE001 - a raised exception must still be recorded, not crash the caller silently
+        logger.exception("emergency_square_off.attempt_raised")
+        event_repository.mark_failed_retryable(
+            halt_identity=halt_identity,
+            positions_closed=0,
+            positions_failed=[],
+            reconciliation_divergence_count=None,
+            error=repr(exc),
+        )
+        return AutomaticSquareOffCheckOutcome(
+            kill_switch_engaged=True,
+            already_handled=False,
+            square_off=None,
+            reconciliation_divergence_count=None,
+            zero_exposure_confirmed=False,
+        )
 
     reconciliation_divergence_count: int | None = None
     try:
@@ -113,14 +144,44 @@ def check_and_trigger_automatic_square_off(
     )
     zero_exposure_confirmed = remaining_open == 0 and not square_off.positions_failed
 
-    if not zero_exposure_confirmed:
+    if square_off.positions_failed:
         logger.error(
             "emergency_square_off.exposure_remains_after_square_off",
             remaining_open_positions=remaining_open,
             positions_failed=square_off.positions_failed,
         )
+        event_repository.mark_failed_retryable(
+            halt_identity=halt_identity,
+            positions_closed=square_off.positions_closed,
+            positions_failed=list(square_off.positions_failed),
+            reconciliation_divergence_count=reconciliation_divergence_count,
+            error="one or more positions could not be closed this attempt",
+        )
+    elif not zero_exposure_confirmed or (
+        reconciliation_divergence_count is not None and reconciliation_divergence_count > 0
+    ):
+        # Every attempted position closed, but exposure/reconciliation
+        # still disagrees - flagged distinctly (see
+        # `EmergencySquareOffEvent`'s docstring) rather than treated as
+        # an ordinary retryable exit failure.
+        logger.error(
+            "emergency_square_off.reconciliation_required_after_square_off",
+            remaining_open_positions=remaining_open,
+            reconciliation_divergence_count=reconciliation_divergence_count,
+        )
+        event_repository.mark_reconciliation_required(
+            halt_identity=halt_identity,
+            positions_closed=square_off.positions_closed,
+            reconciliation_divergence_count=reconciliation_divergence_count,
+        )
     else:
         logger.warning("emergency_square_off.completed_zero_exposure_confirmed")
+        event_repository.mark_completed(
+            halt_identity=halt_identity,
+            positions_closed=square_off.positions_closed,
+            reconciliation_divergence_count=reconciliation_divergence_count,
+            now=clock,
+        )
 
     return AutomaticSquareOffCheckOutcome(
         kill_switch_engaged=True,

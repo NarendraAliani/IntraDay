@@ -811,3 +811,78 @@ class CommunicationLedgerRecord(models.Model):
         indexes = [
             models.Index(fields=["signal_id", "event_id", "channel"]),
         ]
+
+
+class EmergencySquareOffEvent(models.Model):
+    """Checkpoint 48 Part 3: the DURABLE authority for one kill-switch
+    halt event's emergency-square-off lifecycle - replacing the
+    cache-only `cache.add()` claim Checkpoint 46/47 used
+    (`infrastructure/api/emergency_square_off_trigger.py`'s previous
+    `_SQUARE_OFF_HANDLED_KEY_PREFIX`).
+
+    The bug this closes: a pure `cache.add()` claim marks a halt event
+    "handled" the INSTANT it is claimed - not when square-off actually
+    finishes. A process crash between those two moments left the event
+    permanently "handled" in cache (24h TTL) with positions possibly
+    still open, and nothing would ever retry it. A database row survives
+    a process crash; the cache did not model "in progress" as a
+    distinct, inspectable state at all.
+
+    `halt_identity` is the kill switch's own `changed_at.isoformat()` -
+    the same identity Checkpoint 46 used - unique per row, one row per
+    halt event, never per-attempt (multiple attempts update the SAME
+    row, `attempt_count` incrementing) so history is auditable without
+    a separate events table this checkpoint's scope does not need.
+
+    Status vocabulary (deliberately NOT copying the user's suggested
+    names verbatim where this project's own existing vocabulary -
+    `PositionLifecycleStatus`, `TradingHaltStatus` - already reads
+    naturally alongside it):
+
+    NOT_STARTED          - row exists (created on first sighting of the
+                            halt), no attempt has run yet.
+    IN_PROGRESS           - an attempt is currently running (or crashed
+                            mid-run - see `claimed_at` staleness below).
+    COMPLETED             - square-off ran AND reconciliation confirmed
+                            zero open exposure. Terminal - never re-run.
+    FAILED_RETRYABLE       - an attempt raised an exception, OR finished
+                            but left `positions_failed` non-empty, OR
+                            finished but reconciliation still shows open
+                            exposure - the NEXT tick is expected to
+                            retry it. Not terminal.
+    RECONCILIATION_REQUIRED - square-off itself reported success (every
+                            position it attempted closed) but the POST
+                            reconciliation still found a divergence -
+                            distinguished from FAILED_RETRYABLE because
+                            here submitting exit orders is not obviously
+                            the right next action (the divergence may be
+                            a broker/local bookkeeping mismatch, not
+                            remaining exposure) - flagged for operator
+                            attention rather than blindly retried
+                            indefinitely, though the next tick MAY still
+                            retry it (see `emergency_square_off_trigger.py`).
+
+    `claimed_at` is the moment the CURRENT attempt was claimed - used to
+    detect a crashed-mid-run attempt (an `IN_PROGRESS` row whose
+    `claimed_at` is older than `_IN_PROGRESS_STALENESS_SECONDS` is
+    treated as abandoned and reclaimed, not as "someone else is handling
+    it"). This is what makes the state machine restart-safe: NOT_STARTED
+    or FAILED_RETRYABLE or a STALE IN_PROGRESS are all reclaimable;
+    a FRESH IN_PROGRESS (another worker genuinely mid-run right now) is
+    not - preventing two concurrent attempts from both submitting exit
+    orders for the same position."""
+
+    halt_identity = models.CharField(max_length=64, unique=True)
+    status = models.CharField(max_length=32, default="NOT_STARTED")
+    attempt_count = models.PositiveIntegerField(default=0)
+    claimed_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    positions_closed = models.PositiveIntegerField(default=0)
+    positions_failed = models.JSONField(default=list)
+    reconciliation_divergence_count = models.IntegerField(null=True, blank=True)
+    last_error = models.CharField(max_length=1000, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        app_label = "persistence"
