@@ -40,6 +40,10 @@ from intraday.domain.shared_kernel.contracts import Exchange
 from intraday.infrastructure.api.active_loop_runtime import run_active_loop_tick
 from intraday.infrastructure.api.paper_reconciliation_runtime import reconcile_paper_state
 from intraday.infrastructure.api.paper_trading_runtime import get_paper_broker
+from intraday.infrastructure.api.position_monitor_runtime import (
+    PositionMonitorTickOutcome,
+    run_position_monitor_tick,
+)
 from intraday.infrastructure.market_data_providers.dhan.client import (
     DhanAuthenticationError,
     DhanConnectionError,
@@ -83,6 +87,8 @@ class IngestionTickOutcome:
     """`None` when reconciliation was not run this tick (nothing was
     promoted, so there is nothing new to reconcile); an integer
     (possibly 0) once it was."""
+    positions_evaluated: int = 0
+    exits_triggered: int = 0
 
 
 def _observation_to_quote(observation: DhanQuoteObservation) -> Quote:
@@ -163,6 +169,26 @@ def _run_locked(*, session: TradingSession, clock: dt.datetime) -> IngestionTick
     quotes = tuple(_observation_to_quote(observation) for observation in result.observations)
     live_service.record_refresh_success(quotes, fetched_at=result.fetched_at)
 
+    # Checkpoint 44 Part 3/4 (closing POS-003, named by Checkpoint 43's
+    # own gap register): position monitoring now runs EVERY tick using
+    # the freshly-fetched quote prices, independent of whether this
+    # tick also produced a new signal - an open position must be
+    # watched on every price update, not only on ticks that happen to
+    # coincide with a fresh entry.
+    current_prices = {str(q.instrument_id): q.last_price for q in quotes}
+    try:
+        monitor_outcome = run_position_monitor_tick(current_prices=current_prices, now=clock)
+    except Exception:  # noqa: BLE001 - position monitoring must never break ingestion
+        logger.exception("market_data_ingestion.position_monitor_failed")
+        monitor_outcome = PositionMonitorTickOutcome(
+            positions_evaluated=0, exits_triggered=0, exit_decisions=()
+        )
+    if monitor_outcome.exits_triggered > 0:
+        logger.info(
+            "market_data_ingestion.position_exits_triggered",
+            exits_triggered=monitor_outcome.exits_triggered,
+        )
+
     bar_service = BarAggregationService(
         quote_repository=DjangoLiveQuoteRepository(),
         bar_repository=DjangoAggregatedBarRepository(),
@@ -211,7 +237,7 @@ def _run_locked(*, session: TradingSession, clock: dt.datetime) -> IngestionTick
             active_loop_invocations += 1
 
     reconciliation_divergence_count: int | None = None
-    if active_loop_invocations > 0:
+    if active_loop_invocations > 0 or monitor_outcome.exits_triggered > 0:
         # Checkpoint 42 Part 11: reconciliation runs automatically
         # "after order/fill events" - a tick that actually submitted a
         # paper order is exactly that trigger. Never lets a
@@ -246,4 +272,6 @@ def _run_locked(*, session: TradingSession, clock: dt.datetime) -> IngestionTick
         bars_promoted=promoted_count,
         active_loop_invocations=active_loop_invocations,
         reconciliation_divergence_count=reconciliation_divergence_count,
+        positions_evaluated=monitor_outcome.positions_evaluated,
+        exits_triggered=monitor_outcome.exits_triggered,
     )
