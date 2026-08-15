@@ -28,6 +28,9 @@ from intraday.domain.instrument.contracts import make_instrument_id
 from intraday.domain.market_data.contracts import Bar
 from intraday.domain.shared_kernel.contracts import Exchange, Timeframe
 from intraday.infrastructure.api.active_loop_runtime import run_active_loop_tick
+from intraday.infrastructure.api.market_data_ingestion_runtime import (
+    run_market_data_ingestion_tick,
+)
 from intraday.trading_engine.strategy_execution.contracts import StrategyConfigurationValues
 
 
@@ -81,3 +84,23 @@ def active_loop_tick(
     if not outcome.ran:
         return f"skipped:{outcome.skipped_reason}"
     return "ran"
+
+
+@shared_task(name="intraday.infrastructure.api.market_data_ingestion_tick")  # type: ignore[untyped-decorator]
+def market_data_ingestion_tick(*, now_override: str | None = None) -> str:
+    """Checkpoint 41 Part 3/7: the task the Celery Beat schedule below
+    actually invokes on a cadence - THE piece Checkpoint 40 lacked.
+    Wraps `run_market_data_ingestion_tick()` (fetch real Dhan quotes ->
+    aggregate -> promotion-gate -> trigger the active loop for every
+    genuinely promoted bar), reported via a short status string for the
+    same reason `active_loop_tick` is."""
+    outcome = run_market_data_ingestion_tick(
+        now=datetime.fromisoformat(now_override) if now_override else None
+    )
+    if not outcome.ran:
+        return f"skipped:{outcome.skipped_reason}"
+    return (
+        f"ran:bars_aggregated={outcome.bars_aggregated}"
+        f":bars_promoted={outcome.bars_promoted}"
+        f":active_loop_invocations={outcome.active_loop_invocations}"
+    )

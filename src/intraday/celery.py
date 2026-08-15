@@ -24,6 +24,30 @@ app.config_from_object("django.conf:settings", namespace="CELERY")
 app.autodiscover_tasks()
 app.autodiscover_tasks(["intraday.infrastructure.api"], related_name="tasks")
 
+# Checkpoint 41 Part 3: the Celery Beat schedule - the one thing
+# Checkpoint 40 built a task but never actually scheduled ("a scheduler
+# with nothing meaningful to schedule" is exactly what Checkpoint 41
+# explicitly forbade repeating).
+#
+# Cadence decision: every 60 SECONDS, matching this project's canonical
+# base timeframe (`bar_aggregation.py::DEFAULT_TIMEFRAME =
+# Timeframe.ONE_MINUTE`, Checkpoint 24A). A faster cadence would poll
+# Dhan's REST quote endpoint more often than a new 1-minute bar could
+# even close, wasting the documented 1 request/second rate-limit
+# budget (Checkpoint 23) for no additional information; a slower
+# cadence would let a closed bar sit un-evaluated for longer than one
+# bar's own duration, directly hurting `market_event_to_bar` latency
+# for no benefit. `market_data_ingestion_tick` (not `active_loop_tick`
+# directly - see `infrastructure/api/tasks.py`) is what's scheduled,
+# since it is the function that ALSO decides, every single tick,
+# whether the session is even OPEN - never a blind, always-on poll.
+app.conf.beat_schedule = {
+    "market-data-ingestion-every-minute": {
+        "task": "intraday.infrastructure.api.market_data_ingestion_tick",
+        "schedule": 60.0,
+    },
+}
+
 
 @app.task(name="intraday.infrastructure.celery_smoke_task")  # type: ignore[untyped-decorator]
 def celery_smoke_task() -> str:
