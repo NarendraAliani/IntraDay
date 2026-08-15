@@ -4,12 +4,13 @@
 # Wires Celery to Django settings (broker/result-backend URLs, task
 # serialization, timezone) per docs/architecture/TECHNOLOGY_MAPPING.md §5.
 #
-# This file defines exactly one task: `celery_smoke_task`, an
-# infrastructure-only smoke task that proves a worker can boot, discover,
-# and execute a task end-to-end. It performs no business logic and MUST NOT
-# be extended to represent future trading behavior — real tasks belong to
-# their owning bounded context (e.g. control_plane for reconciliation jobs,
-# communication for notification dispatch) in later checkpoints.
+# `celery_smoke_task` (Checkpoint 4) remains infrastructure-only, no
+# business logic, unchanged. Checkpoint 40 registers the FIRST real
+# task, `active_loop_tick` — owned by `infrastructure/api/tasks.py`
+# (not this file, per this module's own original "real tasks belong to
+# their owning bounded context" instruction), discovered explicitly
+# below since `infrastructure.api` is not a Django INSTALLED_APPS
+# entry (the default `autodiscover_tasks()` only scans those).
 from __future__ import annotations
 
 import os
@@ -21,6 +22,7 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "intraday.settings.development")
 app = Celery("intraday")
 app.config_from_object("django.conf:settings", namespace="CELERY")
 app.autodiscover_tasks()
+app.autodiscover_tasks(["intraday.infrastructure.api"], related_name="tasks")
 
 
 @app.task(name="intraday.infrastructure.celery_smoke_task")  # type: ignore[untyped-decorator]

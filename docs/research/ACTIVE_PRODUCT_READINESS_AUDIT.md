@@ -1,4 +1,44 @@
-# Active Product Readiness Audit (Checkpoint 39)
+# Active Product Readiness Audit (Checkpoint 39, updated Checkpoint 40)
+
+## Checkpoint 40 update — closing the read of Checkpoint 39's own headline finding
+
+Checkpoint 39 ended on: **"Nothing new runs unattended."** Checkpoint 40's
+job was to change that within a coding-only session (no ability to
+literally keep a background process alive after the session ends, no
+real Dhan credentials to connect to a live feed with). Given those
+hard constraints, the honest, achievable target was: build the ONE
+function/task a real scheduler (Celery beat, cron, a management
+command) WOULD call repeatedly, and prove it is genuinely
+session-aware, restart-safe, and idempotent when called that way -
+closing the gap between "a caller can invoke this" and "this is
+shaped correctly for unattended invocation."
+
+**What changed**: `infrastructure/api/active_loop_runtime.py::run_active_loop_tick()`
+is the first function in this codebase that:
+1. Determines the market session itself (no caller-supplied
+   `market_session_is_open` boolean to get wrong or forget).
+2. Reloads restart-safe dedup state from the durable ledger on EVERY
+   call (no in-memory state a caller must remember to carry over).
+3. Composes the REAL `PaperTradingService` + `SignalCommunicationService`
+   from the existing production composition root
+   (`paper_trading_runtime.py`), not a test-only assembly.
+
+It is registered as a real Celery task
+(`infrastructure/api/tasks.py::active_loop_tick`, discovered via
+`celery.py`'s explicit `autodiscover_tasks(["intraday.infrastructure.api"])`)
+with JSON-serializable arguments, proven via `.run()` (synchronous,
+no broker needed for the test) to round-trip correctly and to skip
+cleanly on a holiday.
+
+**What did NOT change**: there is still no process that calls this task
+on a schedule (no Celery beat schedule entry exists), and there is
+still no source of `bars` other than a caller/test supplying them - no
+Dhan WebSocket client exists in this codebase at all. The distinction
+this checkpoint draws is between "the loop can be scheduled" (now
+true) and "something schedules it against real data" (still not
+true, and correctly not claimed).
+
+## Original Checkpoint 39 findings below (still accurate)
 
 ## 1. What the product can actually do today
 
