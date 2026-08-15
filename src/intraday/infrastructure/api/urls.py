@@ -22,6 +22,7 @@ from intraday.infrastructure.api import (
     strategy_configuration_views,
     strategy_research_status_views,
     strategy_views,
+    system_readiness_view,
     universe_views,
     watchlist_views,
 )
@@ -29,6 +30,8 @@ from intraday.infrastructure.api import (
 app_name = "config_api"
 
 urlpatterns = [
+    # --- Checkpoint 50: composed system readiness --------------------------
+    path("system/readiness/", system_readiness_view.system_readiness, name="system-readiness"),
     # --- Checkpoint 23: read-only live market data ------------------------
     path("market-data/session/", market_data_views.session_status, name="market-data-session"),
     path("market-data/health/", market_data_views.health_status, name="market-data-health"),

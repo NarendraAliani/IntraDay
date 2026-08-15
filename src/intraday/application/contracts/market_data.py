@@ -39,6 +39,22 @@ class MarketDataHealthResponseSerializer(serializers.Serializer[dict[str, object
     subscription_active = serializers.BooleanField()
 
 
+class SystemReadinessResponseSerializer(serializers.Serializer[dict[str, object]]):
+    """Checkpoint 50 Rule 10: the ONE composed readiness answer -
+    `control_plane.system_readiness.contracts.SystemReadinessSnapshot`
+    on the wire."""
+
+    state = serializers.ChoiceField(
+        choices=["READY", "DEGRADED", "HALTED", "SQUARE_OFF_UNRESOLVED", "FAILED"]
+    )
+    reasons = serializers.ListField(child=serializers.CharField())
+    database_ok = serializers.BooleanField()
+    market_data_state = serializers.CharField()
+    session_status = serializers.CharField()
+    kill_switch_engaged = serializers.BooleanField()
+    square_off_unresolved_count = serializers.IntegerField()
+
+
 class QuoteResponseSerializer(serializers.Serializer[dict[str, object]]):
     symbol = serializers.CharField()
     exchange = serializers.CharField()

@@ -56,6 +56,16 @@ class DjangoEmergencySquareOffEventRepository:
     since every legal transition this domain needs is one of exactly
     those three."""
 
+    def count_unresolved(self) -> int:
+        """Checkpoint 50 Rule 10: how many `EmergencySquareOffEvent`
+        rows have NOT reached `COMPLETED` - the ONE fact the new
+        system-readiness composition needs from this repository.
+        Deliberately a read, not part of the claim/complete/fail state
+        machine itself - never mutates anything."""
+        return EmergencySquareOffEvent.objects.exclude(
+            status=SquareOffEventStatus.COMPLETED.value
+        ).count()
+
     @transaction.atomic
     def claim(self, *, halt_identity: str, now: dt.datetime) -> ClaimResult:
         """Atomically claims the right to run (or re-run) square-off for
