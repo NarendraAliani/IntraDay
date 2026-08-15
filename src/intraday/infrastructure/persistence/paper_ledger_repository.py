@@ -246,10 +246,23 @@ class DjangoPaperLedgerRepository:
     def load_positions_for_reconciliation(self) -> dict[str, Position]:
         """Keyed by `instrument_id` string, matching
         `reconcile_positions()`'s own expected key shape - one position
-        per instrument, mirroring `PaperPositionRecord`'s own "one open
-        row per instrument" invariant (Checkpoint 34 Part 12)."""
+        per instrument.
+
+        Checkpoint 47 Part 2 ROOT-CAUSE FIX: this method used to filter
+        `status="OPEN"` only, while `PaperBroker.get_positions()` (the
+        `broker` side `reconcile_positions()` compares against) reports
+        EVERY position it has ever held, open or closed
+        (`infrastructure/brokers/paper/broker.py::get_positions()`
+        returns `tuple(self._positions.values())` unconditionally).
+        The mismatch produced a real, reproducible `MISSING_LOCALLY`
+        divergence for every position the moment it closed - found by
+        Checkpoint 46's own end-to-end emergency-square-off test, left
+        unresolved there, root-caused and fixed here. Ordered by `pk`
+        (insertion order) so the dict-overwrite-by-instrument below
+        naturally keeps the MOST RECENT row per instrument, matching
+        `PaperBroker`'s own single-entry-per-instrument dict."""
         result: dict[str, Position] = {}
-        for row in PaperPositionRecord.objects.filter(status="OPEN"):
+        for row in PaperPositionRecord.objects.order_by("pk"):
             result[row.instrument_id] = Position(
                 position_id=PositionId(row.position_id),
                 instrument_id=InstrumentId(row.instrument_id),

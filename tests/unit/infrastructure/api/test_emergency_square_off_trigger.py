@@ -96,12 +96,14 @@ def test_full_chain_kill_switch_to_zero_exposure() -> None:
     assert outcome.already_handled is False
     assert outcome.square_off is not None
     assert outcome.square_off.positions_closed == 1
-    # Reconciliation genuinely RAN (not None) - its own divergence
-    # count is a separate, independently-tested concern
-    # (test_paper_reconciliation_runtime.py); this test's job is
-    # proving the CHAIN reaches reconciliation, not re-asserting
-    # reconciliation's own internal correctness.
-    assert outcome.reconciliation_divergence_count is not None
+    # Checkpoint 47 Part 2: MUST be exactly zero - Checkpoint 46 left a
+    # real MISSING_LOCALLY divergence unresolved here (a genuine bug
+    # in load_positions_for_reconciliation(), root-caused and fixed
+    # this checkpoint - see Decision 199). Both "zero exposure" AND
+    # "zero reconciliation divergence" are required for this checkpoint
+    # to consider emergency square-off genuinely proven, not merely
+    # "closed but murky."
+    assert outcome.reconciliation_divergence_count == 0
     assert outcome.zero_exposure_confirmed is True
 
     trading_service = get_paper_trading_service()

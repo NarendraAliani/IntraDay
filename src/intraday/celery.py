@@ -41,10 +41,31 @@ app.autodiscover_tasks(["intraday.infrastructure.api"], related_name="tasks")
 # directly - see `infrastructure/api/tasks.py`) is what's scheduled,
 # since it is the function that ALSO decides, every single tick,
 # whether the session is even OPEN - never a blind, always-on poll.
+#
+# Checkpoint 47 Part 4: `emergency_square_off_check_tick` is scheduled
+# SEPARATELY, at its OWN faster cadence, deliberately independent of
+# `market_data_ingestion_tick`. This is a direct fix to a real
+# architectural weakness Checkpoint 46 had: automatic square-off was
+# only ever invoked FROM the ingestion tick, meaning kill-switch safety
+# implicitly depended on ingestion succeeding - exactly backwards, since
+# ingestion (a Dhan REST call, a rate-limited external dependency) may
+# itself be the thing that has failed when an operator needs the kill
+# switch to actually work. 15 seconds is fast enough that an engaged
+# kill switch is acted on promptly without being an "artificial
+# one-second polling loop" (this project's own established anti-
+# pattern to avoid, Checkpoint 41) - safety-critical, so faster than
+# the 60s market-data cadence is justified; `check_and_trigger_
+# automatic_square_off()` itself is a cheap no-op whenever the kill
+# switch is not engaged, so the faster cadence costs almost nothing
+# in the common case.
 app.conf.beat_schedule = {
     "market-data-ingestion-every-minute": {
         "task": "intraday.infrastructure.api.market_data_ingestion_tick",
         "schedule": 60.0,
+    },
+    "emergency-square-off-check-every-15-seconds": {
+        "task": "intraday.infrastructure.api.emergency_square_off_check_tick",
+        "schedule": 15.0,
     },
 }
 

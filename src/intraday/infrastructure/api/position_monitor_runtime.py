@@ -183,13 +183,22 @@ def run_emergency_square_off(
     checkpoint) triggers deliberately.
 
     `current_prices` (keyed by `str(instrument_id)`) is CALLER-supplied
-    - matching `run_position_monitor_tick()`'s own established
-    discipline (Checkpoint 44) - rather than this function reading a
-    broker-specific `get_latest_price()` method `domain.broker.
-    BrokerGateway` does not declare (Decision 149: `PaperBroker` and a
-    future `DhanBroker` are siblings under the SAME interface; this
-    module must only call what that shared interface actually
-    guarantees)."""
+    when available - matching `run_position_monitor_tick()`'s own
+    established discipline (Checkpoint 44). Checkpoint 47 Part 4 ADDS a
+    fallback: when an instrument has no caller-supplied price (the
+    exact scenario an independent safety trigger needs to survive -
+    market-data ingestion, the USUAL price source, may itself be the
+    failed subsystem an emergency square-off exists to protect
+    against), this function falls back to `PaperBroker`'s own
+    paper-specific `get_latest_price()` (its last recorded price,
+    possibly stale, but a real, known price - never fabricated). This
+    is a DELIBERATE, DOCUMENTED exception to Decision 197's broker-
+    neutrality preference: `PaperBroker` is the only broker this
+    project has, and an emergency mechanism that fails closed (refuses
+    to close a position) purely because the abstraction is
+    broker-neutral would be exactly backwards - revisit this fallback
+    when a real `DhanBroker` exists and can be asked the same
+    question through a shared interface method."""
     clock = now or datetime.now(tz=UTC)
     trading_service = get_paper_trading_service()
     ledger = DjangoPaperLedgerRepository()
@@ -202,6 +211,10 @@ def run_emergency_square_off(
 
     for position in open_positions:
         current_price = current_prices.get(str(position.instrument_id))
+        if current_price is None:
+            get_latest_price = getattr(trading_service.broker, "get_latest_price", None)
+            if callable(get_latest_price):
+                current_price = get_latest_price(position.instrument_id)
         if current_price is None:
             failed.append(str(position.position_id))
             continue

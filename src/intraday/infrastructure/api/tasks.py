@@ -28,6 +28,9 @@ from intraday.domain.instrument.contracts import make_instrument_id
 from intraday.domain.market_data.contracts import Bar
 from intraday.domain.shared_kernel.contracts import Exchange, Timeframe
 from intraday.infrastructure.api.active_loop_runtime import run_active_loop_tick
+from intraday.infrastructure.api.emergency_square_off_trigger import (
+    check_and_trigger_automatic_square_off,
+)
 from intraday.infrastructure.api.market_data_ingestion_runtime import (
     run_market_data_ingestion_tick,
 )
@@ -103,4 +106,30 @@ def market_data_ingestion_tick(*, now_override: str | None = None) -> str:
         f"ran:bars_aggregated={outcome.bars_aggregated}"
         f":bars_promoted={outcome.bars_promoted}"
         f":active_loop_invocations={outcome.active_loop_invocations}"
+    )
+
+
+@shared_task(name="intraday.infrastructure.api.emergency_square_off_check_tick")  # type: ignore[untyped-decorator]
+def emergency_square_off_check_tick(*, now_override: str | None = None) -> str:
+    """Checkpoint 47 Part 4: an INDEPENDENT scheduled task, separate
+    from `market_data_ingestion_tick` - the whole point being that
+    kill-switch safety must not wait on (or depend on the success of)
+    market-data ingestion, which may itself be the failed subsystem an
+    emergency square-off exists to protect against. Supplies NO
+    caller-side prices (`current_prices={}`) - relying entirely on
+    `run_emergency_square_off()`'s own Checkpoint 47 Part 4 fallback to
+    `PaperBroker`'s last recorded price, so this task has no dependency
+    on a fresh quote fetch having just succeeded."""
+    outcome = check_and_trigger_automatic_square_off(
+        current_prices={}, now=datetime.fromisoformat(now_override) if now_override else None
+    )
+    if not outcome.kill_switch_engaged:
+        return "not_engaged"
+    if outcome.already_handled:
+        return "already_handled"
+    assert outcome.square_off is not None  # narrows for the f-string below
+    return (
+        f"handled:positions_closed={outcome.square_off.positions_closed}"
+        f":positions_failed={len(outcome.square_off.positions_failed)}"
+        f":zero_exposure_confirmed={outcome.zero_exposure_confirmed}"
     )

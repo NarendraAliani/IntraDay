@@ -138,11 +138,21 @@ def test_emergency_square_off_with_no_open_positions_is_a_clean_no_op() -> None:
     assert outcome.positions_failed == ()
 
 
-def test_emergency_square_off_reports_a_position_it_cannot_price_as_failed() -> None:
+def test_emergency_square_off_reports_a_position_it_cannot_price_as_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Checkpoint 47 Part 4 added a fallback to PaperBroker's own last
+    recorded price when the caller supplies none (so an independent
+    safety trigger survives market-data ingestion being the failed
+    subsystem) - in normal operation a FILLED position always has SOME
+    recorded price (PaperBroker cannot fill a MARKET order otherwise),
+    so this test monkeypatches `get_latest_price` to simulate the
+    genuinely-no-price-available edge case directly, proving the
+    honest failure path still exists and is still reachable."""
     _open_position(RELIANCE, "entry-unpriced")
+    trading_service = get_paper_trading_service()
+    monkeypatch.setattr(trading_service.broker, "get_latest_price", lambda instrument_id: None)
 
-    # No current price supplied for RELIANCE - must be reported as
-    # failed, never silently skipped or fabricated a price for.
     outcome = run_emergency_square_off(current_prices={}, now=NOW)
 
     assert outcome.positions_found == 1
