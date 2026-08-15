@@ -12,22 +12,29 @@
 # `application/services/` instead.
 #
 # HONEST, DOCUMENTED LIMITATION (Checkpoint 40's own explicit
-# requirement, Part 23): this module does NOT itself connect to any
-# live market-data source. `run_active_loop_tick()` still requires the
-# CALLER to supply `bars` - there is no Dhan WebSocket client in this
-# codebase yet (see `docs/research/ACTIVE_PRODUCT_READINESS_AUDIT.md`,
-# "Dhan status"). What this module DOES provide, for the first time, is
-# the single function a scheduler/Celery task can invoke on a fixed
-# cadence with NO caller-side bookkeeping - it is genuinely idempotent
-# and session-aware by itself, closing the "the caller has to remember
-# to pass already_processed_signal_ids" gap that made every prior
-# checkpoint's proof caller-driven rather than scheduler-ready.
+# requirement, Part 23; STILL TRUE after Checkpoint 52 - see below):
+# `run_active_loop_tick()` itself does NOT connect to any live
+# market-data source. It still requires the CALLER to supply `bars` -
+# there is no Dhan WebSocket client in this codebase yet (see
+# `docs/architecture/ACTIVE_PRODUCT_GAP_REGISTER.md`).
+#
+# Checkpoint 52 ADDS `run_active_loop_tick_from_source()` - a thin
+# wrapper that pulls bars from any `application.repositories.
+# live_market_data.BarSource` (the new canonical, technology-neutral
+# boundary) and forwards them to `run_active_loop_tick()` unchanged.
+# This is the SHAPE a real Dhan-tick-driven feed would plug into; the
+# ONLY concrete `BarSource` this checkpoint implements is
+# `infrastructure/market_data_providers/replay/
+# DeterministicReplayBarSource` - explicitly, repeatedly labelled
+# REPLAY, never live-market-data evidence. Building a real Dhan-backed
+# `BarSource` remains a separate, undone, NAMED dependency.
 from __future__ import annotations
 
 import datetime as dt
 from dataclasses import dataclass
 from decimal import Decimal
 
+from intraday.application.repositories.live_market_data import BarSource
 from intraday.application.services.paper_signal_execution import PaperSignalExecutionService
 from intraday.application.services.paper_trading import PaperTradingService
 from intraday.application.services.signal_communication import SignalCommunicationService
@@ -35,7 +42,7 @@ from intraday.application.services.strategy_execution import build_coordinator
 from intraday.domain.market_data.contracts import Bar
 from intraday.domain.session.calendar import session_for_instant
 from intraday.domain.session.contracts import SessionStatus
-from intraday.domain.shared_kernel.contracts import InstrumentId
+from intraday.domain.shared_kernel.contracts import InstrumentId, Timeframe
 from intraday.infrastructure.api.paper_trading_runtime import (
     get_paper_trading_service,
     get_signal_communication_service,
@@ -125,3 +132,39 @@ def run_active_loop_tick(
     )
 
     return ActiveLoopTickOutcome(ran=True, skipped_reason=None, session_status=session.status)
+
+
+def run_active_loop_tick_from_source(
+    *,
+    source: BarSource,
+    instrument_id: InstrumentId,
+    timeframe: Timeframe,
+    strategy_id: str,
+    configuration: StrategyConfigurationValues,
+    quantity: Decimal = DEFAULT_QUANTITY,
+    data_quality_is_stale: bool = False,
+    now: dt.datetime | None = None,
+) -> ActiveLoopTickOutcome:
+    """Checkpoint 52: the scheduler-shaped entry point that no longer
+    requires the CALLER to manually slice/assemble `bars` on every
+    invocation - it pulls them from `source` (any `BarSource`) itself,
+    then delegates to `run_active_loop_tick()` unchanged (never
+    reimplements its session-gating, dedup, or order-submission logic).
+
+    Safe to call repeatedly with an advancing `now`/clock, exactly the
+    calling pattern a real scheduled task (Celery Beat) would use - the
+    underlying `run_active_loop_tick()` call's own idempotency
+    (already-processed signal IDs, already-submitted order idempotency
+    keys) is what prevents the SAME historical bars, re-supplied by
+    `source` on every call, from ever acting twice."""
+    clock = now or dt.datetime.now(tz=dt.UTC)
+    bars = source.get_bars(instrument_id=instrument_id, timeframe=timeframe, as_of=clock)
+    return run_active_loop_tick(
+        instrument_id=instrument_id,
+        strategy_id=strategy_id,
+        configuration=configuration,
+        bars=bars,
+        quantity=quantity,
+        data_quality_is_stale=data_quality_is_stale,
+        now=clock,
+    )

@@ -16,10 +16,16 @@ from intraday.domain.instrument.contracts import make_instrument_id
 from intraday.domain.market_data.contracts import Bar
 from intraday.domain.session.contracts import SessionStatus
 from intraday.domain.shared_kernel.contracts import Exchange, Timeframe
-from intraday.infrastructure.api.active_loop_runtime import run_active_loop_tick
+from intraday.infrastructure.api.active_loop_runtime import (
+    run_active_loop_tick,
+    run_active_loop_tick_from_source,
+)
 from intraday.infrastructure.api.paper_trading_runtime import (
     get_paper_trading_service,
     reset_paper_broker_for_testing,
+)
+from intraday.infrastructure.market_data_providers.replay.deterministic_bar_source import (
+    DeterministicReplayBarSource,
 )
 from intraday.infrastructure.persistence.models import PaperOrderRecord
 from intraday.trading_engine.strategy_execution.contracts import StrategyConfigurationValues
@@ -140,3 +146,66 @@ def test_second_tick_with_the_same_bars_does_not_duplicate_the_order() -> None:
     second_order_count = PaperOrderRecord.objects.count()
 
     assert second_order_count == first_order_count
+
+
+def test_active_loop_from_source_is_driven_purely_through_the_bar_source_boundary() -> None:
+    """Checkpoint 52: the caller no longer manually slices/assembles
+    `bars` on each call - it supplies a `BarSource` ONCE, and
+    `run_active_loop_tick_from_source()` pulls whatever is available
+    `as_of` the current clock, exactly the calling pattern a real
+    scheduled task (against a real future Dhan-backed `BarSource`)
+    would use. Called TWICE with an advancing clock, simulating two
+    scheduler ticks - proves no duplicate order results, using the
+    SAME underlying idempotency `run_active_loop_tick()` already had,
+    now reached through the new source-driven entrypoint."""
+    trading_service = get_paper_trading_service()
+    bars = _uptrend_bars(MARKET_OPEN_INSTANT)
+    trading_service.broker.record_price(RELIANCE, bars[-1].close, MARKET_OPEN_INSTANT)
+    source = DeterministicReplayBarSource.seeded(bars)
+
+    all_bars_available_at = MARKET_OPEN_INSTANT + timedelta(minutes=len(bars) + 1)
+
+    first_tick = run_active_loop_tick_from_source(
+        source=source,
+        instrument_id=RELIANCE,
+        timeframe=Timeframe.ONE_MINUTE,
+        strategy_id="ema_crossover",
+        configuration=_config(),
+        now=all_bars_available_at,
+    )
+    assert first_tick.ran is True
+    assert PaperOrderRecord.objects.exclude(signal_id="").exists()
+    first_order_count = PaperOrderRecord.objects.count()
+
+    # Second scheduler tick, clock advanced - the SAME bars are still
+    # all that's "available" (the replay source never adds more), so
+    # this must be a genuine no-op, not a duplicate order.
+    second_tick = run_active_loop_tick_from_source(
+        source=source,
+        instrument_id=RELIANCE,
+        timeframe=Timeframe.ONE_MINUTE,
+        strategy_id="ema_crossover",
+        configuration=_config(),
+        now=all_bars_available_at + timedelta(minutes=1),
+    )
+    assert second_tick.ran is True  # bars were still available, market still open
+    assert PaperOrderRecord.objects.count() == first_order_count
+
+
+def test_active_loop_from_source_reveals_no_bars_before_they_exist() -> None:
+    """Before ANY bar's timestamp has arrived, the source-driven tick
+    must behave exactly like a real live feed with nothing to say yet -
+    `skipped_reason="no_bars_supplied"`, never a fabricated signal."""
+    source = DeterministicReplayBarSource.seeded(_uptrend_bars(MARKET_OPEN_INSTANT))
+
+    outcome = run_active_loop_tick_from_source(
+        source=source,
+        instrument_id=RELIANCE,
+        timeframe=Timeframe.ONE_MINUTE,
+        strategy_id="ema_crossover",
+        configuration=_config(),
+        now=MARKET_OPEN_INSTANT,  # before the first seeded bar's timestamp
+    )
+
+    assert outcome.ran is False
+    assert outcome.skipped_reason == "no_bars_supplied"

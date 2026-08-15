@@ -22,8 +22,8 @@ from datetime import datetime
 from typing import Protocol
 
 from intraday.domain.market_data.aggregation import AggregatedBar
-from intraday.domain.market_data.contracts import Quote
-from intraday.domain.shared_kernel.contracts import Timeframe
+from intraday.domain.market_data.contracts import Bar, Quote
+from intraday.domain.shared_kernel.contracts import InstrumentId, Timeframe
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +81,36 @@ class AggregatedBarRepository(Protocol):
     def get_recent(self, *, timeframe: Timeframe, limit: int = 200) -> tuple[AggregatedBar, ...]:
         """The most recent `limit` bars across all instruments, newest
         first - read-only, never triggers aggregation itself."""
+        ...
+
+
+class BarSource(Protocol):
+    """Checkpoint 52: the canonical, technology-neutral interface
+    between "something that supplies bars over time" and
+    `active_loop_runtime.run_active_loop_tick_from_source()`. THE point
+    of this Protocol: a real future Dhan-tick-driven bar source and the
+    `DeterministicReplayBarSource` (`infrastructure/market_data_providers/
+    replay/`) this checkpoint actually implements are INTERCHANGEABLE
+    behind this one interface - the active loop caller never knows or
+    cares which one it was given. No implementation exists yet for a
+    real Dhan-tick-driven source (that remains a separate, undone,
+    NAMED dependency - see `ACTIVE_PRODUCT_GAP_REGISTER.md`); this
+    checkpoint proves the SHAPE of the boundary and provides the one
+    concrete, honestly-labelled deterministic implementation."""
+
+    def get_bars(
+        self, *, instrument_id: InstrumentId, timeframe: Timeframe, as_of: datetime
+    ) -> tuple[Bar, ...]:
+        """Every bar this source can supply with `timestamp <= as_of`,
+        for `instrument_id`/`timeframe` - safe to call repeatedly with
+        an advancing `as_of` (a live source's natural calling pattern);
+        the caller's OWN idempotency (already-processed signal IDs,
+        already-submitted order idempotency keys - both already
+        established, Checkpoint 36/39) is what prevents re-supplying
+        the same historical bars from ever re-acting on them twice.
+        This Protocol makes no promise about ordering; callers sort if
+        they need to (mirrors `LiveQuoteRepository.get_observations()`'s
+        own precedent)."""
         ...
 
 
