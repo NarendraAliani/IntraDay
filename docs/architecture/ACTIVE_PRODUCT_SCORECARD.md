@@ -98,27 +98,32 @@ built - it needs to be fed.
    complete PAPER session end-to-end against **replay/synthetic** data
    (proven, Checkpoint 51/57), but not yet against anything resembling
    live market data.
-2. **What exactly prevents that?** Two things, in order: (a) the
-   WebSocket technology decision remains unresolved (Decision 211/212),
-   blocking a real Dhan connection even before the credential question;
-   (b) `async_worker.py`'s Quote output is not wired into bar
-   aggregation - a small, concrete, buildable gap, not a research
-   question.
-3. **Top 5 blockers**: WebSocket technology decision · Quote→bar wiring
-   · token lifecycle · watchdog/reconnect · this environment's Dhan
-   credential (live verification only).
-4. **Critical path**: WebSocket decision → real transport → Quote→bar
-   wiring → TRADING_GRADE_BAR conditions → (everything downstream
+2. **What exactly prevents that?** Two things, in order: (a) a real
+   `DhanWebSocketTransport` does not exist yet - the WebSocket
+   TECHNOLOGY DECISION was resolved Checkpoint 60 (`websockets`
+   library, see Decision 215 and `MARKET_DATA_RUNTIME_ARCHITECTURE.md`)
+   but the transport itself is not yet built; (b) this environment's
+   Dhan credential remains unusable for live verification (Checkpoint
+   41, unchanged) regardless of transport readiness.
+3. **Top 5 blockers**: `DhanWebSocketTransport` implementation ·
+   token lifecycle · watchdog/reconnect · instrument master ·
+   this environment's Dhan credential (live verification only).
+4. **Critical path**: real transport built against the now-locked
+   `websockets` decision → Quote→bar wiring (already real, Checkpoint
+   58/59) → TRADING_GRADE_BAR conditions → (everything downstream
    already exists).
 5. **What can run in parallel?** Performance/load testing and long-run
    stability testing can be built against the SYNTHETIC provider today,
-   independent of the WebSocket decision.
-6. **What should CP58 implement?** The Quote→bar wiring (see below -
-   implemented this checkpoint) - it's real, bounded, and does not
-   require resolving the WebSocket dependency question first.
-7. **What should CP59 implement?** The WebSocket technology decision
-   itself, explicitly reviewed (not a side effect), then a real
-   transport built against it.
+   independent of the real transport's completion.
+6. **What did CP58 implement?** The Quote→bar wiring - real, bounded.
+   **What did CP59 correct?** Aggregation now runs periodically WHILE
+   the worker runs, not only at stream end. **What did CP60 resolve?**
+   The WebSocket technology decision itself (`websockets` library),
+   with real primary-source research - not yet implemented.
+7. **What should CP61 implement?** `DhanWebSocketTransport` against the
+   now-locked `websockets` decision, plus a real `websockets`-based
+   fake server replacing/supplementing the raw-TCP one for integration
+   tests - the actual next unblocking step.
 8. **What should NOT be worked on yet?** Frontend polish, additional
    report types, multi-broker expansion - all P2, all premature while
    the live-data critical path is still open.
