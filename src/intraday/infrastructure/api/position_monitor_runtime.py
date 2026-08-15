@@ -219,6 +219,25 @@ def run_emergency_square_off(
             failed.append(str(position.position_id))
             continue
 
+        # Checkpoint 51: a REAL bug found while building the EOD
+        # lifecycle test on top of this function - `PaperBroker.
+        # submit_order()` fills a MARKET order at its OWN internally
+        # recorded price (`_latest_prices`), never at anything passed
+        # into `submit_order()` itself. Without this call, a
+        # caller-supplied `current_price` here was silently ignored for
+        # the ACTUAL fill (only used for the "can we price this at
+        # all" check and the risk-evaluation notional estimate above),
+        # so every emergency/EOD square-off exit silently filled at
+        # whatever stale price the broker last happened to record -
+        # frequently the SAME price the position was entered at,
+        # producing a fabricated zero realized P&L regardless of the
+        # real exit price the caller intended. `record_price()` is
+        # idempotent and safe to call with the same value the fallback
+        # branch above may have just read from the broker itself.
+        record_price = getattr(trading_service.broker, "record_price", None)
+        if callable(record_price):
+            record_price(position.instrument_id, current_price, clock)
+
         exit_side = Side.SELL if position.direction is Side.BUY else Side.BUY
         order = OrderIntent(
             order_id=str(uuid.uuid4()),  # type: ignore[arg-type]

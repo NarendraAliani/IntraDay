@@ -886,3 +886,37 @@ class EmergencySquareOffEvent(models.Model):
 
     class Meta:
         app_label = "persistence"
+
+
+class EODRun(models.Model):
+    """Checkpoint 51 Part 11: the durable EOD-lifecycle state machine -
+    ONE row per calendar trading date, deliberately reusing the exact
+    crash-recovery design proven for `EmergencySquareOffEvent`
+    (Checkpoint 48/Decision 202) rather than inventing a new pattern -
+    the same lesson applies identically here: EOD force-closes every
+    open PAPER position, so a crash mid-run must never be able to
+    permanently mark the day "closed" while positions remain open.
+
+    `eod_date` is the identity (one EOD per trading day, never per
+    attempt - retries update the SAME row, `attempt_count`
+    incrementing). Status vocabulary deliberately mirrors
+    `EmergencySquareOffEvent`'s own (`NOT_STARTED` -> `IN_PROGRESS` ->
+    `COMPLETED` / `FAILED_RETRYABLE`) rather than inventing a fourth
+    vocabulary for what is structurally the same problem (force-close
+    exposure, verify zero, record the outcome, survive a crash)."""
+
+    eod_date = models.DateField(unique=True)
+    status = models.CharField(max_length=32, default="NOT_STARTED")
+    attempt_count = models.PositiveIntegerField(default=0)
+    claimed_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    positions_closed = models.PositiveIntegerField(default=0)
+    positions_failed = models.JSONField(default=list)
+    reconciliation_divergence_count = models.IntegerField(null=True, blank=True)
+    total_realized_pnl = models.DecimalField(max_digits=18, decimal_places=4, null=True, blank=True)
+    last_error = models.CharField(max_length=1000, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        app_label = "persistence"
