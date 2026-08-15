@@ -42,6 +42,11 @@ from intraday.infrastructure.persistence.models import (
     PaperPositionRecord,
     PaperTradeRecord,
 )
+from intraday.trading_engine.position_management.contracts import (
+    ExitPlan,
+    ManagedPosition,
+    PositionLifecycleStatus,
+)
 
 
 def _event_to_dict(event: OrderEvent) -> dict[str, object]:
@@ -268,3 +273,124 @@ class DjangoPaperLedgerRepository:
             utilized_margin=row.utilized_margin,
             as_of=row.updated_at,
         )
+
+    # ------------------------------------------------------------------
+    # Checkpoint 43 Part 3/5: position-management lineage/exit-plan.
+    # ------------------------------------------------------------------
+
+    @transaction.atomic
+    def attach_exit_plan(
+        self,
+        *,
+        position_id: str,
+        strategy_id: str,
+        strategy_version: str,
+        entry_order_id: str,
+        exit_plan: ExitPlan,
+        quantity: object,
+        entry_price: object,
+    ) -> None:
+        """Called once, right after a position's entry order fills -
+        never called again for the same position (a second call would
+        silently reset `remaining_quantity`/`highest_favorable_price`,
+        erasing genuine monitoring progress). The caller
+        (`application/services/position_monitor_composition.py`) is
+        responsible for calling this exactly once."""
+        PaperPositionRecord.objects.filter(position_id=position_id).update(
+            strategy_id=strategy_id,
+            strategy_version=strategy_version,
+            entry_order_id=entry_order_id,
+            stop_loss=exit_plan.stop_loss,
+            target_1=exit_plan.target_1,
+            target_2=exit_plan.target_2,
+            target_3=exit_plan.target_3,
+            trailing_stop_distance=exit_plan.trailing_stop_distance,
+            lifecycle_status=PositionLifecycleStatus.OPEN.value,
+            remaining_quantity=quantity,
+            highest_favorable_price=entry_price,
+        )
+
+    @transaction.atomic
+    def update_position_lifecycle(
+        self,
+        *,
+        position_id: str,
+        lifecycle_status: PositionLifecycleStatus,
+        remaining_quantity: object,
+        highest_favorable_price: object,
+        exit_reason: str,
+    ) -> None:
+        PaperPositionRecord.objects.filter(position_id=position_id).update(
+            lifecycle_status=lifecycle_status.value,
+            remaining_quantity=remaining_quantity,
+            highest_favorable_price=highest_favorable_price,
+            exit_reason=exit_reason,
+        )
+
+    def load_open_managed_positions(self) -> tuple[ManagedPosition, ...]:
+        """Only positions that were given a REAL `ExitPlan` (via
+        `attach_exit_plan()`) are returned as monitorable
+        `ManagedPosition`s - a position with no strategy-declared exit
+        rule (`stop_loss` and every target/trailing field all `None`)
+        is honestly excluded, never given a fabricated plan just to be
+        monitorable (Checkpoint 42's own "never fabricate a field"
+        discipline, applied here)."""
+        result: list[ManagedPosition] = []
+        for row in PaperPositionRecord.objects.filter(status="OPEN"):
+            has_any_rule = any(
+                (
+                    row.stop_loss,
+                    row.target_1,
+                    row.target_2,
+                    row.target_3,
+                    row.trailing_stop_distance,
+                )
+            )
+            if not has_any_rule:
+                continue
+            position = Position(
+                position_id=PositionId(row.position_id),
+                instrument_id=InstrumentId(row.instrument_id),
+                direction=Side(row.direction),
+                quantity=row.quantity,
+                average_entry_price=row.average_entry_price,
+                realized_pnl=row.realized_pnl,
+                unrealized_pnl=row.unrealized_pnl,
+                opened_at=row.opened_at,
+                status=PositionStatus(row.status),
+                closed_at=row.closed_at,
+            )
+            exit_plan = ExitPlan(
+                stop_loss=row.stop_loss,
+                target_1=row.target_1,
+                target_2=row.target_2,
+                target_3=row.target_3,
+                trailing_stop_distance=row.trailing_stop_distance,
+            )
+            remaining_quantity = (
+                row.remaining_quantity if row.remaining_quantity is not None else row.quantity
+            )
+            if remaining_quantity <= 0:
+                # Fully exited already (Decimal('0') is falsy in Python
+                # but is a genuine, correct "nothing left" value - never
+                # treated as "not set" and fallen back to the original
+                # quantity, which would resurrect a closed position).
+                continue
+            highest_favorable_price = (
+                row.highest_favorable_price
+                if row.highest_favorable_price is not None
+                else row.average_entry_price
+            )
+            result.append(
+                ManagedPosition(
+                    position=position,
+                    strategy_id=row.strategy_id,  # type: ignore[arg-type]
+                    strategy_version=row.strategy_version,
+                    entry_order_id=OrderId(row.entry_order_id),
+                    exit_plan=exit_plan,
+                    lifecycle_status=PositionLifecycleStatus(row.lifecycle_status),
+                    remaining_quantity=remaining_quantity,
+                    highest_favorable_price=highest_favorable_price,
+                )
+            )
+        return tuple(result)

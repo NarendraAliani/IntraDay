@@ -736,6 +736,30 @@ class PaperPositionRecord(models.Model):
     closed_at = models.DateTimeField(null=True, blank=True)
     status = models.CharField(max_length=10, default="OPEN")
 
+    # Checkpoint 43 Part 3/5: position-management lineage/exit-plan
+    # fields, ALL nullable/blank-default so every position created
+    # before this checkpoint (and every position a strategy with no
+    # ExitPlan produces, e.g. ema_crossover without the opt-in policy)
+    # continues to mean exactly what `ManagedPosition.exit_plan=None`
+    # already means - "no automatic exit rule exists for this
+    # position," never a fabricated default.
+    strategy_id = models.CharField(max_length=100, blank=True, default="")
+    strategy_version = models.CharField(max_length=20, blank=True, default="")
+    entry_order_id = models.CharField(max_length=100, blank=True, default="")
+    stop_loss = models.DecimalField(max_digits=18, decimal_places=4, null=True, blank=True)
+    target_1 = models.DecimalField(max_digits=18, decimal_places=4, null=True, blank=True)
+    target_2 = models.DecimalField(max_digits=18, decimal_places=4, null=True, blank=True)
+    target_3 = models.DecimalField(max_digits=18, decimal_places=4, null=True, blank=True)
+    trailing_stop_distance = models.DecimalField(
+        max_digits=18, decimal_places=4, null=True, blank=True
+    )
+    lifecycle_status = models.CharField(max_length=20, default="OPEN")
+    remaining_quantity = models.DecimalField(max_digits=18, decimal_places=4, null=True, blank=True)
+    highest_favorable_price = models.DecimalField(
+        max_digits=18, decimal_places=4, null=True, blank=True
+    )
+    exit_reason = models.CharField(max_length=30, blank=True, default="")
+
     class Meta:
         app_label = "persistence"
         indexes = [models.Index(fields=["instrument_id", "status"])]

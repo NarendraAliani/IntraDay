@@ -30,7 +30,9 @@ import uuid
 from dataclasses import dataclass, replace
 from datetime import datetime
 from decimal import Decimal
+from typing import Protocol
 
+from intraday.application.services.exit_plan_policy import derive_default_exit_plan
 from intraday.application.services.paper_trading import (
     PaperOrderSubmissionResult,
     PaperTradingService,
@@ -44,14 +46,35 @@ from intraday.communication.contracts.signal_communication import (
 )
 from intraday.domain.market_data.contracts import Bar
 from intraday.domain.order.contracts import OrderIntent, OrderStatus, OrderType, TimeInForce
+from intraday.domain.position.contracts import PositionStatus
 from intraday.domain.risk.contracts import RiskDecisionOutcome
 from intraday.domain.shared_kernel.contracts import InstrumentId, Side, SignalId
 from intraday.domain.signal.contracts import SignalStatus
+from intraday.trading_engine.position_management.contracts import ExitPlan
 from intraday.trading_engine.strategy_execution.contracts import (
     StrategyConfigurationValues,
     StrategyDirection,
 )
 from intraday.trading_engine.strategy_execution.coordinator import StrategyExecutionCoordinator
+
+
+class ExitPlanAttacher(Protocol):
+    """Checkpoint 43 Part 4 - `application.repositories`-style Protocol
+    (Contract 6: this module must never import `infrastructure.*`
+    directly). `DjangoPaperLedgerRepository.attach_exit_plan()`
+    satisfies this structurally."""
+
+    def attach_exit_plan(
+        self,
+        *,
+        position_id: str,
+        strategy_id: str,
+        strategy_version: str,
+        entry_order_id: str,
+        exit_plan: ExitPlan,
+        quantity: object,
+        entry_price: object,
+    ) -> None: ...
 
 
 def derive_signal_id(
@@ -139,11 +162,21 @@ class PaperSignalExecutionService:
         paper_trading_service: PaperTradingService,
         quantity: Decimal,
         communication: SignalCommunicationService | None = None,
+        exit_plan_attacher: ExitPlanAttacher | None = None,
+        apply_default_exit_plan: bool = False,
     ) -> None:
         self._coordinator = coordinator
         self._paper_trading_service = paper_trading_service
         self._quantity = quantity
         self._communication = communication
+        self._exit_plan_attacher = exit_plan_attacher
+        self._apply_default_exit_plan = apply_default_exit_plan
+        """Checkpoint 43 Part 4: OFF by default - see
+        `exit_plan_policy.py`'s own module docstring for why the
+        PROJECT_POLICY default exit plan is opt-in, not automatic for
+        every strategy. When `True` AND `exit_plan_attacher` is
+        supplied, a FILLED entry order's resulting position is given a
+        real, monitorable `ExitPlan` via `derive_default_exit_plan()`."""
 
     def evaluate_and_submit(
         self,
@@ -255,6 +288,14 @@ class PaperSignalExecutionService:
             already_submitted_idempotency_keys=already_submitted_idempotency_keys,
         )
         self._communicate_outcome(signal_id=signal_id, context=context, order_result=order_result)
+        self._maybe_attach_exit_plan(
+            order_result=order_result,
+            instrument_id=instrument_id,
+            side=side,
+            strategy_id=strategy_id,
+            configuration=configuration,
+            entry_order_id=order.order_id,
+        )
 
         return PaperSignalExecutionResult(
             strategy_id=strategy_id,
@@ -262,6 +303,48 @@ class PaperSignalExecutionService:
             direction=signal.direction,
             skipped_reason=None,
             order_result=order_result,
+        )
+
+    def _maybe_attach_exit_plan(
+        self,
+        *,
+        order_result: PaperOrderSubmissionResult,
+        instrument_id: InstrumentId,
+        side: Side,
+        strategy_id: str,
+        configuration: StrategyConfigurationValues,
+        entry_order_id: object,
+    ) -> None:
+        """Checkpoint 43 Part 4: only when BOTH `apply_default_exit_plan`
+        is on and the order genuinely FILLED - a rejected/unfilled
+        order has no position to attach a plan to, and this method
+        never invents one."""
+        if not self._apply_default_exit_plan or self._exit_plan_attacher is None:
+            return
+        broker_report = order_result.broker_report
+        if broker_report is None or broker_report.status is not OrderStatus.FILLED:
+            return
+
+        matching_positions = [
+            p
+            for p in self._paper_trading_service.broker.get_positions()
+            if p.instrument_id == instrument_id and p.status is PositionStatus.OPEN
+        ]
+        if not matching_positions:
+            return
+        position = matching_positions[0]
+
+        exit_plan = derive_default_exit_plan(
+            entry_price=position.average_entry_price, direction=side
+        )
+        self._exit_plan_attacher.attach_exit_plan(
+            position_id=str(position.position_id),
+            strategy_id=strategy_id,
+            strategy_version=configuration.configuration_version,
+            entry_order_id=str(entry_order_id),
+            exit_plan=exit_plan,
+            quantity=position.quantity,
+            entry_price=position.average_entry_price,
         )
 
     def _communicate(

@@ -22,12 +22,13 @@ from intraday.trading_engine.position_management.contracts import (
     PositionLifecycleStatus,
 )
 
-# Checkpoint 42 Part 3/5's own "partial exits" requirement, given a
+# Checkpoint 42/43's own "partial exits" requirement, given a
 # concrete, DOCUMENTED assumption rather than an invented one: T1/T2
-# each exit ONE THIRD of the position's ORIGINAL quantity (not the
-# remaining quantity - so three equal exits sum to the full original
-# size); T3 (or any target hit when remaining quantity is already at
-# or below one third) exits everything still open. This is a policy
+# each exit ONE THIRD of the REMAINING quantity at the moment they
+# fire (not one third of the original entry size) - self-consistent
+# across successive partial exits, so a T3 (or any target hit with
+# less than one third left) exit always closes EXACTLY what remains,
+# with no rounding-drift residual ever left open. This is a policy
 # choice, not a Dhan/exchange requirement - documented explicitly so a
 # future checkpoint can make it configurable instead of silently
 # assuming this specific split is correct for every strategy.
@@ -82,8 +83,14 @@ def evaluate_position_exit(
         target_hit = current_price >= target_price if is_long else current_price <= target_price
         if not target_hit:
             break  # targets are ordered - if this one hasn't hit, later ones cannot have either
-        original_quantity = managed.position.quantity
-        partial = (original_quantity * _PARTIAL_EXIT_FRACTION).quantize(Decimal("0.0001"))
+        # Basis is the position's CURRENT remaining_quantity (not the
+        # original entry size) - self-consistent across successive
+        # partial exits, so the FINAL target always exits exactly what
+        # is actually left (never a rounding-drift residual). This
+        # does mean each partial exit is "one third of what's left,"
+        # not "one third of the original size" - see this module's own
+        # policy note above.
+        partial = (managed.remaining_quantity * _PARTIAL_EXIT_FRACTION).quantize(Decimal("0.0001"))
         exit_quantity = (
             managed.remaining_quantity
             if status is PositionLifecycleStatus.TARGET_3 or partial >= managed.remaining_quantity
