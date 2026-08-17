@@ -131,11 +131,17 @@ built - it needs to be fed.
    with-backoff, no correct minute-boundary bar semantics (still
    batch-of-5), no performance/load/long-run testing, no real Dhan
    connection.
-8. **What should CP62 implement?** Wire the real WebSocket path into
-   `manage.py run_market_data_worker` (a `--provider fake-ws` mode),
-   then reconnect-with-backoff integrated with the worker state
-   machine, then token lifecycle - in that order, since each depends
-   on the previous being real.
+8. **CP62 update**: `--provider fake-ws` now wires the real WebSocket
+   path into the actual `manage.py run_market_data_worker` command -
+   directly run and observed with real output (real quotes, real
+   periodic bar aggregation, real handshake). Quote-persistence logic
+   was extracted into a shared `_QuoteSink` used by both providers. 2
+   new tests, 1210 total passing.
+9. **What should CP63 implement?** Reconnect-with-backoff integrated
+   with the worker state machine (currently: a Disconnect packet stops
+   the loop, it does not retry), then token lifecycle - in that order,
+   since reconnect logic needs to exist before token-expiry-triggered
+   reconnection can be meaningfully tested.
 8. **What should NOT be worked on yet?** Frontend polish, additional
    report types, multi-broker expansion - all P2, all premature while
    the live-data critical path is still open.

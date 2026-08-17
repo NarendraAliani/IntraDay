@@ -19,6 +19,12 @@
 # while the worker is still running - not merely once, after the
 # stream has already ended (Checkpoint 58's real limitation, named
 # honestly and now closed).
+#
+# Checkpoint 62 ADDS: `--provider fake-ws` - the REAL RFC 6455
+# WebSocket path (Checkpoint 61's transport), now exercised through
+# THIS actual operator-facing command, not only through unit tests.
+# The command's own docstring named this exact gap ("still only
+# supports --provider fake") as unclosed at the end of Checkpoint 61.
 from __future__ import annotations
 
 import io
@@ -116,3 +122,43 @@ def test_bars_are_produced_while_the_worker_is_still_running_not_only_after_the_
         f"expected at least 3 aggregation passes (2 mid-stream + 1 final cleanup), "
         f"got {len(aggregation_lines)}: {aggregation_lines}"
     )
+
+
+@requires_postgres
+def test_command_runs_end_to_end_over_the_real_websocket_provider() -> None:
+    """Checkpoint 62: the same acceptance proof as
+    `test_command_runs_end_to_end_and_reports_a_real_summary`, but
+    through `--provider fake-ws` - a genuine RFC 6455 handshake and
+    real WebSocket frames, not raw TCP."""
+    out = io.StringIO()
+
+    call_command(
+        "run_market_data_worker", "--provider", "fake-ws", "--packet-count", "5", stdout=out
+    )
+
+    output = out.getvalue()
+    assert "Starting market-data worker (provider=fake-ws" in output
+    assert "Worker finished: final_state=STOPPED" in output
+    assert "quotes_processed=5" in output
+    assert "decode_failures=0" in output
+    assert "quote: NSE:" in output
+
+
+@requires_postgres
+def test_command_over_websocket_actually_persists_quotes_and_aggregates_bars() -> None:
+    """The WebSocket-provider equivalent of
+    `test_command_actually_persists_quotes_and_aggregates_real_bars` -
+    proves the SAME `_QuoteSink` persistence/aggregation path is
+    genuinely reached from the real-WebSocket branch, not just the
+    raw-TCP one."""
+    quotes_before = LiveQuoteObservation.objects.count()
+    bars_before = AggregatedBarObservation.objects.count()
+    out = io.StringIO()
+
+    call_command(
+        "run_market_data_worker", "--provider", "fake-ws", "--packet-count", "8", stdout=out
+    )
+
+    assert LiveQuoteObservation.objects.count() - quotes_before == 8
+    assert AggregatedBarObservation.objects.count() >= bars_before
+    assert "aggregated" in out.getvalue()
