@@ -199,3 +199,29 @@ def run_historical_backtest_run_task(run_id: str) -> str:
         )
         raise
     return "completed"
+
+
+def dispatch_historical_backtest_run(run_id: str) -> None:
+    """Checkpoint 63.x: dispatches `run_historical_backtest_run_task` for
+    `run_id`, preferring the real, asynchronous Celery path (`.delay()`,
+    a message published to the configured broker for a worker to pick
+    up) exactly like `active_loop_tick`/`market_data_ingestion_tick`
+    already do in production.
+
+    HONEST FALLBACK: this project has no Celery worker process running
+    as part of its normal development flow (no `REDIS_URL` is set by
+    default - `settings/base.py`), so a bare `.delay()` call raises a
+    broker-connection error the instant a developer clicks "Prepare
+    Data & Start Backtest" without a worker/Redis running - a genuine
+    500 a real user hit. Rather than requiring every developer to stand
+    up Redis + a worker just to exercise this PoC feature, a broker
+    dispatch failure here falls back to running the task inline,
+    synchronously, in the SAME process - identical in effect to what
+    `CELERY_TASK_ALWAYS_EAGER=True` already does for tests. A real
+    deployment with a configured broker and a running worker is
+    unaffected: `.delay()` succeeds and the task runs asynchronously as
+    designed, exactly as intended."""
+    try:
+        run_historical_backtest_run_task.delay(run_id)
+    except Exception:  # noqa: BLE001 - any broker-dispatch failure, not just one exception type
+        run_historical_backtest_run_task(run_id)

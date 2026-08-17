@@ -21,6 +21,7 @@ import {
 } from "../../common/api/killSwitchApi";
 import type { KillSwitchStatusResponse } from "../../common/api/killSwitchApi";
 import { ApiNetworkError, ApiRequestError } from "../../common/api/client";
+import { InstrumentPickerSingle } from "../../common/components/InstrumentPicker";
 import {
   getPaperFunds,
   getPaperOrders,
@@ -277,16 +278,12 @@ export function PaperTradingPage(): JSX.Element {
                 this application.
               </p>
               <div className="form-grid">
-                <label>
-                  Instrument
-                  <input
-                    type="text"
-                    value={orderForm.instrumentId}
-                    onChange={(e) =>
-                      setOrderForm((f) => ({ ...f, instrumentId: e.target.value }))
-                    }
-                  />
-                </label>
+                <InstrumentPickerSingle
+                  id="paper-order-instrument"
+                  label="Instrument"
+                  value={orderForm.instrumentId}
+                  onChange={(instrumentId) => setOrderForm((f) => ({ ...f, instrumentId }))}
+                />
                 <label>
                   Side
                   <select

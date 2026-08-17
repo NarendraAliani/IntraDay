@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 
 import { ApiNetworkError, ApiRequestError } from "../../common/api/client";
 import { ErrorState } from "../../common/components/ErrorState";
+import { InstrumentPickerMulti } from "../../common/components/InstrumentPicker";
 import { LoadingState } from "../../common/components/LoadingState";
 import { deleteWatchlist, listWatchlists, saveWatchlist } from "../../common/api/backtestingApi";
 import type { WatchlistResponse } from "../../common/api/backtestingApi";
@@ -21,7 +22,7 @@ export function WatchlistPage(): JSX.Element {
   const [watchlists, setWatchlists] = useState<WatchlistResponse[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [name, setName] = useState("");
-  const [instruments, setInstruments] = useState("");
+  const [instruments, setInstruments] = useState<string[]>([]);
 
   async function reload(): Promise<void> {
     try {
@@ -40,13 +41,10 @@ export function WatchlistPage(): JSX.Element {
     try {
       await saveWatchlist({
         name: name.trim(),
-        instrument_ids: instruments
-          .split(",")
-          .map((s) => s.trim())
-          .filter(Boolean),
+        instrument_ids: instruments,
       });
       setName("");
-      setInstruments("");
+      setInstruments([]);
       await reload();
     } catch (err) {
       setError(describeError(err));
@@ -84,15 +82,12 @@ export function WatchlistPage(): JSX.Element {
           <label htmlFor="watchlist-name">Watchlist name</label>
           <input id="watchlist-name" value={name} onChange={(e) => setName(e.target.value)} />
         </div>
-        <div className="strategy-config-page__field">
-          <label htmlFor="watchlist-instruments">Instruments (comma-separated)</label>
-          <input
-            id="watchlist-instruments"
-            value={instruments}
-            onChange={(e) => setInstruments(e.target.value)}
-            placeholder="NSE:FIXTURE01, NSE:TESTCO"
-          />
-        </div>
+        <InstrumentPickerMulti
+          idPrefix="watchlist-instruments"
+          label="Instruments"
+          value={instruments}
+          onChange={setInstruments}
+        />
         <button type="submit" disabled={!name.trim()}>
           Save Watchlist
         </button>

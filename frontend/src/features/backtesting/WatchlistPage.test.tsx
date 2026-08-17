@@ -19,6 +19,7 @@ describe("WatchlistPage", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
         const url = typeof input === "string" ? input : input.toString();
+        if (url.includes("/market-data/quotes/")) return jsonResponse([]);
         if (url.endsWith("/watchlists/")) {
           return jsonResponse([{ name: "core", instrument_ids: ["NSE:FIXTURE01"] }]);
         }
@@ -33,12 +34,24 @@ describe("WatchlistPage", () => {
     }
   });
 
-  it("saves a new watchlist", async () => {
+  it("saves a new watchlist, picking instruments from real observed quotes (never free text)", async () => {
     let saved = false;
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
         const url = typeof input === "string" ? input : input.toString();
+        if (url.includes("/market-data/quotes/")) {
+          return jsonResponse([
+            {
+              symbol: "FIXTURE01",
+              exchange: "NSE",
+              last_price: "100.00",
+              source_timestamp: "2026-08-14T06:00:00Z",
+              freshness_age_seconds: 5,
+              is_stale: false,
+            },
+          ]);
+        }
         if (url.endsWith("/watchlists/") && !saved) return jsonResponse([]);
         if (url.endsWith("/watchlists/save/")) {
           saved = true;
@@ -54,9 +67,27 @@ describe("WatchlistPage", () => {
     await waitFor(() => expect(screen.getByText(/No watchlists yet/)).toBeInTheDocument());
 
     fireEvent.change(screen.getByLabelText("Watchlist name"), { target: { value: "new-list" } });
-    fireEvent.change(screen.getByLabelText(/Instruments/), { target: { value: "NSE:FIXTURE01" } });
+    await waitFor(() => expect(screen.getByText("NSE:FIXTURE01")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("checkbox"));
     fireEvent.click(screen.getByRole("button", { name: "Save Watchlist" }));
 
     await waitFor(() => expect(screen.getByText(/new-list/)).toBeInTheDocument());
+  });
+
+  it("never lets the operator type a free-text instrument symbol", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.includes("/market-data/quotes/")) return jsonResponse([]);
+        if (url.endsWith("/watchlists/")) return jsonResponse([]);
+        return jsonResponse({ error_code: "not_found", message: "no route" }, 404);
+      }),
+    );
+    renderWithAuth(<WatchlistPage />);
+    await waitFor(() => expect(screen.getByText(/No watchlists yet/)).toBeInTheDocument());
+
+    expect(screen.queryByLabelText(/Instruments/)).not.toBeInTheDocument();
+    expect(document.querySelector('input[type="text"]#watchlist-instruments')).toBeNull();
   });
 });

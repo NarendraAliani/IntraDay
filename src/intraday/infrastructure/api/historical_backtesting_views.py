@@ -35,7 +35,7 @@ from intraday.domain.instrument.contracts import make_instrument_id
 from intraday.domain.shared_kernel.contracts import Exchange, InstrumentId, Timeframe
 from intraday.infrastructure.api.errors import invalid_configuration, not_found
 from intraday.infrastructure.api.permissions import IsConfigurationOperator
-from intraday.infrastructure.api.tasks import run_historical_backtest_run_task
+from intraday.infrastructure.api.tasks import dispatch_historical_backtest_run
 from intraday.infrastructure.persistence.historical_backtest_run_repository import (
     DjangoBacktestRunRepository,
 )
@@ -95,7 +95,7 @@ def create_historical_backtest_run_view(request: Request) -> Response:
         slippage_percent=data["slippage_percent"],
         total_instruments=len(data["instrument_ids"]),
     )
-    run_historical_backtest_run_task.delay(run_id)
+    dispatch_historical_backtest_run(run_id)
     return Response({"run_id": run_id}, status=202)
 
 

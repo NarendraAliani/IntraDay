@@ -16,6 +16,7 @@ import {
 } from "../../common/components/ParameterSchemaFields";
 import { DrawdownChart, EquityCurveChart } from "../../common/components/EquityChart";
 import { ErrorState } from "../../common/components/ErrorState";
+import { InstrumentPickerMulti, InstrumentPickerSingle } from "../../common/components/InstrumentPicker";
 import { LoadingState } from "../../common/components/LoadingState";
 import {
   asConfigurationView,
@@ -268,14 +269,17 @@ export function BacktestingWorkbenchPage(): JSX.Element {
             <fieldset>
               <legend>Backtest Settings</legend>
               <div className="strategy-config-page__field">
-                <label htmlFor="bt-instrument">Instrument</label>
-                <input
+                <InstrumentPickerSingle
                   id="bt-instrument"
+                  label="Instrument"
                   value={instrumentId}
-                  onChange={(e) => setInstrumentId(e.target.value)}
+                  onChange={setInstrumentId}
+                  extraOptions={["NSE:FIXTURE01"]}
                 />
                 <p className="strategy-config-page__help-text">
-                  What stock/universe: the exact instrument this backtest simulates trading.
+                  What stock: the exact instrument this backtest simulates trading.
+                  "NSE:FIXTURE01" is this project's deterministic synthetic fixture, always
+                  available for testing regardless of live market data.
                 </p>
               </div>
               <div className="strategy-config-page__field">
@@ -870,20 +874,11 @@ function formatSeconds(value: number | null | undefined): string {
 }
 
 function HistoricalBacktestRunPanel(props: HistoricalBacktestRunPanelProps): JSX.Element {
-  const [instrumentIdsText, setInstrumentIdsText] = useState("NSE:RELIANCE");
+  const [instrumentIds, setInstrumentIds] = useState<string[]>([]);
   const [startDate, setStartDate] = useState("2026-01-05");
   const [endDate, setEndDate] = useState("2026-01-09");
   const [state, setState] = useState<HistoricalRunPhase>({ phase: "idle" });
   const [runId, setRunId] = useState<string | null>(null);
-
-  const instrumentIds = useMemo(
-    () =>
-      instrumentIdsText
-        .split(",")
-        .map((s) => s.trim())
-        .filter((s) => s.length > 0),
-    [instrumentIdsText],
-  );
 
   useEffect(() => {
     if (state.phase !== "polling" || runId === null) return undefined;
@@ -967,15 +962,14 @@ function HistoricalBacktestRunPanel(props: HistoricalBacktestRunPanelProps): JSX
         provider.
       </p>
 
+      <InstrumentPickerMulti
+        idPrefix="hist-universe"
+        label="Universe"
+        value={instrumentIds}
+        onChange={setInstrumentIds}
+      />
+
       <div className="historical-run__config">
-        <div className="strategy-config-page__field">
-          <label htmlFor="hist-instruments">Universe (comma-separated instrument IDs)</label>
-          <input
-            id="hist-instruments"
-            value={instrumentIdsText}
-            onChange={(e) => setInstrumentIdsText(e.target.value)}
-          />
-        </div>
         <div className="strategy-config-page__field">
           <label htmlFor="hist-start-date">Start Date</label>
           <input

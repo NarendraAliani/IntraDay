@@ -405,6 +405,16 @@ describe("BacktestingWorkbenchPage", () => {
       "/strategy-engine/fields/": FIELDS,
       "/strategy-engine/strategies/": STRATEGIES,
       "/strategy-engine/strategies/ema_crossover/schema/": SCHEMA,
+      "/market-data/quotes/": [
+        {
+          symbol: "RELIANCE",
+          exchange: "NSE",
+          last_price: "1234.56",
+          source_timestamp: "2026-08-14T06:00:00Z",
+          freshness_age_seconds: 5,
+          is_stale: false,
+        },
+      ],
       "/backtesting/coverage-preview/": {
         instruments: [
           {
@@ -423,11 +433,14 @@ describe("BacktestingWorkbenchPage", () => {
     await waitFor(() => expect(screen.getByText("EMA Crossover")).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "Configure" }));
     await waitFor(() => expect(screen.getByLabelText(/Fast EMA Lookback/)).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getAllByText("NSE:RELIANCE").length).toBeGreaterThan(0),
+    );
+    fireEvent.click(screen.getAllByRole("checkbox", { name: "NSE:RELIANCE" })[0]);
 
     fireEvent.click(screen.getByRole("button", { name: "Check Data Readiness" }));
 
-    await waitFor(() => expect(screen.getByText("NSE:RELIANCE")).toBeInTheDocument());
-    expect(screen.getByText("FETCH REQUIRED")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("FETCH REQUIRED")).toBeInTheDocument());
   });
 
   it("polls real backend progress after starting a historical run - never a fake timer-driven bar", async () => {
@@ -469,6 +482,18 @@ describe("BacktestingWorkbenchPage", () => {
         if (url.includes("/strategy-engine/fields/")) return jsonResponse(FIELDS);
         if (url.includes("/strategy-engine/strategies/ema_crossover/schema/")) return jsonResponse(SCHEMA);
         if (url.endsWith("/strategy-engine/strategies/")) return jsonResponse(STRATEGIES);
+        if (url.includes("/market-data/quotes/")) {
+          return jsonResponse([
+            {
+              symbol: "RELIANCE",
+              exchange: "NSE",
+              last_price: "1234.56",
+              source_timestamp: "2026-08-14T06:00:00Z",
+              freshness_age_seconds: 5,
+              is_stale: false,
+            },
+          ]);
+        }
         if (url.includes("/progress/")) return jsonResponse(progressPayload());
         if (method === "POST" && url.endsWith("/backtesting/historical-runs/")) {
           return jsonResponse({ run_id: "run-1" });
@@ -480,6 +505,10 @@ describe("BacktestingWorkbenchPage", () => {
     await waitFor(() => expect(screen.getByText("EMA Crossover")).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "Configure" }));
     await waitFor(() => expect(screen.getByLabelText(/Fast EMA Lookback/)).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getAllByText("NSE:RELIANCE").length).toBeGreaterThan(0),
+    );
+    fireEvent.click(screen.getAllByRole("checkbox", { name: "NSE:RELIANCE" })[0]);
 
     fireEvent.click(screen.getByRole("button", { name: "Prepare Data & Start Backtest" }));
 
