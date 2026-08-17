@@ -2,79 +2,107 @@
 
 ## Checkpoint
 
-Checkpoint 62
+Checkpoint 62.x (product/UI request, scoped down after a backend
+audit and an explicit user decision)
 
 ## Objective
 
-Close the specific gap Checkpoint 61's own report named as unclosed:
-the real RFC 6455 WebSocket transport existed and was proven only
-through unit tests, never through the actual operator-facing
-`manage.py run_market_data_worker` command. Wire it in, while
-remaining 100% PAPER-only and without re-researching the already-
-resolved WebSocket technology decision.
+The user requested redesigning the "Live Market Data Monitor" frontend
+page into an "Active Signal Monitor" (FO-Scanner-style operator
+console: timeframe/universe/strategy selectors, a table of qualifying
+strategy signals, an expandable explanation panel). Before touching
+any UI, per the user's own explicit "backend audit before UI changes"
+instruction, a research pass was run to determine what backend
+capability actually exists to build the signal table against.
 
 ## Research Performed
 
-None new this checkpoint. This was an implementation checkpoint,
-consistent with the user's own explicit "stop researching, this is an
-implementation checkpoint" instruction from Checkpoint 61's review.
+A background audit agent inspected: `domain/signal/`,
+`signal_intelligence/`, `application/`, `infrastructure/api/urls.py`,
+`trading_engine/strategy_execution/registry.py`,
+`domain/shared_kernel/contracts.py` (Timeframe enum), the existing
+`frontend/src/features/market-data/LiveMarketDataMonitor.tsx`, and the
+frontend shared component library.
 
-## Official Sources Consulted
+## Findings
 
-None this checkpoint.
-
-## Research Findings
-
-None new.
+- `domain.signal.contracts.Signal` exists as a value object
+  (strategy_id, instrument_id, direction, timestamp, theoretical
+  entry/stop-loss/targets, status, confidence) - but had **no
+  repository and no persistence** anywhere in the codebase.
+- **No signal-listing API endpoint existed** - `urls.py` had zero
+  signal-prefixed routes.
+- Only **3 real registered strategies**: `ema_crossover`,
+  `sma_trend_filter`, `atr_volatility_breakout` - NOT "Trend
+  Follower/Mean Reversion/Breakout Hunter/Scalping Alpha" as the
+  request's mockup implied.
+- Real, supported `Timeframe` values: `TICK, 1m, 3m, 5m, 15m, 30m, 1h,
+  1d`.
+- No signal explainability/reason-trail data existed anywhere.
+- No existing API endpoint implements pagination - nothing to
+  pattern-match against.
+- The current frontend page is explicitly, deliberately
+  observation-only (its own comments state it excludes Buy/Sell/
+  Entry/SL/Target fields on purpose).
+- A real, reusable frontend design-system/component library exists
+  (badges, empty/error/loading states, theme tokens).
 
 ## Hidden Gaps Discovered
 
-None new beyond what was already documented. The already-known gaps
-(reconnect-with-backoff, token lifecycle, watchdog, correct minute-
-boundary bar semantics, instrument master, performance measurement,
-frontend) remain exactly as previously documented - not rediscovered,
-not silently expanded, not reduced.
+The requested signal table (entry/SL/targets/explanation, populated
+from real strategy output) could not be honestly built - doing so
+would have required either fabricating data (explicitly forbidden by
+the user's own "no hallucinated data" rule in the same request) or
+building a real backend signal-persistence pipeline first, which did
+not exist.
 
 ## Architecture Decisions
 
-- **Decision 217** (new, locked): `manage.py run_market_data_worker`
-  gained `--provider fake-ws`, using the real `DhanWebSocketTransport`/
-  `FakeDhanWebSocketServer` (Decision 216) through the actual
-  operator-facing command. Quote-persistence/periodic-aggregation
-  logic (Checkpoint 58/59) extracted into a shared `_QuoteSink` used
-  identically by both `--provider fake` (raw TCP) and `--provider
-  fake-ws` (real WebSocket).
+Given this finding, the user was asked how to proceed and explicitly
+chose: **"Build the minimal backend signal pipeline first."** This
+checkpoint's remaining scope is that backend work - see Decision 218
+in `ARCHITECTURE_DECISIONS.md` for the full rationale.
 
 ## Implementation Performed
 
-Refactored `run_market_data_worker.py`: extracted the existing quote-
-persistence + periodic-bar-aggregation logic (previously inline in a
-single `_run()` method, Checkpoint 58/59) into a `_QuoteSink` class
-with `on_quote()`, `aggregate_now()`, and `flush_remainder()` methods.
-Added `_run_fake_tcp()` and `_run_fake_ws()` branch methods, both
-constructing a `_QuoteSink` and passing its `on_quote` as the
-callback to the respective transport's worker loop
-(`run_worker_against_stream()` for raw TCP, `run_worker_against_websocket()`
-for real WebSocket - both from Checkpoint 57/61, unmodified). Added
-`--provider fake-ws` to the CLI's `--provider` choices (previously
-only `fake`).
+1. New `SignalRecord` Django model (migrated) - the first persistence
+   for `domain.signal.contracts.Signal` in this project.
+2. New `DjangoSignalRepository`: `record_signal()` (idempotent
+   upsert keyed on the already-deterministic `signal_id`) and
+   `list_signals()` (server-side paginated, with `strategy_id`/
+   `instrument_id` filters).
+3. New `GET /api/v1/config/signals/` - read-only, authenticated, the
+   first paginated list endpoint in this project.
+4. New optional `SignalRecorder` Protocol on
+   `PaperSignalExecutionService` (mirrors the existing
+   `ExitPlanAttacher` opt-in pattern, defaults to `None` - purely
+   additive, no pre-existing caller/test is affected). Wired to
+   `DjangoSignalRepository()` in the real composition root
+   (`active_loop_runtime.py`).
+5. A real signal is recorded if and only if `evaluate_and_submit()`
+   genuinely produces one (never for a skipped/neutral/already-
+   processed evaluation) - reuses the EXISTING signal-producing path,
+   never a second signal-generation mechanism.
 
 ## Files Created
 
-None.
+- `src/intraday/infrastructure/persistence/signal_repository.py`
+- `src/intraday/infrastructure/api/signal_views.py`
+- `src/intraday/infrastructure/persistence/migrations/0016_signalrecord.py`
+- `tests/unit/application/services/test_paper_signal_execution_signal_recording.py`
+- `tests/unit/infrastructure/persistence/test_signal_repository.py`
+- `tests/unit/infrastructure/api/test_signal_api.py`
 
 ## Files Modified
 
-- `src/intraday/infrastructure/persistence/management/commands/run_market_data_worker.py`
-  (refactored to share persistence/aggregation logic across two
-  providers; added `--provider fake-ws`)
-- `tests/unit/infrastructure/persistence/management/test_run_market_data_worker_command.py`
-  (2 new tests)
-- `docs/architecture/ARCHITECTURE_DECISIONS.md` (Decision 217)
+- `src/intraday/infrastructure/persistence/models.py` (`SignalRecord`)
+- `src/intraday/application/services/paper_signal_execution.py`
+  (`SignalRecorder` Protocol, `_maybe_record_signal()`)
+- `src/intraday/infrastructure/api/active_loop_runtime.py` (wiring)
+- `src/intraday/infrastructure/api/urls.py` (`/signals/` route)
+- `docs/architecture/ARCHITECTURE_DECISIONS.md` (Decision 218)
 - `docs/architecture/ACTIVE_PRODUCT_GAP_REGISTER.md`
-- `docs/architecture/ACTIVE_PRODUCT_SCORECARD.md`
-- `taskReport.md` (true overwrite - this file, Checkpoint 62 content
-  only)
+- `taskReport.md` (true overwrite - this file)
 
 ## Files Deleted
 
@@ -82,146 +110,136 @@ None.
 
 ## Tests Added
 
-2 new tests in `test_run_market_data_worker_command.py`:
-
-- `test_command_runs_end_to_end_over_the_real_websocket_provider` -
-  mirrors the existing raw-TCP acceptance test exactly, but through
-  `--provider fake-ws`.
-- `test_command_over_websocket_actually_persists_quotes_and_aggregates_bars` -
-  mirrors the existing raw-TCP persistence-proof test, checking real
-  database row deltas, not just printed output.
+14 new tests:
+- 4 in `test_paper_signal_execution_signal_recording.py`: a real
+  signal is recorded exactly once with correct fields; a flat/no-
+  signal bar series records NOTHING (the direct proof a normal
+  market update does not fabricate a signal); an already-processed
+  signal is not re-recorded; `signal_recorder=None` (default) changes
+  nothing.
+- 6 in `test_signal_repository.py`: record+list, idempotent
+  re-recording of the same `signal_id`, pagination, strategy/
+  instrument filters, page-size bound (max 200).
+- 4 in `test_signal_api.py`: authentication required, honest empty
+  state, a real persisted signal returned correctly via the API,
+  pagination query params.
 
 ## Tests Executed
 
-- Manual runs: `python manage.py run_market_data_worker --provider
-  fake-ws --packet-count 12` executed directly this checkpoint,
-  producing real quotes over a real WebSocket handshake and 3 real
-  periodic bar-aggregation passes. `--provider fake --packet-count 6`
-  re-run afterward to confirm the `_QuoteSink` refactor did not
-  regress the pre-existing raw-TCP path.
-- `poetry run pytest tests/unit/infrastructure/persistence/management/test_run_market_data_worker_command.py -q`
-  → **7 passed** (5 pre-existing + 2 new).
-- `poetry run pytest tests/unit/architecture/test_live_market_data_boundaries.py -q`
-  → **4 passed** (safety boundary test, re-confirmed against the
-  refactored command).
-- `poetry run pytest -q` (full backend suite) → **1210 passed**
-  (1208 pre-existing + 2 new; every pre-existing test remains green).
+- New tests alone: **14 passed**.
+- `poetry run pytest tests/unit/architecture -q`: **52 passed**
+  (every architecture/safety-boundary test, confirming no order-
+  placement code path was introduced).
+- `poetry run pytest -q` (full backend suite): **1224 passed**
+  (1210 pre-existing + 14 new; every pre-existing test remains
+  green - a real bug WAS caught by re-running them: the `timeframe`
+  field was initially too narrow, causing a genuine `DataError` in
+  `test_active_loop_runtime.py`, fixed before this report).
 - `ruff format --check`, `ruff check`: clean.
 - `mypy` (strict, project code) on every touched file: clean.
-- `lint-imports` (`.importlinter`, 6 contracts): 6/6 kept.
+- `lint-imports` (`.importlinter`, 6 contracts): 6/6 kept -
+  `paper_signal_execution.py` (application layer) still does not
+  import `infrastructure.*` directly, per Contract 6.
 - `manage.py check`: clean. `makemigrations --check --dry-run`: no
   pending migrations. `spectacular --fail-on-warn`: clean.
 
 ## Failure Injection
 
-NOT expanded this checkpoint. Coverage remains limited to what
-Checkpoint 61's tests already exercised (connection-refused,
-malformed-packet, Disconnect-packet, both over raw TCP and real
-WebSocket).
+Not applicable to this checkpoint's scope.
 
 ## Performance Benchmark
 
-NOT MEASURED this checkpoint.
+Not measured this checkpoint.
 
 ## Long-Run Stability
 
-NOT tested this checkpoint.
+Not tested this checkpoint.
 
 ## End-to-End Paper Pipeline
 
-NOT attempted this checkpoint. The new work stops at Quote persistence
-and bar aggregation - no signal/risk/paper-order integration was
-exercised against either provider.
+Not newly exercised - `evaluate_and_submit()` itself was already
+proven end-to-end in prior checkpoints; this checkpoint only added an
+observation hook onto that existing, unchanged path.
 
 ## Frontend Audit
 
-NOT performed this checkpoint.
+Performed as background research only (see Findings above) - no
+frontend code was written or modified this checkpoint. The requested
+UI redesign (control bar, FO-Scanner-style signal table, explanation
+panel) remains entirely undone.
 
 ## Security Review
 
-No credentials were used, logged, or exposed. Both providers remain
-fully synthetic/local. `TRADING_MODE` remains PAPER throughout; the
-safety-boundary test (`test_live_market_data_boundaries.py`, which
-mechanically scans for forbidden `trading_engine` imports) was
-re-confirmed passing against the refactored command file.
+No credentials touched. `TRADING_MODE` remains PAPER throughout - the
+new signals API is strictly read-only, and the full architecture
+safety-boundary test suite (52 tests) was re-run and confirmed
+passing, including the mechanical scan for forbidden order-placement
+imports.
 
 ## Deployment Review
 
-NOT performed this checkpoint.
+Not performed this checkpoint.
 
 ## Current Product Readiness
 
-Unchanged in kind from Checkpoint 61, incrementally advanced in one
-specific dimension: the real WebSocket transport is now reachable
-through the actual operator command, not only through tests. Every
-other previously-open gap (reconnect, token lifecycle, watchdog,
-correct bar semantics, performance, frontend, real Dhan connectivity)
-remains exactly as open as it was.
+A real, tested, minimal signal-persistence backend now exists where
+none did before. The frontend "Active Signal Monitor" experience the
+user actually asked to see remains completely unbuilt - this
+checkpoint deliberately stopped at the backend, per the user's own
+explicit choice, rather than building a UI in the same turn.
 
 ## Performance Ranking
 
 **ENGINEERING MATURITY: 8.9/10** - unchanged.
 
-**ACTIVE PRODUCT MATURITY: ~5.7-5.8/10** - a small increase from
-Checkpoint 61's ~5.7, reflecting that the real transport is now
-operator-reachable, not a large jump.
+**ACTIVE PRODUCT MATURITY: ~5.7-5.8/10** - unchanged from Checkpoint
+62; a real backend capability was added, but the product-facing
+experience the user is actually trying to reach (an operator being
+able to see live signals in the UI) is not yet reachable.
 
 | Area | Score |
 |---|---|
-| Architecture | 9.3/10 |
-| Market Data | 5.5/10 - real transport reachable via both providers; still fully synthetic |
-| WebSocket | 7.0/10 - real handshake, real framing, now CLI-wired; no reconnect/token lifecycle |
-| Token Lifecycle | 1.5/10 - a state name only |
-| Reconnect/Recovery | 3.0/10 - detected, not retried |
-| Watchdog | 1.5/10 - not implemented |
-| Bar Engine | 5.0/10 - real aggregation, still batch-of-5 triggered, not minute-boundary-driven |
-| Signal Pipeline | 7.5/10 - real, proven only against replay data |
-| Risk Engine | 8.0/10 - real, ten enforcement checks |
-| Paper Trading | 8.0/10 - real, full lifecycle |
-| Observability | 3.5/10 - unchanged |
-| Performance | 1.5/10 - unmeasured |
-| Scalability | 1.5/10 - untested |
-| Long-Run Stability | 1.5/10 - untested |
-| Frontend | 2.0/10 - unchanged, 17 consecutive checkpoints with none |
-| Production Readiness | 3.5/10 |
-| Live Trading Readiness | 1.0/10 - deliberately kept near-zero |
+| Signal persistence/API | 6.5/10 - real, tested, but only 4 fields captured (no SL/targets/explanation) |
+| Frontend | 2.0/10 - unchanged, 17+ consecutive checkpoints with none |
+| Everything else | unchanged from Checkpoint 62's own scorecard |
 
 ## Remaining Gaps
 
-Reconnect-with-backoff integrated into the worker state machine, token
-lifecycle, watchdog, correct minute-boundary bar-closure semantics,
-instrument master beyond four symbols, performance/load/long-run
-testing, live/backtest bar-path parity, frontend/operator console,
-real Dhan connectivity (credential-blocked).
+The frontend redesign itself (all of it); `SignalRecord` explanation/
+SL/target fields; reconnect-with-backoff; token lifecycle; watchdog;
+correct minute-boundary bar semantics; instrument master beyond four
+symbols; performance/load/long-run testing; live/backtest parity;
+real Dhan connectivity.
 
 ## Blocked Items
 
-Real Dhan connectivity - this environment's Dhan credential remains
-unusable for live verification (Checkpoint 41, unchanged).
+Real Dhan connectivity - unchanged (Checkpoint 41).
 
 ## Risks
 
-Unchanged from Checkpoint 61's own risk list - reconnect absence,
-token lifecycle absence, batch-triggered (not boundary-driven) bar
-closure, unmeasured performance, and the fact that the entire
-WebSocket transport, however well-tested locally, has never touched
-Dhan's actual production endpoint.
+Building a UI later against `SignalRecord` as it currently stands will
+only be able to show strategy/instrument/direction/price/risk-status/
+order-status - NOT entry/SL/targets/explanation, which the request's
+own mockup implied. Any future UI work must either honestly omit those
+columns or this backend must be extended first (a further, separate,
+real decision - not something to default into silently).
 
 ## Next Checkpoint
 
-Reconnect-with-backoff integrated with the worker state machine
-(currently: a Disconnect packet stops the loop, it does not retry),
-then token lifecycle - in that dependency order.
+The actual frontend "Active Signal Monitor" redesign, built strictly
+against the real `GET /api/v1/config/signals/` contract now available
+- honestly using only the fields it returns, with an explicit "not yet
+available" state for anything the mockup showed that the backend does
+not yet provide (explanation, SL, targets).
 
 ## Honest Final Conclusion
 
-The specific gap Checkpoint 61 left open - "the real transport exists
-but only tests exercise it" - is now closed: `manage.py
-run_market_data_worker --provider fake-ws` runs the identical
-production transport code an operator would actually invoke, proven by
-directly running it and observing correct output, not merely by unit
-tests. This is real, incremental progress, narrowly scoped as intended.
-It does not change the larger picture: the market-data runtime remains
-synthetic-only, unable to reconnect after a disconnect, without a
-token lifecycle, without performance measurement, and without any
-contact with Dhan's real production feed.
+The user asked for a UI redesign; a backend audit found the UI could
+not be built honestly without fabricating data; the user was asked and
+chose to build the missing backend first. That backend - a real
+Signal persistence layer, repository, and paginated API, wired into
+the actual signal-producing path and proven never to record a
+fabricated signal - now exists and is tested. The frontend experience
+itself, which is what the user actually wants to see and use, remains
+completely unbuilt. This checkpoint is honestly a backend-only
+prerequisite step, not the product experience requested.

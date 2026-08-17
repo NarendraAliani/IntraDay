@@ -58,6 +58,31 @@ from intraday.trading_engine.strategy_execution.contracts import (
 from intraday.trading_engine.strategy_execution.coordinator import StrategyExecutionCoordinator
 
 
+class SignalRecorder(Protocol):
+    """Checkpoint 62.x - `application.repositories`-style Protocol
+    (Contract 6: this module must never import `infrastructure.*`
+    directly), mirroring `ExitPlanAttacher`'s own established pattern.
+    `DjangoSignalRepository.record_signal()` satisfies this
+    structurally. Optional, defaults to `None` (no persistence) -
+    mirrors `apply_default_exit_plan`'s own opt-in discipline, so
+    every pre-existing caller/test of this service is unaffected."""
+
+    def record_signal(
+        self,
+        *,
+        signal_id: SignalId,
+        strategy_id: str,
+        instrument_id: InstrumentId,
+        direction: str,
+        price: Decimal,
+        timeframe: str,
+        signal_timestamp: datetime,
+        risk_status: str,
+        risk_reason: str,
+        order_status: str,
+    ) -> None: ...
+
+
 class ExitPlanAttacher(Protocol):
     """Checkpoint 43 Part 4 - `application.repositories`-style Protocol
     (Contract 6: this module must never import `infrastructure.*`
@@ -164,11 +189,18 @@ class PaperSignalExecutionService:
         communication: SignalCommunicationService | None = None,
         exit_plan_attacher: ExitPlanAttacher | None = None,
         apply_default_exit_plan: bool = False,
+        signal_recorder: SignalRecorder | None = None,
     ) -> None:
         self._coordinator = coordinator
         self._paper_trading_service = paper_trading_service
         self._quantity = quantity
         self._communication = communication
+        self._signal_recorder = signal_recorder
+        """Checkpoint 62.x: optional, off by default - when supplied,
+        every REAL signal this service produces (never a skipped/
+        neutral/already-processed evaluation) is persisted through it,
+        the one thing an "active signal monitor" UI needs to query
+        instead of fabricating rows."""
         self._exit_plan_attacher = exit_plan_attacher
         self._apply_default_exit_plan = apply_default_exit_plan
         """Checkpoint 43 Part 4: OFF by default - see
@@ -288,6 +320,16 @@ class PaperSignalExecutionService:
             already_submitted_idempotency_keys=already_submitted_idempotency_keys,
         )
         self._communicate_outcome(signal_id=signal_id, context=context, order_result=order_result)
+        self._maybe_record_signal(
+            signal_id=signal_id,
+            strategy_id=strategy_id,
+            instrument_id=instrument_id,
+            direction=signal.direction,
+            price=signal.price,
+            timeframe=str(signal.timeframe),
+            signal_timestamp=signal.timestamp,
+            order_result=order_result,
+        )
         self._maybe_attach_exit_plan(
             order_result=order_result,
             instrument_id=instrument_id,
@@ -303,6 +345,45 @@ class PaperSignalExecutionService:
             direction=signal.direction,
             skipped_reason=None,
             order_result=order_result,
+        )
+
+    def _maybe_record_signal(
+        self,
+        *,
+        signal_id: SignalId,
+        strategy_id: str,
+        instrument_id: InstrumentId,
+        direction: StrategyDirection,
+        price: Decimal,
+        timeframe: str,
+        signal_timestamp: datetime,
+        order_result: PaperOrderSubmissionResult,
+    ) -> None:
+        """Only reached for a REAL, non-skipped, non-neutral,
+        not-already-processed signal (see `evaluate_and_submit()`'s
+        own early-return guards above) - never called for a skipped
+        evaluation, so a signal-monitor UI querying this data can
+        never show a fabricated "signal" for a bar where the strategy
+        produced nothing actionable."""
+        if self._signal_recorder is None:
+            return
+        risk_decision = order_result.risk_decision
+        order_status = (
+            order_result.broker_report.status.value
+            if order_result.broker_report is not None
+            else ""
+        )
+        self._signal_recorder.record_signal(
+            signal_id=signal_id,
+            strategy_id=strategy_id,
+            instrument_id=instrument_id,
+            direction=direction.value,
+            price=price,
+            timeframe=timeframe,
+            signal_timestamp=signal_timestamp,
+            risk_status=risk_decision.outcome.value,
+            risk_reason=risk_decision.explanation,
+            order_status=order_status,
         )
 
     def _maybe_attach_exit_plan(

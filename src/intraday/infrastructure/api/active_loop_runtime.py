@@ -50,6 +50,7 @@ from intraday.infrastructure.api.paper_trading_runtime import (
 from intraday.infrastructure.persistence.paper_ledger_repository import (
     DjangoPaperLedgerRepository,
 )
+from intraday.infrastructure.persistence.signal_repository import DjangoSignalRepository
 from intraday.trading_engine.strategy_execution.contracts import StrategyConfigurationValues
 from intraday.trading_engine.strategy_execution.registry import build_default_registry
 
@@ -115,6 +116,7 @@ def run_active_loop_tick(
         paper_trading_service=trading_service,
         quantity=quantity,
         communication=communication,
+        signal_recorder=DjangoSignalRepository(),
     )
 
     already_processed = ledger.load_processed_signal_ids()

@@ -920,3 +920,40 @@ class EODRun(models.Model):
 
     class Meta:
         app_label = "persistence"
+
+
+class SignalRecord(models.Model):
+    """Checkpoint 62.x: the FIRST persisted, queryable record of a real
+    strategy-generated signal - closes a gap a fresh audit this
+    checkpoint found: `domain.signal.contracts.Signal` existed only as
+    a value object, with no repository and no API anywhere in this
+    project, making an honest "active signal monitor" UI impossible to
+    build without either this table or fabricated data. Written from
+    `PaperSignalExecutionService.evaluate_and_submit()`
+    (`application/services/paper_signal_execution.py`) - the ONE real
+    place a strategy's evaluated direction becomes a signal in this
+    codebase - never a second, parallel signal-generation path, and
+    NEVER for a skipped/neutral/already-processed evaluation (see that
+    method's own early-return guards)."""
+
+    signal_id = models.CharField(max_length=64, unique=True)
+    strategy_id = models.CharField(max_length=100)
+    instrument_id = models.CharField(max_length=100)
+    direction = models.CharField(max_length=16)
+    price = models.DecimalField(max_digits=18, decimal_places=4)
+    timeframe = models.CharField(max_length=32, blank=True, default="")
+    """Stores `str(signal.timeframe)` verbatim (matching `derive_signal_id()`'s
+    own identity-hashing input exactly, e.g. `"Timeframe.ONE_MINUTE"` -
+    the enum's default `str()`, not `.value`) - widened from an initial
+    16-char guess after a real test failure (`DataError: value too
+    long`) proved the actual string is longer than assumed."""
+    signal_timestamp = models.DateTimeField()
+    risk_status = models.CharField(max_length=16)
+    risk_reason = models.CharField(max_length=1000, blank=True, default="")
+    order_status = models.CharField(max_length=32, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        app_label = "persistence"
+        indexes = [models.Index(fields=["-signal_timestamp"])]
+        ordering = ["-signal_timestamp"]
