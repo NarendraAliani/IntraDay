@@ -17,7 +17,18 @@ import {
 import { DrawdownChart, EquityCurveChart } from "../../common/components/EquityChart";
 import { ErrorState } from "../../common/components/ErrorState";
 import { LoadingState } from "../../common/components/LoadingState";
-import { asConfigurationView, asDataQualityView, runBacktest } from "../../common/api/backtestingApi";
+import {
+  asConfigurationView,
+  asDataQualityView,
+  createHistoricalBacktestRun,
+  getCoveragePreview,
+  getHistoricalBacktestRunProgress,
+  runBacktest,
+} from "../../common/api/backtestingApi";
+import type {
+  CoveragePreviewResponse,
+  HistoricalBacktestRunProgress,
+} from "../../common/api/backtestingApi";
 import {
   getFieldRegistry,
   getStrategySchema,
@@ -231,6 +242,7 @@ export function BacktestingWorkbenchPage(): JSX.Element {
       )}
 
       {view === "configure" && schema && selectedStrategy && (
+        <Fragment>
         <section className="backtest-workbench__configure" aria-label="Configure Backtest">
           <button type="button" onClick={() => setView("discover")}>
             ← Back to Discover
@@ -410,6 +422,22 @@ export function BacktestingWorkbenchPage(): JSX.Element {
 
           {runState.phase === "completed" && <BacktestResultsPanel result={runState.result} />}
         </section>
+
+        <HistoricalBacktestRunPanel
+          strategyId={selectedStrategy.strategy_id}
+          specificationVersion={selectedStrategy.specification_version}
+          codeVersion={selectedStrategy.code_version}
+          strategyValues={values}
+          defaultTimeframe={timeframe}
+          initialCapital={initialCapital}
+          positionSizingMode={positionSizingMode}
+          positionSizeValue={positionSizeValue}
+          brokeragePercent={brokeragePercent}
+          slippagePercent={slippagePercent}
+          costModelName={costModelName}
+          canRun={canRun}
+        />
+        </Fragment>
       )}
     </div>
   );
@@ -793,5 +821,311 @@ function TradeTable({ trades }: { trades: TradeRow[] }): JSX.Element {
         </table>
       )}
     </div>
+  );
+}
+
+// --- Checkpoint 63.x: DB-first, multi-instrument historical backtest run,
+// with real (never fabricated/timer-driven) progress polling. Separate
+// panel from the single-instrument "Run Backtest" flow above -
+// deliberately additive rather than replacing it, since the existing
+// flow's fixture/single-instrument semantics remain valid for quick
+// strategy iteration; THIS panel is for the DB-first multi-instrument
+// architecture Checkpoint 63.x introduces. -----------------------------
+
+const TERMINAL_RUN_STATUSES = new Set(["COMPLETED", "PARTIAL", "FAILED", "CANCELLED"]);
+const POLL_INTERVAL_MS = 1200;
+
+interface HistoricalBacktestRunPanelProps {
+  strategyId: string;
+  specificationVersion: string;
+  codeVersion: string;
+  strategyValues: Record<string, string>;
+  defaultTimeframe: string;
+  initialCapital: string;
+  positionSizingMode: "FIXED_QUANTITY" | "PERCENT_OF_EQUITY";
+  positionSizeValue: string;
+  brokeragePercent: string;
+  slippagePercent: string;
+  costModelName: "FLAT_PERCENTAGE" | "INDIAN_CASH_EQUITY_INTRADAY";
+  canRun: boolean;
+}
+
+type HistoricalRunPhase =
+  | { phase: "idle" }
+  | { phase: "previewing" }
+  | { phase: "preview_ready"; preview: CoveragePreviewResponse }
+  | { phase: "starting" }
+  | { phase: "polling"; progress: HistoricalBacktestRunProgress }
+  | { phase: "done"; progress: HistoricalBacktestRunProgress }
+  | { phase: "error"; message: string };
+
+function formatSeconds(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "—";
+  const total = Math.max(0, Math.round(value));
+  const minutes = Math.floor(total / 60)
+    .toString()
+    .padStart(2, "0");
+  const seconds = (total % 60).toString().padStart(2, "0");
+  return `${minutes}:${seconds}`;
+}
+
+function HistoricalBacktestRunPanel(props: HistoricalBacktestRunPanelProps): JSX.Element {
+  const [instrumentIdsText, setInstrumentIdsText] = useState("NSE:RELIANCE");
+  const [startDate, setStartDate] = useState("2026-01-05");
+  const [endDate, setEndDate] = useState("2026-01-09");
+  const [state, setState] = useState<HistoricalRunPhase>({ phase: "idle" });
+  const [runId, setRunId] = useState<string | null>(null);
+
+  const instrumentIds = useMemo(
+    () =>
+      instrumentIdsText
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0),
+    [instrumentIdsText],
+  );
+
+  useEffect(() => {
+    if (state.phase !== "polling" || runId === null) return undefined;
+    let cancelled = false;
+    const interval = setInterval(async () => {
+      try {
+        const progress = await getHistoricalBacktestRunProgress(runId);
+        if (cancelled) return;
+        if (TERMINAL_RUN_STATUSES.has(progress.status)) {
+          setState({ phase: "done", progress });
+        } else {
+          setState({ phase: "polling", progress });
+        }
+      } catch (error) {
+        if (!cancelled) setState({ phase: "error", message: describeError(error) });
+      }
+    }, POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.phase, runId]);
+
+  async function handlePreview(): Promise<void> {
+    setState({ phase: "previewing" });
+    try {
+      const preview = await getCoveragePreview({
+        instrument_ids: instrumentIds,
+        timeframe: props.defaultTimeframe,
+        start_date: startDate,
+        end_date: endDate,
+      });
+      setState({ phase: "preview_ready", preview });
+    } catch (error) {
+      setState({ phase: "error", message: describeError(error) });
+    }
+  }
+
+  async function handleStart(): Promise<void> {
+    setState({ phase: "starting" });
+    try {
+      const created = await createHistoricalBacktestRun({
+        instrument_ids: instrumentIds,
+        timeframe: props.defaultTimeframe,
+        start_date: startDate,
+        end_date: endDate,
+        strategy_id: props.strategyId,
+        specification_version: props.specificationVersion,
+        code_version: props.codeVersion,
+        configuration_version: `workbench-historical-${Date.now()}`,
+        strategy_values: props.strategyValues,
+        initial_capital: props.initialCapital,
+        position_sizing_mode: props.positionSizingMode,
+        position_size_value: props.positionSizeValue,
+        brokerage_percent: props.brokeragePercent,
+        slippage_percent: props.slippagePercent,
+        cost_model_name: props.costModelName,
+      });
+      setRunId(created.run_id);
+      const progress = await getHistoricalBacktestRunProgress(created.run_id);
+      setState(
+        TERMINAL_RUN_STATUSES.has(progress.status)
+          ? { phase: "done", progress }
+          : { phase: "polling", progress },
+      );
+    } catch (error) {
+      setState({ phase: "error", message: describeError(error) });
+    }
+  }
+
+  const progress = state.phase === "polling" || state.phase === "done" ? state.progress : null;
+
+  return (
+    <section className="historical-run" aria-label="DB-First Historical Backtest Run">
+      <h2>Historical Data Readiness &amp; Scanner Progress</h2>
+      <p className="strategy-config-page__help-text">
+        Runs this strategy against a stock universe, sourcing historical bars from the database
+        first and only calling the historical data provider for genuinely missing ranges. Signals
+        only ever come from bars already persisted in the database — never directly from the
+        provider.
+      </p>
+
+      <div className="historical-run__config">
+        <div className="strategy-config-page__field">
+          <label htmlFor="hist-instruments">Universe (comma-separated instrument IDs)</label>
+          <input
+            id="hist-instruments"
+            value={instrumentIdsText}
+            onChange={(e) => setInstrumentIdsText(e.target.value)}
+          />
+        </div>
+        <div className="strategy-config-page__field">
+          <label htmlFor="hist-start-date">Start Date</label>
+          <input
+            id="hist-start-date"
+            type="date"
+            value={startDate}
+            onChange={(e) => setStartDate(e.target.value)}
+          />
+        </div>
+        <div className="strategy-config-page__field">
+          <label htmlFor="hist-end-date">End Date</label>
+          <input
+            id="hist-end-date"
+            type="date"
+            value={endDate}
+            onChange={(e) => setEndDate(e.target.value)}
+          />
+        </div>
+      </div>
+
+      <div className="historical-run__actions">
+        <button
+          type="button"
+          onClick={() => void handlePreview()}
+          disabled={instrumentIds.length === 0 || state.phase === "previewing"}
+        >
+          {state.phase === "previewing" ? "Checking…" : "Check Data Readiness"}
+        </button>
+        {props.canRun && (
+          <button
+            type="button"
+            onClick={() => void handleStart()}
+            disabled={
+              instrumentIds.length === 0 || state.phase === "starting" || state.phase === "polling"
+            }
+          >
+            Prepare Data &amp; Start Backtest
+          </button>
+        )}
+      </div>
+
+      {state.phase === "preview_ready" && (
+        <table className="historical-run__readiness-table">
+          <caption>Historical Data Readiness</caption>
+          <thead>
+            <tr>
+              <th scope="col">Instrument</th>
+              <th scope="col">Coverage</th>
+              <th scope="col">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {state.preview.instruments.map((entry) => (
+              <tr key={entry.instrument_id}>
+                <td>{entry.instrument_id}</td>
+                <td>{entry.coverage_percent.toFixed(1)}%</td>
+                <td>
+                  {entry.is_complete ? (
+                    <span className="badge badge--ok">READY</span>
+                  ) : (
+                    <span className="badge badge--pending">FETCH REQUIRED</span>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      {state.phase === "error" && <ErrorState message={state.message} />}
+
+      {progress && (
+        <div className="historical-run__progress" aria-label="Scanner Progress">
+          <div
+            className="historical-run__progress-bar"
+            role="progressbar"
+            aria-valuenow={progress.progress_percent}
+            aria-valuemin={0}
+            aria-valuemax={100}
+          >
+            <div
+              className={`historical-run__progress-bar-fill historical-run__progress-bar-fill--${Math.round(progress.progress_percent / 10) * 10}`}
+            />
+          </div>
+          <p>
+            <strong>{progress.progress_percent.toFixed(1)}%</strong> — {progress.phase}
+          </p>
+          <p className="strategy-config-page__help-text">{progress.message || "—"}</p>
+
+          <dl className="historical-run__stats">
+            <dt>Current Instrument</dt>
+            <dd>{progress.current_instrument || "—"}</dd>
+            <dt>Current Strategy</dt>
+            <dd>{progress.current_strategy || "—"}</dd>
+            <dt>Instruments</dt>
+            <dd>
+              {progress.completed_instruments} / {progress.total_instruments}
+            </dd>
+            <dt>Bars Scanned</dt>
+            <dd>{progress.scanned_bars.toLocaleString()}</dd>
+            <dt>Signals</dt>
+            <dd>{progress.signals_generated}</dd>
+            <dt>Database Cache Hits</dt>
+            <dd>{progress.cache_hits.toLocaleString()}</dd>
+            <dt>API-Fetched Bars</dt>
+            <dd>{progress.cache_misses.toLocaleString()}</dd>
+            <dt>API Requests</dt>
+            <dd>{progress.api_requests}</dd>
+            <dt>Elapsed</dt>
+            <dd>{formatSeconds(progress.elapsed_seconds)}</dd>
+            <dt>ETA</dt>
+            <dd>{formatSeconds(progress.eta_seconds)}</dd>
+            <dt>Scan Source</dt>
+            <dd>
+              <strong className="badge badge--ok">DATABASE ONLY</strong>
+            </dd>
+          </dl>
+
+          {(() => {
+            const failures = progress.failed_instruments as Array<{
+              instrument_id: string;
+              reason: string;
+            }>;
+            return (
+              failures.length > 0 && (
+                <div role="alert" className="historical-run__failures">
+                  <strong>Incomplete data — the following instruments were skipped:</strong>
+                  <ul>
+                    {failures.map((failure) => (
+                      <li key={failure.instrument_id}>
+                        {failure.instrument_id}: {failure.reason}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )
+            );
+          })()}
+
+          {state.phase === "done" && (
+            <p>
+              <strong
+                className={`badge ${progress.status === "COMPLETED" ? "badge--ok" : "badge--pending"}`}
+              >
+                {progress.status}
+              </strong>
+            </p>
+          )}
+        </div>
+      )}
+    </section>
   );
 }

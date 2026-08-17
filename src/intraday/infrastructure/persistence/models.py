@@ -922,6 +922,158 @@ class EODRun(models.Model):
         app_label = "persistence"
 
 
+class HistoricalBar(models.Model):
+    """Checkpoint 63.x: the FIRST persisted, DB-first archive of raw
+    historical OHLCV bars — the whole point of this checkpoint's
+    architecture is that the scanner/backtester read ONLY from this
+    table (via `DjangoHistoricalBarRepository`), never directly from an
+    external historical-data API. Deliberately separate from
+    `AggregatedBarObservation` above: that table is an upsert-by-
+    identity projection built from LIVE quote polling, keyed on plain
+    symbol strings, with no concept of "was this fetched from a
+    historical archive or aggregated live" or of a bar-level
+    `source`/`fetched_at` provenance trail — reusing it here would
+    conflate two genuinely different pipelines (live ingestion vs.
+    historical backfill) that this checkpoint's own architecture
+    diagram requires to stay distinct.
+
+    Uniqueness is `(instrument_id, timeframe, bar_timestamp)` — a
+    historical bar's identity is what instrument/timeframe/close-time
+    it represents, NEVER the auto-incrementing row id (Phase 2's
+    explicit instruction). `bulk_upsert()`
+    (`DjangoHistoricalBarRepository`) relies on this constraint to make
+    re-fetching an already-cached range a safe no-op rather than a
+    duplicate."""
+
+    instrument_id = models.CharField(max_length=100)
+    exchange = models.CharField(max_length=8)
+    symbol = models.CharField(max_length=32)
+    timeframe = models.CharField(max_length=8)
+    bar_timestamp = models.DateTimeField()
+    open_price = models.DecimalField(max_digits=18, decimal_places=4)
+    high_price = models.DecimalField(max_digits=18, decimal_places=4)
+    low_price = models.DecimalField(max_digits=18, decimal_places=4)
+    close_price = models.DecimalField(max_digits=18, decimal_places=4)
+    volume = models.DecimalField(max_digits=20, decimal_places=4)
+    source = models.CharField(max_length=32)
+    """Provenance: which pipeline stage produced this row, e.g.
+    `"API_FETCH"` (freshly fetched from the historical provider this
+    request) vs. a value indicating it was already present from a
+    prior run - see `infrastructure.market_data_providers.
+    synthetic_historical` for the one provider implementation that
+    exists today, and its own docstring for why it is NOT a real Dhan
+    historical-candle integration."""
+    ingested_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        app_label = "persistence"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["instrument_id", "timeframe", "bar_timestamp"],
+                name="uq_historical_bar_identity",
+            )
+        ]
+        indexes = [models.Index(fields=["instrument_id", "timeframe", "bar_timestamp"])]
+        ordering = ["bar_timestamp"]
+
+
+class BacktestRun(models.Model):
+    """Checkpoint 63.x: a persistent, pollable record of one DB-first
+    historical backtest run's progress — the state
+    `HistoricalBacktestRunOrchestrator` mutates as it works and
+    `GET .../historical-runs/{run_id}/progress/` reads back. `run_id` is
+    a UUID (not the deterministic per-instrument `backtest_id` the
+    underlying engine already produces - see `BacktestResultRecord` -
+    since one `BacktestRun` spans MULTIPLE instruments/backtest_ids, it
+    needs its own, separate identity).
+
+    `phase` is the fine-grained state-machine value (Phase 14 of this
+    checkpoint's brief); `status` is the coarse terminal/non-terminal
+    outcome a caller checks first. Every numeric progress field here is
+    updated from ACTUAL orchestrator work, never advanced on a timer -
+    see the orchestrator's own docstring."""
+
+    PHASE_CHOICES = [
+        (p, p)
+        for p in (
+            "QUEUED",
+            "ANALYZING_DATA_COVERAGE",
+            "FETCHING_HISTORICAL_DATA",
+            "VALIDATING_DATA",
+            "PERSISTING_DATA",
+            "PREPARING_SCAN",
+            "SCANNING",
+            "CALCULATING_RESULTS",
+            "FINALIZING",
+            "COMPLETED",
+            "PARTIAL",
+            "FAILED",
+            "CANCELLED",
+        )
+    ]
+    STATUS_CHOICES = [
+        (s, s) for s in ("QUEUED", "RUNNING", "COMPLETED", "PARTIAL", "FAILED", "CANCELLED")
+    ]
+
+    run_id = models.CharField(max_length=64, unique=True)
+    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default="QUEUED")
+    phase = models.CharField(max_length=32, choices=PHASE_CHOICES, default="QUEUED")
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    created_by = models.CharField(max_length=150)
+
+    start_date = models.DateField()
+    end_date = models.DateField()
+    timeframe = models.CharField(max_length=8)
+    instrument_ids = models.JSONField(default=list)
+    strategy_id = models.CharField(max_length=100)
+    specification_version = models.CharField(max_length=32)
+    code_version = models.CharField(max_length=32)
+    configuration_version = models.CharField(max_length=32)
+    strategy_values = models.JSONField(default=dict)
+    cost_model_name = models.CharField(max_length=32, default="FLAT_PERCENTAGE")
+    initial_capital = models.DecimalField(max_digits=18, decimal_places=4)
+    position_sizing_mode = models.CharField(max_length=32)
+    position_size_value = models.DecimalField(max_digits=18, decimal_places=6)
+    brokerage_percent = models.DecimalField(max_digits=8, decimal_places=4, default=0)
+    slippage_percent = models.DecimalField(max_digits=8, decimal_places=4, default=0)
+
+    total_instruments = models.PositiveIntegerField(default=0)
+    completed_instruments = models.PositiveIntegerField(default=0)
+    total_bars = models.PositiveIntegerField(default=0)
+    scanned_bars = models.PositiveIntegerField(default=0)
+    signals_generated = models.PositiveIntegerField(default=0)
+
+    cache_hits = models.PositiveIntegerField(default=0)
+    cache_misses = models.PositiveIntegerField(default=0)
+    api_requests = models.PositiveIntegerField(default=0)
+
+    failed_instruments = models.JSONField(default=list)
+    """List of `{"instrument_id": ..., "reason": ...}` objects - Phase 6
+    partial-failure disclosure, never silently dropped from the
+    report."""
+    result_backtest_ids = models.JSONField(default=dict)
+    """`{instrument_id: backtest_id}` - one underlying, already-persisted
+    `BacktestResultRecord` per successfully-scanned instrument (Phase 9
+    Step 15/16: this run does not re-implement result persistence, it
+    references the SAME `BacktestResultRepository` every other backtest
+    uses)."""
+
+    error_message = models.CharField(max_length=2000, blank=True, default="")
+    progress_percent = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    current_instrument = models.CharField(max_length=100, blank=True, default="")
+    current_strategy = models.CharField(max_length=100, blank=True, default="")
+    current_timestamp = models.DateTimeField(null=True, blank=True)
+    message = models.CharField(max_length=500, blank=True, default="")
+
+    class Meta:
+        app_label = "persistence"
+        indexes = [models.Index(fields=["-created_at"])]
+        ordering = ["-created_at"]
+
+
 class SignalRecord(models.Model):
     """Checkpoint 62.x: the FIRST persisted, queryable record of a real
     strategy-generated signal - closes a gap a fresh audit this

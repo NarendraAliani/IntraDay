@@ -14,6 +14,7 @@ from django.urls import path
 
 from intraday.infrastructure.api import (
     backtesting_views,
+    historical_backtesting_views,
     kill_switch_views,
     market_data_views,
     paper_trading_views,
@@ -172,6 +173,22 @@ urlpatterns = [
         "backtesting/strategies/<str:strategy_id>/results/",
         backtesting_views.list_backtest_results,
         name="backtesting-results-list",
+    ),
+    # --- Checkpoint 63.x: DB-first historical backtest runs ---------------
+    path(
+        "backtesting/historical-runs/",
+        historical_backtesting_views.create_historical_backtest_run_view,
+        name="backtesting-historical-run-create",
+    ),
+    path(
+        "backtesting/historical-runs/<str:run_id>/progress/",
+        historical_backtesting_views.get_historical_backtest_run_progress,
+        name="backtesting-historical-run-progress",
+    ),
+    path(
+        "backtesting/coverage-preview/",
+        historical_backtesting_views.coverage_preview_view,
+        name="backtesting-coverage-preview",
     ),
     # --- Checkpoint 27: research watchlists -------------------------------
     path("watchlists/", watchlist_views.list_watchlists, name="watchlists-list"),

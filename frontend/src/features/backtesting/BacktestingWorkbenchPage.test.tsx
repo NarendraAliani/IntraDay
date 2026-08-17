@@ -399,4 +399,92 @@ describe("BacktestingWorkbenchPage", () => {
     expect(screen.getByText("STT")).toBeInTheDocument();
     expect(screen.getByText("GST")).toBeInTheDocument();
   });
+
+  it("shows the DB-first historical run panel with a real data-readiness preview", async () => {
+    stubFetch({
+      "/strategy-engine/fields/": FIELDS,
+      "/strategy-engine/strategies/": STRATEGIES,
+      "/strategy-engine/strategies/ema_crossover/schema/": SCHEMA,
+      "/backtesting/coverage-preview/": {
+        instruments: [
+          {
+            instrument_id: "NSE:RELIANCE",
+            coverage_percent: 0,
+            expected_bar_count: 75,
+            cached_bar_count: 0,
+            is_complete: false,
+            missing_range_count: 1,
+          },
+        ],
+        overall_coverage_percent: 0,
+      },
+    });
+    renderWithAuth(<BacktestingWorkbenchPage />);
+    await waitFor(() => expect(screen.getByText("EMA Crossover")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Configure" }));
+    await waitFor(() => expect(screen.getByLabelText(/Fast EMA Lookback/)).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "Check Data Readiness" }));
+
+    await waitFor(() => expect(screen.getByText("NSE:RELIANCE")).toBeInTheDocument());
+    expect(screen.getByText("FETCH REQUIRED")).toBeInTheDocument();
+  });
+
+  it("polls real backend progress after starting a historical run - never a fake timer-driven bar", async () => {
+    let pollCount = 0;
+    function progressPayload(): unknown {
+      pollCount += 1;
+      const complete = pollCount >= 2;
+      return {
+        run_id: "run-1",
+        status: complete ? "COMPLETED" : "RUNNING",
+        phase: complete ? "COMPLETED" : "SCANNING",
+        progress_percent: complete ? 100 : 50,
+        current_instrument: "NSE:RELIANCE",
+        current_strategy: "ema_crossover",
+        message: complete ? "Backtest run completed" : "Scanning NSE:RELIANCE",
+        total_instruments: 1,
+        completed_instruments: complete ? 1 : 0,
+        total_bars: 75,
+        scanned_bars: complete ? 75 : 30,
+        signals_generated: 2,
+        cache_hits: 0,
+        cache_misses: 75,
+        api_requests: 1,
+        failed_instruments: [],
+        result_backtest_ids: complete ? { "NSE:RELIANCE": "abc123" } : {},
+        error_message: "",
+        created_at: "2026-08-17T06:00:00Z",
+        started_at: "2026-08-17T06:00:00Z",
+        completed_at: complete ? "2026-08-17T06:01:00Z" : null,
+        elapsed_seconds: 12,
+        eta_seconds: complete ? null : 5,
+      };
+    }
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : input.toString();
+        const method = init?.method ?? "GET";
+        if (url.includes("/strategy-engine/fields/")) return jsonResponse(FIELDS);
+        if (url.includes("/strategy-engine/strategies/ema_crossover/schema/")) return jsonResponse(SCHEMA);
+        if (url.endsWith("/strategy-engine/strategies/")) return jsonResponse(STRATEGIES);
+        if (url.includes("/progress/")) return jsonResponse(progressPayload());
+        if (method === "POST" && url.endsWith("/backtesting/historical-runs/")) {
+          return jsonResponse({ run_id: "run-1" });
+        }
+        return jsonResponse({ error_code: "not_found", message: "no route" }, 404);
+      }),
+    );
+    renderWithAuth(<BacktestingWorkbenchPage />);
+    await waitFor(() => expect(screen.getByText("EMA Crossover")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Configure" }));
+    await waitFor(() => expect(screen.getByLabelText(/Fast EMA Lookback/)).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "Prepare Data & Start Backtest" }));
+
+    await waitFor(() => expect(screen.getByText("DATABASE ONLY")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("COMPLETED")).toBeInTheDocument(), { timeout: 5000 });
+    expect(screen.getByText("2")).toBeInTheDocument(); // signals_generated rendered from real backend state
+  });
 });

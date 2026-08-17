@@ -161,6 +161,59 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/config/backtesting/coverage-preview/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Phase 21: read-only data-readiness preview — never fetches,
+         *     never persists, only reports what `HistoricalBar` already has for
+         *     each requested instrument.
+         */
+        post: operations["api_v1_config_backtesting_coverage_preview_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config/backtesting/historical-runs/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["api_v1_config_backtesting_historical_runs_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config/backtesting/historical-runs/{run_id}/progress/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["api_v1_config_backtesting_historical_runs_progress_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/config/backtesting/results/{backtest_id}/": {
         parameters: {
             query?: never;
@@ -721,7 +774,10 @@ export interface paths {
          * @description Read-only, server-side paginated list of REAL, persisted
          *     strategy signals - never a fabricated row. Query params:
          *     `page` (default 1), `page_size` (default 25, max 200),
-         *     `strategy_id` and `instrument_id` (optional filters).
+         *     `strategy_id`, `instrument_id`, `timeframe`, `direction`
+         *     (all optional filters - the Active Signal Monitor UI's controls
+         *     bind directly to these, never a frontend-only filter over an
+         *     unbounded fetch).
          */
         get: operations["api_v1_config_signals_retrieve"];
         put?: never;
@@ -1312,6 +1368,28 @@ export interface components {
          * @enum {string}
          */
         CostModelNameEnum: "FLAT_PERCENTAGE" | "INDIAN_CASH_EQUITY_INTRADAY";
+        CoveragePreviewEntry: {
+            instrument_id: string;
+            /** Format: double */
+            coverage_percent: number;
+            expected_bar_count: number;
+            cached_bar_count: number;
+            is_complete: boolean;
+            missing_range_count: number;
+        };
+        CoveragePreviewRequest: {
+            instrument_ids: string[];
+            timeframe: string;
+            /** Format: date */
+            start_date: string;
+            /** Format: date */
+            end_date: string;
+        };
+        CoveragePreviewResponse: {
+            instruments: components["schemas"]["CoveragePreviewEntry"][];
+            /** Format: double */
+            overall_coverage_percent: number;
+        };
         /**
          * @description Response shape for `GET /api/v1/auth/session/` and the successful
          *     result of `POST /api/v1/auth/login/`. Never includes a password,
@@ -1371,6 +1449,79 @@ export interface components {
          * @enum {string}
          */
         HealthzResponseStatusEnum: "alive";
+        HistoricalBacktestRunCreated: {
+            run_id: string;
+        };
+        HistoricalBacktestRunProgress: {
+            run_id: string;
+            status: string;
+            phase: string;
+            /** Format: double */
+            progress_percent: number;
+            current_instrument: string;
+            current_strategy: string;
+            message: string;
+            total_instruments: number;
+            completed_instruments: number;
+            total_bars: number;
+            scanned_bars: number;
+            signals_generated: number;
+            cache_hits: number;
+            cache_misses: number;
+            api_requests: number;
+            failed_instruments: unknown;
+            result_backtest_ids: unknown;
+            error_message: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            started_at: string | null;
+            /** Format: date-time */
+            completed_at: string | null;
+            /** Format: double */
+            elapsed_seconds: number;
+            /** Format: double */
+            eta_seconds: number | null;
+        };
+        /**
+         * @description Checkpoint 63.x: creates a DB-first historical backtest run
+         *     spanning `instrument_ids` (plural — the universe), single strategy
+         *     (matching the existing single-strategy `BacktestRunRequestSerializer`
+         *     scope; multi-strategy-per-run is a documented, deferred extension).
+         *     Financial fields mirror `BacktestRunRequestSerializer` exactly —
+         *     same fields, same defaults, same "only expose assumptions that
+         *     already have a correct implementation" scoping (Phase 20).
+         */
+        HistoricalBacktestRunRequest: {
+            instrument_ids: string[];
+            timeframe: string;
+            /** Format: date */
+            start_date: string;
+            /** Format: date */
+            end_date: string;
+            strategy_id: string;
+            specification_version: string;
+            code_version: string;
+            configuration_version: string;
+            strategy_values: unknown;
+            /** Format: decimal */
+            initial_capital: string;
+            position_sizing_mode: components["schemas"]["PositionSizingModeEnum"];
+            /** Format: decimal */
+            position_size_value: string;
+            /**
+             * Format: decimal
+             * @default 0.0000
+             */
+            brokerage_percent: string;
+            /**
+             * Format: decimal
+             * @default 0.0000
+             */
+            slippage_percent: string;
+            /** @default FLAT_PERCENTAGE */
+            cost_model_name: components["schemas"]["CostModelNameEnum"];
+        };
         KillSwitchEngageRequest: {
             reason: string;
         };
@@ -1958,6 +2109,101 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CurrentUserResponse"];
+                };
+            };
+        };
+    };
+    api_v1_config_backtesting_coverage_preview_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CoveragePreviewRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["CoveragePreviewRequest"];
+                "multipart/form-data": components["schemas"]["CoveragePreviewRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CoveragePreviewResponse"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+        };
+    };
+    api_v1_config_backtesting_historical_runs_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HistoricalBacktestRunRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["HistoricalBacktestRunRequest"];
+                "multipart/form-data": components["schemas"]["HistoricalBacktestRunRequest"];
+            };
+        };
+        responses: {
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HistoricalBacktestRunCreated"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+        };
+    };
+    api_v1_config_backtesting_historical_runs_progress_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HistoricalBacktestRunProgress"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
                 };
             };
         };

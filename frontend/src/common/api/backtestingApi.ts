@@ -46,6 +46,31 @@ export function runBacktest(body: BacktestRunRequest): Promise<BacktestResult> {
   return apiPost<BacktestResult>("/api/v1/config/backtesting/run/", body);
 }
 
+// --- Checkpoint 63.x: DB-first historical backtest runs ------------------
+export type HistoricalBacktestRunRequest = components["schemas"]["HistoricalBacktestRunRequest"];
+export type HistoricalBacktestRunCreated = components["schemas"]["HistoricalBacktestRunCreated"];
+export type HistoricalBacktestRunProgress = components["schemas"]["HistoricalBacktestRunProgress"];
+export type CoveragePreviewRequest = components["schemas"]["CoveragePreviewRequest"];
+export type CoveragePreviewResponse = components["schemas"]["CoveragePreviewResponse"];
+
+export function createHistoricalBacktestRun(
+  body: HistoricalBacktestRunRequest,
+): Promise<HistoricalBacktestRunCreated> {
+  return apiPost<HistoricalBacktestRunCreated>("/api/v1/config/backtesting/historical-runs/", body);
+}
+
+export function getHistoricalBacktestRunProgress(
+  runId: string,
+): Promise<HistoricalBacktestRunProgress> {
+  return apiGet<HistoricalBacktestRunProgress>(
+    `/api/v1/config/backtesting/historical-runs/${runId}/progress/`,
+  );
+}
+
+export function getCoveragePreview(body: CoveragePreviewRequest): Promise<CoveragePreviewResponse> {
+  return apiPost<CoveragePreviewResponse>("/api/v1/config/backtesting/coverage-preview/", body);
+}
+
 export function getBacktestResult(backtestId: string): Promise<BacktestResult> {
   return apiGet<BacktestResult>(`/api/v1/config/backtesting/results/${backtestId}/`);
 }

@@ -19,11 +19,18 @@
 # remains the named, tracked external blocker).
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from celery import shared_task
 
+from intraday.application.services.backtesting import BacktestingService
+from intraday.application.services.historical_backtest_run import HistoricalBacktestRunOrchestrator
+from intraday.application.services.historical_data_coverage import HistoricalDataCoverageService
+from intraday.application.services.historical_data_preparation import (
+    HistoricalDataPreparationService,
+)
+from intraday.application.services.market_data import HistoricalMarketDataService
 from intraday.domain.instrument.contracts import make_instrument_id
 from intraday.domain.market_data.contracts import Bar
 from intraday.domain.shared_kernel.contracts import Exchange, Timeframe
@@ -34,7 +41,18 @@ from intraday.infrastructure.api.emergency_square_off_trigger import (
 from intraday.infrastructure.api.market_data_ingestion_runtime import (
     run_market_data_ingestion_tick,
 )
+from intraday.infrastructure.market_data_providers.synthetic_historical import (
+    SyntheticHistoricalBarProvider,
+)
+from intraday.infrastructure.persistence.historical_backtest_run_repository import (
+    DjangoBacktestRunRepository,
+)
+from intraday.infrastructure.persistence.historical_bar_repository import (
+    DjangoHistoricalBarRepository,
+)
+from intraday.infrastructure.persistence.repositories import DjangoBacktestResultRepository
 from intraday.trading_engine.strategy_execution.contracts import StrategyConfigurationValues
+from intraday.trading_engine.strategy_execution.registry import build_default_registry
 
 
 @shared_task(name="intraday.infrastructure.api.active_loop_tick")  # type: ignore[untyped-decorator]
@@ -133,3 +151,51 @@ def emergency_square_off_check_tick(*, now_override: str | None = None) -> str:
         f":positions_failed={len(outcome.square_off.positions_failed)}"
         f":zero_exposure_confirmed={outcome.zero_exposure_confirmed}"
     )
+
+
+_HISTORICAL_RUN_REGISTRY = build_default_registry()
+
+
+def build_historical_backtest_orchestrator() -> HistoricalBacktestRunOrchestrator:
+    """Wires the DB-first orchestrator with its real Django-backed
+    dependencies - the ONE place `SyntheticHistoricalBarProvider`
+    (see that module's own honest-disclosure docstring) is instantiated
+    for the historical-run task/API path."""
+    bar_repository = DjangoHistoricalBarRepository()
+    return HistoricalBacktestRunOrchestrator(
+        run_repository=DjangoBacktestRunRepository(),
+        preparation=HistoricalDataPreparationService(
+            coverage=HistoricalDataCoverageService(repository=bar_repository),
+            provider=SyntheticHistoricalBarProvider(),
+            writer=bar_repository,
+        ),
+        backtesting=BacktestingService(
+            market_data=HistoricalMarketDataService(repository=bar_repository),
+            registry=_HISTORICAL_RUN_REGISTRY,
+            repository=DjangoBacktestResultRepository(),
+        ),
+    )
+
+
+@shared_task(name="intraday.infrastructure.api.run_historical_backtest_run")  # type: ignore[untyped-decorator]
+def run_historical_backtest_run_task(run_id: str) -> str:
+    """Checkpoint 63.x: dispatched (`.delay()`) by
+    `create_historical_backtest_run_view` so a `BacktestRun`'s
+    progress is genuinely pollable from a running background job -
+    `CELERY_TASK_ALWAYS_EAGER=True` in the test settings module runs
+    this synchronously in-process for tests, while a real deployment
+    dispatches it to a Celery worker exactly like `active_loop_tick`/
+    `market_data_ingestion_tick` already are."""
+    orchestrator = build_historical_backtest_orchestrator()
+    try:
+        orchestrator.run(run_id)
+    except Exception as exc:  # noqa: BLE001 - a run must always end in a terminal, reported state
+        DjangoBacktestRunRepository().update(
+            run_id,
+            status="FAILED",
+            phase="FAILED",
+            error_message=str(exc),
+            completed_at=datetime.now(tz=UTC),
+        )
+        raise
+    return "completed"
