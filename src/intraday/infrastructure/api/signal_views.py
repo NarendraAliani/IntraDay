@@ -68,7 +68,10 @@ def list_signals(request: Request) -> Response:
     """Read-only, server-side paginated list of REAL, persisted
     strategy signals - never a fabricated row. Query params:
     `page` (default 1), `page_size` (default 25, max 200),
-    `strategy_id` and `instrument_id` (optional filters)."""
+    `strategy_id`, `instrument_id`, `timeframe`, `direction`
+    (all optional filters - the Active Signal Monitor UI's controls
+    bind directly to these, never a frontend-only filter over an
+    unbounded fetch)."""
     try:
         page = int(request.query_params.get("page", "1"))
     except ValueError:
@@ -83,6 +86,8 @@ def list_signals(request: Request) -> Response:
         page_size=page_size,
         strategy_id=request.query_params.get("strategy_id") or None,
         instrument_id=request.query_params.get("instrument_id") or None,
+        timeframe=request.query_params.get("timeframe") or None,
+        direction=request.query_params.get("direction") or None,
     )
 
     data = SignalListResponseSerializer(

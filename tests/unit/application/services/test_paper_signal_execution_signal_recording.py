@@ -74,6 +74,7 @@ class _RecordedCall:
     direction: str
     risk_status: str
     order_status: str
+    timeframe: str
 
 
 class _FakeSignalRecorder:
@@ -108,6 +109,7 @@ class _FakeSignalRecorder:
                 direction=direction,
                 risk_status=risk_status,
                 order_status=order_status,
+                timeframe=timeframe,
             )
         )
 
@@ -163,6 +165,34 @@ def test_a_real_signal_is_recorded_exactly_once() -> None:
     assert recorded.direction == "BULLISH"
     assert recorded.risk_status == "APPROVED"
     assert recorded.order_status == "FILLED"
+
+
+def test_recorded_timeframe_is_the_clean_enum_value_not_its_repr() -> None:
+    """The persisted/filterable `timeframe` field must be `"1m"`
+    (`Timeframe.value`), not `"Timeframe.ONE_MINUTE"`
+    (`str(Timeframe.ONE_MINUTE)`) - found and fixed while wiring the
+    Active Signal Monitor UI's timeframe filter/display, distinct from
+    `derive_signal_id()`'s own identity hash (which still uses
+    `str()`, unchanged, and is not what this test checks)."""
+    recorder = _FakeSignalRecorder()
+    service, broker = _service(recorder)
+    bars = _uptrend_bars()
+    broker.record_price(RELIANCE, bars[-1].close, BASE)
+
+    service.evaluate_and_submit(
+        bars=bars,
+        instrument_id=RELIANCE,
+        strategy_id="ema_crossover",
+        configuration=_config(),
+        strategy_is_active=True,
+        market_session_is_open=True,
+        data_quality_is_stale=False,
+        already_processed_signal_ids=frozenset(),
+        already_submitted_idempotency_keys=frozenset(),
+    )
+
+    assert len(recorder.calls) == 1
+    assert recorder.calls[0].timeframe == "1m"
 
 
 def test_a_flat_bar_series_with_no_signal_records_nothing() -> None:

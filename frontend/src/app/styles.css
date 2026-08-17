@@ -793,6 +793,264 @@ dd {
   border-bottom: none;
 }
 
+/* Checkpoint 62.x: Active Signal Monitor. Reuses every existing token
+   (--color-surface/--color-border/--color-text-muted/--color-bg/
+   --color-active-border/--color-on-accent) and the existing .badge/
+   .state--empty vocabulary - no second design system introduced. */
+
+.signal-monitor__header {
+  margin-bottom: 1.5rem;
+}
+
+.signal-monitor__layout {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  gap: 1.5rem;
+  align-items: start;
+}
+
+.signal-monitor__sidebar {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 1.25rem;
+  position: sticky;
+  top: 1rem;
+}
+
+.signal-monitor__sidebar h2 {
+  margin: 0 0 1rem;
+  font-size: 1rem;
+}
+
+.signal-monitor__field {
+  margin-bottom: 1.25rem;
+}
+
+.signal-monitor__field:last-child {
+  margin-bottom: 0;
+}
+
+.signal-monitor__field label:not(.signal-monitor__radio):not(.signal-monitor__checkbox) {
+  display: block;
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+  margin-bottom: 0.35rem;
+}
+
+.signal-monitor__field select {
+  width: 100%;
+  padding: 0.45rem 0.6rem;
+  border-radius: 4px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg);
+  color: inherit;
+}
+
+.signal-monitor__field-label {
+  display: block;
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+  margin-bottom: 0.5rem;
+}
+
+.signal-monitor__radio,
+.signal-monitor__checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+  padding: 0.2rem 0;
+  cursor: pointer;
+}
+
+.signal-monitor__checklist {
+  margin-top: 0.5rem;
+  max-height: 180px;
+  overflow-y: auto;
+  padding-right: 0.25rem;
+}
+
+.signal-monitor__hint {
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+  margin: 0.4rem 0 0;
+}
+
+.signal-monitor__strategy-actions {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}
+
+.signal-monitor__link-button {
+  background: none;
+  border: none;
+  color: var(--color-active-border);
+  cursor: pointer;
+  padding: 0;
+  font-size: 0.85rem;
+  text-decoration: underline;
+}
+
+.signal-monitor__main {
+  min-width: 0;
+}
+
+.signal-monitor__summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.signal-monitor__summary-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 0.9rem 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.signal-monitor__summary-label {
+  font-size: 0.78rem;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.signal-monitor__summary-value {
+  font-size: 1.15rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.signal-monitor__table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  overflow-x: auto;
+  display: block;
+}
+
+.signal-monitor__table thead,
+.signal-monitor__table tbody {
+  display: table;
+  width: 100%;
+  table-layout: fixed;
+}
+
+.signal-monitor__table th,
+.signal-monitor__table td {
+  text-align: left;
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid var(--color-border);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.signal-monitor__table th {
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+.signal-monitor__table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.signal-monitor__pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  margin-top: 1rem;
+  font-size: 0.9rem;
+}
+
+.signal-monitor__pagination button {
+  padding: 0.4rem 0.9rem;
+  border-radius: 4px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  cursor: pointer;
+}
+
+.signal-monitor__pagination button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.signal-monitor__details {
+  margin-top: 1.5rem;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 1.25rem 1.5rem;
+}
+
+.signal-monitor__details-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+}
+
+.signal-monitor__details-header h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.signal-monitor__details-grid {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.4rem 1rem;
+}
+
+.signal-monitor__details-grid dt {
+  color: var(--color-text-muted);
+}
+
+.signal-monitor__details-grid dd {
+  margin: 0;
+}
+
+.signal-monitor__unavailable {
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+
+.signal-monitor__diagnostics {
+  margin-top: 2rem;
+  border-top: 1px solid var(--color-border);
+  padding-top: 1.25rem;
+}
+
+.signal-monitor__diagnostics-body {
+  margin-top: 1rem;
+}
+
+@media (max-width: 900px) {
+  .signal-monitor__layout {
+    grid-template-columns: 1fr;
+  }
+
+  .signal-monitor__sidebar {
+    position: static;
+  }
+
+  .signal-monitor__table {
+    overflow-x: auto;
+  }
+}
+
 .strategy-config-page__field {
   display: flex;
   flex-direction: column;

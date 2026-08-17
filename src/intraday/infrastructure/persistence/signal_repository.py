@@ -72,16 +72,25 @@ class DjangoSignalRepository:
         page_size: int = 25,
         strategy_id: str | None = None,
         instrument_id: str | None = None,
+        timeframe: str | None = None,
+        direction: str | None = None,
     ) -> SignalListPage:
         """Read-only, server-side paginated - no existing endpoint in
         this project paginated before this checkpoint (a fresh audit
         confirmed this), so this establishes the pattern rather than
-        copying one."""
+        copying one. `timeframe`/`direction` filters added when the
+        Active Signal Monitor UI's own timeframe control was found to
+        have no backend filter to bind to - a real wiring gap closed
+        here, not left as a cosmetic dropdown."""
         queryset = SignalRecord.objects.all()
         if strategy_id:
             queryset = queryset.filter(strategy_id=strategy_id)
         if instrument_id:
             queryset = queryset.filter(instrument_id=instrument_id)
+        if timeframe:
+            queryset = queryset.filter(timeframe=timeframe)
+        if direction:
+            queryset = queryset.filter(direction=direction)
 
         total_count = queryset.count()
         page = max(page, 1)

@@ -710,6 +710,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/config/signals/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Read-only, server-side paginated list of REAL, persisted
+         *     strategy signals - never a fabricated row. Query params:
+         *     `page` (default 1), `page_size` (default 25, max 200),
+         *     `strategy_id` and `instrument_id` (optional filters).
+         */
+        get: operations["api_v1_config_signals_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/config/strategy-engine/fields/": {
         parameters: {
             query?: never;
@@ -923,6 +945,27 @@ export interface paths {
             cookie?: never;
         };
         get: operations["api_v1_config_strategy_active_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config/system/readiness/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Read-only, no live broker call, no order/position code reachable
+         *     from this module (mirrors `market_data_views.py`'s own absolute
+         *     safety-boundary discipline).
+         */
+        get: operations["api_v1_config_system_readiness_retrieve"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1353,7 +1396,7 @@ export interface components {
             password: string;
         };
         MarketDataHealthResponse: {
-            state: components["schemas"]["StateEnum"];
+            state: components["schemas"]["MarketDataHealthResponseStateEnum"];
             /** Format: date-time */
             last_success_at: string | null;
             /** Format: date-time */
@@ -1365,6 +1408,16 @@ export interface components {
             reconnect_count: number;
             subscription_active: boolean;
         };
+        /**
+         * @description * `CONNECTED_FRESH` - CONNECTED_FRESH
+         *     * `CONNECTED_STALE` - CONNECTED_STALE
+         *     * `DISCONNECTED` - DISCONNECTED
+         *     * `AUTHENTICATION_FAILED` - AUTHENTICATION_FAILED
+         *     * `ERROR` - ERROR
+         *     * `MARKET_CLOSED` - MARKET_CLOSED
+         * @enum {string}
+         */
+        MarketDataHealthResponseStateEnum: "CONNECTED_FRESH" | "CONNECTED_STALE" | "DISCONNECTED" | "AUTHENTICATION_FAILED" | "ERROR" | "MARKET_CLOSED";
         /**
          * @description * `MARKET` - MARKET
          *     * `LIMIT` - LIMIT
@@ -1618,16 +1671,28 @@ export interface components {
          * @enum {string}
          */
         SideEnum: "BUY" | "SELL";
-        /**
-         * @description * `CONNECTED_FRESH` - CONNECTED_FRESH
-         *     * `CONNECTED_STALE` - CONNECTED_STALE
-         *     * `DISCONNECTED` - DISCONNECTED
-         *     * `AUTHENTICATION_FAILED` - AUTHENTICATION_FAILED
-         *     * `ERROR` - ERROR
-         *     * `MARKET_CLOSED` - MARKET_CLOSED
-         * @enum {string}
-         */
-        StateEnum: "CONNECTED_FRESH" | "CONNECTED_STALE" | "DISCONNECTED" | "AUTHENTICATION_FAILED" | "ERROR" | "MARKET_CLOSED";
+        SignalListResponse: {
+            items: components["schemas"]["SignalResponse"][];
+            total_count: number;
+            page: number;
+            page_size: number;
+        };
+        SignalResponse: {
+            signal_id: string;
+            strategy_id: string;
+            instrument_id: string;
+            direction: string;
+            /** Format: decimal */
+            price: string;
+            timeframe: string;
+            /** Format: date-time */
+            signal_timestamp: string;
+            risk_status: string;
+            risk_reason: string;
+            order_status: string;
+            /** Format: date-time */
+            created_at: string;
+        };
         StrategyConfigurationResponse: {
             strategy_id: string;
             specification_version: string;
@@ -1674,6 +1739,29 @@ export interface components {
             created_at: string;
             is_active: boolean;
         };
+        /**
+         * @description Checkpoint 50 Rule 10: the ONE composed readiness answer -
+         *     `control_plane.system_readiness.contracts.SystemReadinessSnapshot`
+         *     on the wire.
+         */
+        SystemReadinessResponse: {
+            state: components["schemas"]["SystemReadinessResponseStateEnum"];
+            reasons: string[];
+            database_ok: boolean;
+            market_data_state: string;
+            session_status: string;
+            kill_switch_engaged: boolean;
+            square_off_unresolved_count: number;
+        };
+        /**
+         * @description * `READY` - READY
+         *     * `DEGRADED` - DEGRADED
+         *     * `HALTED` - HALTED
+         *     * `SQUARE_OFF_UNRESOLVED` - SQUARE_OFF_UNRESOLVED
+         *     * `FAILED` - FAILED
+         * @enum {string}
+         */
+        SystemReadinessResponseStateEnum: "READY" | "DEGRADED" | "HALTED" | "SQUARE_OFF_UNRESOLVED" | "FAILED";
         TelegramSettingsResponse: {
             channel_id_masked: string;
             channel_id_source: components["schemas"]["ProviderConfigurationSourceEnum"];
@@ -2617,6 +2705,25 @@ export interface operations {
             };
         };
     };
+    api_v1_config_signals_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignalListResponse"];
+                };
+            };
+        };
+    };
     api_v1_config_strategy_engine_fields_list: {
         parameters: {
             query?: never;
@@ -2989,6 +3096,25 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ApiError"];
+                };
+            };
+        };
+    };
+    api_v1_config_system_readiness_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemReadinessResponse"];
                 };
             };
         };

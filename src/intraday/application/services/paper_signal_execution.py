@@ -326,7 +326,13 @@ class PaperSignalExecutionService:
             instrument_id=instrument_id,
             direction=signal.direction,
             price=signal.price,
-            timeframe=str(signal.timeframe),
+            # `.value` ("5m"), not `str(signal.timeframe)` ("Timeframe.
+            # ONE_MINUTE") - `derive_signal_id()`'s own identity hash
+            # (lines above, unchanged) still uses `str()`; this is a
+            # SEPARATE, purely display/filter-facing field for the
+            # persisted `SignalRecord`, found necessary while wiring
+            # the Active Signal Monitor UI's timeframe filter.
+            timeframe=signal.timeframe.value,
             signal_timestamp=signal.timestamp,
             order_result=order_result,
         )

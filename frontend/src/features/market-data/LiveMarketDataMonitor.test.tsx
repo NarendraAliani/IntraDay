@@ -1,12 +1,18 @@
 // frontend/src/features/market-data/LiveMarketDataMonitor.test.tsx
 //
 // Checkpoint 23: real-boundary tests for the Live Market Data Monitor -
-// only `global.fetch` is mocked; the real generated contract types, the
-// real marketDataApi.ts client functions, and the real component are
-// exercised together (matching DhanSettingsCard.test.tsx's established
-// philosophy). Explicitly asserts NO trading control (Buy/Sell/Order/
-// Quantity/Stop Loss/Target/Position/P&L/Execute/Trade) is ever
-// rendered, per Checkpoint 23 §12.
+// only `global.fetch` is mocked; the real generated contract types and
+// the real component are exercised together.
+//
+// Checkpoint 62.x: rewritten for the Active Signal Monitor redesign.
+// The former blanket "no forbidden trading word anywhere in the page"
+// check is replaced with a narrower, more accurate one: this page now
+// legitimately DISCUSSES risk/order OUTCOMES (already-safely-gated
+// PAPER results) and explicitly explains which fields (stop loss,
+// targets) are NOT available - what must never appear is an
+// interactive ORDER-PLACEMENT CONTROL (a Buy/Sell/Execute button, a
+// quantity input, a submit-order form), which this test checks for
+// directly rather than banning the underlying words.
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -18,6 +24,9 @@ type SessionResponse = components["schemas"]["SessionResponse"];
 type MarketDataHealthResponse = components["schemas"]["MarketDataHealthResponse"];
 type QuoteResponse = components["schemas"]["QuoteResponse"];
 type BarResponse = components["schemas"]["BarResponse"];
+type SignalResponse = components["schemas"]["SignalResponse"];
+type SignalListResponse = components["schemas"]["SignalListResponse"];
+type StrategySummary = components["schemas"]["StrategySummary"];
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -85,158 +94,197 @@ const RELIANCE_BAR: BarResponse = {
   data_source: "dhan",
 };
 
-function stubEndpoints(
-  session: SessionResponse,
-  health: MarketDataHealthResponse,
-  quotes: QuoteResponse[],
-  bars: BarResponse[] = [],
-): ReturnType<typeof vi.fn> {
+const EMA_STRATEGY: StrategySummary = {
+  strategy_id: "ema_crossover",
+  display_name: "EMA Crossover",
+  specification_version: "v1",
+  code_version: "v1",
+  is_active: true,
+};
+
+const EMPTY_SIGNALS: SignalListResponse = { items: [], total_count: 0, page: 1, page_size: 10 };
+
+const RELIANCE_SIGNAL: SignalResponse = {
+  signal_id: "sig-1",
+  strategy_id: "ema_crossover",
+  instrument_id: "NSE:RELIANCE",
+  direction: "BULLISH",
+  price: "1234.5600",
+  timeframe: "5m",
+  signal_timestamp: "2026-08-14T06:00:00Z",
+  risk_status: "APPROVED",
+  risk_reason: "",
+  order_status: "FILLED",
+  created_at: "2026-08-14T06:00:00Z",
+};
+
+function stubEndpoints(options: {
+  session?: SessionResponse;
+  health?: MarketDataHealthResponse;
+  quotes?: QuoteResponse[];
+  bars?: BarResponse[];
+  strategies?: StrategySummary[];
+  signals?: SignalListResponse;
+}): ReturnType<typeof vi.fn> {
+  const {
+    session = SESSION,
+    health = HEALTH_DISCONNECTED,
+    quotes = [],
+    bars = [],
+    strategies = [EMA_STRATEGY],
+    signals = EMPTY_SIGNALS,
+  } = options;
   const fetchMock = vi.fn((input: RequestInfo | URL) => {
     const url = String(input);
     if (url.includes("/session/")) return Promise.resolve(jsonResponse(session));
     if (url.includes("/health/")) return Promise.resolve(jsonResponse(health));
     if (url.includes("/bars/")) return Promise.resolve(jsonResponse(bars));
     if (url.includes("/quotes/")) return Promise.resolve(jsonResponse(quotes));
+    if (url.includes("/strategy-engine/strategies/")) return Promise.resolve(jsonResponse(strategies));
+    if (url.includes("/signals/")) return Promise.resolve(jsonResponse(signals));
     return Promise.resolve(jsonResponse(health));
   });
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 }
 
-describe("LiveMarketDataMonitor", () => {
-  it("shows a loading state before the responses resolve", () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(() => new Promise<Response>(() => {})),
-    );
+describe("LiveMarketDataMonitor (Active Signal Monitor)", () => {
+  it("shows an honest empty state naming the current scan configuration when no signals exist", async () => {
+    stubEndpoints({});
 
     renderWithAuth(<LiveMarketDataMonitor />);
 
-    expect(screen.getByRole("status")).toHaveTextContent(/loading/i);
-  });
-
-  it("renders session status, health, and an empty instrument table before any refresh", async () => {
-    stubEndpoints(SESSION, HEALTH_DISCONNECTED, []);
-
-    renderWithAuth(<LiveMarketDataMonitor />);
-
-    await waitFor(() => expect(screen.getByText("Market Open")).toBeInTheDocument());
-    expect(screen.getByText(/disconnected/i)).toBeInTheDocument();
-    expect(screen.getByText(/no quotes observed yet/i)).toBeInTheDocument();
-  });
-
-  it("renders observed quotes in the instrument table", async () => {
-    stubEndpoints(SESSION, HEALTH_CONNECTED, [RELIANCE_QUOTE]);
-
-    renderWithAuth(<LiveMarketDataMonitor />);
-
-    await waitFor(() => expect(screen.getByText("RELIANCE")).toBeInTheDocument());
-    expect(screen.getByText("₹1234.5600")).toBeInTheDocument();
-    expect(screen.getByText("● Fresh")).toBeInTheDocument();
-  });
-
-  it("renders an empty state for bars before any aggregation has run", async () => {
-    stubEndpoints(SESSION, HEALTH_DISCONNECTED, [], []);
-
-    renderWithAuth(<LiveMarketDataMonitor />);
-
-    await waitFor(() => expect(screen.getByText(/no bars aggregated yet/i)).toBeInTheDocument());
-  });
-
-  it("renders recent bars with explicit FORMING/CLOSED status, never a fabricated volume", async () => {
-    stubEndpoints(SESSION, HEALTH_CONNECTED, [RELIANCE_QUOTE], [RELIANCE_BAR]);
-
-    renderWithAuth(<LiveMarketDataMonitor />);
-
-    await waitFor(() => expect(screen.getByText("● Closed")).toBeInTheDocument());
-    expect(screen.getByText("₹1230.0000")).toBeInTheDocument();
-    expect(screen.getByText("₹1236.0000")).toBeInTheDocument();
-    // Volume is never fabricated - rendered as an explicit placeholder, not a number.
-    const volumeCells = screen.getAllByText("—");
-    expect(volumeCells.length).toBeGreaterThan(0);
-  });
-
-  it("renders a FORMING bar with a distinct badge from CLOSED", async () => {
-    const formingBar: BarResponse = { ...RELIANCE_BAR, status: "FORMING" };
-    stubEndpoints(SESSION, HEALTH_CONNECTED, [RELIANCE_QUOTE], [formingBar]);
-
-    renderWithAuth(<LiveMarketDataMonitor />);
-
-    await waitFor(() => expect(screen.getByText("◐ Forming")).toBeInTheDocument());
-    expect(screen.queryByText("● Closed")).not.toBeInTheDocument();
-  });
-
-  it("hides the Refresh button for a reader without operator capability", async () => {
-    stubEndpoints(SESSION, HEALTH_DISCONNECTED, []);
-
-    renderWithAuth(<LiveMarketDataMonitor />, {
-      state: { status: "authenticated", username: "reader", capabilities: ["configuration.read"] },
-    });
-
-    await waitFor(() => expect(screen.getByText(/read-only access/i)).toBeInTheDocument());
-    expect(screen.queryByRole("button", { name: /refresh quotes/i })).not.toBeInTheDocument();
-  });
-
-  it("shows the Refresh button for an operator and triggers a refresh on click", async () => {
-    const fetchMock = stubEndpoints(SESSION, HEALTH_DISCONNECTED, []);
-    fetchMock.mockImplementation((input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes("/refresh/")) return Promise.resolve(jsonResponse(HEALTH_CONNECTED));
-      if (url.includes("/session/")) return Promise.resolve(jsonResponse(SESSION));
-      if (url.includes("/health/")) return Promise.resolve(jsonResponse(HEALTH_CONNECTED));
-      if (url.includes("/bars/")) return Promise.resolve(jsonResponse([RELIANCE_BAR]));
-      if (url.includes("/quotes/")) return Promise.resolve(jsonResponse([RELIANCE_QUOTE]));
-      return Promise.resolve(jsonResponse(HEALTH_CONNECTED));
-    });
-
-    renderWithAuth(<LiveMarketDataMonitor />);
-
-    await waitFor(() => expect(screen.getByRole("button", { name: /refresh quotes/i })).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("button", { name: /refresh quotes/i }));
-
-    await waitFor(() => expect(screen.getByText(/^● Connected$/)).toBeInTheDocument());
-    const refreshCalled = fetchMock.mock.calls.some((call) => String(call[0]).includes("/refresh/"));
-    expect(refreshCalled).toBe(true);
-  });
-
-  it("renders a safe error message when loading fails, never raw backend internals", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(() =>
-        Promise.resolve(
-          jsonResponse({ error_code: "internal_error", message: "Unable to load market data." }, 500),
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          /No active signals\. Timeframe: 5m\. Universe: All Stocks\./i,
         ),
-      ),
+      ).toBeInTheDocument();
+    });
+  });
+
+  it("renders a real qualifying signal in the active signal table, never a market-data row", async () => {
+    stubEndpoints({
+      health: HEALTH_CONNECTED,
+      quotes: [RELIANCE_QUOTE],
+      signals: { items: [RELIANCE_SIGNAL], total_count: 1, page: 1, page_size: 10 },
+    });
+
+    renderWithAuth(<LiveMarketDataMonitor />);
+
+    await waitFor(() => {
+      expect(screen.getByText("ema_crossover")).toBeInTheDocument();
+      expect(screen.getByText("RELIANCE")).toBeInTheDocument();
+      expect(screen.getByText("BULLISH")).toBeInTheDocument();
+      expect(screen.getByText("APPROVED")).toBeInTheDocument();
+    });
+  });
+
+  it("shows real strategy names from the registry, never the old mock names", async () => {
+    stubEndpoints({});
+
+    renderWithAuth(<LiveMarketDataMonitor />);
+
+    await waitFor(() => expect(screen.getByText("EMA Crossover")).toBeInTheDocument());
+    expect(screen.queryByText(/trend follower/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/breakout hunter/i)).not.toBeInTheDocument();
+  });
+
+  it("shows signal details with an honest 'not available' note for SL/targets/explanation", async () => {
+    stubEndpoints({
+      signals: { items: [RELIANCE_SIGNAL], total_count: 1, page: 1, page_size: 10 },
+    });
+
+    renderWithAuth(<LiveMarketDataMonitor />);
+
+    const detailsButton = await waitFor(
+      () => {
+        const button = screen.getByRole("button", { name: /details/i });
+        expect(button).toBeInTheDocument();
+        return button;
+      },
+      { timeout: 3000 },
     );
+    fireEvent.click(detailsButton);
+
+    await waitFor(() => {
+      expect(screen.getByText("Signal Details")).toBeInTheDocument();
+      const unavailableNotes = screen.getAllByText(/not available from the current signal contract/i);
+      expect(unavailableNotes.length).toBeGreaterThanOrEqual(2); // SL/targets AND explanation
+    });
+  });
+
+  it("keeps market-data diagnostics collapsed by default, expandable on demand", async () => {
+    stubEndpoints({ health: HEALTH_CONNECTED, quotes: [RELIANCE_QUOTE], bars: [RELIANCE_BAR] });
+
+    renderWithAuth(<LiveMarketDataMonitor />);
+
+    await waitFor(() => expect(screen.getByText(/market data health/i)).toBeInTheDocument());
+    expect(screen.queryByText("Market Session")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /market data health/i }));
+
+    await waitFor(() => expect(screen.getByText("Market Session")).toBeInTheDocument());
+    expect(screen.getAllByText("RELIANCE").length).toBeGreaterThan(0);
+  });
+
+  it("never renders an order-placement control (button, quantity input, or submit form)", async () => {
+    stubEndpoints({
+      health: HEALTH_CONNECTED,
+      quotes: [RELIANCE_QUOTE],
+      signals: { items: [RELIANCE_SIGNAL], total_count: 1, page: 1, page_size: 10 },
+    });
+
+    renderWithAuth(<LiveMarketDataMonitor />);
+
+    await waitFor(() => expect(screen.getByText("ema_crossover")).toBeInTheDocument());
+
+    const forbiddenButtonNames = [/^buy$/i, /^sell$/i, /^execute$/i, /place order/i, /submit order/i];
+    for (const pattern of forbiddenButtonNames) {
+      expect(screen.queryByRole("button", { name: pattern })).not.toBeInTheDocument();
+    }
+    expect(screen.queryByLabelText(/quantity/i)).not.toBeInTheDocument();
+    expect(document.querySelector('input[type="number"]')).not.toBeInTheDocument();
+  });
+
+  it("renders a safe error message when loading signals fails, never raw backend internals", async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/signals/")) {
+        return Promise.resolve(
+          jsonResponse({ error_code: "internal_error", message: "Unable to load signals." }, 500),
+        );
+      }
+      if (url.includes("/session/")) return Promise.resolve(jsonResponse(SESSION));
+      if (url.includes("/health/")) return Promise.resolve(jsonResponse(HEALTH_DISCONNECTED));
+      if (url.includes("/bars/")) return Promise.resolve(jsonResponse([]));
+      if (url.includes("/quotes/")) return Promise.resolve(jsonResponse([]));
+      if (url.includes("/strategy-engine/strategies/")) return Promise.resolve(jsonResponse([EMA_STRATEGY]));
+      return Promise.resolve(jsonResponse(HEALTH_DISCONNECTED));
+    });
+    vi.stubGlobal("fetch", fetchMock);
 
     renderWithAuth(<LiveMarketDataMonitor />);
 
     await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
-    expect(screen.getByRole("alert")).toHaveTextContent("Unable to load market data.");
+    expect(screen.getByRole("alert")).toHaveTextContent("Unable to load signals.");
   });
 
-  it("never renders any trading control or field (Checkpoint 23 §12)", async () => {
-    stubEndpoints(SESSION, HEALTH_CONNECTED, [RELIANCE_QUOTE], [RELIANCE_BAR]);
+  it("changing the timeframe control re-requests signals with the new timeframe (real wiring, not cosmetic)", async () => {
+    const fetchMock = stubEndpoints({});
 
-    const { container } = renderWithAuth(<LiveMarketDataMonitor />);
+    renderWithAuth(<LiveMarketDataMonitor />);
 
-    await waitFor(() => expect(screen.getAllByText("RELIANCE").length).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.getByText(/no active signals/i)).toBeInTheDocument());
+    fetchMock.mockClear();
 
-    const forbiddenPatterns = [
-      /\bbuy\b/i,
-      /\bsell\b/i,
-      /\border\b/i,
-      /quantity/i,
-      /stop loss/i,
-      /\btarget\b/i,
-      /\bposition\b/i,
-      /p&l/i,
-      /\bexecute\b/i,
-      /\btrade\b/i,
-    ];
-    const text = container.textContent ?? "";
-    for (const pattern of forbiddenPatterns) {
-      expect(text).not.toMatch(pattern);
-    }
+    fireEvent.change(screen.getByLabelText(/timeframe/i), { target: { value: "15m" } });
+
+    await waitFor(() => {
+      const calledWith15m = fetchMock.mock.calls.some((call) =>
+        String(call[0]).includes("timeframe=15m"),
+      );
+      expect(calledWith15m).toBe(true);
+    });
   });
 });
