@@ -2,12 +2,13 @@
 //
 // Checkpoint 63.x follow-up: proves the shared instrument picker only
 // ever offers real, backend-sourced instruments (never free text),
-// displays real company/display names (never a bare instrument id),
-// "Select All" selects every real exchange instrument (not just
-// observed ones) when the exchange master list is available, degrades
-// honestly when it is not, and discloses that index (NIFTY/SENSEX)
-// selection is unavailable rather than either hiding it or fabricating
-// constituent data.
+// shows ONLY the real company/display name (never a bare or
+// parenthetical instrument id), supports real-time client-side search,
+// "Select All" selects every real (or currently-filtered) exchange
+// instrument (not just observed ones) when the exchange master list is
+// available, degrades honestly when it is not, and discloses that
+// index (NIFTY/SENSEX) selection is unavailable rather than either
+// hiding it or fabricating constituent data.
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -74,15 +75,28 @@ const RELIANCE_QUOTE = {
 };
 
 describe("InstrumentPickerSingle", () => {
-  it("shows the real company name, never a bare instrument id, and never a free-text input", async () => {
+  it("shows only the real company name - never a bare/parenthetical instrument id, never free text", async () => {
     stub({ nseInstruments: [RELIANCE] });
     renderWithAuth(<InstrumentPickerSingle id="test-picker" value="" onChange={() => {}} />);
 
-    await waitFor(() =>
-      expect(screen.getByText("Reliance Industries (NSE:RELIANCE)")).toBeInTheDocument(),
-    );
-    expect(document.querySelector('input[type="text"]')).toBeNull();
+    await waitFor(() => expect(screen.getByText("Reliance Industries")).toBeInTheDocument());
+    expect(screen.queryByText(/NSE:RELIANCE/)).not.toBeInTheDocument();
+    expect(document.querySelector('input[type="text"]#test-picker')).toBeNull();
     expect(screen.getByRole("combobox", { name: "Instrument" }).tagName).toBe("SELECT");
+  });
+
+  it("filters options in real time as the operator types a search query", async () => {
+    stub({ nseInstruments: [RELIANCE, TCS, INFY] });
+    renderWithAuth(<InstrumentPickerSingle id="test-picker" value="" onChange={() => {}} />);
+
+    await waitFor(() => expect(screen.getByText("Infosys")).toBeInTheDocument());
+    expect(screen.getByText("Reliance Industries")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Search stocks"), { target: { value: "info" } });
+
+    expect(screen.getByText("Infosys")).toBeInTheDocument();
+    expect(screen.queryByText("Reliance Industries")).not.toBeInTheDocument();
+    expect(screen.queryByText("Tata Consultancy Services")).not.toBeInTheDocument();
   });
 
   it("discloses that index (NIFTY/SENSEX) selection is unavailable rather than fabricating it", async () => {
@@ -104,22 +118,35 @@ describe("InstrumentPickerSingle", () => {
       />,
     );
 
-    await waitFor(() => expect(screen.getByText("NSE:FIXTURE01 (NSE:FIXTURE01)")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("NSE:FIXTURE01")).toBeInTheDocument());
   });
 });
 
 describe("InstrumentPickerMulti", () => {
-  it("selecting a checkbox calls onChange with the real instrument id (labeled by its real name)", async () => {
+  it("selecting a checkbox calls onChange with the real instrument id, labeled only by its real name", async () => {
     stub({ quotes: [RELIANCE_QUOTE], nseInstruments: [RELIANCE] });
     const onChange = vi.fn();
     renderWithAuth(<InstrumentPickerMulti idPrefix="test-multi" value={[]} onChange={onChange} />);
 
-    await waitFor(() =>
-      expect(screen.getByText("Reliance Industries (NSE:RELIANCE)")).toBeInTheDocument(),
-    );
-    fireEvent.click(screen.getByRole("checkbox", { name: "Reliance Industries (NSE:RELIANCE)" }));
+    await waitFor(() => expect(screen.getByText("Reliance Industries")).toBeInTheDocument());
+    expect(screen.queryByText(/NSE:RELIANCE/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Reliance Industries" }));
 
     expect(onChange).toHaveBeenCalledWith(["NSE:RELIANCE"]);
+  });
+
+  it("filters the checklist in real time as the operator types a search query", async () => {
+    stub({ nseInstruments: [RELIANCE, TCS, INFY, HDFCBANK] });
+    renderWithAuth(<InstrumentPickerMulti idPrefix="test-multi" value={[]} onChange={() => {}} />);
+
+    await waitFor(() => expect(screen.getByText("HDFC Bank")).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText("Search stocks"), { target: { value: "tata" } });
+
+    expect(screen.getByText("Tata Consultancy Services")).toBeInTheDocument();
+    expect(screen.queryByText("HDFC Bank")).not.toBeInTheDocument();
+    expect(screen.queryByText("Reliance Industries")).not.toBeInTheDocument();
+    expect(screen.getByText("1 match")).toBeInTheDocument();
   });
 
   it('"Select All" selects every real exchange instrument, not only ones with a live quote', async () => {
@@ -130,14 +157,24 @@ describe("InstrumentPickerMulti", () => {
     const onChange = vi.fn();
     renderWithAuth(<InstrumentPickerMulti idPrefix="test-multi" value={[]} onChange={onChange} />);
 
-    await waitFor(() =>
-      expect(screen.getByText("Tata Consultancy Services (NSE:TCS)")).toBeInTheDocument(),
-    );
+    await waitFor(() => expect(screen.getByText("Tata Consultancy Services")).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "Select All" }));
 
     expect(onChange).toHaveBeenCalledWith(
       expect.arrayContaining(["NSE:RELIANCE", "NSE:TCS", "NSE:INFY", "NSE:HDFCBANK"]),
     );
+  });
+
+  it('"Select All" only selects the currently search-filtered instruments when a query is active', async () => {
+    stub({ nseInstruments: [RELIANCE, TCS, INFY, HDFCBANK] });
+    const onChange = vi.fn();
+    renderWithAuth(<InstrumentPickerMulti idPrefix="test-multi" value={[]} onChange={onChange} />);
+
+    await waitFor(() => expect(screen.getByText("HDFC Bank")).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText("Search stocks"), { target: { value: "bank" } });
+    fireEvent.click(screen.getByRole("button", { name: "Select All (Matching)" }));
+
+    expect(onChange).toHaveBeenCalledWith(["NSE:HDFCBANK"]);
   });
 
   it("degrades honestly to observed-only selection when the exchange master list is unavailable", async () => {

@@ -435,9 +435,9 @@ describe("BacktestingWorkbenchPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Configure" }));
     await waitFor(() => expect(screen.getByLabelText(/Fast EMA Lookback/)).toBeInTheDocument());
     await waitFor(() =>
-      expect(screen.getAllByText("RELIANCE (NSE:RELIANCE)").length).toBeGreaterThan(0),
+      expect(screen.getAllByText("RELIANCE").length).toBeGreaterThan(0),
     );
-    fireEvent.click(screen.getAllByRole("checkbox", { name: "RELIANCE (NSE:RELIANCE)" })[0]);
+    fireEvent.click(screen.getAllByRole("checkbox", { name: "RELIANCE" })[0]);
 
     fireEvent.click(screen.getByRole("button", { name: "Check Data Readiness" }));
 
@@ -510,9 +510,9 @@ describe("BacktestingWorkbenchPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Configure" }));
     await waitFor(() => expect(screen.getByLabelText(/Fast EMA Lookback/)).toBeInTheDocument());
     await waitFor(() =>
-      expect(screen.getAllByText("RELIANCE (NSE:RELIANCE)").length).toBeGreaterThan(0),
+      expect(screen.getAllByText("RELIANCE").length).toBeGreaterThan(0),
     );
-    fireEvent.click(screen.getAllByRole("checkbox", { name: "RELIANCE (NSE:RELIANCE)" })[0]);
+    fireEvent.click(screen.getAllByRole("checkbox", { name: "RELIANCE" })[0]);
 
     fireEvent.click(screen.getByRole("button", { name: "Prepare Data & Start Backtest" }));
 

@@ -90,14 +90,17 @@ def _orchestrator(provider: object) -> HistoricalBacktestRunOrchestrator:
     )
 
 
-def _create_run(run_id: str, *, start: date, end: date) -> None:
+def _create_run(
+    run_id: str, *, start: date, end: date, instrument_ids: list[str] | None = None
+) -> None:
+    instrument_ids = instrument_ids if instrument_ids is not None else ["NSE:RELIANCE"]
     DjangoBacktestRunRepository().create(
         run_id,
         created_by="test-operator",
         start_date=start,
         end_date=end,
         timeframe="5m",
-        instrument_ids=["NSE:RELIANCE"],
+        instrument_ids=instrument_ids,
         strategy_id="ema_crossover",
         specification_version="v1",
         code_version="v1",
@@ -109,7 +112,7 @@ def _create_run(run_id: str, *, start: date, end: date) -> None:
         position_size_value=10,
         brokerage_percent=0,
         slippage_percent=0,
-        total_instruments=1,
+        total_instruments=len(instrument_ids),
     )
 
 
@@ -179,3 +182,34 @@ def test_full_sequence_api_then_db_then_scanner_survives_api_being_disabled_afte
     assert second_snapshot.api_requests == 0
     assert disabled_provider.fetch_call_count == 0
     assert not second_snapshot.failed_instruments
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_one_unexpectedly_broken_instrument_does_not_abort_the_whole_run() -> None:
+    """A real bug found from a live report: an UNEXPECTED exception for
+    one instrument (not one of the two narrowly-caught error types)
+    used to propagate out of run() entirely, aborting every other
+    instrument in the universe - and, one layer up, turning into an
+    unhandled 500 for the whole HTTP request. A malformed instrument id
+    (an exchange this platform doesn't recognize) is used here as a
+    concrete way to trigger a genuinely unexpected exception mid-loop
+    without mocking internals."""
+    start, end = date(2026, 1, 7), date(2026, 1, 7)  # one trading Wednesday
+    run_id = "mixed-run"
+    _create_run(
+        run_id, start=start, end=end, instrument_ids=["NSE:RELIANCE", "XYZ:NOT-A-REAL-EXCHANGE"]
+    )
+
+    orchestrator = _orchestrator(SyntheticHistoricalBarProvider(is_available=True))
+    orchestrator.run(run_id)  # must not raise
+
+    snapshot = DjangoBacktestRunRepository().get(run_id)
+    assert snapshot is not None
+    assert snapshot.status == "PARTIAL"  # one succeeded, one failed - disclosed, not hidden
+    assert snapshot.completed_instruments == 2
+    assert len(snapshot.failed_instruments) == 1
+    assert snapshot.failed_instruments[0]["instrument_id"] == "XYZ:NOT-A-REAL-EXCHANGE"
+    # the OTHER instrument still completed successfully despite its neighbor's failure
+    assert "NSE:RELIANCE" in snapshot.result_backtest_ids
+    assert snapshot.scanned_bars > 0

@@ -19,6 +19,13 @@
 //     than showing nothing. Observed-only entries have no real display
 //     name available, so they fall back to showing their bare symbol.
 //
+// Shows ONLY the company name (never a bare/parenthetical instrument
+// id) - the underlying instrument id is still what's actually
+// submitted as the value, just not shown. Includes a real-time,
+// client-side search filter (over the already-fetched exchange list -
+// no network round-trip per keystroke) since an exchange can carry
+// thousands of instruments.
+//
 // A REAL BUG this session found and fixed: the first version of this
 // picker showed Dhan's own dummy API-testing scrips ("011NSETEST",
 // "0ABCL31" bonds) instead of real stocks - traced by actually
@@ -40,7 +47,7 @@
 // disabled, with an explicit label explaining why - never silently
 // omitted (which would look like an oversight) and never filled with
 // unverified data (which would be a fabrication).
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { getCurrentQuotes, listInstruments } from "../api/marketDataApi";
 
@@ -128,6 +135,15 @@ function useInstrumentUniverse(exchange: ExchangeFilter): UniverseState {
   return state;
 }
 
+function matchesSearch(entry: UniverseEntry, query: string): boolean {
+  if (!query) return true;
+  const needle = query.trim().toLowerCase();
+  return (
+    entry.displayName.toLowerCase().includes(needle) ||
+    entry.instrumentId.toLowerCase().includes(needle)
+  );
+}
+
 /** The "pick an index" affordance every instrument picker on this page
  * shows, disabled, with the honest reason why - see module docstring. */
 function IndexUnavailableNotice(): JSX.Element {
@@ -161,12 +177,27 @@ function ExchangeSelect(props: {
   );
 }
 
-function optionLabel(entry: UniverseEntry): string {
-  // "Reliance Industries (NSE:RELIANCE)" - the real company name up
-  // front (what the operator recognizes), the exact instrument id in
-  // parentheses (what actually gets submitted) so it's never ambiguous
-  // which underlying instrument a name maps to.
-  return `${entry.displayName} (${entry.instrumentId})`;
+function SearchInput(props: {
+  id: string;
+  value: string;
+  onChange: (query: string) => void;
+  resultCount: number;
+}): JSX.Element {
+  return (
+    <div className="instrument-picker__row">
+      <label htmlFor={props.id}>Search stocks</label>
+      <input
+        id={props.id}
+        type="text"
+        placeholder="Type a company name or symbol…"
+        value={props.value}
+        onChange={(e) => props.onChange(e.target.value)}
+      />
+      <span className="instrument-picker__result-count">
+        {props.resultCount} match{props.resultCount === 1 ? "" : "es"}
+      </span>
+    </div>
+  );
 }
 
 export interface InstrumentPickerSingleProps {
@@ -183,21 +214,37 @@ export interface InstrumentPickerSingleProps {
 }
 
 /** A single-instrument picker (e.g. the Workbench's single-instrument
- * Run Backtest form) - a real <select> over real instruments (shown by
- * company name), never a free-text field. */
+ * Run Backtest form) - a real <select>, filterable by a live search
+ * box, over real instruments shown by company name only, never a
+ * free-text field. */
 export function InstrumentPickerSingle(props: InstrumentPickerSingleProps): JSX.Element {
   const [exchange, setExchange] = useState<ExchangeFilter>("ALL");
+  const [query, setQuery] = useState("");
   const { entries, loading, error } = useInstrumentUniverse(exchange);
-  const byId = new Map(entries.map((e) => [e.instrumentId, e]));
-  for (const extra of props.extraOptions ?? []) {
-    if (!byId.has(extra)) byId.set(extra, { instrumentId: extra, displayName: extra });
-  }
-  const combined = Array.from(byId.values()).sort((a, b) => a.displayName.localeCompare(b.displayName));
+
+  const combined = useMemo(() => {
+    const byId = new Map(entries.map((e) => [e.instrumentId, e]));
+    for (const extra of props.extraOptions ?? []) {
+      if (!byId.has(extra)) byId.set(extra, { instrumentId: extra, displayName: extra });
+    }
+    return Array.from(byId.values()).sort((a, b) => a.displayName.localeCompare(b.displayName));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entries]);
+
+  const filtered = useMemo(() => combined.filter((e) => matchesSearch(e, query)), [combined, query]);
 
   return (
     <div className="instrument-picker">
       <ExchangeSelect id={`${props.id}-exchange`} value={exchange} onChange={setExchange} />
       <IndexUnavailableNotice />
+      {!loading && combined.length > 0 && (
+        <SearchInput
+          id={`${props.id}-search`}
+          value={query}
+          onChange={setQuery}
+          resultCount={filtered.length}
+        />
+      )}
       <label htmlFor={props.id}>{props.label ?? "Instrument"}</label>
       {loading && <p className="strategy-config-page__help-text">Loading instruments…</p>}
       {error && <p className="strategy-config-page__help-text">{error}</p>}
@@ -211,9 +258,9 @@ export function InstrumentPickerSingle(props: InstrumentPickerSingleProps): JSX.
           <option value="" disabled>
             Select a stock…
           </option>
-          {combined.map((entry) => (
+          {filtered.map((entry) => (
             <option key={entry.instrumentId} value={entry.instrumentId}>
-              {optionLabel(entry)}
+              {entry.displayName}
             </option>
           ))}
         </select>
@@ -230,14 +277,17 @@ export interface InstrumentPickerMultiProps {
 }
 
 /** A multi-instrument picker (e.g. the DB-first historical run's
- * universe, or a watchlist) - real checkboxes over real instruments
- * (shown by company name), with a select-all/clear-all pair, never
- * comma-separated free text. "Select All" selects every instrument on
- * the chosen exchange when the real exchange master list is
- * available. */
+ * universe, or a watchlist) - real checkboxes, filterable by a live
+ * search box, over real instruments shown by company name only, with a
+ * select-all/clear-all pair, never comma-separated free text.
+ * "Select All" selects every CURRENTLY VISIBLE (i.e. matching the
+ * active search) instrument - every instrument on the exchange when
+ * there's no search query. */
 export function InstrumentPickerMulti(props: InstrumentPickerMultiProps): JSX.Element {
   const [exchange, setExchange] = useState<ExchangeFilter>("ALL");
+  const [query, setQuery] = useState("");
   const { entries, loading, error, isFullExchangeList } = useInstrumentUniverse(exchange);
+  const filtered = useMemo(() => entries.filter((e) => matchesSearch(e, query)), [entries, query]);
   const selected = new Set(props.value);
 
   function toggle(instrumentId: string): void {
@@ -251,6 +301,14 @@ export function InstrumentPickerMulti(props: InstrumentPickerMultiProps): JSX.El
     <div className="instrument-picker">
       <ExchangeSelect id={`${props.idPrefix}-exchange`} value={exchange} onChange={setExchange} />
       <IndexUnavailableNotice />
+      {!loading && entries.length > 0 && (
+        <SearchInput
+          id={`${props.idPrefix}-search`}
+          value={query}
+          onChange={setQuery}
+          resultCount={filtered.length}
+        />
+      )}
       <p>{props.label ?? "Universe"}</p>
       {loading && <p className="strategy-config-page__help-text">Loading instruments…</p>}
       {error && <p className="strategy-config-page__help-text">{error}</p>}
@@ -267,15 +325,15 @@ export function InstrumentPickerMulti(props: InstrumentPickerMultiProps): JSX.El
             </p>
           )}
           <div className="instrument-picker__actions">
-            <button type="button" onClick={() => props.onChange(entries.map((e) => e.instrumentId))}>
-              Select All
+            <button type="button" onClick={() => props.onChange(filtered.map((e) => e.instrumentId))}>
+              Select All{query ? " (Matching)" : ""}
             </button>
             <button type="button" onClick={() => props.onChange([])}>
               Clear
             </button>
           </div>
           <ul className="instrument-picker__checklist">
-            {entries.map((entry) => (
+            {filtered.map((entry) => (
               <li key={entry.instrumentId}>
                 <label>
                   <input
@@ -283,7 +341,7 @@ export function InstrumentPickerMulti(props: InstrumentPickerMultiProps): JSX.El
                     checked={selected.has(entry.instrumentId)}
                     onChange={() => toggle(entry.instrumentId)}
                   />
-                  {optionLabel(entry)}
+                  {entry.displayName}
                 </label>
               </li>
             ))}

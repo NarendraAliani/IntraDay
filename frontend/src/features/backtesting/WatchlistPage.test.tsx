@@ -73,7 +73,7 @@ describe("WatchlistPage", () => {
     await waitFor(() => expect(screen.getByText(/No watchlists yet/)).toBeInTheDocument());
 
     fireEvent.change(screen.getByLabelText("Watchlist name"), { target: { value: "new-list" } });
-    await waitFor(() => expect(screen.getByText("FIXTURE01 (NSE:FIXTURE01)")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("FIXTURE01")).toBeInTheDocument());
     fireEvent.click(screen.getByRole("checkbox"));
     fireEvent.click(screen.getByRole("button", { name: "Save Watchlist" }));
 

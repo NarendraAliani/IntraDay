@@ -22,6 +22,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 
+import structlog
 from celery import shared_task
 
 from intraday.application.services.backtesting import BacktestingService
@@ -53,6 +54,8 @@ from intraday.infrastructure.persistence.historical_bar_repository import (
 from intraday.infrastructure.persistence.repositories import DjangoBacktestResultRepository
 from intraday.trading_engine.strategy_execution.contracts import StrategyConfigurationValues
 from intraday.trading_engine.strategy_execution.registry import build_default_registry
+
+logger = structlog.get_logger(__name__)
 
 
 @shared_task(name="intraday.infrastructure.api.active_loop_tick")  # type: ignore[untyped-decorator]
@@ -208,6 +211,19 @@ def dispatch_historical_backtest_run(run_id: str) -> None:
     up) exactly like `active_loop_tick`/`market_data_ingestion_tick`
     already do in production.
 
+    A REAL BUG this fixed: `run_historical_backtest_run_task` re-raises
+    after recording a FAILED `BacktestRun` (correct for a real Celery
+    worker - it needs the exception for its own retry/monitoring), but
+    when this function's own broker-unavailable fallback below calls
+    that task SYNCHRONOUSLY, that re-raise used to propagate all the
+    way up through the view with no handler, producing an unhandled
+    Django 500 instead of the clean `202 {run_id}` response the caller
+    already has every reason to expect (the run row was created
+    successfully; its own FAILED status is what polling exists to
+    reveal). Both call paths below now swallow the exception here -
+    once it's already durably recorded on the `BacktestRun` row, this
+    function's job (get the work started, one way or another) is done.
+
     HONEST FALLBACK: this project has no Celery worker process running
     as part of its normal development flow (no `REDIS_URL` is set by
     default - `settings/base.py`), so a bare `.delay()` call raises a
@@ -224,4 +240,11 @@ def dispatch_historical_backtest_run(run_id: str) -> None:
     try:
         run_historical_backtest_run_task.delay(run_id)
     except Exception:  # noqa: BLE001 - any broker-dispatch failure, not just one exception type
-        run_historical_backtest_run_task(run_id)
+        try:
+            run_historical_backtest_run_task(run_id)
+        except Exception as inner_exc:  # noqa: BLE001 - already recorded as FAILED on the BacktestRun row
+            logger.warning(
+                "historical_backtest_run.synchronous_fallback_failed",
+                run_id=run_id,
+                error=repr(inner_exc),
+            )

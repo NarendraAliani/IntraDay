@@ -33,6 +33,20 @@
 # constructed with differs (DB-backed here vs. the fixture repository
 # elsewhere). Strategy lookup, feature computation, and `run_backtest()`
 # are the exact same code path as every other backtest in this project.
+#
+# A REAL BUG found and fixed from a live report: the per-instrument
+# loop only caught two NARROW, expected exception types around the
+# scan step. Any OTHER unexpected exception for one instrument (a data
+# edge case, a transient error) used to abort the ENTIRE multi-
+# instrument run - the opposite of Phase 6's "one bad instrument must
+# not silently invalidate the whole result" requirement, and taken
+# further: it turned into an unhandled 500 all the way up through the
+# view (see `infrastructure.api.tasks.dispatch_historical_backtest_run`'s
+# own fix for the other half of that bug). The whole per-instrument body
+# is now wrapped in one broad `except Exception` as a final safety net,
+# on top of (not replacing) the existing narrower, more specific catches
+# below - a genuinely broken instrument is now recorded as a failure and
+# the run continues with the rest of the universe.
 from __future__ import annotations
 
 import datetime as _dt
@@ -93,97 +107,140 @@ class HistoricalBacktestRunOrchestrator:
 
         cache_hits = 0
         cache_misses = 0
-        api_requests = 0
         total_bars = 0
         scanned_bars = 0
         signals_generated = 0
+        api_requests = 0
         failed_instruments: list[dict[str, str]] = []
         result_backtest_ids: dict[str, str] = {}
         completed = 0
 
         for raw_instrument_id in snapshot.instrument_ids:
-            instrument_id = _instrument_id_from_str(raw_instrument_id)
-            self.run_repository.update(
-                run_id,
-                current_instrument=raw_instrument_id,
-                current_strategy=snapshot.strategy_id,
-                phase="ANALYZING_DATA_COVERAGE",
-                message=f"Checking database coverage for {raw_instrument_id}",
-            )
-
-            outcome = self.preparation.prepare(instrument_id, timeframe, start, end)
-            cache_hits += outcome.cache_hits
-            api_requests += outcome.api_requests
-            if outcome.bars_fetched:
-                cache_misses += outcome.bars_fetched
+            try:
+                instrument_id = _instrument_id_from_str(raw_instrument_id)
                 self.run_repository.update(
                     run_id,
-                    phase="FETCHING_HISTORICAL_DATA",
-                    message=f"Fetched {outcome.bars_fetched} missing bars for {raw_instrument_id}",
+                    current_instrument=raw_instrument_id,
+                    current_strategy=snapshot.strategy_id,
+                    phase="ANALYZING_DATA_COVERAGE",
+                    message=f"Checking database coverage for {raw_instrument_id}",
                 )
-                self.run_repository.update(run_id, phase="VALIDATING_DATA")
+
+                outcome = self.preparation.prepare(instrument_id, timeframe, start, end)
+                cache_hits += outcome.cache_hits
+                api_requests += outcome.api_requests
+                if outcome.bars_fetched:
+                    cache_misses += outcome.bars_fetched
+                    self.run_repository.update(
+                        run_id,
+                        phase="FETCHING_HISTORICAL_DATA",
+                        message=(
+                            f"Fetched {outcome.bars_fetched} missing bars for {raw_instrument_id}"
+                        ),
+                    )
+                    self.run_repository.update(run_id, phase="VALIDATING_DATA")
+                    self.run_repository.update(
+                        run_id,
+                        phase="PERSISTING_DATA",
+                        message=f"Persisted {outcome.bars_persisted} bars for {raw_instrument_id}",
+                    )
+
                 self.run_repository.update(
                     run_id,
-                    phase="PERSISTING_DATA",
-                    message=f"Persisted {outcome.bars_persisted} bars for {raw_instrument_id}",
+                    cache_hits=cache_hits,
+                    cache_misses=cache_misses,
+                    api_requests=api_requests,
                 )
 
-            self.run_repository.update(
-                run_id, cache_hits=cache_hits, cache_misses=cache_misses, api_requests=api_requests
-            )
+                if outcome.status in (PreparationStatus.FAILED, PreparationStatus.NOT_AVAILABLE):
+                    failed_instruments.append(
+                        {
+                            "instrument_id": raw_instrument_id,
+                            "reason": outcome.error_message or "historical data unavailable",
+                        }
+                    )
+                    completed += 1
+                    self.run_repository.update(
+                        run_id,
+                        completed_instruments=completed,
+                        failed_instruments=failed_instruments,
+                        progress_percent=round(
+                            (completed / max(snapshot.total_instruments, 1)) * 100, 2
+                        ),
+                        message=f"Data unavailable for {raw_instrument_id} - skipped",
+                    )
+                    continue
 
-            if outcome.status in (PreparationStatus.FAILED, PreparationStatus.NOT_AVAILABLE):
-                failed_instruments.append(
-                    {
-                        "instrument_id": raw_instrument_id,
-                        "reason": outcome.error_message or "historical data unavailable",
-                    }
+                self.run_repository.update(
+                    run_id,
+                    phase="PREPARING_SCAN",
+                    message=f"Preparing scan for {raw_instrument_id}",
                 )
+
+                self.run_repository.update(
+                    run_id,
+                    phase="SCANNING",
+                    message=f"Scanning {raw_instrument_id} with {snapshot.strategy_id}",
+                )
+                config = BacktestConfiguration(
+                    instrument_id=instrument_id,
+                    timeframe=timeframe,
+                    start=start,
+                    end=end,
+                    strategy_id=snapshot.strategy_id,
+                    specification_version=snapshot.specification_version,
+                    code_version=snapshot.code_version,
+                    configuration_version=snapshot.configuration_version,
+                    initial_capital=snapshot.initial_capital,
+                    position_sizing_mode=PositionSizingMode(snapshot.position_sizing_mode),
+                    position_size_value=snapshot.position_size_value,
+                    brokerage_percent=snapshot.brokerage_percent,
+                    slippage_percent=snapshot.slippage_percent,
+                )
+
+                try:
+                    result = self.backtesting.run(
+                        config,
+                        dict(snapshot.strategy_values),
+                        created_by=snapshot.created_by,
+                        cost_model_name=snapshot.cost_model_name,
+                    )
+                except (InvalidBacktestConfigurationError, InsufficientHistoricalDataError) as exc:
+                    failed_instruments.append(
+                        {"instrument_id": raw_instrument_id, "reason": str(exc)}
+                    )
+                    completed += 1
+                    self.run_repository.update(
+                        run_id,
+                        completed_instruments=completed,
+                        failed_instruments=failed_instruments,
+                        progress_percent=round(
+                            (completed / max(snapshot.total_instruments, 1)) * 100, 2
+                        ),
+                    )
+                    continue
+
+                bar_count = result.data_quality.bar_count
+                total_bars += bar_count
+                scanned_bars += bar_count
+                signals_generated += len(result.trades)
+                result_backtest_ids[raw_instrument_id] = result.backtest_id
                 completed += 1
+
                 self.run_repository.update(
                     run_id,
+                    phase="CALCULATING_RESULTS",
+                    total_bars=total_bars,
+                    scanned_bars=scanned_bars,
+                    signals_generated=signals_generated,
+                    result_backtest_ids=result_backtest_ids,
                     completed_instruments=completed,
-                    failed_instruments=failed_instruments,
                     progress_percent=round(
                         (completed / max(snapshot.total_instruments, 1)) * 100, 2
                     ),
-                    message=f"Data unavailable for {raw_instrument_id} - skipped",
+                    message=f"Completed {raw_instrument_id}: {len(result.trades)} trade(s)",
                 )
-                continue
-
-            self.run_repository.update(
-                run_id, phase="PREPARING_SCAN", message=f"Preparing scan for {raw_instrument_id}"
-            )
-
-            self.run_repository.update(
-                run_id,
-                phase="SCANNING",
-                message=f"Scanning {raw_instrument_id} with {snapshot.strategy_id}",
-            )
-            config = BacktestConfiguration(
-                instrument_id=instrument_id,
-                timeframe=timeframe,
-                start=start,
-                end=end,
-                strategy_id=snapshot.strategy_id,
-                specification_version=snapshot.specification_version,
-                code_version=snapshot.code_version,
-                configuration_version=snapshot.configuration_version,
-                initial_capital=snapshot.initial_capital,
-                position_sizing_mode=PositionSizingMode(snapshot.position_sizing_mode),
-                position_size_value=snapshot.position_size_value,
-                brokerage_percent=snapshot.brokerage_percent,
-                slippage_percent=snapshot.slippage_percent,
-            )
-
-            try:
-                result = self.backtesting.run(
-                    config,
-                    dict(snapshot.strategy_values),
-                    created_by=snapshot.created_by,
-                    cost_model_name=snapshot.cost_model_name,
-                )
-            except (InvalidBacktestConfigurationError, InsufficientHistoricalDataError) as exc:
+            except Exception as exc:  # noqa: BLE001 - see module docstring: one bad instrument must never abort the whole run
                 failed_instruments.append({"instrument_id": raw_instrument_id, "reason": str(exc)})
                 completed += 1
                 self.run_repository.update(
@@ -193,27 +250,9 @@ class HistoricalBacktestRunOrchestrator:
                     progress_percent=round(
                         (completed / max(snapshot.total_instruments, 1)) * 100, 2
                     ),
+                    message=f"Unexpected error scanning {raw_instrument_id} - skipped",
                 )
                 continue
-
-            bar_count = result.data_quality.bar_count
-            total_bars += bar_count
-            scanned_bars += bar_count
-            signals_generated += len(result.trades)
-            result_backtest_ids[raw_instrument_id] = result.backtest_id
-            completed += 1
-
-            self.run_repository.update(
-                run_id,
-                phase="CALCULATING_RESULTS",
-                total_bars=total_bars,
-                scanned_bars=scanned_bars,
-                signals_generated=signals_generated,
-                result_backtest_ids=result_backtest_ids,
-                completed_instruments=completed,
-                progress_percent=round((completed / max(snapshot.total_instruments, 1)) * 100, 2),
-                message=f"Completed {raw_instrument_id}: {len(result.trades)} trade(s)",
-            )
 
         self.run_repository.update(run_id, phase="FINALIZING")
 
