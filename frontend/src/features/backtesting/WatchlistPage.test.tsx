@@ -21,7 +21,7 @@ describe("WatchlistPage", () => {
         const url = typeof input === "string" ? input : input.toString();
         if (url.includes("/market-data/quotes/")) return jsonResponse([]);
         if (url.includes("/market-data/instruments/")) {
-          return jsonResponse({ exchange: "NSE", instrument_ids: [], data_source: "UNAVAILABLE" });
+          return jsonResponse({ exchange: "NSE", instruments: [], data_source: "UNAVAILABLE" });
         }
         if (url.endsWith("/watchlists/")) {
           return jsonResponse([{ name: "core", instrument_ids: ["NSE:FIXTURE01"] }]);
@@ -56,7 +56,7 @@ describe("WatchlistPage", () => {
           ]);
         }
         if (url.includes("/market-data/instruments/")) {
-          return jsonResponse({ exchange: "NSE", instrument_ids: [], data_source: "UNAVAILABLE" });
+          return jsonResponse({ exchange: "NSE", instruments: [], data_source: "UNAVAILABLE" });
         }
         if (url.endsWith("/watchlists/") && !saved) return jsonResponse([]);
         if (url.endsWith("/watchlists/save/")) {
@@ -73,7 +73,7 @@ describe("WatchlistPage", () => {
     await waitFor(() => expect(screen.getByText(/No watchlists yet/)).toBeInTheDocument());
 
     fireEvent.change(screen.getByLabelText("Watchlist name"), { target: { value: "new-list" } });
-    await waitFor(() => expect(screen.getByText("NSE:FIXTURE01")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("FIXTURE01 (NSE:FIXTURE01)")).toBeInTheDocument());
     fireEvent.click(screen.getByRole("checkbox"));
     fireEvent.click(screen.getByRole("button", { name: "Save Watchlist" }));
 
@@ -87,7 +87,7 @@ describe("WatchlistPage", () => {
         const url = typeof input === "string" ? input : input.toString();
         if (url.includes("/market-data/quotes/")) return jsonResponse([]);
         if (url.includes("/market-data/instruments/")) {
-          return jsonResponse({ exchange: "NSE", instrument_ids: [], data_source: "UNAVAILABLE" });
+          return jsonResponse({ exchange: "NSE", instruments: [], data_source: "UNAVAILABLE" });
         }
         if (url.endsWith("/watchlists/")) return jsonResponse([]);
         return jsonResponse({ error_code: "not_found", message: "no route" }, 404);

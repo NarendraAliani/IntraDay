@@ -1,12 +1,11 @@
 # File: src/intraday/application/services/instrument_master.py
 #
 # Follow-up to Checkpoint 63.x: answers "what are ALL the tradable
-# instruments for exchange X?" - the real data source the instrument
-# picker's "Select All" needs to mean "all stocks on this exchange,"
-# not just the handful the live-quote pipeline happens to have observed
-# so far. Deliberately separate from `HistoricalDataCoverageService`/
-# the DB-first bar pipeline - this answers a different question ("what
-# instruments EXIST") than "what bars are cached."
+# instruments for exchange X, and what are they actually called?" - the
+# real data source the instrument picker's "Select All" needs to mean
+# "all stocks on this exchange," and the real display-name source so
+# the picker can show "Reliance Industries" rather than a bare
+# "NSE:RELIANCE" instrument id.
 #
 # Provider-neutral by the same Protocol pattern every other repository
 # in this codebase uses - `DhanInstrumentMasterProvider`
@@ -21,21 +20,35 @@ from intraday.domain.instrument.contracts import make_instrument_id
 from intraday.domain.shared_kernel.contracts import Exchange
 
 
+@dataclass(frozen=True, slots=True)
+class InstrumentMasterEntry:
+    symbol: str
+    display_name: str
+
+
 class InstrumentMasterProvider(Protocol):
-    def list_symbols(self, exchange: Exchange) -> tuple[str, ...]:
-        """Every tradable cash-equity trading symbol on `exchange`,
-        sorted, deduplicated - bare symbols (e.g. `"RELIANCE"`), not
-        `InstrumentId`-formatted strings; the caller combines this with
-        `exchange` itself."""
+    def list_instruments(self, exchange: Exchange) -> tuple[InstrumentMasterEntry, ...]:
+        """Every genuine, tradable cash-equity instrument on
+        `exchange`, sorted by symbol, deduplicated - with its real
+        display name, never a fabricated or guessed one."""
         ...
+
+
+@dataclass(frozen=True, slots=True)
+class InstrumentSummary:
+    instrument_id: str
+    display_name: str
 
 
 @dataclass(frozen=True, slots=True)
 class InstrumentMasterService:
     provider: InstrumentMasterProvider
 
-    def list_instrument_ids(self, exchange: Exchange) -> tuple[str, ...]:
+    def list_instruments(self, exchange: Exchange) -> tuple[InstrumentSummary, ...]:
         return tuple(
-            str(make_instrument_id(exchange, symbol))
-            for symbol in self.provider.list_symbols(exchange)
+            InstrumentSummary(
+                instrument_id=str(make_instrument_id(exchange, entry.symbol)),
+                display_name=entry.display_name,
+            )
+            for entry in self.provider.list_instruments(exchange)
         )

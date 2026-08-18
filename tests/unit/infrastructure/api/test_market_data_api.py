@@ -545,21 +545,32 @@ def test_recent_bars_never_imports_trading_or_signal_code() -> None:
 
 @requires_postgres
 @pytest.mark.django_db
-def test_list_instruments_returns_real_symbols_from_the_scrip_master() -> None:
+def test_list_instruments_returns_real_symbols_and_display_names_from_the_scrip_master() -> None:
     """Follow-up to Checkpoint 63.x: proves the endpoint returns the
-    provider's real symbols (never the caller's own free text), with an
-    explicit data_source disclosure."""
+    provider's real symbols and display names (never the caller's own
+    free text, never a bare id with no name), with an explicit
+    data_source disclosure."""
+    from intraday.infrastructure.market_data_providers.dhan.instrument_master import (
+        InstrumentMasterEntry,
+    )
+
     client = _client_as_reader()
     with patch(
         "intraday.infrastructure.api.market_data_views.DhanInstrumentMasterProvider"
     ) as mock_provider_class:
-        mock_provider_class.return_value.list_symbols.return_value = ("RELIANCE", "TCS")
+        mock_provider_class.return_value.list_instruments.return_value = (
+            InstrumentMasterEntry(symbol="RELIANCE", display_name="Reliance Industries"),
+            InstrumentMasterEntry(symbol="TCS", display_name="Tata Consultancy Services"),
+        )
         response = client.get("/api/v1/config/market-data/instruments/?exchange=NSE")
 
     assert response.status_code == 200
     body = response.json()
     assert body["exchange"] == "NSE"
-    assert body["instrument_ids"] == ["NSE:RELIANCE", "NSE:TCS"]
+    assert body["instruments"] == [
+        {"instrument_id": "NSE:RELIANCE", "display_name": "Reliance Industries"},
+        {"instrument_id": "NSE:TCS", "display_name": "Tata Consultancy Services"},
+    ]
     assert body["data_source"] == "DHAN_SCRIP_MASTER"
 
 
@@ -576,14 +587,14 @@ def test_list_instruments_degrades_honestly_when_the_scrip_master_is_unavailable
     with patch(
         "intraday.infrastructure.api.market_data_views.DhanInstrumentMasterProvider"
     ) as mock_provider_class:
-        mock_provider_class.return_value.list_symbols.side_effect = (
+        mock_provider_class.return_value.list_instruments.side_effect = (
             InstrumentMasterUnavailableError("network unreachable")
         )
         response = client.get("/api/v1/config/market-data/instruments/?exchange=NSE")
 
     assert response.status_code == 200
     body = response.json()
-    assert body["instrument_ids"] == []
+    assert body["instruments"] == []
     assert body["data_source"] == "UNAVAILABLE"
 
 

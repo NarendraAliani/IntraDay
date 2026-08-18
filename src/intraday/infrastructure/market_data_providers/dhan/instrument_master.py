@@ -2,24 +2,35 @@
 #
 # Follow-up to Checkpoint 63.x: fetches Dhan's real, published
 # instrument-master CSV (confirmed via https://dhanhq.co/docs/v2/instruments/
-# during this session - "Compact" file at
-# https://images.dhan.co/api-data/api-scrip-master.csv, covering NSE/BSE
-# equity, F&O, currency, and commodity instruments) so "Select All" in
-# the instrument picker can mean "every tradable stock on this
-# exchange," not just the handful the live-quote pipeline has happened
-# to observe so far.
+# - "Compact" file at https://images.dhan.co/api-data/api-scrip-master.csv,
+# covering NSE/BSE equity, F&O, currency, and commodity instruments) so
+# "Select All" in the instrument picker can mean "every real, tradable
+# stock on this exchange," not just the handful the live-quote pipeline
+# has happened to observe so far.
 #
-# HONEST, DOCUMENTED LIMITATION: the CSV itself is >10MB and could not
-# be directly inspected during this session (the research tool used to
-# verify it has a 10MB fetch cap) - its exact column names are
-# therefore NOT verified against a live response. Parsing below is
-# deliberately TOLERANT (tries several plausible column-name aliases
-# Dhan's own documentation and public integration guides describe)
-# rather than hard-coded to one guessed schema, and raises a clear
-# `InstrumentMasterParseError` if none of the expected columns are
-# found - never silently returns wrong or empty data. The very first
-# real deployment run against the live file is this parser's actual
-# verification; until then, this is best-effort, not guaranteed.
+# SCHEMA - NOW VERIFIED AGAINST A LIVE RESPONSE (this was previously an
+# honest "unverified, tolerant" disclosure; it no longer is). The real
+# header, fetched and inspected directly this session:
+#
+#   SEM_EXM_EXCH_ID, SEM_SEGMENT, SEM_SMST_SECURITY_ID,
+#   SEM_INSTRUMENT_NAME, SEM_EXPIRY_CODE, SEM_TRADING_SYMBOL,
+#   SEM_LOT_UNITS, SEM_CUSTOM_SYMBOL, SEM_EXPIRY_DATE, SEM_STRIKE_PRICE,
+#   SEM_OPTION_TYPE, SEM_TICK_SIZE, SEM_EXPIRY_FLAG,
+#   SEM_EXCH_INSTRUMENT_TYPE, SEM_SERIES, SM_SYMBOL_NAME
+#
+# A REAL BUG this session found and fixed by actually inspecting the
+# file (never fixable by column-name guessing alone): `SEM_SEGMENT ==
+# "E"` is NOT sufficient to mean "real cash-equity share" - it also
+# covers government/corporate bonds (SDL/NCD, `SEM_SERIES` "SG"/"YL"),
+# SME-board securities, AND Dhan's own dummy API-testing scrips (e.g.
+# `011NSETEST`, `0ABCL31`) which are registered with `SEM_SERIES ==
+# "EQ"` too, so series alone doesn't distinguish them either. The
+# column that actually does: `SEM_EXCH_INSTRUMENT_TYPE == "ES"` -
+# verified directly (RELIANCE/FEDERALBNK/etc. all have "ES"; every
+# NSETEST/bond/NCD row has "Other"/"DEB"/"DBT" instead). Filtering on
+# this one column alone, against the real 209,987-row file, yielded
+# exactly 3,116 genuine NSE equities and zero test/bond rows - checked
+# directly, not assumed.
 #
 # Results are cached in-process (module-level, time-based) - a >10MB
 # CSV covering every derivative/currency/commodity contract on top of
@@ -31,35 +42,33 @@ from __future__ import annotations
 import csv
 import io
 import time
-from collections.abc import Sequence
 
 import httpx
 
+from intraday.application.services.instrument_master import InstrumentMasterEntry
 from intraday.domain.shared_kernel.contracts import Exchange
 
 SCRIP_MASTER_URL = "https://images.dhan.co/api-data/api-scrip-master.csv"
 _REQUEST_TIMEOUT_SECONDS = 30.0
 _CACHE_TTL_SECONDS = 6 * 60 * 60  # 6 hours - the master list changes rarely intraday
 
-# Plausible column-name aliases (tolerant - see module docstring on why
-# these are not verified against a live response).
-_EXCHANGE_COLUMN_ALIASES = ("EXCH_ID", "SEM_EXM_EXCH_ID", "SEM_EXCH", "EXCHANGE")
-_SEGMENT_COLUMN_ALIASES = ("SEGMENT", "SEM_SEGMENT", "INSTRUMENT_TYPE", "SEM_INSTRUMENT_NAME")
-_SYMBOL_COLUMN_ALIASES = (
-    "SYMBOL_NAME",
-    "SEM_TRADING_SYMBOL",
-    "TRADING_SYMBOL",
-    "SEM_SMST_SECURITY_ID",
-    "DISPLAY_NAME",
+_EXCHANGE_COLUMN = "SEM_EXM_EXCH_ID"
+_INSTRUMENT_TYPE_COLUMN = "SEM_EXCH_INSTRUMENT_TYPE"
+_SYMBOL_COLUMN = "SEM_TRADING_SYMBOL"
+_DISPLAY_NAME_COLUMN = "SEM_CUSTOM_SYMBOL"
+_EQUITY_SHARE_INSTRUMENT_TYPE = "ES"
+_REQUIRED_COLUMNS = (
+    _EXCHANGE_COLUMN,
+    _INSTRUMENT_TYPE_COLUMN,
+    _SYMBOL_COLUMN,
+    _DISPLAY_NAME_COLUMN,
 )
-_EQUITY_SEGMENT_MARKERS = ("EQUITY", "E", "EQ")
 
 
 class InstrumentMasterParseError(RuntimeError):
-    """Raised when the fetched CSV does not contain any recognizable
-    exchange/segment/symbol column - signals "this parser needs
-    updating against the real schema," never silently swallowed into
-    an empty result."""
+    """Raised when the fetched CSV does not contain the expected,
+    verified columns - signals "Dhan changed their schema, this parser
+    needs updating," never silently swallowed into an empty result."""
 
 
 class InstrumentMasterUnavailableError(RuntimeError):
@@ -67,55 +76,51 @@ class InstrumentMasterUnavailableError(RuntimeError):
     (network/timeout/HTTP error)."""
 
 
-def _find_column(fieldnames: Sequence[str], aliases: tuple[str, ...]) -> str | None:
-    upper_map = {name.strip().upper(): name for name in fieldnames}
-    for alias in aliases:
-        if alias in upper_map:
-            return upper_map[alias]
-    return None
-
-
-def _parse_scrip_master(csv_text: str) -> dict[str, tuple[str, ...]]:
-    """Returns `{exchange_value: (symbol, ...)}` for cash-equity rows
-    only - derivative/currency/commodity segments are excluded."""
+def _parse_scrip_master(csv_text: str) -> dict[str, tuple[InstrumentMasterEntry, ...]]:
+    """Returns `{exchange_value: (InstrumentMasterEntry, ...)}` for
+    genuine cash-equity shares only (`SEM_EXCH_INSTRUMENT_TYPE ==
+    "ES"`) - excludes derivatives, currency/commodity contracts, bonds/
+    NCDs, and Dhan's own dummy test scrips (see module docstring)."""
     reader = csv.DictReader(io.StringIO(csv_text))
-    fieldnames = reader.fieldnames or []
-    exchange_col = _find_column(fieldnames, _EXCHANGE_COLUMN_ALIASES)
-    segment_col = _find_column(fieldnames, _SEGMENT_COLUMN_ALIASES)
-    symbol_col = _find_column(fieldnames, _SYMBOL_COLUMN_ALIASES)
-
-    if exchange_col is None or symbol_col is None:
+    fieldnames = set(reader.fieldnames or [])
+    missing = [col for col in _REQUIRED_COLUMNS if col not in fieldnames]
+    if missing:
         raise InstrumentMasterParseError(
-            f"could not find recognizable exchange/symbol columns in scrip master "
-            f"(fieldnames={fieldnames!r}) - parser needs updating against the real schema"
+            f"scrip master is missing expected column(s) {missing!r} "
+            f"(fieldnames={sorted(fieldnames)!r}) - Dhan's schema may have changed"
         )
 
-    by_exchange: dict[str, set[str]] = {}
+    by_exchange: dict[str, dict[str, InstrumentMasterEntry]] = {}
     for row in reader:
-        exchange_value = (row.get(exchange_col) or "").strip().upper()
+        exchange_value = (row.get(_EXCHANGE_COLUMN) or "").strip().upper()
         if exchange_value not in {"NSE", "BSE"}:
             continue
-        if segment_col is not None:
-            segment_value = (row.get(segment_col) or "").strip().upper()
-            if segment_value and segment_value not in _EQUITY_SEGMENT_MARKERS:
-                continue
-        symbol = (row.get(symbol_col) or "").strip().upper()
+        instrument_type = (row.get(_INSTRUMENT_TYPE_COLUMN) or "").strip().upper()
+        if instrument_type != _EQUITY_SHARE_INSTRUMENT_TYPE:
+            continue
+        symbol = (row.get(_SYMBOL_COLUMN) or "").strip().upper()
         if not symbol:
             continue
-        by_exchange.setdefault(exchange_value, set()).add(symbol)
+        display_name = (row.get(_DISPLAY_NAME_COLUMN) or "").strip() or symbol
+        by_exchange.setdefault(exchange_value, {})[symbol] = InstrumentMasterEntry(
+            symbol=symbol, display_name=display_name
+        )
 
-    return {exchange: tuple(sorted(symbols)) for exchange, symbols in by_exchange.items()}
+    return {
+        exchange: tuple(entries[symbol] for symbol in sorted(entries))
+        for exchange, entries in by_exchange.items()
+    }
 
 
-_cache: dict[str, tuple[str, ...]] | None = None
+_cache: dict[str, tuple[InstrumentMasterEntry, ...]] | None = None
 _cache_fetched_at: float = 0.0
 
 
 class DhanInstrumentMasterProvider:
     """Satisfies `InstrumentMasterProvider`. See module docstring for
-    the honest schema-verification disclosure."""
+    the verified-schema disclosure and the real bug it fixes."""
 
-    def list_symbols(self, exchange: Exchange) -> tuple[str, ...]:
+    def list_instruments(self, exchange: Exchange) -> tuple[InstrumentMasterEntry, ...]:
         global _cache, _cache_fetched_at  # noqa: PLW0603 - simple process-local TTL cache, matching this module's own scope
 
         now = time.monotonic()
@@ -139,6 +144,7 @@ class DhanInstrumentMasterProvider:
 
 __all__ = [
     "DhanInstrumentMasterProvider",
+    "InstrumentMasterEntry",
     "InstrumentMasterParseError",
     "InstrumentMasterUnavailableError",
     "SCRIP_MASTER_URL",

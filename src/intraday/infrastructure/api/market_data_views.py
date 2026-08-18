@@ -153,13 +153,14 @@ def current_quotes(request: Request) -> Response:
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def list_instruments(request: Request) -> Response:
-    """Follow-up to Checkpoint 63.x: every tradable instrument for
-    `?exchange=NSE|BSE`, from the real Dhan scrip master - what the
-    instrument picker's "Select All" uses instead of being limited to
-    only currently live-observed instruments. Degrades HONESTLY on
-    failure (`source: "UNAVAILABLE"`, empty list) rather than a 500 -
-    the frontend picker falls back to observed-quotes-only selection in
-    that case, never a fabricated instrument list."""
+    """Follow-up to Checkpoint 63.x: every genuine, tradable cash-equity
+    instrument for `?exchange=NSE|BSE` with its real display name, from
+    the real (verified-schema, see instrument_master.py) Dhan scrip
+    master - what the instrument picker's "Select All" uses instead of
+    being limited to only currently live-observed instruments. Degrades
+    HONESTLY on failure (`data_source: "UNAVAILABLE"`, empty list)
+    rather than a 500 - the frontend picker falls back to observed-
+    quotes-only selection in that case, never a fabricated list."""
     exchange_param = request.query_params.get("exchange", "NSE").strip().upper()
     try:
         exchange = Exchange(exchange_param)
@@ -168,11 +169,11 @@ def list_instruments(request: Request) -> Response:
 
     service = InstrumentMasterService(provider=DhanInstrumentMasterProvider())
     try:
-        instrument_ids = service.list_instrument_ids(exchange)
+        instruments = service.list_instruments(exchange)
         source = "DHAN_SCRIP_MASTER"
     except (InstrumentMasterUnavailableError, InstrumentMasterParseError) as exc:
         logger.warning("instrument_master.unavailable", error=str(exc), exchange=exchange_param)
-        instrument_ids = ()
+        instruments = ()
         source = "UNAVAILABLE"
 
     return Response(
@@ -180,7 +181,10 @@ def list_instruments(request: Request) -> Response:
             InstrumentListResponseSerializer(
                 {
                     "exchange": exchange.value,
-                    "instrument_ids": list(instrument_ids),
+                    "instruments": [
+                        {"instrument_id": i.instrument_id, "display_name": i.display_name}
+                        for i in instruments
+                    ],
                     "data_source": source,
                 }
             ).data

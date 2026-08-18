@@ -362,13 +362,14 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * @description Follow-up to Checkpoint 63.x: every tradable instrument for
-         *     `?exchange=NSE|BSE`, from the real Dhan scrip master - what the
-         *     instrument picker's "Select All" uses instead of being limited to
-         *     only currently live-observed instruments. Degrades HONESTLY on
-         *     failure (`source: "UNAVAILABLE"`, empty list) rather than a 500 -
-         *     the frontend picker falls back to observed-quotes-only selection in
-         *     that case, never a fabricated instrument list.
+         * @description Follow-up to Checkpoint 63.x: every genuine, tradable cash-equity
+         *     instrument for `?exchange=NSE|BSE` with its real display name, from
+         *     the real (verified-schema, see instrument_master.py) Dhan scrip
+         *     master - what the instrument picker's "Select All" uses instead of
+         *     being limited to only currently live-observed instruments. Degrades
+         *     HONESTLY on failure (`data_source: "UNAVAILABLE"`, empty list)
+         *     rather than a 500 - the frontend picker falls back to observed-
+         *     quotes-only selection in that case, never a fabricated list.
          */
         get: operations["api_v1_config_market_data_instruments_retrieve"];
         put?: never;
@@ -1556,15 +1557,19 @@ export interface components {
         /**
          * @description Follow-up to Checkpoint 63.x: the real "all tradable instruments
          *     for this exchange" list (Dhan scrip master), backing the instrument
-         *     picker's "Select All." `source` is always explicit -
-         *     `"DHAN_SCRIP_MASTER"` when the real master list was fetched,
-         *     `"UNAVAILABLE"` when it could not be (never silently returned as if
-         *     it succeeded).
+         *     picker's "Select All" AND its display names. `data_source` is
+         *     always explicit - `"DHAN_SCRIP_MASTER"` when the real master list
+         *     was fetched, `"UNAVAILABLE"` when it could not be (never silently
+         *     returned as if it succeeded).
          */
         InstrumentListResponse: {
             exchange: string;
-            instrument_ids: string[];
+            instruments: components["schemas"]["InstrumentSummary"][];
             data_source: components["schemas"]["DataSourceEnum"];
+        };
+        InstrumentSummary: {
+            instrument_id: string;
+            display_name: string;
         };
         KillSwitchEngageRequest: {
             reason: string;

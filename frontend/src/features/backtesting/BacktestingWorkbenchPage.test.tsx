@@ -415,7 +415,7 @@ describe("BacktestingWorkbenchPage", () => {
           is_stale: false,
         },
       ],
-      "/market-data/instruments/": { exchange: "NSE", instrument_ids: [], data_source: "UNAVAILABLE" },
+      "/market-data/instruments/": { exchange: "NSE", instruments: [], data_source: "UNAVAILABLE" },
       "/backtesting/coverage-preview/": {
         instruments: [
           {
@@ -435,9 +435,9 @@ describe("BacktestingWorkbenchPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Configure" }));
     await waitFor(() => expect(screen.getByLabelText(/Fast EMA Lookback/)).toBeInTheDocument());
     await waitFor(() =>
-      expect(screen.getAllByText("NSE:RELIANCE").length).toBeGreaterThan(0),
+      expect(screen.getAllByText("RELIANCE (NSE:RELIANCE)").length).toBeGreaterThan(0),
     );
-    fireEvent.click(screen.getAllByRole("checkbox", { name: "NSE:RELIANCE" })[0]);
+    fireEvent.click(screen.getAllByRole("checkbox", { name: "RELIANCE (NSE:RELIANCE)" })[0]);
 
     fireEvent.click(screen.getByRole("button", { name: "Check Data Readiness" }));
 
@@ -496,7 +496,7 @@ describe("BacktestingWorkbenchPage", () => {
           ]);
         }
         if (url.includes("/market-data/instruments/")) {
-          return jsonResponse({ exchange: "NSE", instrument_ids: [], data_source: "UNAVAILABLE" });
+          return jsonResponse({ exchange: "NSE", instruments: [], data_source: "UNAVAILABLE" });
         }
         if (url.includes("/progress/")) return jsonResponse(progressPayload());
         if (method === "POST" && url.endsWith("/backtesting/historical-runs/")) {
@@ -510,9 +510,9 @@ describe("BacktestingWorkbenchPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Configure" }));
     await waitFor(() => expect(screen.getByLabelText(/Fast EMA Lookback/)).toBeInTheDocument());
     await waitFor(() =>
-      expect(screen.getAllByText("NSE:RELIANCE").length).toBeGreaterThan(0),
+      expect(screen.getAllByText("RELIANCE (NSE:RELIANCE)").length).toBeGreaterThan(0),
     );
-    fireEvent.click(screen.getAllByRole("checkbox", { name: "NSE:RELIANCE" })[0]);
+    fireEvent.click(screen.getAllByRole("checkbox", { name: "RELIANCE (NSE:RELIANCE)" })[0]);
 
     fireEvent.click(screen.getByRole("button", { name: "Prepare Data & Start Backtest" }));
 
