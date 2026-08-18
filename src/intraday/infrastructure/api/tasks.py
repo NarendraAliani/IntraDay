@@ -204,47 +204,77 @@ def run_historical_backtest_run_task(run_id: str) -> str:
     return "completed"
 
 
+def _a_celery_worker_is_actually_listening() -> bool:
+    """A SECOND real bug this fixes, found from a live report AFTER the
+    first `.delay()`-failure fallback below: `.delay()` only raises if
+    the broker itself is unreachable (bad URL, connection refused). If
+    the broker (Redis) IS reachable but simply has no worker process
+    consuming it - exactly this project's actual situation; no Celery
+    worker runs as part of its normal dev flow - `.delay()` succeeds
+    silently, the message sits published on the queue forever, and the
+    `BacktestRun` row stays at `QUEUED`/0% permanently, with no error
+    anywhere to signal it. A "did the publish call raise" check can
+    never detect this failure mode. `app.control.ping()` (a short,
+    real round-trip asking any live worker to respond) is the only way
+    to actually know before committing to the async path - not a
+    fixed sleep or a guess."""
+    try:
+        from intraday.celery import app as celery_app
+
+        return bool(celery_app.control.ping(timeout=0.5))
+    except Exception:  # noqa: BLE001 - any inspection failure means "assume no worker"
+        return False
+
+
 def dispatch_historical_backtest_run(run_id: str) -> None:
     """Checkpoint 63.x: dispatches `run_historical_backtest_run_task` for
     `run_id`, preferring the real, asynchronous Celery path (`.delay()`,
     a message published to the configured broker for a worker to pick
     up) exactly like `active_loop_tick`/`market_data_ingestion_tick`
-    already do in production.
+    already do in production - but ONLY when a worker is actually
+    verified alive (see `_a_celery_worker_is_actually_listening`'s own
+    docstring for the real bug that requires this check, not just a
+    try/except around `.delay()` itself).
 
-    A REAL BUG this fixed: `run_historical_backtest_run_task` re-raises
-    after recording a FAILED `BacktestRun` (correct for a real Celery
-    worker - it needs the exception for its own retry/monitoring), but
-    when this function's own broker-unavailable fallback below calls
-    that task SYNCHRONOUSLY, that re-raise used to propagate all the
-    way up through the view with no handler, producing an unhandled
-    Django 500 instead of the clean `202 {run_id}` response the caller
-    already has every reason to expect (the run row was created
-    successfully; its own FAILED status is what polling exists to
-    reveal). Both call paths below now swallow the exception here -
+    A REAL BUG this also fixes: `run_historical_backtest_run_task`
+    re-raises after recording a FAILED `BacktestRun` (correct for a
+    real Celery worker - it needs the exception for its own retry/
+    monitoring), but when this function's own synchronous fallback
+    below calls that task directly, that re-raise used to propagate
+    all the way up through the view with no handler, producing an
+    unhandled Django 500 instead of the clean `202 {run_id}` response
+    the caller already has every reason to expect (the run row was
+    created successfully; its own FAILED status is what polling exists
+    to reveal). The fallback call below swallows the exception here -
     once it's already durably recorded on the `BacktestRun` row, this
     function's job (get the work started, one way or another) is done.
 
     HONEST FALLBACK: this project has no Celery worker process running
     as part of its normal development flow (no `REDIS_URL` is set by
-    default - `settings/base.py`), so a bare `.delay()` call raises a
-    broker-connection error the instant a developer clicks "Prepare
-    Data & Start Backtest" without a worker/Redis running - a genuine
-    500 a real user hit. Rather than requiring every developer to stand
-    up Redis + a worker just to exercise this PoC feature, a broker
-    dispatch failure here falls back to running the task inline,
-    synchronously, in the SAME process - identical in effect to what
-    `CELERY_TASK_ALWAYS_EAGER=True` already does for tests. A real
-    deployment with a configured broker and a running worker is
-    unaffected: `.delay()` succeeds and the task runs asynchronously as
-    designed, exactly as intended."""
-    try:
-        run_historical_backtest_run_task.delay(run_id)
-    except Exception:  # noqa: BLE001 - any broker-dispatch failure, not just one exception type
+    default - `settings/base.py`). Rather than requiring every
+    developer to stand up Redis + a worker just to exercise this PoC
+    feature, running with no live worker falls back to running the
+    task inline, synchronously, in the SAME process - identical in
+    effect to what `CELERY_TASK_ALWAYS_EAGER=True` already does for
+    tests. A real deployment with a configured broker AND a running
+    worker is unaffected: the ping succeeds, `.delay()` dispatches, and
+    the task runs asynchronously as designed, exactly as intended."""
+    if _a_celery_worker_is_actually_listening():
         try:
-            run_historical_backtest_run_task(run_id)
-        except Exception as inner_exc:  # noqa: BLE001 - already recorded as FAILED on the BacktestRun row
+            run_historical_backtest_run_task.delay(run_id)
+            return
+        except Exception as delay_exc:  # noqa: BLE001 - falls through to the synchronous path below
             logger.warning(
-                "historical_backtest_run.synchronous_fallback_failed",
+                "historical_backtest_run.delay_failed_despite_live_worker",
                 run_id=run_id,
-                error=repr(inner_exc),
+                error=repr(delay_exc),
             )
+
+    try:
+        run_historical_backtest_run_task(run_id)
+    except Exception as inner_exc:  # noqa: BLE001 - already recorded as FAILED on the BacktestRun row
+        logger.warning(
+            "historical_backtest_run.synchronous_fallback_failed",
+            run_id=run_id,
+            error=repr(inner_exc),
+        )
