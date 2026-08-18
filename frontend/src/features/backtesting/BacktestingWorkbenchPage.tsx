@@ -16,7 +16,7 @@ import {
 } from "../../common/components/ParameterSchemaFields";
 import { DrawdownChart, EquityCurveChart } from "../../common/components/EquityChart";
 import { ErrorState } from "../../common/components/ErrorState";
-import { InstrumentPickerMulti, InstrumentPickerSingle } from "../../common/components/InstrumentPicker";
+import { InstrumentPickerMulti } from "../../common/components/InstrumentPicker";
 import { LoadingState } from "../../common/components/LoadingState";
 import {
   asConfigurationView,
@@ -87,7 +87,7 @@ export function BacktestingWorkbenchPage(): JSX.Element {
   const [schema, setSchema] = useState<StrategySchema | null>(null);
   const [values, setValues] = useState<Record<string, string>>({});
 
-  const [instrumentId, setInstrumentId] = useState("NSE:FIXTURE01");
+  const [selectedInstrumentIds, setSelectedInstrumentIds] = useState<string[]>(["NSE:FIXTURE01"]);
   const [timeframe, setTimeframe] = useState("5m");
   const [start, setStart] = useState(() => `${todayIsoDate()}T09:15`);
   const [end, setEnd] = useState(() => `${todayIsoDate()}T15:30`);
@@ -161,6 +161,7 @@ export function BacktestingWorkbenchPage(): JSX.Element {
 
   async function handleRun(): Promise<void> {
     if (!schema || !selectedStrategy) return;
+    if (selectedInstrumentIds.length !== 1) return; // gated by the disabled button below too
     setRunState({ phase: "running" });
     try {
       const parsedValues: Record<string, unknown> = {};
@@ -171,7 +172,7 @@ export function BacktestingWorkbenchPage(): JSX.Element {
           parameter.parameter_type === "INTEGER" ? Number.parseInt(raw, 10) : raw;
       }
       const result = await runBacktest({
-        instrument_id: instrumentId,
+        instrument_id: selectedInstrumentIds[0],
         timeframe,
         start: new Date(start).toISOString(),
         end: new Date(end).toISOString(),
@@ -277,18 +278,27 @@ export function BacktestingWorkbenchPage(): JSX.Element {
             <fieldset>
               <legend>Backtest Settings</legend>
               <div className="strategy-config-page__field">
-                <InstrumentPickerSingle
-                  id="bt-instrument"
-                  label="Instrument"
-                  value={instrumentId}
-                  onChange={setInstrumentId}
-                  extraOptions={["NSE:FIXTURE01"]}
+                <InstrumentPickerMulti
+                  idPrefix="bt-instrument"
+                  label="Universe (select one, many, or all — Select All)"
+                  value={selectedInstrumentIds}
+                  onChange={setSelectedInstrumentIds}
                 />
                 <p className="strategy-config-page__help-text">
-                  What stock: the exact instrument this backtest simulates trading.
+                  What stock(s): pick one, many, or all. "Run Backtest" below runs an
+                  immediate, single-instrument simulation — it requires exactly ONE stock
+                  selected. To backtest 2+ stocks, select them here and use "Prepare Data &amp;
+                  Start Backtest" in the Historical Data Readiness panel further down instead.
                   "NSE:FIXTURE01" is this project's deterministic synthetic fixture, always
                   available for testing regardless of live market data.
                 </p>
+                {selectedInstrumentIds.length !== 1 && (
+                  <p className="strategy-config-page__help-text backtest-results__warning">
+                    {selectedInstrumentIds.length === 0
+                      ? "Select exactly one stock to enable Run Backtest."
+                      : `${selectedInstrumentIds.length} stocks selected — Run Backtest needs exactly one. Use the Historical Data Readiness panel below for multiple stocks.`}
+                  </p>
+                )}
               </div>
               <div className="strategy-config-page__field">
                 <label htmlFor="bt-timeframe">Timeframe</label>
@@ -420,7 +430,10 @@ export function BacktestingWorkbenchPage(): JSX.Element {
             </fieldset>
 
             {canRun ? (
-              <button type="submit" disabled={runState.phase === "running"}>
+              <button
+                type="submit"
+                disabled={runState.phase === "running" || selectedInstrumentIds.length !== 1}
+              >
                 {runState.phase === "running" ? "Running…" : "Run Backtest"}
               </button>
             ) : (
@@ -717,10 +730,13 @@ interface TradeRow {
   cost_breakdown: CostBreakdownRow;
 }
 
+const TRADES_PER_PAGE = 15;
+
 function TradeTable({ trades }: { trades: TradeRow[] }): JSX.Element {
   const [directionFilter, setDirectionFilter] = useState<"ALL" | "BULLISH" | "BEARISH">("ALL");
   const [outcomeFilter, setOutcomeFilter] = useState<"ALL" | "PROFITABLE" | "LOSING">("ALL");
   const [expandedTradeId, setExpandedTradeId] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
 
   const filtered = trades.filter((t) => {
     if (directionFilter !== "ALL" && t.direction !== directionFilter) return false;
@@ -730,13 +746,31 @@ function TradeTable({ trades }: { trades: TradeRow[] }): JSX.Element {
     return true;
   });
 
+  const totalPages = Math.max(1, Math.ceil(filtered.length / TRADES_PER_PAGE));
+  const currentPage = Math.min(page, totalPages);
+  const pageStart = (currentPage - 1) * TRADES_PER_PAGE;
+  const pageTrades = filtered.slice(pageStart, pageStart + TRADES_PER_PAGE);
+
+  function updateDirectionFilter(value: "ALL" | "BULLISH" | "BEARISH"): void {
+    setDirectionFilter(value);
+    setPage(1);
+  }
+
+  function updateOutcomeFilter(value: "ALL" | "PROFITABLE" | "LOSING"): void {
+    setOutcomeFilter(value);
+    setPage(1);
+  }
+
   return (
     <div className="backtest-results__trades">
       <h4>Trade Ledger</h4>
       <div className="backtest-results__filters">
         <label>
           Direction:
-          <select value={directionFilter} onChange={(e) => setDirectionFilter(e.target.value as never)}>
+          <select
+            value={directionFilter}
+            onChange={(e) => updateDirectionFilter(e.target.value as never)}
+          >
             <option value="ALL">All</option>
             <option value="BULLISH">Long</option>
             <option value="BEARISH">Short</option>
@@ -744,17 +778,21 @@ function TradeTable({ trades }: { trades: TradeRow[] }): JSX.Element {
         </label>
         <label>
           Outcome:
-          <select value={outcomeFilter} onChange={(e) => setOutcomeFilter(e.target.value as never)}>
+          <select value={outcomeFilter} onChange={(e) => updateOutcomeFilter(e.target.value as never)}>
             <option value="ALL">All</option>
             <option value="PROFITABLE">Profitable</option>
             <option value="LOSING">Losing</option>
           </select>
         </label>
+        <span className="backtest-results__trade-count">
+          {filtered.length} trade{filtered.length === 1 ? "" : "s"}
+        </span>
       </div>
       {filtered.length === 0 ? (
         <p>No trades match the selected filters.</p>
       ) : (
-        <table>
+        <div className="backtest-results__trade-table-wrap">
+        <table className="backtest-results__trade-table">
           <thead>
             <tr>
               <th>Trade #</th>
@@ -772,9 +810,9 @@ function TradeTable({ trades }: { trades: TradeRow[] }): JSX.Element {
             </tr>
           </thead>
           <tbody>
-            {filtered.map((trade) => (
+            {pageTrades.map((trade, index) => (
               <Fragment key={trade.trade_id}>
-                <tr>
+                <tr className={index % 2 === 0 ? "backtest-results__trade-row--even" : undefined}>
                   <td>{trade.trade_id}</td>
                   <td>{new Date(trade.entry_timestamp).toLocaleString()}</td>
                   <td>{new Date(trade.exit_timestamp).toLocaleString()}</td>
@@ -831,6 +869,28 @@ function TradeTable({ trades }: { trades: TradeRow[] }): JSX.Element {
             ))}
           </tbody>
         </table>
+        </div>
+      )}
+      {filtered.length > 0 && totalPages > 1 && (
+        <div className="backtest-results__pagination">
+          <button
+            type="button"
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            disabled={currentPage === 1}
+          >
+            ← Previous
+          </button>
+          <span>
+            Page {currentPage} of {totalPages}
+          </span>
+          <button
+            type="button"
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            disabled={currentPage === totalPages}
+          >
+            Next →
+          </button>
+        </div>
       )}
     </div>
   );

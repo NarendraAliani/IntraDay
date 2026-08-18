@@ -159,6 +159,14 @@ const BACKTEST_RESULT = {
   },
 };
 
+function manyTradesResult(count: number): typeof BACKTEST_RESULT {
+  const template = BACKTEST_RESULT.trades[0];
+  return {
+    ...BACKTEST_RESULT,
+    trades: Array.from({ length: count }, (_, i) => ({ ...template, trade_id: `ema_crossover-${i + 1}` })),
+  };
+}
+
 function stubFetch(routes: Record<string, unknown>): void {
   const sortedRoutes = Object.entries(routes).sort((a, b) => b[0].length - a[0].length);
   vi.stubGlobal(
@@ -216,7 +224,7 @@ describe("BacktestingWorkbenchPage", () => {
 
     await waitFor(() => expect(screen.getByLabelText(/Fast EMA Lookback/)).toBeInTheDocument());
     expect(screen.getByLabelText(/Slow EMA Lookback/)).toBeInTheDocument();
-    expect(screen.getByLabelText("Instrument")).toBeInTheDocument();
+    expect(screen.getAllByText(/Universe \(select one, many, or all/).length).toBeGreaterThan(0);
   });
 
   it("runs a backtest and renders KPIs, charts, data-quality disclosure, and the trade ledger", async () => {
@@ -437,7 +445,12 @@ describe("BacktestingWorkbenchPage", () => {
     await waitFor(() =>
       expect(screen.getAllByText("RELIANCE").length).toBeGreaterThan(0),
     );
-    fireEvent.click(screen.getAllByRole("checkbox", { name: "RELIANCE" })[0]);
+    // Two InstrumentPickerMulti instances now render on this page (the top
+    // "Backtest Settings" Universe field and the historical-run panel's own
+    // Universe field below) - the SECOND occurrence is the historical
+    // panel's, which is what "Check Data Readiness" actually reads from.
+    const relianceCheckboxes = screen.getAllByRole("checkbox", { name: "RELIANCE" });
+    fireEvent.click(relianceCheckboxes[relianceCheckboxes.length - 1]);
 
     fireEvent.click(screen.getByRole("button", { name: "Check Data Readiness" }));
 
@@ -512,12 +525,81 @@ describe("BacktestingWorkbenchPage", () => {
     await waitFor(() =>
       expect(screen.getAllByText("RELIANCE").length).toBeGreaterThan(0),
     );
-    fireEvent.click(screen.getAllByRole("checkbox", { name: "RELIANCE" })[0]);
+    const relianceCheckboxes = screen.getAllByRole("checkbox", { name: "RELIANCE" });
+    fireEvent.click(relianceCheckboxes[relianceCheckboxes.length - 1]);
 
     fireEvent.click(screen.getByRole("button", { name: "Prepare Data & Start Backtest" }));
 
     await waitFor(() => expect(screen.getByText("DATABASE ONLY")).toBeInTheDocument());
     await waitFor(() => expect(screen.getByText("COMPLETED")).toBeInTheDocument(), { timeout: 5000 });
     expect(screen.getByText("2")).toBeInTheDocument(); // signals_generated rendered from real backend state
+  });
+
+  it("requires exactly one selected stock to enable Run Backtest, and offers a Universe picker (one/many/all)", async () => {
+    stubFetch({
+      "/strategy-engine/fields/": FIELDS,
+      "/strategy-engine/strategies/": STRATEGIES,
+      "/strategy-engine/strategies/ema_crossover/schema/": SCHEMA,
+      "/market-data/quotes/": [
+        {
+          symbol: "RELIANCE",
+          exchange: "NSE",
+          last_price: "1234.56",
+          source_timestamp: "2026-08-14T06:00:00Z",
+          freshness_age_seconds: 5,
+          is_stale: false,
+        },
+      ],
+      "/market-data/instruments/": { exchange: "NSE", instruments: [], data_source: "UNAVAILABLE" },
+    });
+    renderWithAuth(<BacktestingWorkbenchPage />);
+    await waitFor(() => expect(screen.getByText("EMA Crossover")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Configure" }));
+    await waitFor(() => expect(screen.getByLabelText(/Fast EMA Lookback/)).toBeInTheDocument());
+
+    // Default: exactly one stock (the deterministic fixture) - Run Backtest enabled.
+    expect(screen.getByRole("button", { name: "Run Backtest" })).not.toBeDisabled();
+
+    // Selecting a second, real stock alongside it disables the button with
+    // guidance pointing at the multi-instrument panel instead.
+    await waitFor(() => expect(screen.getAllByText("RELIANCE").length).toBeGreaterThan(0));
+    const relianceCheckboxes = screen.getAllByRole("checkbox", { name: "RELIANCE" });
+    fireEvent.click(relianceCheckboxes[0]);
+
+    expect(screen.getByRole("button", { name: "Run Backtest" })).toBeDisabled();
+    expect(screen.getByText(/2 stocks selected/)).toBeInTheDocument();
+
+    // Unchecking it again returns to exactly one selected stock (the
+    // fixture) - Run Backtest re-enables.
+    fireEvent.click(relianceCheckboxes[0]);
+    expect(screen.getByRole("button", { name: "Run Backtest" })).not.toBeDisabled();
+  });
+
+  it("paginates the trade ledger instead of rendering every trade in one long table", async () => {
+    stubFetch({
+      "/strategy-engine/fields/": FIELDS,
+      "/strategy-engine/strategies/": STRATEGIES,
+      "/strategy-engine/strategies/ema_crossover/schema/": SCHEMA,
+      "/backtesting/run/": manyTradesResult(32),
+    });
+    renderWithAuth(<BacktestingWorkbenchPage />);
+    await waitFor(() => expect(screen.getByText("EMA Crossover")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Configure" }));
+    await waitFor(() => expect(screen.getByLabelText(/Fast EMA Lookback/)).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Run Backtest" }));
+
+    await waitFor(() => expect(screen.getByText("32 trades")).toBeInTheDocument());
+    // 15 trades per page - page 1 shows the first 15, not all 32.
+    expect(screen.getByText("ema_crossover-1")).toBeInTheDocument();
+    expect(screen.getByText("ema_crossover-15")).toBeInTheDocument();
+    expect(screen.queryByText("ema_crossover-16")).not.toBeInTheDocument();
+    expect(screen.getByText("Page 1 of 3")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Next →" }));
+
+    expect(screen.getByText("Page 2 of 3")).toBeInTheDocument();
+    expect(screen.getByText("ema_crossover-16")).toBeInTheDocument();
+    expect(screen.queryByText("ema_crossover-1")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "← Previous" })).not.toBeDisabled();
   });
 });
