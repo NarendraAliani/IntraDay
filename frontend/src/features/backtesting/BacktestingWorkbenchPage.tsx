@@ -22,6 +22,7 @@ import {
   asConfigurationView,
   asDataQualityView,
   createHistoricalBacktestRun,
+  getBacktestResult,
   getCoveragePreview,
   getHistoricalBacktestRunProgress,
   runBacktest,
@@ -1234,16 +1235,84 @@ function HistoricalBacktestRunPanel(props: HistoricalBacktestRunPanelProps): JSX
           })()}
 
           {state.phase === "done" && (
-            <p>
-              <strong
-                className={`badge ${progress.status === "COMPLETED" ? "badge--ok" : "badge--pending"}`}
-              >
-                {progress.status}
-              </strong>
-            </p>
+            <>
+              <p>
+                <strong
+                  className={`badge ${progress.status === "COMPLETED" ? "badge--ok" : "badge--pending"}`}
+                >
+                  {progress.status}
+                </strong>
+              </p>
+              <PerInstrumentResults
+                resultBacktestIds={progress.result_backtest_ids as Record<string, string>}
+              />
+            </>
           )}
         </div>
       )}
     </section>
+  );
+}
+
+/** Answers "where do I actually see the signals/trades a completed
+ * historical run produced?" - a real gap a live report found: the
+ * progress panel only ever showed an aggregate Signals COUNT, with no
+ * way to see what they actually were. Reuses the SAME BacktestResultsPanel
+ * every single-instrument run already shows - one result per
+ * instrument, fetched on demand (never all of them eagerly - a run can
+ * span hundreds of instruments) via the same getBacktestResult() the
+ * Compare page already uses. */
+function PerInstrumentResults(props: { resultBacktestIds: Record<string, string> }): JSX.Element | null {
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [results, setResults] = useState<Record<string, BacktestResult>>({});
+  const [loadingId, setLoadingId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const instrumentIds = Object.keys(props.resultBacktestIds);
+  if (instrumentIds.length === 0) return null;
+
+  async function toggle(instrumentId: string): Promise<void> {
+    if (expandedId === instrumentId) {
+      setExpandedId(null);
+      return;
+    }
+    setExpandedId(instrumentId);
+    if (results[instrumentId]) return;
+    setLoadingId(instrumentId);
+    setError(null);
+    try {
+      const result = await getBacktestResult(props.resultBacktestIds[instrumentId]);
+      setResults((prev) => ({ ...prev, [instrumentId]: result }));
+    } catch (err) {
+      setError(describeError(err));
+    } finally {
+      setLoadingId(null);
+    }
+  }
+
+  return (
+    <div className="historical-run__per-instrument-results">
+      <h4>Results by Instrument</h4>
+      <p className="strategy-config-page__help-text">
+        Signals and trades are per-instrument. Expand any instrument below to see its full
+        results - the exact same view a single-instrument backtest shows.
+      </p>
+      <ul className="historical-run__instrument-result-list">
+        {instrumentIds.map((instrumentId) => (
+          <li key={instrumentId}>
+            <button type="button" onClick={() => void toggle(instrumentId)}>
+              {expandedId === instrumentId ? "Hide" : "View Results"}: {instrumentId}
+            </button>
+            {expandedId === instrumentId && loadingId === instrumentId && (
+              <LoadingState label={`Loading results for ${instrumentId}…`} />
+            )}
+            {expandedId === instrumentId && error && <ErrorState message={error} />}
+            {expandedId === instrumentId && results[instrumentId] && (
+              <BacktestResultsPanel result={results[instrumentId]} />
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }

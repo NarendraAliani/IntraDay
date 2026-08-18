@@ -792,4 +792,83 @@ describe("BacktestingWorkbenchPage", () => {
     expect(screen.getByRole("button", { name: "Check Data Readiness" })).not.toBeDisabled();
     expect(screen.getByRole("button", { name: "Prepare Data & Start Backtest" })).not.toBeDisabled();
   });
+
+  it("lets the operator drill into a completed historical run's per-instrument signals and trades", async () => {
+    // A real gap a live report found: a completed historical run only
+    // ever showed an aggregate Signals COUNT, with no way to actually
+    // see what those signals/trades were anywhere on the page.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : input.toString();
+        const method = init?.method ?? "GET";
+        if (url.includes("/strategy-engine/fields/")) return jsonResponse(FIELDS);
+        if (url.includes("/strategy-engine/strategies/ema_crossover/schema/")) return jsonResponse(SCHEMA);
+        if (url.endsWith("/strategy-engine/strategies/")) return jsonResponse(STRATEGIES);
+        if (url.includes("/market-data/quotes/")) {
+          return jsonResponse([
+            {
+              symbol: "RELIANCE",
+              exchange: "NSE",
+              last_price: "1234.56",
+              source_timestamp: "2026-08-14T06:00:00Z",
+              freshness_age_seconds: 5,
+              is_stale: false,
+            },
+          ]);
+        }
+        if (url.includes("/market-data/instruments/")) {
+          return jsonResponse({ exchange: "NSE", instruments: [], data_source: "UNAVAILABLE" });
+        }
+        if (url.includes("/backtesting/results/abc123/")) return jsonResponse(BACKTEST_RESULT);
+        if (method === "POST" && url.endsWith("/backtesting/historical-runs/")) {
+          return jsonResponse({ run_id: "run-1" });
+        }
+        if (url.includes("/progress/")) {
+          return jsonResponse({
+            run_id: "run-1",
+            status: "COMPLETED",
+            phase: "COMPLETED",
+            progress_percent: 100,
+            current_instrument: "NSE:RELIANCE",
+            current_strategy: "ema_crossover",
+            message: "done",
+            total_instruments: 1,
+            completed_instruments: 1,
+            total_bars: 10,
+            scanned_bars: 10,
+            signals_generated: 1,
+            cache_hits: 0,
+            cache_misses: 10,
+            api_requests: 1,
+            failed_instruments: [],
+            result_backtest_ids: { "NSE:RELIANCE": "abc123" },
+            error_message: "",
+            created_at: "2026-08-17T06:00:00Z",
+            started_at: "2026-08-17T06:00:00Z",
+            completed_at: "2026-08-17T06:01:00Z",
+            elapsed_seconds: 1,
+            eta_seconds: null,
+          });
+        }
+        return jsonResponse({ error_code: "not_found", message: "no route" }, 404);
+      }),
+    );
+    renderWithAuth(<BacktestingWorkbenchPage />);
+    await waitFor(() => expect(screen.getByText("EMA Crossover")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Configure" }));
+    await waitFor(() => expect(screen.getByLabelText(/Fast EMA Lookback/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText("RELIANCE").length).toBeGreaterThan(0));
+    fireEvent.click(screen.getAllByRole("checkbox", { name: "RELIANCE" })[0]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Prepare Data & Start Backtest" }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /View Results: NSE:RELIANCE/ })).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /View Results: NSE:RELIANCE/ }));
+
+    await waitFor(() => expect(screen.getByText("ema_crossover-1")).toBeInTheDocument());
+    expect(screen.getAllByText("Net P&L").length).toBeGreaterThan(0);
+  });
 });
