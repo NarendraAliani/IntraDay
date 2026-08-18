@@ -745,4 +745,51 @@ describe("BacktestingWorkbenchPage", () => {
     expect(body.strategy_values.slow_lookback).toBe(6);
     expect(typeof body.strategy_values.fast_lookback).toBe("number");
   });
+
+  it("shares ONE Universe selection between Run Backtest and the historical-run panel - never a duplicate picker", async () => {
+    // A real bug found from a live report: this page used to have TWO
+    // separate, unsynced instrument pickers (one for Run Backtest, a
+    // second, independent one down in the historical-run panel) - an
+    // operator who selected stocks in the first had to select them
+    // AGAIN in the second for "Prepare Data & Start Backtest" to do
+    // anything, which read as "Run Backtest doesn't work at all."
+    stubFetch({
+      "/strategy-engine/fields/": FIELDS,
+      "/strategy-engine/strategies/": STRATEGIES,
+      "/strategy-engine/strategies/ema_crossover/schema/": SCHEMA,
+      "/market-data/quotes/": [
+        {
+          symbol: "RELIANCE",
+          exchange: "NSE",
+          last_price: "1234.56",
+          source_timestamp: "2026-08-14T06:00:00Z",
+          freshness_age_seconds: 5,
+          is_stale: false,
+        },
+      ],
+      "/market-data/instruments/": { exchange: "NSE", instruments: [], data_source: "UNAVAILABLE" },
+    });
+    renderWithAuth(<BacktestingWorkbenchPage />);
+    await waitFor(() => expect(screen.getByText("EMA Crossover")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Configure" }));
+    await waitFor(() => expect(screen.getByLabelText(/Fast EMA Lookback/)).toBeInTheDocument());
+
+    // Exactly ONE "RELIANCE" checkbox exists on the whole page - not two.
+    await waitFor(() => expect(screen.getAllByText("RELIANCE").length).toBeGreaterThan(0));
+    const relianceCheckboxes = screen.getAllByRole("checkbox", { name: "RELIANCE" });
+    expect(relianceCheckboxes).toHaveLength(1);
+
+    // Clear the default fixture selection first, so the historical-run
+    // panel's actions start disabled (nothing selected anywhere).
+    fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+    expect(screen.getByRole("button", { name: "Prepare Data & Start Backtest" })).toBeDisabled();
+
+    // Selecting RELIANCE ONCE, in the one shared picker, is enough to
+    // enable the historical-run panel's actions too - no second
+    // selection step required down there.
+    fireEvent.click(relianceCheckboxes[0]);
+
+    expect(screen.getByRole("button", { name: "Check Data Readiness" })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: "Prepare Data & Start Backtest" })).not.toBeDisabled();
+  });
 });

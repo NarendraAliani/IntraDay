@@ -472,6 +472,7 @@ export function BacktestingWorkbenchPage(): JSX.Element {
           specificationVersion={selectedStrategy.specification_version}
           codeVersion={selectedStrategy.code_version}
           strategyValues={parseStrategyValues(schema, values)}
+          selectedInstrumentIds={selectedInstrumentIds}
           defaultTimeframe={timeframe}
           initialCapital={initialCapital}
           positionSizingMode={positionSizingMode}
@@ -933,6 +934,15 @@ interface HistoricalBacktestRunPanelProps {
   /** Already parsed/typed (via `parseStrategyValues`) - never the raw,
    * all-string form values `ParameterSchemaFields` emits. */
   strategyValues: Record<string, unknown>;
+  /** THE SAME Universe selection as the single-instrument "Backtest
+   * Settings" section above - a REAL bug found from a live report: this
+   * panel used to have its OWN, entirely separate instrument picker,
+   * so an operator who selected stocks above had to select them AGAIN
+   * down here for "Prepare Data & Start Backtest" to do anything -
+   * confusing enough that it read as "Run Backtest doesn't work" even
+   * though both controls were individually correct. One Universe
+   * selection, shared by both actions, now. */
+  selectedInstrumentIds: string[];
   defaultTimeframe: string;
   initialCapital: string;
   positionSizingMode: "FIXED_QUANTITY" | "PERCENT_OF_EQUITY";
@@ -974,7 +984,7 @@ function formatSeconds(value: number | null | undefined): string {
 }
 
 function HistoricalBacktestRunPanel(props: HistoricalBacktestRunPanelProps): JSX.Element {
-  const [instrumentIds, setInstrumentIds] = useState<string[]>([]);
+  const instrumentIds = props.selectedInstrumentIds;
   const [startDate, setStartDate] = useState(todayIsoDate);
   const [endDate, setEndDate] = useState(todayIsoDate);
   const [state, setState] = useState<HistoricalRunPhase>({ phase: "idle" });
@@ -1059,15 +1069,15 @@ function HistoricalBacktestRunPanel(props: HistoricalBacktestRunPanelProps): JSX
         Runs this strategy against a stock universe, sourcing historical bars from the database
         first and only calling the historical data provider for genuinely missing ranges. Signals
         only ever come from bars already persisted in the database — never directly from the
-        provider.
+        provider. Uses the SAME Universe selected in Backtest Settings above.
       </p>
 
-      <InstrumentPickerMulti
-        idPrefix="hist-universe"
-        label="Universe"
-        value={instrumentIds}
-        onChange={setInstrumentIds}
-      />
+      {instrumentIds.length === 0 && (
+        <p className="strategy-config-page__help-text backtest-results__warning">
+          No stocks selected yet — pick one, many, or all in the Universe field under Backtest
+          Settings above.
+        </p>
+      )}
 
       <div className="historical-run__config">
         <div className="strategy-config-page__field">
