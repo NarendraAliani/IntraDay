@@ -145,6 +145,52 @@ class StrategyConfigurationValues:
                 raise ValueError(f"StrategyConfigurationValues.{name} must be non-empty")
 
 
+def coerce_configuration_values(
+    schema: StrategyParameterSchema, values: dict[str, object]
+) -> dict[str, object]:
+    """A REAL bug this fixes, found from a live report: `validate_configuration`
+    below requires a DECIMAL-typed parameter to be an actual Python
+    `Decimal` INSTANCE, but JSON has no native Decimal type at all - a
+    value arriving over the API as `"0.02"` (or as a JSON number, which
+    `json` would decode as `float`, not `Decimal`) can NEVER satisfy
+    that `isinstance(value, Decimal)` check by any client-side encoding
+    choice. This is the ONE place that gap is closed - every caller
+    that accepts configuration values from outside the process
+    (`BacktestingService.run()`, `StrategyConfigurationService.
+    save_configuration()`) must call this BEFORE `validate_configuration()`,
+    never construct/validate raw API values directly.
+
+    Only DECIMAL-typed parameters are touched (`Decimal(str(value))` -
+    routing through `str()` first avoids `Decimal(float)`'s well-known
+    binary-floating-point-precision surprises, e.g. `Decimal(0.02) ==
+    Decimal('0.0200000000000000004440892...')`). INTEGER values are
+    left untouched: a JSON number without a decimal point already
+    decodes to a native Python `int`, which `validate_configuration`
+    already accepts directly - no coercion gap exists there. Any value
+    that cannot be parsed as a Decimal raises `InvalidParameterValueError`
+    immediately, with the exact same message shape
+    `_validate_single_value` already uses elsewhere, rather than
+    silently passing through a bad value for the isinstance check
+    below to reject less informatively."""
+    coerced = dict(values)
+    for param in schema.parameters:
+        if param.parameter_type != ParameterType.DECIMAL:
+            continue
+        if param.parameter_id not in coerced:
+            continue
+        value = coerced[param.parameter_id]
+        if isinstance(value, Decimal):
+            continue
+        try:
+            coerced[param.parameter_id] = Decimal(str(value))
+        except Exception as exc:  # noqa: BLE001 - decimal.InvalidOperation and friends, all invalid input
+            raise InvalidParameterValueError(
+                f"strategy {schema.strategy_id!r}: parameter {param.parameter_id!r} "
+                f"is not a Decimal: {value!r}"
+            ) from exc
+    return coerced
+
+
 def validate_configuration(
     schema: StrategyParameterSchema, values: dict[str, object], *, known_field_ids: frozenset[str]
 ) -> None:

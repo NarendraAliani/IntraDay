@@ -23,6 +23,7 @@ from intraday.trading_engine.strategy_execution.contracts import (
     StrategyDirection,
     StrategyParameterSchema,
     StrategySignal,
+    coerce_configuration_values,
     validate_configuration,
 )
 from intraday.trading_engine.strategy_execution.registry import (
@@ -41,5 +42,6 @@ __all__ = [
     "StrategyRegistry",
     "StrategySignal",
     "build_default_registry",
+    "coerce_configuration_values",
     "validate_configuration",
 ]

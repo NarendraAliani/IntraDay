@@ -27,6 +27,7 @@ from intraday.trading_engine.strategy_execution import (
     StrategyRegistry,
     StrategySignal,
     build_default_registry,
+    coerce_configuration_values,
 )
 
 __all__ = [
@@ -36,6 +37,7 @@ __all__ = [
     "StrategyRegistry",
     "StrategySignal",
     "build_default_registry",
+    "coerce_configuration_values",
 ]
 
 _ = _strategy_execution  # referenced to satisfy linters; the re-exports above are what matter

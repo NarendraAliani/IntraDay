@@ -319,3 +319,31 @@ def test_a_long_configuration_version_like_the_frontend_actually_sends_succeeds(
         content_type="application/json",
     )
     assert response.status_code == 202
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_a_decimal_typed_strategy_parameter_sent_as_a_json_string_succeeds() -> None:
+    """THE real bug a live report found: sma_trend_filter's band_percent
+    is DECIMAL-typed, and the frontend (like any JSON API client) can
+    only ever send it as a string or number - never a native Python
+    Decimal, which JSON has no representation for at all. Every
+    historical run using this strategy failed with "parameter
+    'band_percent' is not a Decimal: '0.02'" until the backend itself
+    coerced it before validation. Proves the exact real payload now
+    succeeds end to end, with a real qualifying instrument/date range."""
+    client = _client_as_operator()
+    response = client.post(
+        "/api/v1/config/backtesting/historical-runs/",
+        data=_run_payload(
+            strategy_id="sma_trend_filter",
+            strategy_values={"lookback": 20, "band_percent": "0.02"},
+        ),
+        content_type="application/json",
+    )
+    assert response.status_code == 202
+    run_id = response.json()["run_id"]
+
+    progress = client.get(f"/api/v1/config/backtesting/historical-runs/{run_id}/progress/").json()
+    assert progress["status"] == "COMPLETED"
+    assert not progress["failed_instruments"]

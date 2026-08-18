@@ -22,7 +22,11 @@ from intraday.application.repositories import BacktestResultRepository
 from intraday.application.services.errors import ResourceNotFoundError
 from intraday.application.services.market_data import HistoricalMarketDataService
 from intraday.application.services.strategy_execution import compute_feature_series
-from intraday.research.backtesting import StrategyConfigurationValues, StrategyRegistry
+from intraday.research.backtesting import (
+    StrategyConfigurationValues,
+    StrategyRegistry,
+    coerce_configuration_values,
+)
 from intraday.research.backtesting.contracts import (
     BacktestConfiguration,
     BacktestResult,
@@ -96,12 +100,21 @@ class BacktestingService:
         cost_model_name: str = FLAT_PERCENTAGE,
     ) -> BacktestResult:
         strategy = self.registry.get(config.strategy_id)
+        # A REAL bug found from a live report: `strategy_values` arrives
+        # here straight from an API request (JSON has no native Decimal
+        # type), so any DECIMAL-typed parameter is still a bare str/
+        # float at this point - `coerce_configuration_values()` is the
+        # one place that gap is closed, BEFORE strategy execution ever
+        # sees these values (see its own docstring for the full
+        # account). INTEGER values need no coercion - a JSON number
+        # without a decimal point already decodes to a native `int`.
+        coerced_values = coerce_configuration_values(strategy.parameter_schema(), strategy_values)
         strategy_config = StrategyConfigurationValues(
             strategy_id=config.strategy_id,
             specification_version=config.specification_version,
             code_version=config.code_version,
             configuration_version=config.configuration_version,
-            values=strategy_values,
+            values=coerced_values,
         )
         cost_model = _build_cost_model(config, cost_model_name)
         bars = self.market_data.get_bars(

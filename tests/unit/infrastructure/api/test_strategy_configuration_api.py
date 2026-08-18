@@ -167,3 +167,34 @@ def test_save_configuration_rejects_duplicate_identity() -> None:
         content_type="application/json",
     )
     assert second.status_code == 409
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_save_configuration_accepts_a_decimal_typed_parameter_sent_as_a_json_string() -> None:
+    """The same real bug found and fixed in the backtesting flow: JSON
+    has no native Decimal type, so sma_trend_filter's DECIMAL-typed
+    band_percent can only ever arrive here as a string/number. Proves
+    the save succeeds, and that the stored/returned value round-trips
+    as the original JSON-safe value (never a raw Decimal that a plain
+    JSONField couldn't have stored in the first place)."""
+    client = _client_as_operator()
+    save_response = client.post(
+        "/api/v1/config/strategy-engine/strategies/sma_trend_filter/configurations/save/",
+        data={
+            "specification_version": "v1",
+            "code_version": "v1",
+            "configuration_version": "cfg-decimal-v1",
+            "values": {"lookback": 20, "band_percent": "0.02"},
+        },
+        content_type="application/json",
+    )
+    assert save_response.status_code == 201
+    assert save_response.json()["values"] == {"lookback": 20, "band_percent": "0.02"}
+
+    get_response = client.get(
+        "/api/v1/config/strategy-engine/strategies/sma_trend_filter/configurations/"
+        "v1/v1/cfg-decimal-v1/"
+    )
+    assert get_response.status_code == 200
+    assert get_response.json()["values"] == {"lookback": 20, "band_percent": "0.02"}

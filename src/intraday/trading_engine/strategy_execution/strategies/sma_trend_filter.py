@@ -54,10 +54,24 @@ class SmaTrendFilterStrategy:
                     label="Neutral Band (%)",
                     parameter_type=ParameterType.DECIMAL,
                     required=True,
-                    default=None,
+                    # A REAL bug found from a live report: this field had
+                    # `default=None`, so every user had to guess a value
+                    # with zero guidance (the reporting user's own guess,
+                    # 0.02%, is far too tight for NSE cash-equity intraday
+                    # noise and would fire on almost every bar). 0.2%
+                    # is a reasonable starting neutral band for this
+                    # asset class; the frontend now both pre-fills this
+                    # AND shows it as the field's placeholder hint - see
+                    # `ParameterSchemaFields.tsx`. `default` is JSON-
+                    # serialized verbatim by the API (`strategy_
+                    # configuration_views.py`), so it must stay a plain
+                    # float here, never a `Decimal` (same JSON-boundary
+                    # class of bug as `coerce_configuration_values`).
+                    default=0.2,
                     minimum=0,
                     maximum=10,
-                    help_text="Percent distance from SMA required before a direction is declared.",
+                    help_text="Percent distance from SMA required before a direction is declared. "
+                    "Suggested starting value: 0.2%.",
                 ),
             ),
         )

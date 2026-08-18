@@ -21,7 +21,10 @@ from intraday.application.config_schema.records import StrategyConfigurationSnap
 from intraday.application.repositories import StrategyConfigurationRepository
 from intraday.application.services.errors import ResourceNotFoundError
 from intraday.signal_intelligence.feature_engine.field_registry import list_fields
-from intraday.trading_engine.strategy_execution.contracts import validate_configuration
+from intraday.trading_engine.strategy_execution.contracts import (
+    coerce_configuration_values,
+    validate_configuration,
+)
 from intraday.trading_engine.strategy_execution.registry import StrategyRegistry
 
 
@@ -52,7 +55,17 @@ class StrategyConfigurationService:
         exists (Part 11/12: configurations are immutable once saved)."""
         strategy = self.registry.get(strategy_id)  # raises UnknownStrategyError if absent
         schema = strategy.parameter_schema()
-        validate_configuration(schema, values, known_field_ids=self._known_field_ids())
+        # Same real bug found and fixed in application.services.backtesting
+        # - `values` arrives here straight from an API request (JSON has
+        # no native Decimal type), so a DECIMAL-typed parameter is still
+        # a bare str/float at this point. Coerce ONLY for validation -
+        # `parameter_values` below is persisted through a plain
+        # `models.JSONField` with no Decimal-aware encoder, so the
+        # ORIGINAL, JSON-safe `values` (never the coerced Decimal
+        # objects) is what actually gets stored; a Decimal would raise
+        # its own, separate "not JSON serializable" error at save time.
+        coerced_values = coerce_configuration_values(schema, values)
+        validate_configuration(schema, coerced_values, known_field_ids=self._known_field_ids())
 
         snapshot = StrategyConfigurationSnapshot(
             strategy_id=strategy_id,

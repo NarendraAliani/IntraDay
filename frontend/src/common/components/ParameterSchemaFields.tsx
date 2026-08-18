@@ -58,6 +58,11 @@ export function ParameterControl({
         value={value}
         min={parameter.minimum != null ? String(parameter.minimum) : undefined}
         max={parameter.maximum != null ? String(parameter.maximum) : undefined}
+        // Suggested-value hint (a real user asked for this after having
+        // to guess a value for a field with no guidance): the schema's
+        // own `default` doubles as a placeholder so it's still visible
+        // even once the field holds a real value the user typed.
+        placeholder={parameter.default != null ? String(parameter.default) : undefined}
         onChange={(e) => onChange(e.target.value)}
       />
     );

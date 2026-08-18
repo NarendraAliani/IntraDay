@@ -21,6 +21,7 @@ from intraday.trading_engine.strategy_execution.contracts import (
     ParameterType,
     StrategyConfigurationValues,
     StrategyDirection,
+    coerce_configuration_values,
     validate_configuration,
 )
 from intraday.trading_engine.strategy_execution.coordinator import StrategyExecutionCoordinator
@@ -199,9 +200,13 @@ def test_validate_configuration_rejects_unknown_parameter() -> None:
 
 
 def test_validate_configuration_rejects_missing_required_without_default() -> None:
-    schema = SmaTrendFilterStrategy().parameter_schema()
+    # SmaTrendFilterStrategy.band_percent used to be the no-default
+    # fixture here, but it now carries a suggested default (a real user
+    # asked for a placeholder/default value after having to guess one) -
+    # ATR's atr_multiplier is still required with no default.
+    schema = AtrVolatilityBreakoutStrategy().parameter_schema()
     with pytest.raises(MissingRequiredParameterError):
-        validate_configuration(schema, {"lookback": 20}, known_field_ids=frozenset())
+        validate_configuration(schema, {"lookback": 14}, known_field_ids=frozenset())
 
 
 def test_validate_configuration_rejects_out_of_range() -> None:
@@ -221,6 +226,65 @@ def test_validate_configuration_accepts_valid_values() -> None:
         {"lookback": 14, "atr_multiplier": Decimal("0.5")},
         known_field_ids=frozenset(),
     )
+
+
+# --- coerce_configuration_values (a real bug, found from a live report:
+# a DECIMAL-typed parameter arriving over the API as a JSON string/number
+# can NEVER satisfy validate_configuration's own isinstance(value,
+# Decimal) check - JSON has no native Decimal type at all - so a
+# coercion step must run BEFORE validation, not be expected of the
+# caller.) ------------------------------------------------------------
+
+
+def test_coerce_configuration_values_converts_a_json_string_to_a_real_decimal() -> None:
+    """The exact real-world case: the frontend sends band_percent as
+    the JSON string "0.02" (matching what ParameterSchemaFields'
+    number input always emits) - coercion must turn that into a real
+    Decimal("0.02"), not merely accept the string as-is."""
+    schema = SmaTrendFilterStrategy().parameter_schema()
+
+    coerced = coerce_configuration_values(schema, {"lookback": 20, "band_percent": "0.02"})
+
+    assert coerced["band_percent"] == Decimal("0.02")
+    assert isinstance(coerced["band_percent"], Decimal)
+    assert coerced["lookback"] == 20  # INTEGER values pass through untouched
+
+
+def test_coerce_then_validate_succeeds_for_the_real_sma_trend_filter_schema() -> None:
+    """Proves the full real pipeline: coerce, then validate, using the
+    ACTUAL strategy (sma_trend_filter) and parameter (band_percent) a
+    live report failed on."""
+    schema = SmaTrendFilterStrategy().parameter_schema()
+    raw_values = {"lookback": 20, "band_percent": "0.02"}
+
+    coerced = coerce_configuration_values(schema, raw_values)
+    validate_configuration(schema, coerced, known_field_ids=frozenset())  # must not raise
+
+
+def test_coerce_configuration_values_leaves_an_already_real_decimal_untouched() -> None:
+    schema = SmaTrendFilterStrategy().parameter_schema()
+    already_decimal = Decimal("0.03")
+
+    coerced = coerce_configuration_values(schema, {"lookback": 20, "band_percent": already_decimal})
+
+    assert coerced["band_percent"] is already_decimal
+
+
+def test_coerce_configuration_values_rejects_unparseable_decimal_input() -> None:
+    schema = SmaTrendFilterStrategy().parameter_schema()
+
+    with pytest.raises(InvalidParameterValueError):
+        coerce_configuration_values(schema, {"lookback": 20, "band_percent": "not-a-number"})
+
+
+def test_coerce_configuration_values_ignores_parameters_not_supplied() -> None:
+    """A missing optional/required-with-default parameter must not
+    raise here - that's validate_configuration's job, not coercion's."""
+    schema = SmaTrendFilterStrategy().parameter_schema()
+
+    coerced = coerce_configuration_values(schema, {"lookback": 20})
+
+    assert "band_percent" not in coerced
 
 
 def test_field_reference_parameter_validates_against_known_fields() -> None:
