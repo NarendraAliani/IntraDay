@@ -602,4 +602,65 @@ describe("BacktestingWorkbenchPage", () => {
     expect(screen.queryByText("ema_crossover-1")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "← Previous" })).not.toBeDisabled();
   });
+
+  it("surfaces backend dev-only debug_detail for an unexpected historical-run failure", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : input.toString();
+        const method = init?.method ?? "GET";
+        if (url.includes("/strategy-engine/fields/")) return jsonResponse(FIELDS);
+        if (url.includes("/strategy-engine/strategies/ema_crossover/schema/")) return jsonResponse(SCHEMA);
+        if (url.endsWith("/strategy-engine/strategies/")) return jsonResponse(STRATEGIES);
+        if (url.includes("/market-data/quotes/")) {
+          return jsonResponse([
+            {
+              symbol: "RELIANCE",
+              exchange: "NSE",
+              last_price: "1234.56",
+              source_timestamp: "2026-08-14T06:00:00Z",
+              freshness_age_seconds: 5,
+              is_stale: false,
+            },
+          ]);
+        }
+        if (url.includes("/market-data/instruments/")) {
+          return jsonResponse({ exchange: "NSE", instruments: [], data_source: "UNAVAILABLE" });
+        }
+        if (method === "POST" && url.endsWith("/backtesting/historical-runs/")) {
+          return jsonResponse(
+            {
+              error_code: "internal_error",
+              message: "An unexpected error occurred.",
+              debug_detail: {
+                exception_type: "IntegrityError",
+                exception_message: "duplicate key value violates unique constraint",
+                traceback: "Traceback (most recent call last):\n  ...",
+              },
+            },
+            500,
+          );
+        }
+        return jsonResponse({ error_code: "not_found", message: "no route" }, 404);
+      }),
+    );
+    renderWithAuth(<BacktestingWorkbenchPage />);
+    await waitFor(() => expect(screen.getByText("EMA Crossover")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Configure" }));
+    await waitFor(() => expect(screen.getByLabelText(/Fast EMA Lookback/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText("RELIANCE").length).toBeGreaterThan(0));
+    const relianceCheckboxes = screen.getAllByRole("checkbox", { name: "RELIANCE" });
+    fireEvent.click(relianceCheckboxes[relianceCheckboxes.length - 1]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Prepare Data & Start Backtest" }));
+
+    await waitFor(() =>
+      expect(screen.getByText(/Developer detail/)).toBeInTheDocument(),
+    );
+    expect(screen.getByText(/IntegrityError/)).toBeInTheDocument();
+    fireEvent.click(screen.getByText(/Developer detail/));
+    expect(
+      screen.getByText("duplicate key value violates unique constraint"),
+    ).toBeInTheDocument();
+  });
 });

@@ -11,9 +11,12 @@
 # what the database already has.
 from __future__ import annotations
 
+import traceback
 import uuid
 from datetime import UTC, datetime
 
+import structlog
+from django.conf import settings
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -43,10 +46,36 @@ from intraday.infrastructure.persistence.historical_bar_repository import (
     DjangoHistoricalBarRepository,
 )
 
+logger = structlog.get_logger(__name__)
+
 
 def _instrument_id(raw: str) -> InstrumentId:
     exchange_str, _, symbol = raw.partition(":")
     return make_instrument_id(Exchange(exchange_str), symbol)
+
+
+def _unexpected(exc: Exception) -> Response:
+    """Wraps `errors.unexpected()` (unchanged, still the safe/generic
+    body every OTHER view in this project returns) with ONE addition,
+    scoped to ONLY this module: when `settings.DEBUG` is True (dev only
+    - `False` in `settings/paper.py`/production), the response ALSO
+    carries the real exception's type/message/traceback under a
+    `debug_detail` key, so a currently-unreproducible bug (this file's
+    own live-report investigation) is actually diagnosable from the
+    browser response itself, without needing separate server-console
+    access. Never touches the shared `unexpected()` helper's behavior
+    for the rest of the app - that established "never leak exception
+    text" convention (Checkpoint 8 §10/§21) stays exactly as it was
+    everywhere else."""
+    response = unexpected(exc)  # logs server-side + the normal safe body
+    if settings.DEBUG:
+        response.data["debug_detail"] = {
+            "exception_type": type(exc).__name__,
+            "exception_message": str(exc),
+            "traceback": traceback.format_exc(),
+        }
+    logger.error("historical_backtesting.unexpected_error", traceback=traceback.format_exc())
+    return response
 
 
 @extend_schema(
@@ -103,7 +132,7 @@ def create_historical_backtest_run_view(request: Request) -> Response:
         # {error_code, message} shape (see infrastructure/api/errors.py).
         # The real exception is still logged server-side (structlog) by
         # unexpected() below.
-        return unexpected(exc)
+        return _unexpected(exc)
     return Response({"run_id": run_id}, status=202)
 
 
@@ -119,7 +148,7 @@ def get_historical_backtest_run_progress(request: Request, run_id: str) -> Respo
     try:
         snapshot = DjangoBacktestRunRepository().get(run_id)
     except Exception as exc:  # noqa: BLE001 - see create_historical_backtest_run_view's own comment
-        return unexpected(exc)
+        return _unexpected(exc)
     if snapshot is None:
         return not_found(ResourceNotFoundError(f"no backtest run found for {run_id!r}"))
 
@@ -207,7 +236,7 @@ def coverage_preview_view(request: Request) -> Response:
                 }
             )
     except Exception as exc:  # noqa: BLE001 - see create_historical_backtest_run_view's own comment
-        return unexpected(exc)
+        return _unexpected(exc)
 
     overall = round((total_cached / total_expected) * 100, 2) if total_expected else 0.0
     return Response({"instruments": entries, "overall_coverage_percent": overall})

@@ -261,3 +261,39 @@ def test_an_unexpected_exception_returns_clean_json_never_a_raw_500_page() -> No
     assert "unexpected error" in body["message"].lower()
     # never leaks the real exception text to the client
     assert "simulated unexpected failure" not in body["message"]
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_unexpected_exception_includes_debug_detail_only_when_debug_is_on() -> None:
+    """The live report this investigates could not be reproduced against
+    the current orchestration logic - this proves the NEXT occurrence
+    will be diagnosable from the browser response itself (matching the
+    real dev environment's DEBUG=True), without weakening the shared,
+    project-wide `unexpected()` convention used by every other view
+    (which stays exception-text-free everywhere else, proven by the
+    sibling test above running under this test suite's own DEBUG=False)."""
+    from unittest.mock import patch
+
+    from django.test import override_settings
+
+    client = _client_as_operator()
+    with (
+        override_settings(DEBUG=True),
+        patch(
+            "intraday.infrastructure.api.historical_backtesting_views.DjangoBacktestRunRepository"
+        ) as mock_repo_class,
+    ):
+        mock_repo_class.return_value.create.side_effect = RuntimeError("a specific real cause")
+        response = client.post(
+            "/api/v1/config/backtesting/historical-runs/",
+            data=_run_payload(),
+            content_type="application/json",
+        )
+
+    assert response.status_code == 500
+    body = response.json()
+    assert body["error_code"] == "internal_error"
+    assert body["debug_detail"]["exception_type"] == "RuntimeError"
+    assert body["debug_detail"]["exception_message"] == "a specific real cause"
+    assert "Traceback" in body["debug_detail"]["traceback"]

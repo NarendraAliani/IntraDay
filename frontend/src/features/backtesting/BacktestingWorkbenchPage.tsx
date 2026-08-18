@@ -929,7 +929,18 @@ type HistoricalRunPhase =
   | { phase: "starting" }
   | { phase: "polling"; progress: HistoricalBacktestRunProgress }
   | { phase: "done"; progress: HistoricalBacktestRunProgress }
-  | { phase: "error"; message: string };
+  | {
+      phase: "error";
+      message: string;
+      /** Dev-only (DEBUG=True backend) exception detail - see
+       * ApiRequestError.debugDetail's own docstring. Never present
+       * against a production backend. */
+      debugDetail?: ApiRequestError["debugDetail"];
+    };
+
+function debugDetailOf(error: unknown): ApiRequestError["debugDetail"] {
+  return error instanceof ApiRequestError ? error.debugDetail : undefined;
+}
 
 function formatSeconds(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return "—";
@@ -961,7 +972,7 @@ function HistoricalBacktestRunPanel(props: HistoricalBacktestRunPanelProps): JSX
           setState({ phase: "polling", progress });
         }
       } catch (error) {
-        if (!cancelled) setState({ phase: "error", message: describeError(error) });
+        if (!cancelled) setState({ phase: "error", message: describeError(error), debugDetail: debugDetailOf(error) });
       }
     }, POLL_INTERVAL_MS);
     return () => {
@@ -982,7 +993,7 @@ function HistoricalBacktestRunPanel(props: HistoricalBacktestRunPanelProps): JSX
       });
       setState({ phase: "preview_ready", preview });
     } catch (error) {
-      setState({ phase: "error", message: describeError(error) });
+      setState({ phase: "error", message: describeError(error), debugDetail: debugDetailOf(error) });
     }
   }
 
@@ -1014,7 +1025,7 @@ function HistoricalBacktestRunPanel(props: HistoricalBacktestRunPanelProps): JSX
           : { phase: "polling", progress },
       );
     } catch (error) {
-      setState({ phase: "error", message: describeError(error) });
+      setState({ phase: "error", message: describeError(error), debugDetail: debugDetailOf(error) });
     }
   }
 
@@ -1107,7 +1118,21 @@ function HistoricalBacktestRunPanel(props: HistoricalBacktestRunPanelProps): JSX
         </table>
       )}
 
-      {state.phase === "error" && <ErrorState message={state.message} />}
+      {state.phase === "error" && (
+        <>
+          <ErrorState message={state.message} />
+          {state.debugDetail && (
+            <details className="historical-run__debug-detail">
+              <summary>
+                Developer detail (only shown because the backend is running with DEBUG on - never
+                appears against a production backend): {state.debugDetail.exception_type}
+              </summary>
+              <p>{state.debugDetail.exception_message}</p>
+              <pre>{state.debugDetail.traceback}</pre>
+            </details>
+          )}
+        </>
+      )}
 
       {progress && (
         <div className="historical-run__progress" aria-label="Scanner Progress">

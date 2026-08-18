@@ -55,6 +55,13 @@ export class ApiRequestError extends Error {
   readonly status: number;
   readonly errorCode: string;
   readonly details?: Record<string, unknown>;
+  /** Dev-only (`DEBUG=True` on the backend, never in production/paper
+   * settings) exception type/message/traceback some endpoints attach
+   * for otherwise-hard-to-reproduce failures - NOT part of the typed
+   * `ApiError` OpenAPI contract (that schema's own `details` field is
+   * explicitly documented as "never a stack trace"), so read
+   * defensively here rather than widening that contract. */
+  readonly debugDetail?: { exception_type: string; exception_message: string; traceback: string };
 
   constructor(status: number, body: ApiError) {
     super(body.message);
@@ -62,6 +69,14 @@ export class ApiRequestError extends Error {
     this.status = status;
     this.errorCode = body.error_code;
     this.details = body.details;
+    const rawDebugDetail = (body as { debug_detail?: unknown }).debug_detail;
+    if (
+      rawDebugDetail !== null &&
+      typeof rawDebugDetail === "object" &&
+      "exception_type" in rawDebugDetail
+    ) {
+      this.debugDetail = rawDebugDetail as ApiRequestError["debugDetail"];
+    }
   }
 }
 

@@ -1186,6 +1186,65 @@ dd {
   color: var(--color-error-border);
 }
 
+.backtest-results {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.backtest-results h3 {
+  margin-bottom: 0;
+}
+
+.backtest-results__data-quality,
+.backtest-results__validation,
+.backtest-results__trades {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+}
+
+.backtest-results__data-quality h4,
+.backtest-results__validation h4,
+.backtest-results__trades h4 {
+  margin-top: 0;
+  margin-bottom: var(--space-2);
+}
+
+.backtest-results__data-quality ul {
+  margin: 0;
+  padding-left: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.backtest-results__validation table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: var(--space-2);
+}
+
+.backtest-results__validation td {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+  font-variant-numeric: tabular-nums;
+}
+
+.backtest-results__validation tr:last-child td {
+  border-bottom: none;
+}
+
+.backtest-results__validation td:first-child {
+  color: var(--color-text-muted);
+}
+
+.backtest-results__validation td:last-child {
+  text-align: right;
+  font-weight: 600;
+}
+
 .backtest-results__filters {
   display: flex;
   gap: 1rem;
@@ -1527,6 +1586,28 @@ dd {
   padding: var(--space-3);
   border: 1px solid var(--color-danger);
   border-radius: var(--radius-md);
+}
+
+.historical-run__debug-detail {
+  margin-top: var(--space-3);
+  padding: var(--space-3);
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+  font-size: var(--font-size-sm);
+}
+
+.historical-run__debug-detail summary {
+  cursor: pointer;
+  color: var(--color-text-muted);
+}
+
+.historical-run__debug-detail pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 300px;
+  overflow-y: auto;
+  font-size: var(--font-size-xs);
 }
 
 /* Checkpoint 63.x follow-up: reusable instrument picker (replaces
