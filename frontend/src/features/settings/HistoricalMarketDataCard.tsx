@@ -8,6 +8,12 @@
 // control - no separate machinery needed for that) and mirrors
 // `BacktestingWorkbenchPage.tsx`'s own real (never timer-driven)
 // progress-polling pattern for the analogous `HistoricalBacktestRunPanel`.
+//
+// TIMEFRAME CHECKBOXES (an explicit, approved decision, not a default):
+// checking several timeframes fetches ALL of them in one run - one
+// combined progress bar over every instrument x timeframe combination,
+// counted server-side as `total_combinations`/`completed_combinations`
+// (see `MarketDataSyncRunOrchestrator`'s own docstring).
 import { useEffect, useState } from "react";
 
 import { ApiNetworkError, ApiRequestError } from "../../common/api/client";
@@ -47,9 +53,41 @@ type SyncPhase =
   | { phase: "done"; progress: MarketDataSyncRunProgress }
   | { phase: "error"; message: string };
 
+function TimeframeCheckboxes(props: {
+  value: string[];
+  onChange: (next: string[]) => void;
+}): JSX.Element {
+  const selected = new Set(props.value);
+
+  function toggle(timeframe: string): void {
+    const next = new Set(selected);
+    if (next.has(timeframe)) next.delete(timeframe);
+    else next.add(timeframe);
+    props.onChange(Array.from(next));
+  }
+
+  return (
+    <fieldset className="strategy-config-page__field">
+      <legend>Timeframes</legend>
+      <div className="instrument-picker__checklist instrument-picker__checklist--inline">
+        {TIMEFRAME_OPTIONS.map((option) => (
+          <label key={option.value}>
+            <input
+              type="checkbox"
+              checked={selected.has(option.value)}
+              onChange={() => toggle(option.value)}
+            />
+            {option.label}
+          </label>
+        ))}
+      </div>
+    </fieldset>
+  );
+}
+
 export function HistoricalMarketDataCard(): JSX.Element {
   const [instrumentIds, setInstrumentIds] = useState<string[]>([]);
-  const [timeframe, setTimeframe] = useState("1d");
+  const [timeframes, setTimeframes] = useState<string[]>(["1d"]);
   const [startDate, setStartDate] = useState(todayIsoDate);
   const [endDate, setEndDate] = useState(todayIsoDate);
   const [state, setState] = useState<SyncPhase>({ phase: "idle" });
@@ -83,7 +121,7 @@ export function HistoricalMarketDataCard(): JSX.Element {
     try {
       const created = await createMarketDataSyncRun({
         instrument_ids: instrumentIds,
-        timeframe,
+        timeframes,
         start_date: startDate,
         end_date: endDate,
       });
@@ -101,6 +139,7 @@ export function HistoricalMarketDataCard(): JSX.Element {
 
   const progress = state.phase === "polling" || state.phase === "done" ? state.progress : null;
   const busy = state.phase === "starting" || state.phase === "polling";
+  const canFetch = instrumentIds.length > 0 && timeframes.length > 0;
 
   return (
     <section className="settings-card" aria-label="Historical Market Data">
@@ -111,7 +150,7 @@ export function HistoricalMarketDataCard(): JSX.Element {
         Fetch real historical OHLCV bars from Dhan (daily or intraday candles) and save them to the
         database, so backtests and future scans have genuine market history to work from instead of
         having to fetch it on demand. Pick one stock, hand-pick several, or select an entire exchange
-        below.
+        below. Check as many timeframes as you need - all of them are fetched together in one run.
       </p>
 
       <InstrumentPickerMulti
@@ -122,20 +161,7 @@ export function HistoricalMarketDataCard(): JSX.Element {
       />
 
       <div className="historical-run__config">
-        <div className="strategy-config-page__field">
-          <label htmlFor="market-data-sync-timeframe">Timeframe</label>
-          <select
-            id="market-data-sync-timeframe"
-            value={timeframe}
-            onChange={(e) => setTimeframe(e.target.value)}
-          >
-            {TIMEFRAME_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </div>
+        <TimeframeCheckboxes value={timeframes} onChange={setTimeframes} />
         <div className="strategy-config-page__field">
           <label htmlFor="market-data-sync-start">Start Date</label>
           <input
@@ -157,15 +183,14 @@ export function HistoricalMarketDataCard(): JSX.Element {
       </div>
 
       <div className="historical-run__actions">
-        <button
-          type="button"
-          onClick={() => void handleFetch()}
-          disabled={instrumentIds.length === 0 || busy}
-        >
+        <button type="button" onClick={() => void handleFetch()} disabled={!canFetch || busy}>
           {busy ? "Fetching…" : "Fetch & Save"}
         </button>
         {instrumentIds.length === 0 && (
           <span className="strategy-config-page__help-text">Select at least one instrument.</span>
+        )}
+        {instrumentIds.length > 0 && timeframes.length === 0 && (
+          <span className="strategy-config-page__help-text">Select at least one timeframe.</span>
         )}
       </div>
 
@@ -173,7 +198,8 @@ export function HistoricalMarketDataCard(): JSX.Element {
         <div className="historical-run__progress" role="status">
           <p>
             <strong>{progress.status}</strong> — {progress.progress_percent.toFixed(1)}% (
-            {progress.completed_instruments}/{progress.total_instruments} instruments)
+            {progress.completed_combinations}/{progress.total_combinations} instrument×timeframe
+            combinations)
           </p>
           {progress.message && (
             <p className="strategy-config-page__help-text">{progress.message}</p>
@@ -182,17 +208,21 @@ export function HistoricalMarketDataCard(): JSX.Element {
             Bars fetched: {progress.bars_fetched} · Bars persisted: {progress.bars_persisted} ·
             Cache hits: {progress.cache_hits} · API requests: {progress.api_requests}
           </p>
-          {Array.isArray(progress.failed_instruments) && progress.failed_instruments.length > 0 && (
+          {Array.isArray(progress.failed_combinations) && progress.failed_combinations.length > 0 && (
             <div className="backtest-results__warning">
-              <p>Incomplete data — the following instruments were skipped:</p>
+              <p>Incomplete data — the following combinations were skipped:</p>
               <ul>
-                {(progress.failed_instruments as { instrument_id: string; reason: string }[]).map(
-                  (failure) => (
-                    <li key={failure.instrument_id}>
-                      {failure.instrument_id}: {failure.reason}
-                    </li>
-                  ),
-                )}
+                {(
+                  progress.failed_combinations as {
+                    instrument_id: string;
+                    timeframe: string;
+                    reason: string;
+                  }[]
+                ).map((failure) => (
+                  <li key={`${failure.instrument_id}-${failure.timeframe}`}>
+                    {failure.instrument_id} ({failure.timeframe}): {failure.reason}
+                  </li>
+                ))}
               </ul>
             </div>
           )}

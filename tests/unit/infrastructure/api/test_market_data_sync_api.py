@@ -51,7 +51,7 @@ def _client_as_reader() -> Client:
 def _payload(**overrides: object) -> dict[str, object]:
     payload: dict[str, object] = {
         "instrument_ids": ["NSE:RELIANCE"],
-        "timeframe": "5m",
+        "timeframes": ["5m"],
         "start_date": "2026-01-05",
         "end_date": "2026-01-05",
     }
@@ -98,12 +98,12 @@ def test_a_run_completes_and_persists_real_bars_via_the_synthetic_fallback() -> 
 
     assert progress["status"] == "COMPLETED"
     assert progress["progress_percent"] == 100.0
-    assert progress["total_instruments"] == 1
-    assert progress["completed_instruments"] == 1
+    assert progress["total_combinations"] == 1
+    assert progress["completed_combinations"] == 1
     assert progress["bars_fetched"] > 0
     assert progress["bars_persisted"] > 0
     assert progress["api_requests"] > 0
-    assert not progress["failed_instruments"]
+    assert not progress["failed_combinations"]
 
 
 @requires_postgres
@@ -146,7 +146,29 @@ def test_an_unknown_timeframe_is_rejected_with_a_400() -> None:
     client = _client_as_operator()
     response = client.post(
         "/api/v1/config/market-data/sync-runs/",
-        data=_payload(timeframe="not-a-real-timeframe"),
+        data=_payload(timeframes=["not-a-real-timeframe"]),
         content_type="application/json",
     )
     assert response.status_code == 400
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_multiple_selected_timeframes_are_all_fetched_in_one_run() -> None:
+    """The approved UI decision: checking several timeframes fetches all
+    of them in one run, with one combined progress bar counting
+    instrument x timeframe combinations, not just instruments."""
+    client = _client_as_operator()
+    response = client.post(
+        "/api/v1/config/market-data/sync-runs/",
+        data=_payload(timeframes=["1d", "5m", "1h"]),
+        content_type="application/json",
+    )
+    run_id = response.json()["run_id"]
+
+    progress = client.get(f"/api/v1/config/market-data/sync-runs/{run_id}/progress/").json()
+
+    assert progress["status"] == "COMPLETED"
+    assert progress["total_combinations"] == 3  # 1 instrument x 3 timeframes
+    assert progress["completed_combinations"] == 3
+    assert not progress["failed_combinations"]

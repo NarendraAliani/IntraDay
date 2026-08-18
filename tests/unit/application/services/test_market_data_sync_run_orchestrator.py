@@ -71,9 +71,9 @@ def test_a_successful_run_fetches_and_persists_real_bars() -> None:
         created_by="test-operator",
         start_date=date(2026, 1, 5),
         end_date=date(2026, 1, 5),
-        timeframe="5m",
+        timeframes=["5m"],
         instrument_ids=["NSE:RELIANCE"],
-        total_instruments=1,
+        total_combinations=1,
     )
 
     _orchestrator(SyntheticHistoricalBarProvider()).run(run_id)
@@ -81,10 +81,10 @@ def test_a_successful_run_fetches_and_persists_real_bars() -> None:
     snapshot = DjangoMarketDataSyncRunRepository().get(run_id)
     assert snapshot is not None
     assert snapshot.status == "COMPLETED"
-    assert snapshot.completed_instruments == 1
+    assert snapshot.completed_combinations == 1
     assert snapshot.bars_fetched > 0
     assert snapshot.bars_persisted > 0
-    assert not snapshot.failed_instruments
+    assert not snapshot.failed_combinations
 
 
 @requires_postgres
@@ -96,9 +96,9 @@ def test_one_failing_instrument_does_not_abort_the_rest_of_the_run() -> None:
         created_by="test-operator",
         start_date=date(2026, 1, 5),
         end_date=date(2026, 1, 5),
-        timeframe="5m",
+        timeframes=["5m"],
         instrument_ids=["NSE:RELIANCE", "NSE:BADSYMBOL"],
-        total_instruments=2,
+        total_combinations=2,
     )
 
     _orchestrator(_UnavailableForOneSymbolProvider()).run(run_id)
@@ -106,9 +106,9 @@ def test_one_failing_instrument_does_not_abort_the_rest_of_the_run() -> None:
     snapshot = DjangoMarketDataSyncRunRepository().get(run_id)
     assert snapshot is not None
     assert snapshot.status == "PARTIAL"
-    assert snapshot.completed_instruments == 2
-    assert len(snapshot.failed_instruments) == 1
-    assert snapshot.failed_instruments[0]["instrument_id"] == "NSE:BADSYMBOL"
+    assert snapshot.completed_combinations == 2
+    assert len(snapshot.failed_combinations) == 1
+    assert snapshot.failed_combinations[0]["instrument_id"] == "NSE:BADSYMBOL"
 
 
 @requires_postgres
@@ -122,9 +122,9 @@ def test_a_repeat_run_over_already_cached_data_makes_zero_provider_calls() -> No
         created_by="test-operator",
         start_date=date(2026, 1, 5),
         end_date=date(2026, 1, 5),
-        timeframe="5m",
+        timeframes=["5m"],
         instrument_ids=["NSE:RELIANCE"],
-        total_instruments=1,
+        total_combinations=1,
     )
     _orchestrator(SyntheticHistoricalBarProvider()).run(run_id_a)
 
@@ -142,9 +142,9 @@ def test_a_repeat_run_over_already_cached_data_makes_zero_provider_calls() -> No
         created_by="test-operator",
         start_date=date(2026, 1, 5),
         end_date=date(2026, 1, 5),
-        timeframe="5m",
+        timeframes=["5m"],
         instrument_ids=["NSE:RELIANCE"],
-        total_instruments=1,
+        total_combinations=1,
     )
     _orchestrator(_AlwaysRaisesProvider()).run(run_id_b)
 
@@ -153,3 +153,26 @@ def test_a_repeat_run_over_already_cached_data_makes_zero_provider_calls() -> No
     assert snapshot.status == "COMPLETED"
     assert snapshot.api_requests == 0
     assert snapshot.cache_hits > 0
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_multiple_timeframes_are_each_fetched_as_their_own_combination() -> None:
+    run_id = str(uuid.uuid4())
+    DjangoMarketDataSyncRunRepository().create(
+        run_id,
+        created_by="test-operator",
+        start_date=date(2026, 1, 5),
+        end_date=date(2026, 1, 5),
+        timeframes=["1d", "5m"],
+        instrument_ids=["NSE:RELIANCE"],
+        total_combinations=2,
+    )
+
+    _orchestrator(SyntheticHistoricalBarProvider()).run(run_id)
+
+    snapshot = DjangoMarketDataSyncRunRepository().get(run_id)
+    assert snapshot is not None
+    assert snapshot.status == "COMPLETED"
+    assert snapshot.completed_combinations == 2
+    assert not snapshot.failed_combinations

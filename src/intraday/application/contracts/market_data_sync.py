@@ -4,7 +4,10 @@
 # (the Settings page's "fetch real data from Dhan into the database"
 # trigger) - mirrors `application/contracts/backtesting.py`'s own
 # request/created/progress serializer shapes for the analogous
-# `BacktestRun` resource.
+# `BacktestRun` resource. `timeframes` is plural - an approved UI
+# decision lets an operator check multiple timeframes at once and fetch
+# them all in one run (see `MarketDataSyncRunOrchestrator`'s own
+# docstring for the instrument x timeframe "combination" model).
 from __future__ import annotations
 
 from rest_framework import serializers
@@ -12,7 +15,7 @@ from rest_framework import serializers
 
 class MarketDataSyncRunRequestSerializer(serializers.Serializer[None]):
     instrument_ids = serializers.ListField(child=serializers.CharField(), min_length=1)
-    timeframe = serializers.CharField()
+    timeframes = serializers.ListField(child=serializers.CharField(), min_length=1)
     start_date = serializers.DateField()
     end_date = serializers.DateField()
 
@@ -26,14 +29,15 @@ class MarketDataSyncRunProgressSerializer(serializers.Serializer[None]):
     status = serializers.CharField()
     progress_percent = serializers.FloatField()
     current_instrument = serializers.CharField()
+    current_timeframe = serializers.CharField()
     message = serializers.CharField()
-    total_instruments = serializers.IntegerField()
-    completed_instruments = serializers.IntegerField()
+    total_combinations = serializers.IntegerField()
+    completed_combinations = serializers.IntegerField()
     bars_fetched = serializers.IntegerField()
     bars_persisted = serializers.IntegerField()
     cache_hits = serializers.IntegerField()
     api_requests = serializers.IntegerField()
-    failed_instruments = serializers.JSONField()
+    failed_combinations = serializers.JSONField()
     created_at = serializers.DateTimeField()
     started_at = serializers.DateTimeField(allow_null=True)
     completed_at = serializers.DateTimeField(allow_null=True)

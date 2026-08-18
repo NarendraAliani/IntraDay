@@ -4,14 +4,23 @@
 # Settings page's manual "fetch real historical data into the database"
 # trigger. Deliberately the SIMPLER sibling of
 # `historical_backtest_run.py`'s `HistoricalBacktestRunOrchestrator` -
-# same per-instrument, real-progress-only mutation discipline, but no
+# same per-combination, real-progress-only mutation discipline, but no
 # scan/strategy step: this run exists purely to populate `HistoricalBar`
 # via `HistoricalDataPreparationService.prepare()`, the SAME service the
 # backtest orchestrator already depends on (never a second, parallel
 # fetch path).
+#
+# MULTI-TIMEFRAME DESIGN (an explicit, approved decision, not a default):
+# a run covers every (instrument_id, timeframe) COMBINATION from its own
+# `instrument_ids x timeframes` cross product, with ONE combined
+# progress bar - `total_combinations`/`completed_combinations` count
+# combinations, not instruments. One bad combination never aborts the
+# rest of the run (same discipline `HistoricalBacktestRunOrchestrator`
+# established).
 from __future__ import annotations
 
 import datetime as _dt
+import itertools
 from dataclasses import dataclass
 
 from intraday.application.repositories.market_data_sync_run import MarketDataSyncRunRepository
@@ -55,23 +64,26 @@ class MarketDataSyncRunOrchestrator:
             run_id, status="RUNNING", started_at=_dt.datetime.now(tz=_dt.UTC)
         )
 
-        timeframe = Timeframe(snapshot.timeframe)
         start, end = range_bounds(snapshot.start_date, snapshot.end_date)
 
         cache_hits = 0
         bars_fetched = 0
         bars_persisted = 0
         api_requests = 0
-        failed_instruments: list[dict[str, str]] = []
+        failed_combinations: list[dict[str, str]] = []
         completed = 0
 
-        for raw_instrument_id in snapshot.instrument_ids:
+        for raw_instrument_id, raw_timeframe in itertools.product(
+            snapshot.instrument_ids, snapshot.timeframes
+        ):
             try:
                 instrument_id = _instrument_id_from_str(raw_instrument_id)
+                timeframe = Timeframe(raw_timeframe)
                 self.run_repository.update(
                     run_id,
                     current_instrument=raw_instrument_id,
-                    message=f"Fetching {raw_instrument_id}",
+                    current_timeframe=raw_timeframe,
+                    message=f"Fetching {raw_instrument_id} ({raw_timeframe})",
                 )
 
                 outcome = self.preparation.prepare(instrument_id, timeframe, start, end)
@@ -82,9 +94,10 @@ class MarketDataSyncRunOrchestrator:
                 completed += 1
 
                 if outcome.status in (PreparationStatus.FAILED, PreparationStatus.NOT_AVAILABLE):
-                    failed_instruments.append(
+                    failed_combinations.append(
                         {
                             "instrument_id": raw_instrument_id,
+                            "timeframe": raw_timeframe,
                             "reason": outcome.error_message or "historical data unavailable",
                         }
                     )
@@ -95,30 +108,39 @@ class MarketDataSyncRunOrchestrator:
                     bars_fetched=bars_fetched,
                     bars_persisted=bars_persisted,
                     api_requests=api_requests,
-                    completed_instruments=completed,
-                    failed_instruments=failed_instruments,
+                    completed_combinations=completed,
+                    failed_combinations=failed_combinations,
                     progress_percent=round(
-                        (completed / max(snapshot.total_instruments, 1)) * 100, 2
+                        (completed / max(snapshot.total_combinations, 1)) * 100, 2
                     ),
-                    message=f"Completed {raw_instrument_id}",
+                    message=f"Completed {raw_instrument_id} ({raw_timeframe})",
                 )
-            except Exception as exc:  # noqa: BLE001 - one bad instrument must never abort the whole run (same discipline as HistoricalBacktestRunOrchestrator)
+            except Exception as exc:  # noqa: BLE001 - one bad combination must never abort the whole run (same discipline as HistoricalBacktestRunOrchestrator)
                 completed += 1
-                failed_instruments.append({"instrument_id": raw_instrument_id, "reason": str(exc)})
+                failed_combinations.append(
+                    {
+                        "instrument_id": raw_instrument_id,
+                        "timeframe": raw_timeframe,
+                        "reason": str(exc),
+                    }
+                )
                 self.run_repository.update(
                     run_id,
-                    completed_instruments=completed,
-                    failed_instruments=failed_instruments,
+                    completed_combinations=completed,
+                    failed_combinations=failed_combinations,
                     progress_percent=round(
-                        (completed / max(snapshot.total_instruments, 1)) * 100, 2
+                        (completed / max(snapshot.total_combinations, 1)) * 100, 2
                     ),
-                    message=f"Unexpected error fetching {raw_instrument_id} - skipped",
+                    message=(
+                        f"Unexpected error fetching {raw_instrument_id} "
+                        f"({raw_timeframe}) - skipped"
+                    ),
                 )
                 continue
 
-        if not failed_instruments:
+        if not failed_combinations:
             final_status = "COMPLETED"
-        elif len(failed_instruments) < snapshot.total_instruments:
+        elif len(failed_combinations) < snapshot.total_combinations:
             final_status = "PARTIAL"
         else:
             final_status = "FAILED"

@@ -4,6 +4,10 @@
 # Protocol - the same "mutable job state" shape
 # `historical_backtest_run.py`'s own Protocol already established,
 # reused deliberately rather than inventing a second convention.
+# `timeframes` is plural - one run can cover multiple timeframes at
+# once (an explicit, approved UI decision - see
+# HistoricalMarketDataCard.tsx), each instrument x timeframe pair
+# counted as one "combination" of progress.
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -21,17 +25,18 @@ class MarketDataSyncRunSnapshot:
     created_by: str
     start_date: date
     end_date: date
-    timeframe: str
+    timeframes: tuple[str, ...]
     instrument_ids: tuple[str, ...]
-    total_instruments: int
-    completed_instruments: int
+    total_combinations: int
+    completed_combinations: int
     bars_fetched: int
     bars_persisted: int
     cache_hits: int
     api_requests: int
-    failed_instruments: tuple[dict[str, str], ...]
+    failed_combinations: tuple[dict[str, str], ...]
     progress_percent: float
     current_instrument: str
+    current_timeframe: str
     message: str
 
 
@@ -43,9 +48,9 @@ class MarketDataSyncRunRepository(Protocol):
         created_by: str,
         start_date: date,
         end_date: date,
-        timeframe: str,
+        timeframes: list[str],
         instrument_ids: list[str],
-        total_instruments: int,
+        total_combinations: int,
     ) -> None: ...
 
     def update(self, run_id: str, **fields: object) -> None:

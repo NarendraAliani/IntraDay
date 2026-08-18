@@ -1087,12 +1087,18 @@ class MarketDataSyncRun(models.Model):
     - the same `run_id`-based create/poll shape `BacktestRun` already
     established, deliberately reused rather than inventing a second
     progress-tracking convention. Mutated by
-    `MarketDataSyncRunOrchestrator` as it works through each instrument,
-    calling the SAME `HistoricalDataPreparationService.prepare()`
-    coverage/fetch/persist pipeline the backtest orchestrator uses -
-    this run has no scan/strategy step of its own, it exists purely to
-    populate `HistoricalBar` so backtests (and, later, any other
-    consumer) find real data already cached."""
+    `MarketDataSyncRunOrchestrator` as it works through each instrument x
+    timeframe combination, calling the SAME `HistoricalDataPreparationService.
+    prepare()` coverage/fetch/persist pipeline the backtest orchestrator
+    uses - this run has no scan/strategy step of its own, it exists
+    purely to populate `HistoricalBar` so backtests (and, later, any
+    other consumer) find real data already cached.
+
+    `timeframes` is a LIST (not a single value) - the Settings page lets
+    an operator check multiple timeframes (e.g. Daily + 5m + 1h) and
+    fetch them all in one run, one combined progress bar covering every
+    instrument x timeframe combination together (an explicit, approved
+    design decision - see HistoricalMarketDataCard.tsx)."""
 
     STATUS_CHOICES = [
         (s, s) for s in ("QUEUED", "RUNNING", "COMPLETED", "PARTIAL", "FAILED", "CANCELLED")
@@ -1108,23 +1114,27 @@ class MarketDataSyncRun(models.Model):
 
     start_date = models.DateField()
     end_date = models.DateField()
-    timeframe = models.CharField(max_length=8)
+    timeframes = models.JSONField(default=list)
     instrument_ids = models.JSONField(default=list)
 
-    total_instruments = models.PositiveIntegerField(default=0)
-    completed_instruments = models.PositiveIntegerField(default=0)
+    total_combinations = models.PositiveIntegerField(default=0)
+    """`len(instrument_ids) * len(timeframes)` - the unit of progress
+    this run actually reports against, since one run now covers every
+    instrument x timeframe pair, not just one per instrument."""
+    completed_combinations = models.PositiveIntegerField(default=0)
     bars_fetched = models.PositiveIntegerField(default=0)
     bars_persisted = models.PositiveIntegerField(default=0)
     cache_hits = models.PositiveIntegerField(default=0)
     api_requests = models.PositiveIntegerField(default=0)
 
-    failed_instruments = models.JSONField(default=list)
-    """List of `{"instrument_id": ..., "reason": ...}` objects - the
-    same partial-failure disclosure convention `BacktestRun` uses,
-    never silently dropped from the report."""
+    failed_combinations = models.JSONField(default=list)
+    """List of `{"instrument_id": ..., "timeframe": ..., "reason": ...}`
+    objects - the same partial-failure disclosure convention
+    `BacktestRun` uses, never silently dropped from the report."""
 
     progress_percent = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     current_instrument = models.CharField(max_length=100, blank=True, default="")
+    current_timeframe = models.CharField(max_length=8, blank=True, default="")
     message = models.CharField(max_length=500, blank=True, default="")
 
     class Meta:

@@ -1659,14 +1659,15 @@ export interface components {
             /** Format: double */
             progress_percent: number;
             current_instrument: string;
+            current_timeframe: string;
             message: string;
-            total_instruments: number;
-            completed_instruments: number;
+            total_combinations: number;
+            completed_combinations: number;
             bars_fetched: number;
             bars_persisted: number;
             cache_hits: number;
             api_requests: number;
-            failed_instruments: unknown;
+            failed_combinations: unknown;
             /** Format: date-time */
             created_at: string;
             /** Format: date-time */
@@ -1676,7 +1677,7 @@ export interface components {
         };
         MarketDataSyncRunRequest: {
             instrument_ids: string[];
-            timeframe: string;
+            timeframes: string[];
             /** Format: date */
             start_date: string;
             /** Format: date */

@@ -72,10 +72,11 @@ def create_market_data_sync_run_view(request: Request) -> Response:
     serializer.is_valid(raise_exception=True)
     data = serializer.validated_data
 
-    try:
-        Timeframe(data["timeframe"])
-    except ValueError as exc:
-        return invalid_configuration(exc)
+    for raw_timeframe in data["timeframes"]:
+        try:
+            Timeframe(raw_timeframe)
+        except ValueError as exc:
+            return invalid_configuration(exc)
     for raw_id in data["instrument_ids"]:
         try:
             _instrument_id(raw_id)
@@ -90,9 +91,9 @@ def create_market_data_sync_run_view(request: Request) -> Response:
             created_by=request.user.get_username(),
             start_date=data["start_date"],
             end_date=data["end_date"],
-            timeframe=data["timeframe"],
+            timeframes=list(data["timeframes"]),
             instrument_ids=list(data["instrument_ids"]),
-            total_instruments=len(data["instrument_ids"]),
+            total_combinations=len(data["instrument_ids"]) * len(data["timeframes"]),
         )
         dispatch_market_data_sync_run(run_id)
     except Exception as exc:  # noqa: BLE001 - never let a raw exception become an opaque non-JSON 500
@@ -122,14 +123,15 @@ def get_market_data_sync_run_progress(request: Request, run_id: str) -> Response
             "status": snapshot.status,
             "progress_percent": snapshot.progress_percent,
             "current_instrument": snapshot.current_instrument,
+            "current_timeframe": snapshot.current_timeframe,
             "message": snapshot.message,
-            "total_instruments": snapshot.total_instruments,
-            "completed_instruments": snapshot.completed_instruments,
+            "total_combinations": snapshot.total_combinations,
+            "completed_combinations": snapshot.completed_combinations,
             "bars_fetched": snapshot.bars_fetched,
             "bars_persisted": snapshot.bars_persisted,
             "cache_hits": snapshot.cache_hits,
             "api_requests": snapshot.api_requests,
-            "failed_instruments": list(snapshot.failed_instruments),
+            "failed_combinations": list(snapshot.failed_combinations),
             "created_at": snapshot.created_at,
             "started_at": snapshot.started_at,
             "completed_at": snapshot.completed_at,

@@ -1668,3 +1668,16 @@ dd {
   border-radius: var(--radius-md);
   padding: var(--space-2);
 }
+
+/* A short, fixed set of checkboxes (e.g. timeframes) that never needs
+   the scrollable, bordered grid the full instrument checklist above
+   does - a plain wrapping row instead. */
+.instrument-picker__checklist--inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
+  max-height: none;
+  overflow-y: visible;
+  border: none;
+  padding: var(--space-1) 0;
+}
