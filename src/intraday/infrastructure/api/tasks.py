@@ -29,9 +29,12 @@ from intraday.application.services.backtesting import BacktestingService
 from intraday.application.services.historical_backtest_run import HistoricalBacktestRunOrchestrator
 from intraday.application.services.historical_data_coverage import HistoricalDataCoverageService
 from intraday.application.services.historical_data_preparation import (
+    HistoricalBarProvider,
     HistoricalDataPreparationService,
 )
 from intraday.application.services.market_data import HistoricalMarketDataService
+from intraday.application.services.market_data_sync_run import MarketDataSyncRunOrchestrator
+from intraday.application.services.provider_settings import DhanSettingsService
 from intraday.domain.instrument.contracts import make_instrument_id
 from intraday.domain.market_data.contracts import Bar
 from intraday.domain.shared_kernel.contracts import Exchange, Timeframe
@@ -42,6 +45,12 @@ from intraday.infrastructure.api.emergency_square_off_trigger import (
 from intraday.infrastructure.api.market_data_ingestion_runtime import (
     run_market_data_ingestion_tick,
 )
+from intraday.infrastructure.market_data_providers.dhan.historical_provider import (
+    DhanHistoricalBarProvider,
+)
+from intraday.infrastructure.market_data_providers.dhan.instrument_master import (
+    DhanInstrumentMasterProvider,
+)
 from intraday.infrastructure.market_data_providers.synthetic_historical import (
     SyntheticHistoricalBarProvider,
 )
@@ -50,6 +59,12 @@ from intraday.infrastructure.persistence.historical_backtest_run_repository impo
 )
 from intraday.infrastructure.persistence.historical_bar_repository import (
     DjangoHistoricalBarRepository,
+)
+from intraday.infrastructure.persistence.market_data_sync_run_repository import (
+    DjangoMarketDataSyncRunRepository,
+)
+from intraday.infrastructure.persistence.provider_settings_repositories import (
+    DjangoDhanCredentialRepository,
 )
 from intraday.infrastructure.persistence.repositories import DjangoBacktestResultRepository
 from intraday.trading_engine.strategy_execution.contracts import StrategyConfigurationValues
@@ -159,17 +174,50 @@ def emergency_square_off_check_tick(*, now_override: str | None = None) -> str:
 _HISTORICAL_RUN_REGISTRY = build_default_registry()
 
 
+def _select_historical_bar_provider() -> HistoricalBarProvider:
+    """A REAL bug this fixes, found from a live report: every backtest
+    ran on `SyntheticHistoricalBarProvider` - deterministic, seeded,
+    FAKE OHLCV - never real market history, regardless of whether the
+    operator had genuinely connected their Dhan account (Settings page
+    showing "Connected" implied nothing about backtest data quality).
+    `DhanHistoricalBarProvider` (a genuine `/v2/charts/historical` +
+    `/v2/charts/intraday` REST adapter) is now used whenever Dhan
+    credentials are actually configured - the SAME credential source
+    `market_data_ingestion_runtime.py` already uses for live quotes, so
+    "Connected" on the Settings page now means what it says for
+    backtesting too.
+
+    HONEST FALLBACK, not silently masked: with no Dhan credentials
+    configured (this project's default dev/test environment - no
+    `DHAN_CLIENT_ID`/`DHAN_ACCESS_TOKEN` and no saved credential row),
+    this falls back to the synthetic provider so the DB-first pipeline
+    (coverage, fetch, persist, scan) remains exercisable without live
+    broker credentials - identical in spirit to `dispatch_historical_
+    backtest_run`'s own worker-liveness fallback just above."""
+    credentials = DhanSettingsService(
+        repository=DjangoDhanCredentialRepository()
+    ).effective_credentials()
+    if credentials is None:
+        return SyntheticHistoricalBarProvider()
+    client_id, access_token = credentials
+    return DhanHistoricalBarProvider(
+        client_id=client_id,
+        access_token=access_token,
+        instrument_master=DhanInstrumentMasterProvider(),
+    )
+
+
 def build_historical_backtest_orchestrator() -> HistoricalBacktestRunOrchestrator:
     """Wires the DB-first orchestrator with its real Django-backed
-    dependencies - the ONE place `SyntheticHistoricalBarProvider`
-    (see that module's own honest-disclosure docstring) is instantiated
-    for the historical-run task/API path."""
+    dependencies - see `_select_historical_bar_provider()`'s own
+    docstring for which historical-data provider this actually uses and
+    why."""
     bar_repository = DjangoHistoricalBarRepository()
     return HistoricalBacktestRunOrchestrator(
         run_repository=DjangoBacktestRunRepository(),
         preparation=HistoricalDataPreparationService(
             coverage=HistoricalDataCoverageService(repository=bar_repository),
-            provider=SyntheticHistoricalBarProvider(),
+            provider=_select_historical_bar_provider(),
             writer=bar_repository,
         ),
         backtesting=BacktestingService(
@@ -275,6 +323,66 @@ def dispatch_historical_backtest_run(run_id: str) -> None:
     except Exception as inner_exc:  # noqa: BLE001 - already recorded as FAILED on the BacktestRun row
         logger.warning(
             "historical_backtest_run.synchronous_fallback_failed",
+            run_id=run_id,
+            error=repr(inner_exc),
+        )
+
+
+def build_market_data_sync_orchestrator() -> MarketDataSyncRunOrchestrator:
+    """Wires the manual data-sync orchestrator - the Settings page's
+    "fetch real Dhan data into the database" trigger. Deliberately
+    reuses `_select_historical_bar_provider()` (the same real-vs-
+    synthetic selection the backtest path uses) and
+    `HistoricalDataPreparationService` (the same coverage/fetch/persist
+    pipeline) - never a second, parallel fetch implementation."""
+    bar_repository = DjangoHistoricalBarRepository()
+    return MarketDataSyncRunOrchestrator(
+        run_repository=DjangoMarketDataSyncRunRepository(),
+        preparation=HistoricalDataPreparationService(
+            coverage=HistoricalDataCoverageService(repository=bar_repository),
+            provider=_select_historical_bar_provider(),
+            writer=bar_repository,
+        ),
+    )
+
+
+@shared_task(name="intraday.infrastructure.api.run_market_data_sync_run")  # type: ignore[untyped-decorator]
+def run_market_data_sync_run_task(run_id: str) -> str:
+    """Dispatched by `create_market_data_sync_run_view` - same eager-in-
+    tests / real-worker-in-production behavior `run_historical_backtest_
+    run_task` has."""
+    orchestrator = build_market_data_sync_orchestrator()
+    try:
+        orchestrator.run(run_id)
+    except Exception as exc:  # noqa: BLE001 - a run must always end in a terminal, reported state
+        DjangoMarketDataSyncRunRepository().update(
+            run_id, status="FAILED", message=str(exc), completed_at=datetime.now(tz=UTC)
+        )
+        raise
+    return "completed"
+
+
+def dispatch_market_data_sync_run(run_id: str) -> None:
+    """Same real/synchronous-fallback dispatch discipline as
+    `dispatch_historical_backtest_run` above - see that function's own
+    docstring for the two real bugs (worker-liveness, re-raise-through-
+    the-fallback) this mirrors the fix for."""
+    if _a_celery_worker_is_actually_listening():
+        try:
+            run_market_data_sync_run_task.delay(run_id)
+            return
+        except Exception as delay_exc:  # noqa: BLE001 - falls through to the synchronous path below
+            logger.warning(
+                "market_data_sync_run.delay_failed_despite_live_worker",
+                run_id=run_id,
+                error=repr(delay_exc),
+            )
+
+    try:
+        run_market_data_sync_run_task(run_id)
+    except Exception as inner_exc:  # noqa: BLE001 - already recorded as FAILED on the MarketDataSyncRun row
+        logger.warning(
+            "market_data_sync_run.synchronous_fallback_failed",
             run_id=run_id,
             error=repr(inner_exc),
         )

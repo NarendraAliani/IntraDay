@@ -56,12 +56,14 @@ _EXCHANGE_COLUMN = "SEM_EXM_EXCH_ID"
 _INSTRUMENT_TYPE_COLUMN = "SEM_EXCH_INSTRUMENT_TYPE"
 _SYMBOL_COLUMN = "SEM_TRADING_SYMBOL"
 _DISPLAY_NAME_COLUMN = "SEM_CUSTOM_SYMBOL"
+_SECURITY_ID_COLUMN = "SEM_SMST_SECURITY_ID"
 _EQUITY_SHARE_INSTRUMENT_TYPE = "ES"
 _REQUIRED_COLUMNS = (
     _EXCHANGE_COLUMN,
     _INSTRUMENT_TYPE_COLUMN,
     _SYMBOL_COLUMN,
     _DISPLAY_NAME_COLUMN,
+    _SECURITY_ID_COLUMN,
 )
 
 
@@ -102,8 +104,10 @@ def _parse_scrip_master(csv_text: str) -> dict[str, tuple[InstrumentMasterEntry,
         if not symbol:
             continue
         display_name = (row.get(_DISPLAY_NAME_COLUMN) or "").strip() or symbol
+        raw_security_id = (row.get(_SECURITY_ID_COLUMN) or "").strip()
+        security_id = int(raw_security_id) if raw_security_id.isdigit() else None
         by_exchange.setdefault(exchange_value, {})[symbol] = InstrumentMasterEntry(
-            symbol=symbol, display_name=display_name
+            symbol=symbol, display_name=display_name, security_id=security_id
         )
 
     return {

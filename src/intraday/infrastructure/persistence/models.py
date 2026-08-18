@@ -1081,6 +1081,58 @@ class BacktestRun(models.Model):
         ordering = ["-created_at"]
 
 
+class MarketDataSyncRun(models.Model):
+    """Follow-up to Checkpoint 63.x: a persistent, pollable record of one
+    manual "fetch real historical data from Dhan into the database" run
+    - the same `run_id`-based create/poll shape `BacktestRun` already
+    established, deliberately reused rather than inventing a second
+    progress-tracking convention. Mutated by
+    `MarketDataSyncRunOrchestrator` as it works through each instrument,
+    calling the SAME `HistoricalDataPreparationService.prepare()`
+    coverage/fetch/persist pipeline the backtest orchestrator uses -
+    this run has no scan/strategy step of its own, it exists purely to
+    populate `HistoricalBar` so backtests (and, later, any other
+    consumer) find real data already cached."""
+
+    STATUS_CHOICES = [
+        (s, s) for s in ("QUEUED", "RUNNING", "COMPLETED", "PARTIAL", "FAILED", "CANCELLED")
+    ]
+
+    run_id = models.CharField(max_length=64, unique=True)
+    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default="QUEUED")
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    created_by = models.CharField(max_length=150)
+
+    start_date = models.DateField()
+    end_date = models.DateField()
+    timeframe = models.CharField(max_length=8)
+    instrument_ids = models.JSONField(default=list)
+
+    total_instruments = models.PositiveIntegerField(default=0)
+    completed_instruments = models.PositiveIntegerField(default=0)
+    bars_fetched = models.PositiveIntegerField(default=0)
+    bars_persisted = models.PositiveIntegerField(default=0)
+    cache_hits = models.PositiveIntegerField(default=0)
+    api_requests = models.PositiveIntegerField(default=0)
+
+    failed_instruments = models.JSONField(default=list)
+    """List of `{"instrument_id": ..., "reason": ...}` objects - the
+    same partial-failure disclosure convention `BacktestRun` uses,
+    never silently dropped from the report."""
+
+    progress_percent = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    current_instrument = models.CharField(max_length=100, blank=True, default="")
+    message = models.CharField(max_length=500, blank=True, default="")
+
+    class Meta:
+        app_label = "persistence"
+        indexes = [models.Index(fields=["-created_at"])]
+        ordering = ["-created_at"]
+
+
 class SignalRecord(models.Model):
     """Checkpoint 62.x: the FIRST persisted, queryable record of a real
     strategy-generated signal - closes a gap a fresh audit this

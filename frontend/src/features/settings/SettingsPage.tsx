@@ -6,6 +6,7 @@
 // hunt through tabs for which provider is misconfigured).
 import { DhanSettingsCard } from "./DhanSettingsCard";
 import { DiscordSettingsCard } from "./DiscordSettingsCard";
+import { HistoricalMarketDataCard } from "./HistoricalMarketDataCard";
 import { TelegramSettingsCard } from "./TelegramSettingsCard";
 
 export function SettingsPage(): JSX.Element {
@@ -20,6 +21,7 @@ export function SettingsPage(): JSX.Element {
         <DhanSettingsCard />
         <TelegramSettingsCard />
         <DiscordSettingsCard />
+        <HistoricalMarketDataCard />
       </div>
     </div>
   );

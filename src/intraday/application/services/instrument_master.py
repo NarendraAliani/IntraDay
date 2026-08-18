@@ -24,6 +24,11 @@ from intraday.domain.shared_kernel.contracts import Exchange
 class InstrumentMasterEntry:
     symbol: str
     display_name: str
+    # Broker-native numeric identifier (Dhan's `security_id`) - `None`
+    # for any source/test fixture that doesn't carry one. Needed to call
+    # a broker's historical-candle REST API, which addresses instruments
+    # by this ID, never by symbol (see `dhan/historical_client.py`).
+    security_id: int | None = None
 
 
 class InstrumentMasterProvider(Protocol):

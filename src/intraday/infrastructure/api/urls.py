@@ -16,6 +16,7 @@ from intraday.infrastructure.api import (
     backtesting_views,
     historical_backtesting_views,
     kill_switch_views,
+    market_data_sync_views,
     market_data_views,
     paper_trading_views,
     risk_views,
@@ -194,6 +195,17 @@ urlpatterns = [
         "backtesting/coverage-preview/",
         historical_backtesting_views.coverage_preview_view,
         name="backtesting-coverage-preview",
+    ),
+    # --- Follow-up to Checkpoint 63.x: manual historical market-data sync --
+    path(
+        "market-data/sync-runs/",
+        market_data_sync_views.create_market_data_sync_run_view,
+        name="market-data-sync-run-create",
+    ),
+    path(
+        "market-data/sync-runs/<str:run_id>/progress/",
+        market_data_sync_views.get_market_data_sync_run_progress,
+        name="market-data-sync-run-progress",
     ),
     # --- Checkpoint 27: research watchlists -------------------------------
     path("watchlists/", watchlist_views.list_watchlists, name="watchlists-list"),

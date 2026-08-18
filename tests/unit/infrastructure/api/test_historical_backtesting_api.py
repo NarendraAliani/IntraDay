@@ -13,12 +13,29 @@ import pytest
 from django.contrib.auth.models import Group, User
 from django.test import Client
 
+from intraday.application.services.provider_settings import DhanSettingsService
 from intraday.infrastructure.api.permissions import CONFIGURATION_OPERATOR_GROUP
 from tests.postgres_utils import requires_postgres
 
 OPERATOR_USERNAME = "hist-bt-operator"  # noqa: S105
 READER_USERNAME = "hist-bt-reader"  # noqa: S105
 PASSWORD = "correct-horse-battery-staple"  # noqa: S105
+
+
+@pytest.fixture(autouse=True)
+def _no_real_dhan_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    """This whole file predates the real `DhanHistoricalBarProvider` and
+    exercises `HistoricalBacktestRunOrchestrator`'s DB-first PIPELINE
+    (coverage/fetch/persist) against the deterministic synthetic
+    provider - never a real Dhan network call. `_select_historical_bar_
+    provider()` (infrastructure/api/tasks.py) now picks the real
+    provider whenever Dhan credentials are configured, and this dev
+    environment's own `.env` genuinely carries a real (if possibly
+    stale) access token - matching `test_market_data_ingestion_runtime.
+    py`'s own established "explicitly force no credentials, unless a
+    test is specifically about the credentials-configured path" fixture
+    pattern, not a new convention."""
+    monkeypatch.setattr(DhanSettingsService, "effective_credentials", lambda self: None)
 
 
 def _client_as_operator() -> Client:
@@ -347,3 +364,68 @@ def test_a_decimal_typed_strategy_parameter_sent_as_a_json_string_succeeds() -> 
     progress = client.get(f"/api/v1/config/backtesting/historical-runs/{run_id}/progress/").json()
     assert progress["status"] == "COMPLETED"
     assert not progress["failed_instruments"]
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_a_run_uses_the_real_dhan_provider_when_credentials_are_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The other half of the real bug this checkpoint fixes: previously
+    EVERY backtest ran on fabricated synthetic data regardless of
+    whether the operator had genuinely connected Dhan (the Settings
+    page's "Connected" badge implied nothing about backtest data
+    quality). Proves `_select_historical_bar_provider()` genuinely
+    reaches for the real `DhanHistoricalBarProvider` - and therefore a
+    real Dhan REST call - once credentials are configured, by
+    monkeypatching ONLY the actual outbound HTTP call (never a real
+    network request in a unit test) and asserting it was invoked with
+    the real instrument's known security_id."""
+    from intraday.application.services.instrument_master import InstrumentMasterEntry
+    from intraday.infrastructure.market_data_providers.dhan import historical_provider
+    from intraday.infrastructure.market_data_providers.dhan.instrument_master import (
+        DhanInstrumentMasterProvider,
+    )
+
+    monkeypatch.setattr(
+        DhanSettingsService, "effective_credentials", lambda self: ("client-1", "token-1")
+    )
+    monkeypatch.setattr(
+        DhanInstrumentMasterProvider,
+        "list_instruments",
+        lambda self, exchange: (
+            InstrumentMasterEntry(
+                symbol="RELIANCE", display_name="Reliance Industries", security_id=2885
+            ),
+        ),
+    )
+
+    calls: list[dict[str, object]] = []
+
+    def _fake_fetch_intraday_candles(**kwargs: object) -> tuple[object, ...]:
+        calls.append(kwargs)
+        return ()
+
+    monkeypatch.setattr(historical_provider, "fetch_intraday_candles", _fake_fetch_intraday_candles)
+
+    client = _client_as_operator()
+    response = client.post(
+        "/api/v1/config/backtesting/historical-runs/",
+        data=_run_payload(),
+        content_type="application/json",
+    )
+    assert response.status_code == 202
+    run_id = response.json()["run_id"]
+
+    progress = client.get(f"/api/v1/config/backtesting/historical-runs/{run_id}/progress/").json()
+
+    # The real provider genuinely ran (proven by the mocked call site
+    # actually being invoked with the right instrument) - the run
+    # itself ends NOT_AVAILABLE/FAILED here because the fake fetch
+    # returns zero bars, which is the correct, honest outcome, not a
+    # test bug: this test's job is proving WHICH provider ran, not
+    # re-proving the already-covered synthetic-provider happy path.
+    assert calls, "the real Dhan historical client was never called"
+    assert calls[0]["security_id"] == 2885
+    assert calls[0]["exchange_segment"] == "NSE_EQ"
+    assert progress["status"] in {"FAILED", "PARTIAL"}

@@ -448,6 +448,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/config/market-data/sync-runs/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["api_v1_config_market_data_sync_runs_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config/market-data/sync-runs/{run_id}/progress/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["api_v1_config_market_data_sync_runs_progress_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/config/paper-trading/expire-session/": {
         parameters: {
             query?: never;
@@ -1618,6 +1650,38 @@ export interface components {
          * @enum {string}
          */
         MarketDataHealthResponseStateEnum: "CONNECTED_FRESH" | "CONNECTED_STALE" | "DISCONNECTED" | "AUTHENTICATION_FAILED" | "ERROR" | "MARKET_CLOSED";
+        MarketDataSyncRunCreated: {
+            run_id: string;
+        };
+        MarketDataSyncRunProgress: {
+            run_id: string;
+            status: string;
+            /** Format: double */
+            progress_percent: number;
+            current_instrument: string;
+            message: string;
+            total_instruments: number;
+            completed_instruments: number;
+            bars_fetched: number;
+            bars_persisted: number;
+            cache_hits: number;
+            api_requests: number;
+            failed_instruments: unknown;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            started_at: string | null;
+            /** Format: date-time */
+            completed_at: string | null;
+        };
+        MarketDataSyncRunRequest: {
+            instrument_ids: string[];
+            timeframe: string;
+            /** Format: date */
+            start_date: string;
+            /** Format: date */
+            end_date: string;
+        };
         /**
          * @description * `MARKET` - MARKET
          *     * `LIMIT` - LIMIT
@@ -2536,6 +2600,68 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionResponse"];
+                };
+            };
+        };
+    };
+    api_v1_config_market_data_sync_runs_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MarketDataSyncRunRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["MarketDataSyncRunRequest"];
+                "multipart/form-data": components["schemas"]["MarketDataSyncRunRequest"];
+            };
+        };
+        responses: {
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MarketDataSyncRunCreated"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+        };
+    };
+    api_v1_config_market_data_sync_runs_progress_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MarketDataSyncRunProgress"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
                 };
             };
         };

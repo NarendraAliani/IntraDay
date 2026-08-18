@@ -81,3 +81,13 @@ def make_instrument_id(exchange: Exchange, symbol: str) -> InstrumentId:
     symbol) pair always produces the same domain identity regardless of
     which adapter or checkpoint constructs it."""
     return InstrumentId(f"{exchange.value}:{symbol.strip().upper()}")
+
+
+def parse_instrument_id(instrument_id: InstrumentId) -> tuple[Exchange, str]:
+    """The inverse of `make_instrument_id` - splits `"NSE:RELIANCE"` back
+    into `(Exchange.NSE, "RELIANCE")`. Needed by any adapter that must
+    resolve a broker-native identifier (e.g. a Dhan `security_id`) from
+    a domain `InstrumentId`, since the domain type itself deliberately
+    carries no broker concept (see module docstring)."""
+    exchange_value, _, symbol = str(instrument_id).partition(":")
+    return Exchange(exchange_value), symbol

@@ -13,6 +13,7 @@ from intraday.domain.instrument.contracts import (
     InstrumentType,
     TradingStatus,
     make_instrument_id,
+    parse_instrument_id,
 )
 from intraday.domain.shared_kernel.contracts import Exchange
 
@@ -36,6 +37,11 @@ def test_make_instrument_id_is_deterministic() -> None:
     a = make_instrument_id(Exchange.NSE, "reliance")
     b = make_instrument_id(Exchange.NSE, "RELIANCE")
     assert a == b == "NSE:RELIANCE"
+
+
+def test_parse_instrument_id_is_the_exact_inverse_of_make_instrument_id() -> None:
+    instrument_id = make_instrument_id(Exchange.NSE, "reliance")
+    assert parse_instrument_id(instrument_id) == (Exchange.NSE, "RELIANCE")
 
 
 def test_same_symbol_on_different_exchanges_is_a_distinct_identity() -> None:

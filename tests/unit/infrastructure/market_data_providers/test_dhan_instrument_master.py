@@ -43,10 +43,14 @@ def test_parses_genuine_equity_shares_with_real_display_names() -> None:
     result = _parse_scrip_master(csv_text)
 
     assert result["NSE"] == (
-        InstrumentMasterEntry(symbol="RELIANCE", display_name="Reliance Industries"),
+        InstrumentMasterEntry(
+            symbol="RELIANCE", display_name="Reliance Industries", security_id=2885
+        ),
     )
     assert result["BSE"] == (
-        InstrumentMasterEntry(symbol="RELIANCE", display_name="Reliance Industries"),
+        InstrumentMasterEntry(
+            symbol="RELIANCE", display_name="Reliance Industries", security_id=500325
+        ),
     )
 
 
@@ -68,7 +72,9 @@ def test_excludes_dhan_dummy_test_scrips_despite_matching_segment_and_series() -
     result = _parse_scrip_master(csv_text)
 
     assert result["NSE"] == (
-        InstrumentMasterEntry(symbol="RELIANCE", display_name="Reliance Industries"),
+        InstrumentMasterEntry(
+            symbol="RELIANCE", display_name="Reliance Industries", security_id=2885
+        ),
     )
 
 
@@ -89,7 +95,9 @@ def test_excludes_bonds_and_debentures_despite_segment_e() -> None:
     result = _parse_scrip_master(csv_text)
 
     assert result["NSE"] == (
-        InstrumentMasterEntry(symbol="RELIANCE", display_name="Reliance Industries"),
+        InstrumentMasterEntry(
+            symbol="RELIANCE", display_name="Reliance Industries", security_id=2885
+        ),
     )
 
 
@@ -114,7 +122,9 @@ def test_falls_back_to_symbol_when_display_name_is_blank() -> None:
 
     result = _parse_scrip_master(csv_text)
 
-    assert result["NSE"] == (InstrumentMasterEntry(symbol="SOMESTOCK", display_name="SOMESTOCK"),)
+    assert result["NSE"] == (
+        InstrumentMasterEntry(symbol="SOMESTOCK", display_name="SOMESTOCK", security_id=1),
+    )
 
 
 def test_missing_expected_columns_raises_loudly_never_silently_wrong() -> None:
