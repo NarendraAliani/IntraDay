@@ -33,7 +33,7 @@ from intraday.application.services.historical_backtest_run import range_bounds
 from intraday.application.services.historical_data_coverage import HistoricalDataCoverageService
 from intraday.domain.instrument.contracts import make_instrument_id
 from intraday.domain.shared_kernel.contracts import Exchange, InstrumentId, Timeframe
-from intraday.infrastructure.api.errors import invalid_configuration, not_found
+from intraday.infrastructure.api.errors import invalid_configuration, not_found, unexpected
 from intraday.infrastructure.api.permissions import IsConfigurationOperator
 from intraday.infrastructure.api.tasks import dispatch_historical_backtest_run
 from intraday.infrastructure.persistence.historical_backtest_run_repository import (
@@ -74,28 +74,36 @@ def create_historical_backtest_run_view(request: Request) -> Response:
             return invalid_configuration(exc)
 
     run_id = str(uuid.uuid4())
-    repository = DjangoBacktestRunRepository()
-    repository.create(
-        run_id,
-        created_by=request.user.get_username(),
-        start_date=data["start_date"],
-        end_date=data["end_date"],
-        timeframe=data["timeframe"],
-        instrument_ids=list(data["instrument_ids"]),
-        strategy_id=data["strategy_id"],
-        specification_version=data["specification_version"],
-        code_version=data["code_version"],
-        configuration_version=data["configuration_version"],
-        strategy_values=dict(data["strategy_values"]),
-        cost_model_name=data["cost_model_name"],
-        initial_capital=data["initial_capital"],
-        position_sizing_mode=data["position_sizing_mode"],
-        position_size_value=data["position_size_value"],
-        brokerage_percent=data["brokerage_percent"],
-        slippage_percent=data["slippage_percent"],
-        total_instruments=len(data["instrument_ids"]),
-    )
-    dispatch_historical_backtest_run(run_id)
+    try:
+        repository = DjangoBacktestRunRepository()
+        repository.create(
+            run_id,
+            created_by=request.user.get_username(),
+            start_date=data["start_date"],
+            end_date=data["end_date"],
+            timeframe=data["timeframe"],
+            instrument_ids=list(data["instrument_ids"]),
+            strategy_id=data["strategy_id"],
+            specification_version=data["specification_version"],
+            code_version=data["code_version"],
+            configuration_version=data["configuration_version"],
+            strategy_values=dict(data["strategy_values"]),
+            cost_model_name=data["cost_model_name"],
+            initial_capital=data["initial_capital"],
+            position_sizing_mode=data["position_sizing_mode"],
+            position_size_value=data["position_size_value"],
+            brokerage_percent=data["brokerage_percent"],
+            slippage_percent=data["slippage_percent"],
+            total_instruments=len(data["instrument_ids"]),
+        )
+        dispatch_historical_backtest_run(run_id)
+    except Exception as exc:  # noqa: BLE001 - never let a raw, unclassified exception become an opaque
+        # non-JSON Django 500 page - the frontend can only show the caller
+        # something useful if the response body is the project's own
+        # {error_code, message} shape (see infrastructure/api/errors.py).
+        # The real exception is still logged server-side (structlog) by
+        # unexpected() below.
+        return unexpected(exc)
     return Response({"run_id": run_id}, status=202)
 
 
@@ -108,7 +116,10 @@ def create_historical_backtest_run_view(request: Request) -> Response:
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def get_historical_backtest_run_progress(request: Request, run_id: str) -> Response:
-    snapshot = DjangoBacktestRunRepository().get(run_id)
+    try:
+        snapshot = DjangoBacktestRunRepository().get(run_id)
+    except Exception as exc:  # noqa: BLE001 - see create_historical_backtest_run_view's own comment
+        return unexpected(exc)
     if snapshot is None:
         return not_found(ResourceNotFoundError(f"no backtest run found for {run_id!r}"))
 
@@ -176,24 +187,27 @@ def coverage_preview_view(request: Request) -> Response:
     entries = []
     total_expected = 0
     total_cached = 0
-    for raw_id in data["instrument_ids"]:
-        try:
-            instrument_id = _instrument_id(raw_id)
-        except (KeyError, ValueError) as exc:
-            return invalid_configuration(exc)
-        report = coverage_service.get_coverage(instrument_id, timeframe, start, end)
-        total_expected += report.expected_bar_count
-        total_cached += report.cached_bar_count
-        entries.append(
-            {
-                "instrument_id": raw_id,
-                "coverage_percent": report.coverage_percent,
-                "expected_bar_count": report.expected_bar_count,
-                "cached_bar_count": report.cached_bar_count,
-                "is_complete": report.is_complete,
-                "missing_range_count": len(report.missing_ranges),
-            }
-        )
+    try:
+        for raw_id in data["instrument_ids"]:
+            try:
+                instrument_id = _instrument_id(raw_id)
+            except (KeyError, ValueError) as exc:
+                return invalid_configuration(exc)
+            report = coverage_service.get_coverage(instrument_id, timeframe, start, end)
+            total_expected += report.expected_bar_count
+            total_cached += report.cached_bar_count
+            entries.append(
+                {
+                    "instrument_id": raw_id,
+                    "coverage_percent": report.coverage_percent,
+                    "expected_bar_count": report.expected_bar_count,
+                    "cached_bar_count": report.cached_bar_count,
+                    "is_complete": report.is_complete,
+                    "missing_range_count": len(report.missing_ranges),
+                }
+            )
+    except Exception as exc:  # noqa: BLE001 - see create_historical_backtest_run_view's own comment
+        return unexpected(exc)
 
     overall = round((total_cached / total_expected) * 100, 2) if total_expected else 0.0
     return Response({"instruments": entries, "overall_coverage_percent": overall})

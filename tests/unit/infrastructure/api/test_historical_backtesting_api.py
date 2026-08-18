@@ -229,3 +229,35 @@ def test_partial_failure_is_disclosed_never_silently_dropped() -> None:
         content_type="application/json",
     )
     assert response.status_code == 400  # rejected at validation - XYZ is not a real Exchange
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_an_unexpected_exception_returns_clean_json_never_a_raw_500_page() -> None:
+    """A real bug found from a live report: an unclassified exception
+    inside the view used to become an opaque, non-JSON Django 500 page
+    - the frontend's error parser can only surface a real message when
+    the body is the project's own {error_code, message} JSON shape.
+    Simulates a genuinely unexpected failure (the repository blowing up)
+    and proves the response is still well-formed JSON, not a crash."""
+    from unittest.mock import patch
+
+    client = _client_as_operator()
+    with patch(
+        "intraday.infrastructure.api.historical_backtesting_views.DjangoBacktestRunRepository"
+    ) as mock_repo_class:
+        mock_repo_class.return_value.create.side_effect = RuntimeError(
+            "simulated unexpected failure"
+        )
+        response = client.post(
+            "/api/v1/config/backtesting/historical-runs/",
+            data=_run_payload(),
+            content_type="application/json",
+        )
+
+    assert response.status_code == 500
+    body = response.json()
+    assert body["error_code"] == "internal_error"
+    assert "unexpected error" in body["message"].lower()
+    # never leaks the real exception text to the client
+    assert "simulated unexpected failure" not in body["message"]
