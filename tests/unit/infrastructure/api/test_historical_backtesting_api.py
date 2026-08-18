@@ -297,3 +297,25 @@ def test_unexpected_exception_includes_debug_detail_only_when_debug_is_on() -> N
     assert body["debug_detail"]["exception_type"] == "RuntimeError"
     assert body["debug_detail"]["exception_message"] == "a specific real cause"
     assert "Traceback" in body["debug_detail"]["traceback"]
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_a_long_configuration_version_like_the_frontend_actually_sends_succeeds() -> None:
+    """THE real bug a live report found: the frontend generates
+    `configuration_version` as `f"wb-hist-{Date.now()}"` (was
+    `f"workbench-historical-{Date.now()}"`, 34 characters - one
+    character over the column's PREVIOUS `max_length=32`, causing a
+    real `DataError: value too long for type character varying(32)` on
+    every historical run creation). Proves the actual value the
+    frontend sends today - and a deliberately still-long one - both
+    now fit the widened column."""
+    client = _client_as_operator()
+    response = client.post(
+        "/api/v1/config/backtesting/historical-runs/",
+        # 34 chars - the old bug, reproduced exactly (was one over the
+        # column's previous max_length=32).
+        data=_run_payload(configuration_version="workbench-historical-1755000000000"),
+        content_type="application/json",
+    )
+    assert response.status_code == 202

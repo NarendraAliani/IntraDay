@@ -1031,7 +1031,14 @@ class BacktestRun(models.Model):
     strategy_id = models.CharField(max_length=100)
     specification_version = models.CharField(max_length=32)
     code_version = models.CharField(max_length=32)
-    configuration_version = models.CharField(max_length=32)
+    configuration_version = models.CharField(max_length=100)
+    """Widened from an initial 32-char guess after a real, reported
+    `DataError: value too long` proved the actual generated value is
+    longer than assumed - the SAME class of bug already found once
+    before on `SignalRecord.timeframe` (Checkpoint 62.x). `100` matches
+    every OTHER `configuration_version` column already in this
+    codebase (`StrategyVersion`/`StrategyConfigurationSnapshot`) -
+    this field was the one inconsistent outlier at `32`."""
     strategy_values = models.JSONField(default=dict)
     cost_model_name = models.CharField(max_length=32, default="FLAT_PERCENTAGE")
     initial_capital = models.DecimalField(max_digits=18, decimal_places=4)

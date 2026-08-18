@@ -1008,7 +1008,7 @@ function HistoricalBacktestRunPanel(props: HistoricalBacktestRunPanelProps): JSX
         strategy_id: props.strategyId,
         specification_version: props.specificationVersion,
         code_version: props.codeVersion,
-        configuration_version: `workbench-historical-${Date.now()}`,
+        configuration_version: `wb-hist-${Date.now()}`,
         strategy_values: props.strategyValues,
         initial_capital: props.initialCapital,
         position_sizing_mode: props.positionSizingMode,
