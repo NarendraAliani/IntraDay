@@ -52,6 +52,14 @@ function describeError(error: unknown): string {
   return "An unexpected error occurred.";
 }
 
+/** Today's calendar date, `YYYY-MM-DD` - the sensible default for
+ * every date field on this page (Start/End on both the single- and
+ * multi-instrument flows), rather than a stale hardcoded fixture date
+ * an operator has to notice and change every time. */
+function todayIsoDate(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
 function formatMoney(value: string | null | undefined): string {
   if (value === null || value === undefined) return "—";
   const parsed = Number.parseFloat(value);
@@ -81,8 +89,8 @@ export function BacktestingWorkbenchPage(): JSX.Element {
 
   const [instrumentId, setInstrumentId] = useState("NSE:FIXTURE01");
   const [timeframe, setTimeframe] = useState("5m");
-  const [start, setStart] = useState("2026-01-02T03:00");
-  const [end, setEnd] = useState("2026-01-02T06:00");
+  const [start, setStart] = useState(() => `${todayIsoDate()}T09:15`);
+  const [end, setEnd] = useState(() => `${todayIsoDate()}T15:30`);
   const [initialCapital, setInitialCapital] = useState("100000");
   const [positionSizingMode, setPositionSizingMode] = useState<"FIXED_QUANTITY" | "PERCENT_OF_EQUITY">(
     "FIXED_QUANTITY",
@@ -92,7 +100,7 @@ export function BacktestingWorkbenchPage(): JSX.Element {
   const [slippagePercent, setSlippagePercent] = useState("0");
   const [costModelName, setCostModelName] = useState<
     "FLAT_PERCENTAGE" | "INDIAN_CASH_EQUITY_INTRADAY"
-  >("FLAT_PERCENTAGE");
+  >("INDIAN_CASH_EQUITY_INTRADAY");
 
   const [runState, setRunState] = useState<RunState>({ phase: "ready" });
   const [expandedStrategyId, setExpandedStrategyId] = useState<string | null>(null);
@@ -875,8 +883,8 @@ function formatSeconds(value: number | null | undefined): string {
 
 function HistoricalBacktestRunPanel(props: HistoricalBacktestRunPanelProps): JSX.Element {
   const [instrumentIds, setInstrumentIds] = useState<string[]>([]);
-  const [startDate, setStartDate] = useState("2026-01-05");
-  const [endDate, setEndDate] = useState("2026-01-09");
+  const [startDate, setStartDate] = useState(todayIsoDate);
+  const [endDate, setEndDate] = useState(todayIsoDate);
   const [state, setState] = useState<HistoricalRunPhase>({ phase: "idle" });
   const [runId, setRunId] = useState<string | null>(null);
 

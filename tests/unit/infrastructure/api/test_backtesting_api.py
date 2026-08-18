@@ -134,3 +134,42 @@ def test_rerunning_identical_configuration_upserts_same_backtest_id() -> None:
     assert first.json()["backtest_id"] == second.json()["backtest_id"]
     list_response = client.get("/api/v1/config/backtesting/strategies/ema_crossover/results/")
     assert len(list_response.json()) == 1  # upsert, not a duplicate row
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_run_backtest_against_a_real_instrument_is_db_first_not_fixture_only() -> None:
+    """Checkpoint 63.x follow-up: debugging the reported "no bars
+    available for NSE:FIXTURE01" experience - a real instrument/date
+    combination (never seen by the fixture repository at all) must now
+    succeed via the same DB-first coverage/fetch/persist pipeline the
+    multi-instrument historical-run panel uses, not fail outright."""
+    client = _client_as_operator()
+    response = client.post(
+        "/api/v1/config/backtesting/run/",
+        data=_run_payload(
+            instrument_id="NSE:RELIANCE",
+            start="2026-08-17T03:45:00Z",
+            end="2026-08-17T10:00:00Z",
+        ),
+        content_type="application/json",
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["data_quality"]["bar_count"] > 0
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_run_backtest_against_fixture_instrument_still_uses_the_deterministic_fixture() -> None:
+    """The FIXTURE01 flow's own reproducibility/cost-model tests depend
+    on this staying exactly as it was - never routed through the DB-
+    first pipeline."""
+    client = _client_as_operator()
+    response = client.post(
+        "/api/v1/config/backtesting/run/", data=_run_payload(), content_type="application/json"
+    )
+    assert response.status_code == 200
+    assert response.json()["data_quality"]["data_source"] == (
+        "HistoricalMarketDataRepository (fixture/historical only)"
+    )

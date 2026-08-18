@@ -40,6 +40,11 @@ urlpatterns = [
     path("market-data/session/", market_data_views.session_status, name="market-data-session"),
     path("market-data/health/", market_data_views.health_status, name="market-data-health"),
     path("market-data/quotes/", market_data_views.current_quotes, name="market-data-quotes"),
+    path(
+        "market-data/instruments/",
+        market_data_views.list_instruments,
+        name="market-data-instruments",
+    ),
     path("market-data/refresh/", market_data_views.refresh, name="market-data-refresh"),
     # --- Checkpoint 24A: read-only canonical bars --------------------------
     path("market-data/bars/", market_data_views.recent_bars, name="market-data-bars"),

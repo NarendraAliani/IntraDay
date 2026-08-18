@@ -354,6 +354,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/config/market-data/instruments/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Follow-up to Checkpoint 63.x: every tradable instrument for
+         *     `?exchange=NSE|BSE`, from the real Dhan scrip master - what the
+         *     instrument picker's "Select All" uses instead of being limited to
+         *     only currently live-observed instruments. Degrades HONESTLY on
+         *     failure (`source: "UNAVAILABLE"`, empty list) rather than a 500 -
+         *     the frontend picker falls back to observed-quotes-only selection in
+         *     that case, never a fabricated instrument list.
+         */
+        get: operations["api_v1_config_market_data_instruments_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/config/market-data/quotes/": {
         parameters: {
             query?: never;
@@ -1402,6 +1427,12 @@ export interface components {
             username: string | null;
             capabilities: string[];
         };
+        /**
+         * @description * `DHAN_SCRIP_MASTER` - DHAN_SCRIP_MASTER
+         *     * `UNAVAILABLE` - UNAVAILABLE
+         * @enum {string}
+         */
+        DataSourceEnum: "DHAN_SCRIP_MASTER" | "UNAVAILABLE";
         DhanSettingsResponse: {
             client_id_masked: string;
             client_id_source: components["schemas"]["ProviderConfigurationSourceEnum"];
@@ -1521,6 +1552,19 @@ export interface components {
             slippage_percent: string;
             /** @default FLAT_PERCENTAGE */
             cost_model_name: components["schemas"]["CostModelNameEnum"];
+        };
+        /**
+         * @description Follow-up to Checkpoint 63.x: the real "all tradable instruments
+         *     for this exchange" list (Dhan scrip master), backing the instrument
+         *     picker's "Select All." `source` is always explicit -
+         *     `"DHAN_SCRIP_MASTER"` when the real master list was fetched,
+         *     `"UNAVAILABLE"` when it could not be (never silently returned as if
+         *     it succeeded).
+         */
+        InstrumentListResponse: {
+            exchange: string;
+            instrument_ids: string[];
+            data_source: components["schemas"]["DataSourceEnum"];
         };
         KillSwitchEngageRequest: {
             reason: string;
@@ -2403,6 +2447,25 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MarketDataHealthResponse"];
+                };
+            };
+        };
+    };
+    api_v1_config_market_data_instruments_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InstrumentListResponse"];
                 };
             };
         };

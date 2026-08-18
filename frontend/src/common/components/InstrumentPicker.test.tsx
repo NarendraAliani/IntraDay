@@ -1,9 +1,12 @@
 // frontend/src/common/components/InstrumentPicker.test.tsx
 //
 // Checkpoint 63.x follow-up: proves the shared instrument picker only
-// ever offers real, backend-sourced instruments (never free text), and
-// honestly discloses that index (NIFTY/SENSEX) selection is unavailable
-// rather than either hiding it or fabricating constituent data.
+// ever offers real, backend-sourced instruments (never free text),
+// "Select All" selects every real exchange instrument (not just
+// observed ones) when the exchange master list is available, degrades
+// honestly when it is not, and discloses that index (NIFTY/SENSEX)
+// selection is unavailable rather than either hiding it or fabricating
+// constituent data.
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -18,12 +21,31 @@ function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 }
 
-function stubQuotes(quotes: unknown[]): void {
+function stub(options: {
+  quotes?: unknown[];
+  nseInstruments?: string[];
+  bseInstruments?: string[];
+  masterAvailable?: boolean;
+}): void {
+  const { quotes = [], nseInstruments = [], bseInstruments = [], masterAvailable = true } = options;
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input.toString();
       if (url.includes("/market-data/quotes/")) return jsonResponse(quotes);
+      if (url.includes("/market-data/instruments/")) {
+        if (!masterAvailable) {
+          return jsonResponse({ exchange: "NSE", instrument_ids: [], data_source: "UNAVAILABLE" });
+        }
+        const isNse = url.includes("exchange=NSE");
+        return jsonResponse({
+          exchange: isNse ? "NSE" : "BSE",
+          instrument_ids: (isNse ? nseInstruments : bseInstruments).map(
+            (s) => `${isNse ? "NSE" : "BSE"}:${s}`,
+          ),
+          data_source: "DHAN_SCRIP_MASTER",
+        });
+      }
       return jsonResponse({ error_code: "not_found", message: "no route" }, 404);
     }),
   );
@@ -39,11 +61,9 @@ const RELIANCE_QUOTE = {
 };
 
 describe("InstrumentPickerSingle", () => {
-  it("offers only real observed instruments, never a free-text input", async () => {
-    stubQuotes([RELIANCE_QUOTE]);
-    renderWithAuth(
-      <InstrumentPickerSingle id="test-picker" value="" onChange={() => {}} />,
-    );
+  it("offers only real instruments, never a free-text input", async () => {
+    stub({ nseInstruments: ["RELIANCE"] });
+    renderWithAuth(<InstrumentPickerSingle id="test-picker" value="" onChange={() => {}} />);
 
     await waitFor(() => expect(screen.getByText("NSE:RELIANCE")).toBeInTheDocument());
     expect(document.querySelector('input[type="text"]')).toBeNull();
@@ -51,15 +71,15 @@ describe("InstrumentPickerSingle", () => {
   });
 
   it("discloses that index (NIFTY/SENSEX) selection is unavailable rather than fabricating it", async () => {
-    stubQuotes([]);
+    stub({});
     renderWithAuth(<InstrumentPickerSingle id="test-picker" value="" onChange={() => {}} />);
 
     expect(screen.getByText("INDEX SELECTION UNAVAILABLE")).toBeInTheDocument();
     expect(screen.queryByText(/NIFTY 50/i)).not.toBeInTheDocument();
   });
 
-  it("includes extra fixed options (e.g. the deterministic fixture) alongside observed instruments", async () => {
-    stubQuotes([]);
+  it("includes extra fixed options (e.g. the deterministic fixture) alongside real instruments", async () => {
+    stub({});
     renderWithAuth(
       <InstrumentPickerSingle
         id="test-picker"
@@ -75,11 +95,9 @@ describe("InstrumentPickerSingle", () => {
 
 describe("InstrumentPickerMulti", () => {
   it("selecting a checkbox calls onChange with the real instrument id", async () => {
-    stubQuotes([RELIANCE_QUOTE]);
+    stub({ quotes: [RELIANCE_QUOTE], nseInstruments: ["RELIANCE"] });
     const onChange = vi.fn();
-    renderWithAuth(
-      <InstrumentPickerMulti idPrefix="test-multi" value={[]} onChange={onChange} />,
-    );
+    renderWithAuth(<InstrumentPickerMulti idPrefix="test-multi" value={[]} onChange={onChange} />);
 
     await waitFor(() => expect(screen.getByText("NSE:RELIANCE")).toBeInTheDocument());
     fireEvent.click(screen.getByRole("checkbox", { name: "NSE:RELIANCE" }));
@@ -87,12 +105,35 @@ describe("InstrumentPickerMulti", () => {
     expect(onChange).toHaveBeenCalledWith(["NSE:RELIANCE"]);
   });
 
-  it("shows an honest empty state when no instruments have been observed yet", async () => {
-    stubQuotes([]);
+  it('"Select All" selects every real exchange instrument, not only ones with a live quote', async () => {
+    stub({
+      quotes: [RELIANCE_QUOTE], // only RELIANCE has ever been observed live
+      nseInstruments: ["RELIANCE", "TCS", "INFY", "HDFCBANK"], // but the exchange has many more
+    });
+    const onChange = vi.fn();
+    renderWithAuth(<InstrumentPickerMulti idPrefix="test-multi" value={[]} onChange={onChange} />);
+
+    await waitFor(() => expect(screen.getByText("NSE:TCS")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Select All" }));
+
+    expect(onChange).toHaveBeenCalledWith(
+      expect.arrayContaining(["NSE:RELIANCE", "NSE:TCS", "NSE:INFY", "NSE:HDFCBANK"]),
+    );
+  });
+
+  it("degrades honestly to observed-only selection when the exchange master list is unavailable", async () => {
+    stub({ quotes: [RELIANCE_QUOTE], masterAvailable: false });
+    renderWithAuth(<InstrumentPickerMulti idPrefix="test-multi" value={[]} onChange={() => {}} />);
+
+    await waitFor(() => expect(screen.getByText("OBSERVED INSTRUMENTS ONLY")).toBeInTheDocument());
+  });
+
+  it("shows an honest empty state when no instruments are available", async () => {
+    stub({});
     renderWithAuth(<InstrumentPickerMulti idPrefix="test-multi" value={[]} onChange={() => {}} />);
 
     await waitFor(() =>
-      expect(screen.getByText(/No observed instruments yet/)).toBeInTheDocument(),
+      expect(screen.getByText(/No instruments available yet/)).toBeInTheDocument(),
     );
   });
 });

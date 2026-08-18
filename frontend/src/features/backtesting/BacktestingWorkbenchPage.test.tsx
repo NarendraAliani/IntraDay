@@ -415,6 +415,7 @@ describe("BacktestingWorkbenchPage", () => {
           is_stale: false,
         },
       ],
+      "/market-data/instruments/": { exchange: "NSE", instrument_ids: [], data_source: "UNAVAILABLE" },
       "/backtesting/coverage-preview/": {
         instruments: [
           {
@@ -493,6 +494,9 @@ describe("BacktestingWorkbenchPage", () => {
               is_stale: false,
             },
           ]);
+        }
+        if (url.includes("/market-data/instruments/")) {
+          return jsonResponse({ exchange: "NSE", instrument_ids: [], data_source: "UNAVAILABLE" });
         }
         if (url.includes("/progress/")) return jsonResponse(progressPayload());
         if (method === "POST" && url.endsWith("/backtesting/historical-runs/")) {

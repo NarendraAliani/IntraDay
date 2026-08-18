@@ -2,9 +2,20 @@
 //
 // Checkpoint 63.x (follow-up): a single, reusable instrument-selection
 // control, replacing free-text "type an instrument ID" inputs across the
-// project. Backed ONLY by real data - `getCurrentQuotes()`, the same
-// "observed instruments" source `LiveMarketDataMonitor`'s universe
-// checklist already uses - never an invented/hard-coded stock list.
+// project. Backed by TWO real data sources, never an invented/hard-coded
+// stock list:
+//
+//   - `listInstruments(exchange)` - the REAL "every tradable instrument
+//     on this exchange" list (Dhan's published scrip master), so
+//     "Select All" genuinely means all stocks on the selected exchange,
+//     not just the handful the live-quote pipeline happens to have
+//     observed. This is what drives the picker whenever a specific
+//     exchange is selected.
+//   - `getCurrentQuotes()` - the "observed instruments" fallback (the
+//     same source `LiveMarketDataMonitor`'s universe checklist already
+//     uses), used only when the exchange master list could not be
+//     fetched (`data_source: "UNAVAILABLE"`) - degrades honestly rather
+//     than showing nothing.
 //
 // INDEX (NIFTY/SENSEX) SELECTION - HONEST DISCLOSURE: this project has
 // no real NIFTY/SENSEX constituent data anywhere (confirmed by a fresh
@@ -19,39 +30,72 @@
 // unverified data (which would be a fabrication).
 import { useEffect, useState } from "react";
 
-import { getCurrentQuotes } from "../api/marketDataApi";
-import type { QuoteResponse } from "../api/marketDataApi";
+import { getCurrentQuotes, listInstruments } from "../api/marketDataApi";
 
 export type ExchangeFilter = "ALL" | "NSE" | "BSE";
 
-function useObservedInstruments(): { instruments: string[]; loading: boolean; error: string | null } {
-  const [quotes, setQuotes] = useState<QuoteResponse[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+interface UniverseState {
+  instruments: string[];
+  loading: boolean;
+  error: string | null;
+  /** Whether the real per-exchange master list backed this result, or
+   * it fell back to only observed instruments - shown to the operator
+   * so "Select All" is never silently narrower than it looks. */
+  isFullExchangeList: boolean;
+}
+
+function useInstrumentUniverse(exchange: ExchangeFilter): UniverseState {
+  const [state, setState] = useState<UniverseState>({
+    instruments: [],
+    loading: true,
+    error: null,
+    isFullExchangeList: false,
+  });
 
   useEffect(() => {
     let cancelled = false;
-    getCurrentQuotes()
-      .then((result) => {
-        if (!cancelled) setQuotes(result);
-      })
-      .catch(() => {
-        if (!cancelled) setError("Unable to load the observed instrument list.");
-      });
+    setState((prev) => ({ ...prev, loading: true, error: null }));
+
+    async function load(): Promise<void> {
+      const exchangesToFetch: ("NSE" | "BSE")[] = exchange === "ALL" ? ["NSE", "BSE"] : [exchange];
+      try {
+        const [masterResults, quotes] = await Promise.all([
+          Promise.all(exchangesToFetch.map((ex) => listInstruments(ex))),
+          getCurrentQuotes(),
+        ]);
+        if (cancelled) return;
+
+        const masterIds = masterResults.flatMap((r) => r.instrument_ids);
+        const anyMasterAvailable = masterResults.some((r) => r.data_source === "DHAN_SCRIP_MASTER");
+        const observedIds = quotes
+          .map((q) => `${q.exchange}:${q.symbol}`)
+          .filter((id) => exchange === "ALL" || id.startsWith(`${exchange}:`));
+
+        const instruments = Array.from(new Set([...masterIds, ...observedIds])).sort();
+        setState({
+          instruments,
+          loading: false,
+          error: null,
+          isFullExchangeList: anyMasterAvailable,
+        });
+      } catch {
+        if (!cancelled) {
+          setState({
+            instruments: [],
+            loading: false,
+            error: "Unable to load the instrument list.",
+            isFullExchangeList: false,
+          });
+        }
+      }
+    }
+    void load();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [exchange]);
 
-  const instruments = Array.from(
-    new Set((quotes ?? []).map((q) => `${q.exchange}:${q.symbol}`)),
-  ).sort();
-
-  return { instruments, loading: quotes === null && error === null, error };
-}
-
-function filterByExchange(instruments: string[], exchange: ExchangeFilter): string[] {
-  if (exchange === "ALL") return instruments;
-  return instruments.filter((id) => id.startsWith(`${exchange}:`));
+  return state;
 }
 
 /** The "pick an index" affordance every instrument picker on this page
@@ -61,8 +105,29 @@ function IndexUnavailableNotice(): JSX.Element {
     <p className="strategy-config-page__help-text">
       <strong className="badge badge--pending">INDEX SELECTION UNAVAILABLE</strong> — NIFTY/SENSEX
       constituent selection is not offered: this platform has no verified, current index-membership
-      data source. Pick from observed instruments below instead.
+      data source. Pick from the instruments below instead.
     </p>
+  );
+}
+
+function ExchangeSelect(props: {
+  id: string;
+  value: ExchangeFilter;
+  onChange: (exchange: ExchangeFilter) => void;
+}): JSX.Element {
+  return (
+    <div className="instrument-picker__row">
+      <label htmlFor={props.id}>Exchange</label>
+      <select
+        id={props.id}
+        value={props.value}
+        onChange={(e) => props.onChange(e.target.value as ExchangeFilter)}
+      >
+        <option value="ALL">All Exchanges</option>
+        <option value="NSE">NSE</option>
+        <option value="BSE">BSE</option>
+      </select>
+    </div>
   );
 }
 
@@ -71,46 +136,32 @@ export interface InstrumentPickerSingleProps {
   onChange: (instrumentId: string) => void;
   label?: string;
   id: string;
-  /** Fixed, always-available options shown alongside real observed
-   * instruments - e.g. the deterministic `NSE:FIXTURE01` synthetic
-   * fixture the single-instrument backtest fixture flow depends on,
-   * which will never appear in live-observed quotes. Still a pick,
-   * never free text - just a known-in-advance option instead of an
-   * empty-until-observed one. */
+  /** Fixed, always-available options shown alongside real instruments -
+   * e.g. the deterministic `NSE:FIXTURE01` synthetic fixture the
+   * single-instrument backtest fixture flow depends on, which will
+   * never appear in a real exchange's instrument list. Still a pick,
+   * never free text - just a known-in-advance option. */
   extraOptions?: string[];
 }
 
 /** A single-instrument picker (e.g. the Workbench's single-instrument
- * Run Backtest form) - a real <select> over observed instruments, never
- * a free-text field. */
+ * Run Backtest form) - a real <select> over real instruments, never a
+ * free-text field. */
 export function InstrumentPickerSingle(props: InstrumentPickerSingleProps): JSX.Element {
-  const { instruments, loading, error } = useObservedInstruments();
   const [exchange, setExchange] = useState<ExchangeFilter>("ALL");
-  const combined = Array.from(new Set([...(props.extraOptions ?? []), ...instruments])).sort();
-  const filtered = filterByExchange(combined, exchange);
+  const { instruments, loading, error } = useInstrumentUniverse(exchange);
+  const filtered = Array.from(new Set([...(props.extraOptions ?? []), ...instruments])).sort();
 
   return (
     <div className="instrument-picker">
-      <div className="instrument-picker__row">
-        <label htmlFor={`${props.id}-exchange`}>Exchange</label>
-        <select
-          id={`${props.id}-exchange`}
-          value={exchange}
-          onChange={(e) => setExchange(e.target.value as ExchangeFilter)}
-        >
-          <option value="ALL">All Exchanges</option>
-          <option value="NSE">NSE</option>
-          <option value="BSE">BSE</option>
-        </select>
-      </div>
+      <ExchangeSelect id={`${props.id}-exchange`} value={exchange} onChange={setExchange} />
       <IndexUnavailableNotice />
       <label htmlFor={props.id}>{props.label ?? "Instrument"}</label>
-      {loading && <p className="strategy-config-page__help-text">Loading observed instruments…</p>}
+      {loading && <p className="strategy-config-page__help-text">Loading instruments…</p>}
       {error && <p className="strategy-config-page__help-text">{error}</p>}
       {!loading && !error && filtered.length === 0 && (
         <p className="strategy-config-page__help-text">
-          No observed instruments yet — the market-data pipeline has not recorded a quote for any
-          instrument. Nothing can be selected until at least one instrument has been observed.
+          No instruments available yet for this exchange.
         </p>
       )}
       {!loading && filtered.length > 0 && (
@@ -137,12 +188,13 @@ export interface InstrumentPickerMultiProps {
 }
 
 /** A multi-instrument picker (e.g. the DB-first historical run's
- * universe, or a watchlist) - real checkboxes over observed instruments,
- * with a select-all/clear-all pair, never comma-separated free text. */
+ * universe, or a watchlist) - real checkboxes over real instruments,
+ * with a select-all/clear-all pair, never comma-separated free text.
+ * "Select All" selects every instrument on the chosen exchange when the
+ * real exchange master list is available. */
 export function InstrumentPickerMulti(props: InstrumentPickerMultiProps): JSX.Element {
-  const { instruments, loading, error } = useObservedInstruments();
   const [exchange, setExchange] = useState<ExchangeFilter>("ALL");
-  const filtered = filterByExchange(instruments, exchange);
+  const { instruments, loading, error, isFullExchangeList } = useInstrumentUniverse(exchange);
   const selected = new Set(props.value);
 
   function toggle(instrumentId: string): void {
@@ -154,32 +206,25 @@ export function InstrumentPickerMulti(props: InstrumentPickerMultiProps): JSX.El
 
   return (
     <div className="instrument-picker">
-      <div className="instrument-picker__row">
-        <label htmlFor={`${props.idPrefix}-exchange`}>Exchange</label>
-        <select
-          id={`${props.idPrefix}-exchange`}
-          value={exchange}
-          onChange={(e) => setExchange(e.target.value as ExchangeFilter)}
-        >
-          <option value="ALL">All Exchanges</option>
-          <option value="NSE">NSE</option>
-          <option value="BSE">BSE</option>
-        </select>
-      </div>
+      <ExchangeSelect id={`${props.idPrefix}-exchange`} value={exchange} onChange={setExchange} />
       <IndexUnavailableNotice />
       <p>{props.label ?? "Universe"}</p>
-      {loading && <p className="strategy-config-page__help-text">Loading observed instruments…</p>}
+      {loading && <p className="strategy-config-page__help-text">Loading instruments…</p>}
       {error && <p className="strategy-config-page__help-text">{error}</p>}
-      {!loading && !error && filtered.length === 0 && (
-        <p className="strategy-config-page__help-text">
-          No observed instruments yet — the market-data pipeline has not recorded a quote for any
-          instrument. Nothing can be selected until at least one instrument has been observed.
-        </p>
+      {!loading && !error && instruments.length === 0 && (
+        <p className="strategy-config-page__help-text">No instruments available yet.</p>
       )}
-      {!loading && filtered.length > 0 && (
+      {!loading && instruments.length > 0 && (
         <>
+          {!isFullExchangeList && (
+            <p className="strategy-config-page__help-text">
+              <strong className="badge badge--pending">OBSERVED INSTRUMENTS ONLY</strong> — the full
+              exchange instrument list is currently unavailable; "Select All" only selects
+              instruments already observed by the market-data pipeline.
+            </p>
+          )}
           <div className="instrument-picker__actions">
-            <button type="button" onClick={() => props.onChange(filtered)}>
+            <button type="button" onClick={() => props.onChange(instruments)}>
               Select All
             </button>
             <button type="button" onClick={() => props.onChange([])}>
@@ -187,7 +232,7 @@ export function InstrumentPickerMulti(props: InstrumentPickerMultiProps): JSX.El
             </button>
           </div>
           <ul className="instrument-picker__checklist">
-            {filtered.map((instrumentId) => (
+            {instruments.map((instrumentId) => (
               <li key={instrumentId}>
                 <label>
                   <input

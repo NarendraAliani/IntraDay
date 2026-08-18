@@ -1,11 +1,26 @@
 # File: src/intraday/infrastructure/api/backtesting_views.py
 #
-# DRF views for the Checkpoint 27 backtesting API resource. The ONLY
-# view in this codebase that runs a backtest - always against the
-# fixture/historical repository (`FixtureHistoricalMarketDataRepository`),
-# never live market data (SAMPLE_BAR safety gate - see
-# `application.services.backtesting`'s own docstring and
-# `tests/unit/architecture/test_backtesting_sample_bar_boundary.py`).
+# DRF views for the Checkpoint 27 backtesting API resource - the
+# single-instrument, synchronous "Run Backtest" flow.
+#
+# Checkpoint 63.x follow-up: originally this view ran EVERY request
+# against the deterministic `FixtureHistoricalMarketDataRepository`
+# (Jan 2026, `NSE:FIXTURE01` only) - a genuinely different, unrelated
+# data source from the DB-first historical-run panel, meaning any real
+# instrument/date typed here always failed with "no bars available."
+# Debugged and fixed: `NSE:FIXTURE01` (the literal deterministic
+# fixture instrument, still used by the reproducibility test suite)
+# keeps using the fixture repository unchanged; every OTHER instrument
+# now goes through the SAME DB-first coverage/fetch/persist pipeline
+# `HistoricalBacktestRunOrchestrator` uses (`HistoricalDataPreparationService`
+# + `DjangoHistoricalBarRepository`) before scanning - so this
+# single-instrument flow and the multi-instrument historical-run panel
+# are now backed by the same real architecture, not two disconnected
+# systems. Neither path ever touches live market data or a broker -
+# see `tests/unit/architecture/test_backtesting_sample_bar_boundary.py`,
+# which this file remains outside the scope of (it only scans
+# `research.backtesting`/`application.services.backtesting`, both
+# still untouched).
 from __future__ import annotations
 
 from drf_spectacular.utils import OpenApiResponse, extend_schema
@@ -21,12 +36,23 @@ from intraday.application.contracts.backtesting import (
 from intraday.application.contracts.errors import ApiErrorSerializer
 from intraday.application.services.backtesting import BacktestingService
 from intraday.application.services.errors import ResourceNotFoundError
+from intraday.application.services.historical_data_coverage import HistoricalDataCoverageService
+from intraday.application.services.historical_data_preparation import (
+    HistoricalDataPreparationService,
+)
 from intraday.application.services.market_data import HistoricalMarketDataService
-from intraday.domain.shared_kernel.contracts import Timeframe
+from intraday.domain.shared_kernel.contracts import InstrumentId, Timeframe
 from intraday.infrastructure.api.errors import invalid_configuration, not_found, unknown_strategy
 from intraday.infrastructure.api.permissions import IsConfigurationOperator
 from intraday.infrastructure.market_data_providers.fixtures import (
+    SYNTHETIC_INSTRUMENT_ID,
     FixtureHistoricalMarketDataRepository,
+)
+from intraday.infrastructure.market_data_providers.synthetic_historical import (
+    SyntheticHistoricalBarProvider,
+)
+from intraday.infrastructure.persistence.historical_bar_repository import (
+    DjangoHistoricalBarRepository,
 )
 from intraday.infrastructure.persistence.repositories import DjangoBacktestResultRepository
 from intraday.research.backtesting.contracts import BacktestConfiguration, PositionSizingMode
@@ -47,12 +73,38 @@ from intraday.trading_engine.strategy_execution.registry import build_default_re
 _REGISTRY = build_default_registry()
 
 
-def _service() -> BacktestingService:
+def _service(instrument_id: InstrumentId) -> BacktestingService:
+    repository: FixtureHistoricalMarketDataRepository | DjangoHistoricalBarRepository
+    if instrument_id == SYNTHETIC_INSTRUMENT_ID:
+        # The deterministic fixture flow, unchanged - still what the
+        # reproducibility/cost-model test suite exercises.
+        repository = FixtureHistoricalMarketDataRepository()
+    else:
+        repository = DjangoHistoricalBarRepository()
     return BacktestingService(
-        market_data=HistoricalMarketDataService(repository=FixtureHistoricalMarketDataRepository()),
+        market_data=HistoricalMarketDataService(repository=repository),
         registry=_REGISTRY,
         repository=DjangoBacktestResultRepository(),
     )
+
+
+def _prepare_if_needed(config: BacktestConfiguration) -> None:
+    """DB-first preparation for any REAL instrument (never the
+    deterministic fixture, which needs no fetching). Mirrors exactly
+    what `HistoricalBacktestRunOrchestrator` does for the multi-
+    instrument panel - the same coverage-check/fetch-missing/persist/
+    verify sequence, just for one instrument inline instead of a
+    polled background run, since this view is deliberately still
+    synchronous (Checkpoint 27's original design)."""
+    if config.instrument_id == SYNTHETIC_INSTRUMENT_ID:
+        return
+    bar_repository = DjangoHistoricalBarRepository()
+    preparation = HistoricalDataPreparationService(
+        coverage=HistoricalDataCoverageService(repository=bar_repository),
+        provider=SyntheticHistoricalBarProvider(),
+        writer=bar_repository,
+    )
+    preparation.prepare(config.instrument_id, config.timeframe, config.start, config.end)
 
 
 @extend_schema(
@@ -94,7 +146,8 @@ def run_backtest_view(request: Request) -> Response:
     except InvalidBacktestConfigurationError as exc:
         return invalid_configuration(exc)
 
-    service = _service()
+    _prepare_if_needed(config)
+    service = _service(config.instrument_id)
     try:
         result = service.run(
             config,
@@ -121,7 +174,9 @@ def run_backtest_view(request: Request) -> Response:
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def get_backtest_result(request: Request, backtest_id: str) -> Response:
-    service = _service()
+    # Read-only: never touches `.market_data`, so which repository
+    # `_service()` wires it with is irrelevant here.
+    service = _service(SYNTHETIC_INSTRUMENT_ID)
     try:
         payload = service.get_result(backtest_id)
     except ResourceNotFoundError as exc:
@@ -133,7 +188,7 @@ def get_backtest_result(request: Request, backtest_id: str) -> Response:
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def list_backtest_results(request: Request, strategy_id: str) -> Response:
-    service = _service()
+    service = _service(SYNTHETIC_INSTRUMENT_ID)
     try:
         payloads = service.list_results(strategy_id)
     except UnknownStrategyError as exc:

@@ -20,6 +20,9 @@ describe("WatchlistPage", () => {
       vi.fn(async (input: RequestInfo | URL) => {
         const url = typeof input === "string" ? input : input.toString();
         if (url.includes("/market-data/quotes/")) return jsonResponse([]);
+        if (url.includes("/market-data/instruments/")) {
+          return jsonResponse({ exchange: "NSE", instrument_ids: [], data_source: "UNAVAILABLE" });
+        }
         if (url.endsWith("/watchlists/")) {
           return jsonResponse([{ name: "core", instrument_ids: ["NSE:FIXTURE01"] }]);
         }
@@ -52,6 +55,9 @@ describe("WatchlistPage", () => {
             },
           ]);
         }
+        if (url.includes("/market-data/instruments/")) {
+          return jsonResponse({ exchange: "NSE", instrument_ids: [], data_source: "UNAVAILABLE" });
+        }
         if (url.endsWith("/watchlists/") && !saved) return jsonResponse([]);
         if (url.endsWith("/watchlists/save/")) {
           saved = true;
@@ -80,6 +86,9 @@ describe("WatchlistPage", () => {
       vi.fn(async (input: RequestInfo | URL) => {
         const url = typeof input === "string" ? input : input.toString();
         if (url.includes("/market-data/quotes/")) return jsonResponse([]);
+        if (url.includes("/market-data/instruments/")) {
+          return jsonResponse({ exchange: "NSE", instrument_ids: [], data_source: "UNAVAILABLE" });
+        }
         if (url.endsWith("/watchlists/")) return jsonResponse([]);
         return jsonResponse({ error_code: "not_found", message: "no route" }, 404);
       }),

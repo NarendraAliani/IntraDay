@@ -82,3 +82,16 @@ class BarResponseSerializer(serializers.Serializer[dict[str, object]]):
     status = serializers.ChoiceField(choices=["FORMING", "CLOSED"])
     observation_count = serializers.IntegerField()
     data_source = serializers.CharField()
+
+
+class InstrumentListResponseSerializer(serializers.Serializer[dict[str, object]]):
+    """Follow-up to Checkpoint 63.x: the real "all tradable instruments
+    for this exchange" list (Dhan scrip master), backing the instrument
+    picker's "Select All." `source` is always explicit -
+    `"DHAN_SCRIP_MASTER"` when the real master list was fetched,
+    `"UNAVAILABLE"` when it could not be (never silently returned as if
+    it succeeded)."""
+
+    exchange = serializers.CharField()
+    instrument_ids = serializers.ListField(child=serializers.CharField())
+    data_source = serializers.ChoiceField(choices=["DHAN_SCRIP_MASTER", "UNAVAILABLE"])

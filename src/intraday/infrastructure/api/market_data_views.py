@@ -38,11 +38,13 @@ from rest_framework.throttling import ScopedRateThrottle
 from intraday.application.contracts.errors import ApiErrorSerializer
 from intraday.application.contracts.market_data import (
     BarResponseSerializer,
+    InstrumentListResponseSerializer,
     MarketDataHealthResponseSerializer,
     QuoteResponseSerializer,
     SessionResponseSerializer,
 )
 from intraday.application.services.bar_aggregation import BarAggregationService
+from intraday.application.services.instrument_master import InstrumentMasterService
 from intraday.application.services.live_market_data import LiveMarketDataService
 from intraday.application.services.provider_settings import DhanSettingsService
 from intraday.control_plane.market_data_health.contracts import MarketDataHealthSnapshot
@@ -51,6 +53,7 @@ from intraday.domain.instrument.contracts import make_instrument_id
 from intraday.domain.market_data.aggregation import AggregatedBar
 from intraday.domain.market_data.contracts import Quote
 from intraday.domain.shared_kernel.contracts import Exchange, Timeframe
+from intraday.infrastructure.api.errors import invalid_configuration
 from intraday.infrastructure.api.permissions import IsConfigurationOperator
 from intraday.infrastructure.market_data_providers.dhan.client import (
     DhanAuthenticationError,
@@ -58,6 +61,11 @@ from intraday.infrastructure.market_data_providers.dhan.client import (
     DhanMalformedResponseError,
     DhanQuoteObservation,
     fetch_quotes,
+)
+from intraday.infrastructure.market_data_providers.dhan.instrument_master import (
+    DhanInstrumentMasterProvider,
+    InstrumentMasterParseError,
+    InstrumentMasterUnavailableError,
 )
 from intraday.infrastructure.market_data_providers.dhan.instruments import observation_universe
 from intraday.infrastructure.persistence.live_market_data_repositories import (
@@ -139,6 +147,45 @@ def current_quotes(request: Request) -> Response:
         dict(QuoteResponseSerializer(_quote_response_data(quote, now=now)).data) for quote in quotes
     ]
     return Response(body)
+
+
+@extend_schema(responses={200: InstrumentListResponseSerializer})
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def list_instruments(request: Request) -> Response:
+    """Follow-up to Checkpoint 63.x: every tradable instrument for
+    `?exchange=NSE|BSE`, from the real Dhan scrip master - what the
+    instrument picker's "Select All" uses instead of being limited to
+    only currently live-observed instruments. Degrades HONESTLY on
+    failure (`source: "UNAVAILABLE"`, empty list) rather than a 500 -
+    the frontend picker falls back to observed-quotes-only selection in
+    that case, never a fabricated instrument list."""
+    exchange_param = request.query_params.get("exchange", "NSE").strip().upper()
+    try:
+        exchange = Exchange(exchange_param)
+    except ValueError as exc:
+        return invalid_configuration(exc)
+
+    service = InstrumentMasterService(provider=DhanInstrumentMasterProvider())
+    try:
+        instrument_ids = service.list_instrument_ids(exchange)
+        source = "DHAN_SCRIP_MASTER"
+    except (InstrumentMasterUnavailableError, InstrumentMasterParseError) as exc:
+        logger.warning("instrument_master.unavailable", error=str(exc), exchange=exchange_param)
+        instrument_ids = ()
+        source = "UNAVAILABLE"
+
+    return Response(
+        dict(
+            InstrumentListResponseSerializer(
+                {
+                    "exchange": exchange.value,
+                    "instrument_ids": list(instrument_ids),
+                    "data_source": source,
+                }
+            ).data
+        )
+    )
 
 
 @extend_schema(

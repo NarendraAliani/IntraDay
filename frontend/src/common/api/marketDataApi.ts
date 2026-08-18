@@ -24,6 +24,19 @@ export function getCurrentQuotes(): Promise<QuoteResponse[]> {
   return apiGet<QuoteResponse[]>("/api/v1/config/market-data/quotes/");
 }
 
+export type InstrumentListResponse = components["schemas"]["InstrumentListResponse"];
+
+/** Follow-up to Checkpoint 63.x: the real "all tradable instruments for
+ * this exchange" list (Dhan scrip master), not limited to only
+ * currently live-observed instruments. `data_source` is always
+ * explicit - `"UNAVAILABLE"` (with an empty list) when the real master
+ * could not be fetched, never silently treated as success. */
+export function listInstruments(exchange: "NSE" | "BSE"): Promise<InstrumentListResponse> {
+  return apiGet<InstrumentListResponse>(
+    `/api/v1/config/market-data/instruments/?exchange=${exchange}`,
+  );
+}
+
 /** Performs exactly one live Dhan fetch and returns the freshly
  * recomputed health snapshot - never called automatically, only on
  * explicit user action (the "Refresh" button). */
