@@ -60,6 +60,31 @@ function todayIsoDate(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+/** Converts the raw, all-string form values (`ParameterSchemaFields`
+ * always emits strings, even for INTEGER-typed parameters) into the
+ * correctly-typed values the strategy-config validator expects - a
+ * REAL bug was found and fixed here: the multi-instrument historical
+ * run panel used to send `strategy_values` UNPARSED (bare strings like
+ * `"9"`), while this exact parsing already existed - but only inline
+ * inside the single-instrument `handleRun()` below, never shared - so
+ * every historical run failed validation ("parameter 'fast_lookback'
+ * is not an int: '9'") despite the single-instrument flow working
+ * fine with the identical schema. Now the ONE shared implementation
+ * both flows call. */
+function parseStrategyValues(
+  schema: StrategySchema,
+  values: Record<string, string>,
+): Record<string, unknown> {
+  const parsed: Record<string, unknown> = {};
+  for (const parameter of schema.parameters) {
+    const raw = values[parameter.parameter_id];
+    if (raw === undefined || raw === "") continue;
+    parsed[parameter.parameter_id] =
+      parameter.parameter_type === "INTEGER" ? Number.parseInt(raw, 10) : raw;
+  }
+  return parsed;
+}
+
 function formatMoney(value: string | null | undefined): string {
   if (value === null || value === undefined) return "—";
   const parsed = Number.parseFloat(value);
@@ -164,13 +189,7 @@ export function BacktestingWorkbenchPage(): JSX.Element {
     if (selectedInstrumentIds.length !== 1) return; // gated by the disabled button below too
     setRunState({ phase: "running" });
     try {
-      const parsedValues: Record<string, unknown> = {};
-      for (const parameter of schema.parameters) {
-        const raw = values[parameter.parameter_id];
-        if (raw === undefined || raw === "") continue;
-        parsedValues[parameter.parameter_id] =
-          parameter.parameter_type === "INTEGER" ? Number.parseInt(raw, 10) : raw;
-      }
+      const parsedValues = parseStrategyValues(schema, values);
       const result = await runBacktest({
         instrument_id: selectedInstrumentIds[0],
         timeframe,
@@ -452,7 +471,7 @@ export function BacktestingWorkbenchPage(): JSX.Element {
           strategyId={selectedStrategy.strategy_id}
           specificationVersion={selectedStrategy.specification_version}
           codeVersion={selectedStrategy.code_version}
-          strategyValues={values}
+          strategyValues={parseStrategyValues(schema, values)}
           defaultTimeframe={timeframe}
           initialCapital={initialCapital}
           positionSizingMode={positionSizingMode}
@@ -911,7 +930,9 @@ interface HistoricalBacktestRunPanelProps {
   strategyId: string;
   specificationVersion: string;
   codeVersion: string;
-  strategyValues: Record<string, string>;
+  /** Already parsed/typed (via `parseStrategyValues`) - never the raw,
+   * all-string form values `ParameterSchemaFields` emits. */
+  strategyValues: Record<string, unknown>;
   defaultTimeframe: string;
   initialCapital: string;
   positionSizingMode: "FIXED_QUANTITY" | "PERCENT_OF_EQUITY";

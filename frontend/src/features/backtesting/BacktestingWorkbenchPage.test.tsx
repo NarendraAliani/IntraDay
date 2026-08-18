@@ -663,4 +663,86 @@ describe("BacktestingWorkbenchPage", () => {
       screen.getByText("duplicate key value violates unique constraint"),
     ).toBeInTheDocument();
   });
+
+  it("sends INTEGER-typed strategy parameters as real numbers, never raw form strings, on a historical run", async () => {
+    // A real bug found from a live report: this flow used to send
+    // strategy_values UNPARSED ({"fast_lookback": "9"}), failing
+    // backend validation ("parameter 'fast_lookback' is not an int:
+    // '9'") on every single historical run, despite the single-
+    // instrument flow (which DOES parse) working fine with the exact
+    // same schema.
+    let capturedBody: unknown = null;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : input.toString();
+        const method = init?.method ?? "GET";
+        if (url.includes("/strategy-engine/fields/")) return jsonResponse(FIELDS);
+        if (url.includes("/strategy-engine/strategies/ema_crossover/schema/")) return jsonResponse(SCHEMA);
+        if (url.endsWith("/strategy-engine/strategies/")) return jsonResponse(STRATEGIES);
+        if (url.includes("/market-data/quotes/")) {
+          return jsonResponse([
+            {
+              symbol: "RELIANCE",
+              exchange: "NSE",
+              last_price: "1234.56",
+              source_timestamp: "2026-08-14T06:00:00Z",
+              freshness_age_seconds: 5,
+              is_stale: false,
+            },
+          ]);
+        }
+        if (url.includes("/market-data/instruments/")) {
+          return jsonResponse({ exchange: "NSE", instruments: [], data_source: "UNAVAILABLE" });
+        }
+        if (method === "POST" && url.endsWith("/backtesting/historical-runs/")) {
+          capturedBody = JSON.parse(init?.body as string);
+          return jsonResponse({ run_id: "run-1" });
+        }
+        if (url.includes("/progress/")) {
+          return jsonResponse({
+            run_id: "run-1",
+            status: "COMPLETED",
+            phase: "COMPLETED",
+            progress_percent: 100,
+            current_instrument: "NSE:RELIANCE",
+            current_strategy: "ema_crossover",
+            message: "done",
+            total_instruments: 1,
+            completed_instruments: 1,
+            total_bars: 10,
+            scanned_bars: 10,
+            signals_generated: 0,
+            cache_hits: 0,
+            cache_misses: 10,
+            api_requests: 1,
+            failed_instruments: [],
+            result_backtest_ids: {},
+            error_message: "",
+            created_at: "2026-08-17T06:00:00Z",
+            started_at: "2026-08-17T06:00:00Z",
+            completed_at: "2026-08-17T06:01:00Z",
+            elapsed_seconds: 1,
+            eta_seconds: null,
+          });
+        }
+        return jsonResponse({ error_code: "not_found", message: "no route" }, 404);
+      }),
+    );
+    renderWithAuth(<BacktestingWorkbenchPage />);
+    await waitFor(() => expect(screen.getByText("EMA Crossover")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Configure" }));
+    await waitFor(() => expect(screen.getByLabelText(/Fast EMA Lookback/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText("RELIANCE").length).toBeGreaterThan(0));
+    const relianceCheckboxes = screen.getAllByRole("checkbox", { name: "RELIANCE" });
+    fireEvent.click(relianceCheckboxes[relianceCheckboxes.length - 1]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Prepare Data & Start Backtest" }));
+
+    await waitFor(() => expect(capturedBody).not.toBeNull());
+    const body = capturedBody as { strategy_values: Record<string, unknown> };
+    expect(body.strategy_values.fast_lookback).toBe(3);
+    expect(body.strategy_values.slow_lookback).toBe(6);
+    expect(typeof body.strategy_values.fast_lookback).toBe("number");
+  });
 });
