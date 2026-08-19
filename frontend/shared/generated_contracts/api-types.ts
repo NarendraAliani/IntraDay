@@ -1475,6 +1475,9 @@ export interface components {
             /** Format: date-time */
             updated_at: string | null;
             updated_by_username: string;
+            token_state: components["schemas"]["TokenStateEnum"];
+            /** Format: date-time */
+            token_expires_at: string | null;
         };
         DhanSettingsSaveRequest: {
             client_id?: string;
@@ -2042,6 +2045,15 @@ export interface components {
             channel_id?: string;
             enabled?: boolean;
         };
+        /**
+         * @description * `UNCONFIGURED` - UNCONFIGURED
+         *     * `VALID` - VALID
+         *     * `EXPIRING_SOON` - EXPIRING_SOON
+         *     * `EXPIRED` - EXPIRED
+         *     * `MALFORMED` - MALFORMED
+         * @enum {string}
+         */
+        TokenStateEnum: "UNCONFIGURED" | "VALID" | "EXPIRING_SOON" | "EXPIRED" | "MALFORMED";
         /**
          * @description Mirrors `domain.universe.UniverseMember` — `instrument_id` is the
          *     domain-owned, broker-neutral identity (e.g. "NSE:RELIANCE"), never a

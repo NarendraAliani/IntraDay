@@ -35,13 +35,17 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Literal
 
 from intraday.application.repositories.provider_settings import (
     DhanCredentialRepository,
     DiscordCredentialRepository,
     TelegramCredentialRepository,
+)
+from intraday.application.services.token_lifecycle import (
+    TokenLifecycleState,
+    evaluate_dhan_token_lifecycle,
 )
 
 ConfigurationSource = Literal["DATABASE", "ENVIRONMENT", "UNCONFIGURED"]
@@ -83,6 +87,16 @@ class DhanSettingsView:
     enabled: bool
     updated_at: datetime | None
     updated_by_username: str
+    token_state: TokenLifecycleState
+    """Checkpoint 64: a REAL bug this closes - the "Connected" badge on
+    this page is driven by a CACHED connection-test result (`Test
+    Connection`), which can go stale relative to the token's own actual
+    expiry (Dhan's documented ~24h token TTL) with no automatic re-check.
+    This field is computed fresh on every `get_display()` call, straight
+    from the token's own `exp` claim - no network call, so it can never
+    be stale in the same way. See `token_lifecycle.py`'s own docstring
+    for the live-verified finding that motivated this."""
+    token_expires_at: datetime | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,9 +108,15 @@ class DhanSettingsService:
         client_id = record.client_id or os.environ.get("DHAN_CLIENT_ID", "")
         client_id_effective = _resolve(bool(record.client_id), "DHAN_CLIENT_ID")
         token_effective = _resolve(record.has_access_token, "DHAN_ACCESS_TOKEN")
+        access_token = self.repository.get_decrypted_access_token() or os.environ.get(
+            "DHAN_ACCESS_TOKEN"
+        )
+        token_lifecycle = evaluate_dhan_token_lifecycle(access_token, now=datetime.now(tz=UTC))
         return DhanSettingsView(
             client_id_masked=_mask_identifier(client_id),
             client_id_source=client_id_effective.source,
+            token_state=token_lifecycle.state,
+            token_expires_at=token_lifecycle.expires_at,
             access_token_configured=token_effective.configured,
             access_token_source=token_effective.source,
             enabled=record.enabled,

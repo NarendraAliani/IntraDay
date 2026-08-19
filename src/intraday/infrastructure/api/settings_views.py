@@ -121,6 +121,8 @@ def _dhan_settings_response() -> Response:
             "enabled": view.enabled,
             "updated_at": view.updated_at,
             "updated_by_username": view.updated_by_username,
+            "token_state": view.token_state.value,
+            "token_expires_at": view.token_expires_at,
         }
     ).data
     return Response(data)

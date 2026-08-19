@@ -16,16 +16,29 @@
 # the four default symbols - not guessed, not derived, not carried over
 # from any other broker's identifiers.
 #
-# A full scrip-master ingestion pipeline (to support an arbitrary,
-# larger universe) is explicitly NOT built this checkpoint - seem
-# unnecessary machinery for a "small configured list of NSE cash-equity
-# symbols" (Checkpoint 23 §7). If the observation universe grows beyond
-# a hand-maintained list, that ingestion pipeline is the natural next
-# increment - documented as a known limitation, not silently deferred.
+# CHECKPOINT 64 UPDATE: the "full scrip-master ingestion pipeline" this
+# module's own docstring named as the natural next increment now exists
+# (`instrument_master.py`, built for historical/backtesting instrument
+# selection - it captures the real Dhan scrip master INCLUDING each
+# instrument's real `security_id`, not just symbol/display_name). This
+# was a genuine, named architectural inconsistency (NewStatus.md, live-
+# quote universe still hardcoded to 4 symbols while the historical side
+# covered ~3,100): a symbol NOT in `_KNOWN_INSTRUMENTS` now falls back
+# to a real scrip-master lookup instead of unconditionally raising -
+# `MARKET_DATA_OBSERVATION_SYMBOLS` is no longer capped at four hand-
+# verified entries. `_KNOWN_INSTRUMENTS` is kept (not deleted) as a
+# small, zero-network-call fast path for the default/common case - the
+# architecture no longer DEPENDS on it being exhaustive.
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+
+from intraday.application.services.instrument_master import InstrumentMasterProvider
+from intraday.domain.shared_kernel.contracts import Exchange
+from intraday.infrastructure.market_data_providers.dhan.instrument_master import (
+    InstrumentMasterUnavailableError,
+)
 
 # Dhan's own exchange-segment vocabulary for the Market Quote API - see
 # docs/architecture/LIVE_MARKET_DATA_ARCHITECTURE.md. NSE cash equity
@@ -56,28 +69,67 @@ _DEFAULT_OBSERVATION_SYMBOLS = "RELIANCE,TCS,INFY,HDFCBANK"
 
 
 class UnknownObservationSymbolError(ValueError):
-    """Raised when `MARKET_DATA_OBSERVATION_SYMBOLS` names a symbol with
-    no verified entry in `_KNOWN_INSTRUMENTS` - refusing to silently
-    drop it or guess a security_id (Checkpoint 23 §4's "do not invent
-    API endpoints" extends to payload identifiers, not just URLs)."""
+    """Raised when `MARKET_DATA_OBSERVATION_SYMBOLS` names a symbol
+    found in NEITHER `_KNOWN_INSTRUMENTS` NOR the real Dhan scrip
+    master - refusing to silently drop it or guess a security_id
+    (Checkpoint 23 §4's "do not invent API endpoints" extends to
+    payload identifiers, not just URLs)."""
 
 
-def observation_universe() -> tuple[DhanInstrument, ...]:
+def _resolve_via_scrip_master(
+    symbol: str, instrument_master: InstrumentMasterProvider
+) -> DhanInstrument | None:
+    """The Checkpoint 64 fallback path - real scrip-master lookup for
+    any symbol `_KNOWN_INSTRUMENTS` doesn't cover. Returns `None`
+    (never raises) on ANY resolution failure - master unavailable, or
+    the symbol genuinely not found - so the caller's own single
+    `UnknownObservationSymbolError` remains the one place this whole
+    function reports "could not resolve," regardless of WHY."""
+    try:
+        entries = instrument_master.list_instruments(Exchange.NSE)
+    except InstrumentMasterUnavailableError:
+        return None
+    for entry in entries:
+        if entry.symbol == symbol and entry.security_id is not None:
+            return DhanInstrument(symbol=symbol, security_id=entry.security_id)
+    return None
+
+
+def observation_universe(
+    *, instrument_master: InstrumentMasterProvider | None = None
+) -> tuple[DhanInstrument, ...]:
     """The configured observation universe (Checkpoint 23 §7) - read
     from `MARKET_DATA_OBSERVATION_SYMBOLS` (comma-separated symbols),
     defaulting to the four symbols this checkpoint's brief itself named
     as an example. Configuration-driven, not hard-coded into any
-    business logic - callers never hard-code a symbol list themselves."""
+    business logic - callers never hard-code a symbol list themselves.
+
+    `instrument_master` (Checkpoint 64): the real scrip-master fallback
+    for any symbol not in the small, zero-network `_KNOWN_INSTRUMENTS`
+    table below - defaults to the real `DhanInstrumentMasterProvider`
+    (imported lazily, only when actually needed, so every existing
+    caller using only the four `_KNOWN_INSTRUMENTS` symbols still makes
+    ZERO network calls, exactly as before). Tests inject a fake here to
+    prove the fallback path without a real network call."""
     raw = os.environ.get("MARKET_DATA_OBSERVATION_SYMBOLS", _DEFAULT_OBSERVATION_SYMBOLS)
     symbols = [s.strip().upper() for s in raw.split(",") if s.strip()]
     instruments = []
     for symbol in symbols:
         instrument = _KNOWN_INSTRUMENTS.get(symbol)
         if instrument is None:
+            provider = instrument_master
+            if provider is None:
+                from intraday.infrastructure.market_data_providers.dhan.instrument_master import (
+                    DhanInstrumentMasterProvider,
+                )
+
+                provider = DhanInstrumentMasterProvider()
+            instrument = _resolve_via_scrip_master(symbol, provider)
+        if instrument is None:
             raise UnknownObservationSymbolError(
                 f"'{symbol}' has no verified Dhan security_id mapping in "
-                "infrastructure/market_data_providers/dhan/instruments.py - "
-                "refusing to guess. Add a verified entry first."
+                "infrastructure/market_data_providers/dhan/instruments.py and was not "
+                "found in the real Dhan scrip master either - refusing to guess."
             )
         instruments.append(instrument)
     return tuple(instruments)

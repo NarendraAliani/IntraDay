@@ -24,6 +24,13 @@ class DhanSettingsResponseSerializer(serializers.Serializer[dict[str, object]]):
     enabled = serializers.BooleanField()
     updated_at = serializers.DateTimeField(allow_null=True)
     updated_by_username = serializers.CharField()
+    # Checkpoint 64: computed fresh from the token's own `exp` claim on
+    # every read - see DhanSettingsService.get_display()'s own docstring
+    # for the real "Connected badge can be stale" bug this closes.
+    token_state = serializers.ChoiceField(
+        choices=["UNCONFIGURED", "VALID", "EXPIRING_SOON", "EXPIRED", "MALFORMED"]
+    )
+    token_expires_at = serializers.DateTimeField(allow_null=True)
 
 
 class TelegramSettingsResponseSerializer(serializers.Serializer[dict[str, object]]):

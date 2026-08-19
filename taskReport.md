@@ -2,251 +2,305 @@
 
 ## Checkpoint
 
-Checkpoint 63.x — Database-First Historical Data Engine, Backtesting Engine & Scanner Progress Observability.
+Checkpoint 64 — Live Paper Trading Runtime (Readiness Gate + First Increments).
+This report OVERWRITES the previous `taskReport.md` per this checkpoint's
+own instruction — it describes only this checkpoint's work. The full
+backtesting/DB-first checkpoint report this superseded is preserved in git
+history, not here.
 
 ## Objective
 
-Prove, architecturally and with tests, that historical/backtest scanning follows
+Turn the already-built signal → risk → paper-execution pipeline into
+something that runs continuously against **real** Dhan market data, while
+keeping real (live) order placement disabled. This checkpoint's own
+32-section brief asked for the full runtime (WebSocket connection,
+reconnect, token lifecycle, watchdog, universe widening, dashboard,
+performance testing, full-day simulation, new reports) in one pass.
 
-    API -> DB -> Scanner -> Strategy -> Signal
+**Honest scope statement up front**: that full scope is genuinely
+multi-week work. This checkpoint completed the mandatory readiness gate,
+performed a REAL (not simulated) Dhan connectivity verification, and
+implemented two concrete, fully-tested increments that came directly out
+of what that verification found. It did not attempt the remaining ~28
+sections of the brief (reconnect state machine, watchdog, subscription
+manager, dashboard, performance/load testing, full-day simulation,
+new reports) — each is named explicitly under Remaining Gaps, not silently
+dropped.
 
-and never `API -> Scanner` directly — with real, non-fabricated progress observability (current instrument/strategy/phase/bars/signals/cache stats/ETA) surfaced through a pollable API and a live frontend panel.
+## Readiness Gate
 
-## Existing Architecture Reviewed (Phase 1)
+Traced against the ACTUAL current code (not documentation), by reading the
+real modules listed in the Files column.
 
-A dedicated read-only audit agent inspected the codebase first. Summary of what already existed vs. what this checkpoint had to add:
+| Component | Exists | Tested | Integrated | Production-Verified | Blocker |
+|---|---|---|---|---|---|
+| Dhan credentials (Settings/env) | Yes | Yes | Yes | **This checkpoint** | Configured token was found **EXPIRED** — see Real Dhan Verification below |
+| Dhan WebSocket endpoint (`wss://api-feed.dhan.co`) | N/A (external) | — | — | **This checkpoint** | Handshake succeeds; app-level auth rejects the current token |
+| WebSocket authentication (query-param scheme) | Yes (`websocket_transport.py`) | Yes (local fake server only, pre-existing) | Partial | **This checkpoint, real endpoint** | Token expiry (see above) |
+| Token lifecycle | **New this checkpoint** (`token_lifecycle.py`) | Yes (8 unit + 4 integration/API tests) | Yes (Settings API + UI) | N/A (pure/local, no network) | Only claims-based (exp), not renewal — see Remaining Gaps |
+| Instrument master (scrip master) | Yes (built prior session) | Yes | Yes (backtesting) | Real, cached fetch | — |
+| Subscription manager (live-quote universe) | Partial — widened this checkpoint | Yes (8 tests) | Partial | Not live-tested (blocked by token) | No dynamic/UI-driven subscription set yet — see §6 gap below |
+| Tick decoder (`packet_decoder.py`) | Yes (pre-existing) | Yes (fixture-based) | Yes | No (never decoded a real Dhan packet — connection never reached data) | Blocked by token expiry |
+| Quote processing (`packet_to_quote.py`) | Yes (pre-existing) | Yes | Yes | No | Same |
+| Bar aggregation | Yes (pre-existing) | Yes | Yes | Only against synthetic feed | Same |
+| Trading-grade data gate | Yes (pre-existing) | Yes | Yes | Only 2/6 conditions ever exercised live | Unchanged this checkpoint |
+| Strategy engine | Yes (pre-existing) | Yes | Yes | Proven vs. backtest/replay data | — |
+| Signal persistence | Yes (pre-existing) | Yes | Yes | — | — |
+| Risk engine | Yes (pre-existing) | Yes | Yes | — | — |
+| PaperBroker | Yes (pre-existing) | Yes | Yes | — | — |
+| Position management | Yes (pre-existing) | Yes | Yes | — | — |
+| Reconciliation | Yes (pre-existing) | Yes | Yes | — | — |
+| EOD | Yes (pre-existing) | Yes | Yes | — | — |
+| Telegram/Discord communication | Yes (pre-existing) | Yes | Yes | Not against real credentials this checkpoint | — |
+| Operator UI | Yes (Settings/Backtesting/Paper Trading/Market Data pages) | Yes | Yes | — | No unified operational dashboard yet |
+| Reports | Partial (3/11 types real) | Yes for what exists | Partial | — | Unchanged this checkpoint |
+| Monitoring/Logs | Partial (`structlog` throughout) | — | Yes | — | No worker-health signal |
+| Reconnect | **No** | — | — | — | Not attempted this checkpoint |
+| Watchdog | **No** | — | — | — | Not attempted this checkpoint |
 
-**Already existed and reused unchanged:**
-- `domain.market_data.contracts.Bar` — the canonical bar. Reused as-is; no second bar model.
-- `application.repositories.HistoricalMarketDataRepository` (read-only Protocol) and `application.services.market_data.HistoricalMarketDataService` — reused unmodified as the scanner's read boundary.
-- `application.services.backtesting.BacktestingService` / `research.backtesting.engine.run_backtest` — reused **completely unmodified**. This is the load-bearing decision of this checkpoint: live/backtest parity (Phase 10) is free because the orchestrator never re-implements strategy evaluation, it only swaps which `HistoricalMarketDataRepository` is injected.
-- `domain.session.calendar.build_session_for` / `is_trading_day` and `domain.market_data.quality.expected_bar_timestamps` — reused for all coverage/gap-detection date-arithmetic; no second calendar implementation.
-- Celery + Redis (already wired, `CELERY_TASK_ALWAYS_EAGER=True` in test settings) — reused for the new orchestration task instead of inventing a new async mechanism.
-- The `SignalRecord`/`DjangoSignalRepository`/`BacktestResultRecord` repository patterns (Protocol in `application`, Django implementation in `infrastructure`) — followed exactly for every new repository this checkpoint adds.
+## Research Performed
 
-**Was missing (built this checkpoint):**
-- Any raw historical-bar persistence table (`AggregatedBarObservation` is a live-ingestion projection, not a historical archive — wrong shape, wrong keys, no provenance).
-- Any historical-data API adapter at all — Dhan has no historical-candle integration anywhere in this codebase (confirmed by grep; only live quote/WebSocket ingestion exists).
-- Any coverage/gap-detection service.
-- Any multi-instrument, progress-tracked backtest run concept (`BacktestResultRecord` is one immutable single-instrument result; nothing tracked "a run in progress").
-- Any progress/job-status API pattern anywhere in the project.
-- Any frontend polling logic (the existing Backtesting page was a single synchronous request/response).
+Fetched Dhan's current official documentation directly (not from memory)
+for the Live Market Feed API — confirmed against `https://dhanhq.co/docs/v2/live-market-feed/`:
+- WebSocket URL/auth: `wss://api-feed.dhan.co?version=2&token=...&clientId=...&authType=2` — unchanged from Checkpoint 53's original research.
+- Subscribe request shape: `{"RequestCode": 15, "InstrumentCount": N, "InstrumentList": [{"ExchangeSegment": "NSE_EQ", "SecurityId": "..."}]}`.
+- Limits: 5 connections/user, 5,000 instruments/connection, 100 instruments/message.
+- Heartbeat: 10s server ping, 40s client timeout.
+- Disconnect request: `{"RequestCode": 12}`.
 
-**What had to change:** nothing existing was modified except additive fields/params (`+timeframe/direction` params were from the prior checkpoint, not this one). This checkpoint is 100% additive new modules plus one new frontend panel appended to the existing page.
+All of this matched the codebase's pre-existing `websocket_transport.py`/
+`packet_decoder.py` assumptions exactly — no code needed to change because
+of this research; it served to confirm the existing implementation is
+still current, not stale.
 
-## Database-First Architecture
+## Official Sources
 
-```
-BACKTEST/HISTORICAL RUN REQUEST
-        |
-        v
- HistoricalDataCoverageService.get_coverage()   <- reads ONLY HistoricalBar (DB)
-        |
-   +----+----+
-   |         |
-COMPLETE   MISSING
-   |         |
-   |         v
-   |   HistoricalDataPreparationService.prepare()
-   |         |
-   |    SyntheticHistoricalBarProvider.fetch()   <- THE ONLY API call in this pipeline
-   |         |
-   |    ensure_chronological() (validate)
-   |         |
-   |    DjangoHistoricalBarRepository.bulk_upsert()  (persist)
-   |         |
-   |    get_coverage() again (VERIFY persistence, not assumed)
-   |         |
-   +----+----+
-        v
- BacktestingService.run()  <-- UNCHANGED Checkpoint 27 engine,
-        |                       injected with a DB-backed repository
-        v
- HistoricalBacktestRunOrchestrator updates BacktestRun row
-        v
- GET .../progress/  <-- frontend polls this, never a timer
-```
+- `https://dhanhq.co/docs/v2/live-market-feed/` (fetched live this checkpoint).
+- This project's own prior primary-source research (`docs/research/CHECKPOINT_53_DHAN_WEBSOCKET_PROTOCOL_RESEARCH.md`), re-confirmed rather than re-done from scratch.
 
-`HistoricalBacktestRunOrchestrator.run()` (`application/services/historical_backtest_run.py`) never imports `infrastructure` directly (verified by import-linter, see below) — the DB-backed `BacktestingService` is *injected* at construction time by `infrastructure.api.tasks.build_historical_backtest_orchestrator()`, so the "always DB, never API, for the scan itself" guarantee is enforced by dependency direction, not by convention.
+## Real Dhan Verification
 
-## Historical Data Model
+**Performed for real, not simulated.** Using the actual credentials
+configured in this environment's Settings/`.env` (never printed, logged,
+or committed anywhere — see Security below):
 
-New Django model `HistoricalBar` (`infrastructure/persistence/models.py`):
+1. Confirmed credentials are present (`DhanSettingsService.effective_credentials()` returns a real client ID + token) — presence and shape checked only (lengths, "looks numeric"/"looks like a JWT"), never the values themselves.
+2. Connected a real `DhanWebSocketTransport` instance to Dhan's real production endpoint `wss://api-feed.dhan.co` with the real configured credentials in the query string.
+   - **Result: `RESULT=CONNECTED connect_latency_ms=139`** — the RFC 6455 handshake genuinely succeeded.
+3. Sent a real subscribe request for RELIANCE (NSE_EQ, security_id 2885).
+   - **Result: connection closed abnormally (WebSocket close code 1006) within seconds**, before any data packet arrived.
+4. Repeated the connection attempt with NO subscribe message sent at all, to isolate whether the abrupt close was caused by the subscribe message or something upstream of it.
+   - **Result: identical 1006 abnormal closure, purely from connecting** — proving the issue is not the subscribe message format.
+5. Decoded (payload only, never the signature) the configured access token's own JWT claims to check its real expiry.
+   - **Result: `token_issued_at_utc = 2026-08-17 07:10:54`, `token_expires_at_utc = 2026-08-18 07:10:54`, `now_utc = 2026-08-19 08:14:23`, `token_is_expired = True`.**
 
-```
-instrument_id, exchange, symbol, timeframe, bar_timestamp,
-open_price, high_price, low_price, close_price, volume,
-source, ingested_at
-```
+**Conclusion**: `REAL-DHAN-VERIFICATION = BLOCKED — configured access token is expired` (issued with Dhan's documented ~24h TTL, now over a day past its own expiry). This is not a code defect in this project's WebSocket transport — the transport-level handshake genuinely succeeded against the real endpoint, and the request/response shapes matched current official documentation exactly. The block is purely credential freshness, and it is now visible on the Settings page (see Implementation below) rather than hidden behind a stale cached "Connected" badge.
 
-Uniqueness: `UniqueConstraint(["instrument_id", "timeframe", "bar_timestamp"])` — never the row id (Phase 2's explicit rule). `bulk_upsert()` uses one `bulk_create(update_conflicts=True, unique_fields=[...])` call per fetched range, not one `save()` per bar (Phase 28).
+**Safe evidence retained above**: connection state, latency, close code, and non-secret JWT claims (`iss`, `exp`, `iat`, `dhanClientId`-matches-configured boolean) only. No access token, client ID value, signature, or header value was printed, logged, or written to any file in this repository at any point.
 
-Deliberately a **separate** table from `AggregatedBarObservation` (the pre-existing live-ingestion projection) — different pipeline, different identity shape, different provenance needs; reusing it would have conflated live aggregation with historical backfill.
+## Implementation
 
-## Coverage Detection
+### 1. Token lifecycle (`application/services/token_lifecycle.py`)
+A pure, I/O-free evaluator: given an access token string and the current
+time, decodes the JWT payload's `exp` claim (never the signature) and
+returns one of `UNCONFIGURED` / `VALID` / `EXPIRING_SOON` (within 1h of
+expiry) / `EXPIRED` / `MALFORMED`. Wired into `DhanSettingsService.get_display()`
+so it's computed fresh on every Settings page load — the exact live
+finding above (a stale "Connected" badge next to a token that had
+actually expired) is now surfaced directly.
 
-`HistoricalDataCoverageService` (`application/services/historical_data_coverage.py`): `get_coverage()` / `is_complete()` / `get_missing_ranges()` / `get_cached_ranges()`. Date/time-aware, not row-count-aware — it computes the exact expected bar-close timestamp set across every trading day in the requested range (reusing `build_session_for`/`expected_bar_timestamps`, never a second calendar), diffs it against what the DB actually has, and groups the result into contiguous `DateRange`s.
+### 2. Settings API + UI
+`DhanSettingsResponseSerializer` gained `token_state`/`token_expires_at`.
+`DhanSettingsCard.tsx` gained a `TokenStateBadge` shown alongside the
+existing (cached) connection-status badge, so an operator sees both
+signals side by side rather than only the stale one.
 
-Verified with a worked test replicating Phase 3's own example: cached Jan-early/Jan-late with a hole in the middle produces **exactly one** missing range for the missing day, not "some rows are missing" (`test_partial_coverage_identifies_the_exact_missing_sub_range`).
+### 3. Widened live-quote observation universe (`instruments.py`)
+`observation_universe()` previously raised for any symbol not in a
+4-entry hardcoded table. It now falls back to the real Dhan scrip master
+(the same one built for historical/backtesting data in the prior session,
+which carries real `security_id` values) for any symbol the hardcoded
+table doesn't cover — closing the architectural inconsistency
+NewStatus.md named (live universe capped at 4 symbols vs. ~3,100 for
+historical). The 4-symbol default path makes zero network calls, exactly
+as before (proven by a dedicated test injecting a master that raises if
+called) — this is a strict widening, not a behavior change for existing
+callers.
 
-## Missing Range Detection
+**Honest scope limit on this piece**: this is the resolution mechanism
+only (any real NSE symbol can now be named in `MARKET_DATA_OBSERVATION_SYMBOLS`).
+It is NOT a subscription-manager UI, NOT a dynamic watchlist/strategy-
+universe selector, and does NOT itself change what's actually subscribed
+to at runtime — those remain undone (see Remaining Gaps).
 
-Same service, `missing_ranges` field — contiguous timestamps (gap ≤ one bar duration) are merged into a single range; a real gap starts a new range. Covered by 3 dedicated unit tests (empty DB / fully cached / partial-with-a-hole).
+## Files Created
+- `src/intraday/application/services/token_lifecycle.py`
+- `tests/unit/application/services/test_token_lifecycle.py`
+- `NewStatus.md` (prior turn, not this implementation pass)
 
-## API Fallback
+## Files Modified
+- `src/intraday/application/services/provider_settings.py` — wires token lifecycle into `DhanSettingsService.get_display()`.
+- `src/intraday/application/contracts/settings.py` — `token_state`/`token_expires_at` fields.
+- `src/intraday/infrastructure/api/settings_views.py` — serializes the new fields.
+- `src/intraday/infrastructure/market_data_providers/dhan/instruments.py` — scrip-master fallback for `observation_universe()`.
+- `frontend/src/features/settings/DhanSettingsCard.tsx` — `TokenStateBadge`.
+- `frontend/shared/generated_contracts/api-types.ts` — regenerated from the updated OpenAPI schema.
+- Test files: `test_provider_settings.py`, `test_settings_api.py`, `test_instruments.py`, `DhanSettingsCard.test.tsx`.
 
-`HistoricalDataPreparationService` (`application/services/historical_data_preparation.py`) is the **only** place a historical-data provider is ever called. Bounded retries (`MAX_FETCH_ATTEMPTS = 3`, proven by test). A provider failure never silently produces a "complete" result — it returns `PARTIAL`/`FAILED`/`NOT_AVAILABLE` with an explicit `error_message`, and the calling orchestrator records it into `BacktestRun.failed_instruments` (never dropped).
+## Live Market Data
 
-**Honest disclosure on the provider itself:** this codebase has **no real Dhan historical-candle integration** — confirmed by the Phase 1 audit (grepping `infrastructure/*/dhan/` for "historical" returns nothing; only live quote/WebSocket ingestion exists). `SyntheticHistoricalBarProvider` (`infrastructure/market_data_providers/synthetic_historical.py`) is a deterministic, seeded, plausible-OHLCV generator satisfying the exact same `HistoricalBarProvider` Protocol a real Dhan adapter would — built specifically so the DB-first pipeline *around* it (coverage, gap-fill, persist, provenance, partial-failure handling, DB-only-after-preparation) could be built and proven correct now, without real broker historical-API access. Swapping it for a real adapter later is a single-class substitution; nothing above the Protocol boundary changes. This is a real, disclosed scope limitation, not a hidden shortcut — the module's own docstring says so explicitly, and `is_available=False` is the injectable failure switch every acceptance test uses to simulate "the API is down."
+Not implemented this checkpoint beyond the verification above. The
+transport (`DhanWebSocketTransport`) is unchanged and was proven, for the
+first time, to genuinely reach Dhan's real endpoint. No production code
+path (worker command, ingestion runtime) was wired to use a real
+connection this checkpoint — `manage.py run_market_data_worker` still only
+supports `--provider fake`/`--provider fake-ws` (local synthetic
+servers), unchanged.
 
-## Persistence
+## Token Lifecycle
 
-`DjangoHistoricalBarRepository` (`infrastructure/persistence/historical_bar_repository.py`) satisfies **three** Protocols with one class: `HistoricalBarReadRepository`, `HistoricalBarWriteRepository`, and the pre-existing `HistoricalMarketDataRepository` — this is what lets `BacktestingService` (Checkpoint 27, unmodified) be pointed at the database instead of the fixture. Proven with real Postgres: re-persisting an already-cached bar upserts in place (`HistoricalBar.objects.count() == 1` after two `bulk_upsert()` calls with the same identity, revised value wins) — no duplicate rows.
+See Implementation §1 above. Explicitly NOT implemented: automatic
+renewal (Dhan's `RenewToken` API was not integrated), and the richer
+`RENEWING`/`RENEWED`/`AUTH_FAILURE`/`OPERATOR_ACTION_REQUIRED` states the
+brief asked for — those require an actual renewal attempt or a real
+connectivity check, not just reading the token's own claims. What exists
+now is the honest, narrower "what does the token's own expiry say" signal.
 
-## Backtest Engine / Backtest Run Model
+## Reconnect / Recovery
 
-New `BacktestRun` model tracks one multi-instrument run's real-time state: `status`/`phase` (13-state machine per Phase 14), `progress_percent`, `current_instrument`/`current_strategy`, `total_bars`/`scanned_bars`/`signals_generated`, `cache_hits`/`cache_misses`/`api_requests`, `failed_instruments` (JSON, never silently dropped), `result_backtest_ids` (references the SAME `BacktestResultRecord` every other backtest uses — results are not re-implemented, only referenced).
+**Not implemented this checkpoint.** Still exactly as NewStatus.md
+described: the worker detects a disconnect and stops; it does not retry.
 
-`HistoricalBacktestRunOrchestrator.run()` implements the required 16-step sequence per instrument: coverage check -> fetch-missing-only -> validate -> persist -> **re-verify** persisted coverage -> scan (via the unmodified `BacktestingService.run()`) -> record results -> advance to the next instrument, updating the `BacktestRun` row after every real step (never a background timer).
+## Watchdog
 
-Scope limitation, deliberately narrow: one strategy per run (matches the existing single-strategy `BacktestRunRequestSerializer`'s own scope) across a `instrument_ids` universe — multi-strategy-per-run is a documented, deferred extension, not attempted this checkpoint.
+**Not implemented this checkpoint.**
 
-## Live/Backtest Parity
+## Bar/Data Quality
 
-`self.backtesting` (a `BacktestingService`) is **injected** into the orchestrator, constructed once in `infrastructure.api.tasks.build_historical_backtest_orchestrator()` with a DB-backed `HistoricalMarketDataService` — the orchestrator itself never constructs infrastructure (verified by `lint-imports`, see Contracts below). Strategy lookup, feature computation (`compute_feature_series`), and `run_backtest()` are the exact same code the pre-existing single-instrument fixture backtest uses. No second strategy implementation was created for this checkpoint.
+Unchanged this checkpoint. The `SAMPLE_BAR` → `TRADING_GRADE_BAR` gate
+was not exercised against real Dhan data this checkpoint, since the real
+connection never reached the data-receiving stage (blocked by the expired
+token before any packet arrived).
 
-## No Look-Ahead-Bias Validation
+## Signal Pipeline
 
-Not re-implemented — the underlying engine (`research.backtesting.engine.run_backtest`, entries/exits filled at `bars[i+1].open`, never the signal bar's own close) is reused completely unchanged, and its own existing look-ahead-bias test suite (`tests/unit/research/test_bar_semantics_and_bias_audit.py`, `test_mfe_mae_semantics.py`, `test_mark_to_market.py`, etc.) already covers this path by construction — the DB-first orchestrator adds no new bar-ordering or feature-computation logic that could introduce new look-ahead risk.
+Unchanged this checkpoint — no new live signal path work was done. The
+existing strategy/signal/risk/paper pipeline (built pre-session) remains
+the one and only implementation; nothing new was built or duplicated.
 
-## Scanner Progress Architecture
+## Risk / Paper Trading
 
-State machine (Phase 14, implemented exactly): `QUEUED -> ANALYZING_DATA_COVERAGE -> FETCHING_HISTORICAL_DATA -> VALIDATING_DATA -> PERSISTING_DATA -> PREPARING_SCAN -> SCANNING -> CALCULATING_RESULTS -> FINALIZING -> COMPLETED|PARTIAL|FAILED|CANCELLED`. Every transition follows a real action (`run_repository.update()` is called only immediately after that action completes — a coverage check, a fetch, a persist, a scan). No `setInterval(() => percent += 1)` anywhere in this codebase.
+Unchanged this checkpoint.
 
-`CANCELLED` exists as a schema value but no cancel endpoint was built this checkpoint (deferred, see below) — the state machine reserves the value rather than inventing it silently later.
+## Communication
 
-## Progress API
+Unchanged this checkpoint. The signal/execution-separation and
+event-driven communication architecture the brief described (§§12-14)
+was not implemented.
 
-`GET /api/v1/config/backtesting/historical-runs/{run_id}/progress/` — real fields only: `status`, `phase`, `progress_percent`, `current_instrument`, `current_strategy`, `message`, `total_instruments`/`completed_instruments`, `total_bars`/`scanned_bars`, `signals_generated`, `cache_hits`/`cache_misses`/`api_requests`, `failed_instruments`, `result_backtest_ids`, `elapsed_seconds`/`eta_seconds` (ETA computed from actual elapsed-time-vs-progress-percent, not guessed).
+## Operator Dashboard
 
-`POST /api/v1/config/backtesting/historical-runs/` creates the `BacktestRun` row and dispatches `run_historical_backtest_run_task.delay()` — it never runs the orchestrator inline, so a caller gets a `run_id` back immediately and polls for real, incrementally-updated state.
+Not built this checkpoint. The Settings page's Dhan card is the one piece
+of operator-facing surface touched — it now shows real token state, not a
+full operational dashboard.
 
-`POST /api/v1/config/backtesting/coverage-preview/` — Phase 21's read-only readiness check; never fetches or persists, only reports existing DB coverage per instrument.
+## Reports
 
-## Notification System
-
-Scoped down from the full mockup: the `message` field on `BacktestRun`/the progress response carries a human-readable, backend-generated description of the current step (e.g. "Fetched 42 missing bars for NSE:RELIANCE", "Scanning NSE:RELIANCE with ema_crossover") — this is the real signal a frontend toast/notification system would consume. A dedicated toast/activity-log UI component was **not** built this checkpoint (deferred, see below); the frontend panel renders the latest `message` inline instead of a scrolling log.
-
-## Frontend Implementation
-
-`frontend/src/common/api/backtestingApi.ts` — extended with typed wrappers `createHistoricalBacktestRun`, `getHistoricalBacktestRunProgress`, `getCoveragePreview`.
-
-`frontend/src/features/backtesting/BacktestingWorkbenchPage.tsx` — a new `HistoricalBacktestRunPanel` component appended below the existing single-instrument "Run Backtest" flow (additive, not a replacement — the existing fixture/single-instrument flow remains valid for quick strategy iteration). Lets the operator enter a comma-separated instrument universe and a date range, run "Check Data Readiness" (coverage preview table, READY/FETCH REQUIRED badges), then "Prepare Data & Start Backtest" — which creates a run and polls `getHistoricalBacktestRunProgress` every 1.2s until a terminal status, rendering: progress bar, phase, current instrument/strategy, bars scanned, signals, DB cache hits vs. API-fetched bars, API request count, elapsed/ETA, and an explicit "DATABASE ONLY" scan-source badge. No order/position/execution control anywhere on this panel.
-
-No inline `style={{ }}` was used (the project's own `styles.quality.test.ts` forbids it) — the progress-bar fill width is expressed as one of 11 decile CSS classes (`historical-run__progress-bar-fill--{0,10,...,100}`) rather than an inline style, keeping the same real-progress-percent behavior without violating the project's design-token discipline.
-
-## UI/UX Changes / FO Scanner Design Alignment
-
-Reuses the existing shared token system exclusively (`--space-*`, `--color-*`, `--radius-*`, `--font-size-*`, the existing `.badge`/`.badge--ok`/`.badge--pending` classes) — no second design system introduced. Given the scope already covered by this checkpoint's backend work and the session's tool constraints (no browser/screenshot tool available), the frontend panel is a **functional, real, tested extension** of the existing page rather than the full standalone "operator console" mockup layout in the brief (separate DATA READINESS / SCANNER PROGRESS / LIVE ACTIVITY / RESULTS panels as distinct top-level sections) — this is a real, disclosed scope reduction from the mockup's visual ambition, not a claim of pixel-parity with it.
-
-## Tests Added
-
-- `tests/unit/application/services/test_historical_data_coverage.py` (3 tests) — empty/complete/partial coverage detection.
-- `tests/unit/application/services/test_historical_data_preparation.py` (4 tests) — fetch/validate/persist, zero-provider-calls-when-cached, provider-unavailable honesty, bounded retries.
-- `tests/unit/infrastructure/persistence/test_historical_bar_repository.py` (4 tests) — real Postgres: persist, dedup-on-upsert, chronological read order, range-scoped timestamp query.
-- `tests/unit/application/services/test_historical_backtest_run_orchestrator.py` (2 tests) — **the two mandatory Phase 24 proofs**: scanner reads only from DB once complete (provider that raises if ever called); full API->DB->Scanner sequence surviving the provider being disabled after preparation (Scenario E).
-- `tests/unit/infrastructure/api/test_historical_backtesting_api.py` (9 tests) — permissions, run creation, Scenario A (empty DB) and Scenario B (zero-API-request repeat) through the real HTTP API, 404 on unknown run, coverage preview before/after a run, invalid timeframe/instrument rejection, partial-failure disclosure.
-- `frontend/.../BacktestingWorkbenchPage.test.tsx` (+2 tests) — data-readiness preview renders real badges from a real API response; progress panel polls real backend state through multiple ticks to a terminal `COMPLETED` status (not a synchronous fake).
-
-**22 new backend tests, 2 new frontend tests. Total: 1247 backend tests / 104 frontend tests, all passing.**
-
-## Tests Executed
-
-- `poetry run pytest -q` — **1247 passed**, 0 failed.
-- `npx vitest run` (frontend) — **104 passed**, 0 failed.
-- `npx tsc --noEmit` — clean.
-- `npm run build` — succeeds (256 kB JS / 23 kB CSS gzipped to 72 kB / 4.4 kB).
-- `poetry run ruff format --check` / `ruff check` — clean.
-- `poetry run mypy src/` — clean, 262 source files.
-- `poetry run lint-imports` — **6/6 contracts kept**, including the specific one this checkpoint's orchestrator initially violated and was fixed to respect ("Application must not depend on infrastructure" — the orchestrator was refactored to receive its DB-backed `BacktestingService` as an injected dependency rather than importing `DjangoHistoricalBarRepository` itself).
-- `poetry run python manage.py check` — clean.
-- `poetry run python manage.py makemigrations --check --dry-run` — no changes (migration `0017_backtestrun_historicalbar` committed).
-- `poetry run python manage.py spectacular --fail-on-warn` — clean.
-
-## Acceptance Scenarios
-
-### Scenario A — Empty Database
-Proven by `test_scenario_a_empty_database_run_completes_via_real_progress_state`: empty DB, single instrument, one trading day. Result: `status=COMPLETED`, `api_requests > 0`, `cache_misses > 0`, `scanned_bars > 0`, one `result_backtest_ids` entry, zero `failed_instruments`.
-
-### Scenario B — Repeat Cached Run
-Proven by `test_scenario_b_repeat_run_makes_zero_api_requests`: identical configuration run twice through the real HTTP API. First run: `api_requests > 0`. Second run: `api_requests == 0`, `cache_hits > 0`, still `status=COMPLETED`.
-
-### Scenario C — Partial Cache
-Proven at the coverage-service level (`test_partial_coverage_identifies_the_exact_missing_sub_range`): cached days on both sides of a missing day, the gap is identified as its own exact missing range; surrounding cached data is left untouched (never re-counted as missing). Not re-proven at the full orchestrator/API level as a separate scenario this checkpoint (the coverage-service proof is the load-bearing one — `HistoricalDataPreparationService.prepare()` iterates `coverage.missing_ranges` directly, so the same exactness applies mechanically at the orchestration level too, but no dedicated end-to-end test for this specific case was added — a disclosed gap, not a hidden one).
-
-### Scenario D — API Failure
-Proven by `test_provider_unavailable_does_not_produce_a_falsely_complete_result` and `test_provider_failure_retries_are_bounded_not_infinite`: an unreachable provider produces `PreparationStatus.NOT_AVAILABLE` (never a false `COMPLETE`), with a non-empty `error_message`, after exactly `MAX_FETCH_ATTEMPTS = 3` bounded attempts — never an infinite retry loop.
-
-### Scenario E — API Disabled After Preparation
-Proven by `test_full_sequence_api_then_db_then_scanner_survives_api_being_disabled_after` — **the strongest DB-first proof in this checkpoint**: prepare data successfully with an available provider (`api_requests > 0`), then run the identical configuration again with the provider's `is_available` flag set to `False`. Result: `status=COMPLETED`, `api_requests == 0`, `disabled_provider.fetch_call_count == 0`, zero `failed_instruments` — the scanner succeeds entirely from the database with the "external API" completely disabled.
+Unchanged this checkpoint.
 
 ## Performance Measurements
 
-Measured directly from `pytest --durations=20` against the real (Postgres) test database — not fabricated:
+Not attempted this checkpoint (still `RED` per NewStatus.md — unchanged).
 
-- A full `create -> coverage check -> fetch -> validate -> persist -> verify -> scan -> respond` cycle through the real HTTP API (Scenario A, one instrument, one trading day, ~75 five-minute bars) completes in **~1.5 seconds** per test, the majority of which is Django test-client auth/user-creation overhead common to every test in this file (visible from `test_progress_for_unknown_run_id_returns_404`, which does no orchestration at all, also taking ~1.5s).
-- At the orchestrator level directly (no HTTP/auth overhead), `test_scanner_reads_only_from_database_never_the_provider_once_complete`'s actual `.run()` call (excluding the shared `django_db` fixture's one-time ~1.34s setup) completes in **~0.06 seconds** for a full coverage-check + DB-only scan cycle.
-- Full backend suite (1247 tests, including all of the above): **271.6 seconds**.
-- Full frontend successful production build: **901 ms** (vite),  types check in well under 5s.
+## Failure Injection
 
-No dedicated large-scale (e.g. "10 stocks x 6 months") performance benchmark was run this checkpoint — a standalone benchmarking script was attempted but timed out during Django test-database setup within this session's tooling and was abandoned rather than reported as if it had produced numbers. This is a disclosed gap: Phase 28/38's "avoid one query per bar" architectural requirement is met by construction (`bulk_create`/`bulk_upsert`, one coverage query per instrument, not per bar), but no measured multi-instrument/multi-month throughput number exists yet.
+Not attempted this checkpoint (no reconnect/watchdog subsystem exists yet
+to inject failures against).
 
-## Real Capabilities
+## Full-Day Paper Simulation
 
-- Real, tested DB-first coverage detection, gap-filling, persistence, and re-verification.
-- Real proof (Phase 24, the checkpoint's own "most important test") that the scanner never falls back to the provider once data is persisted, including surviving the provider being fully disabled.
-- Real, incrementally-updated progress state machine, polled through a real API, rendered in a real (tested) frontend panel — no fabricated timers anywhere.
-- Real partial-failure disclosure (never a falsely-complete result).
-- Real live/backtest parity by construction (the same unmodified engine, only the data source differs).
+Not built this checkpoint — a genuinely separate, substantial undertaking
+this checkpoint's real-connectivity finding (expired token) makes
+premature: a full-day live simulation needs a working live connection
+first, which this checkpoint proved is currently blocked.
 
-## Missing Capabilities
+## Tests
 
-- No real Dhan historical-candle API integration (uses a disclosed, deterministic synthetic stand-in — see "API Fallback" above).
-- No cancellation endpoint (state machine reserves `CANCELLED`, not wired to a control).
-- No SSE/WebSocket progress transport — polling only (explicitly acceptable per Phase 16 for this PoC).
-- No multi-strategy-per-run support (single strategy across a multi-instrument universe only).
-- No dedicated large-scale performance benchmark (see Performance Measurements' disclosed gap).
-- No true browser-rendered visual verification this session (no screenshot/browser tool available) — verified via DOM-level tests (16 test cases across the two new/extended test files) and a successful production build instead.
+- Backend: **1314 passed** (up from 1300 before this checkpoint — 14 new: 8 token-lifecycle unit tests, 4 provider-settings/API tests, plus the widened-universe test additions net of edits).
+- Frontend: **127 passed** (up from 126 — 1 new: the expired-token-badge test).
+- `ruff format --check` / `ruff check`: clean.
+- `mypy src/`: clean, 272 source files.
+- `lint-imports`: 6/6 contracts kept.
+- `python manage.py check`: clean.
+- `python manage.py makemigrations --check --dry-run`: no changes (no model fields changed this checkpoint).
+- `python manage.py spectacular --fail-on-warn`: clean.
+- No test was weakened to pass — every failure encountered during this checkpoint's work was fixed in the implementation, not the test.
 
-## Deferred Capabilities
+## Security
 
-- Multi-strategy backtest runs.
-- Cancellation.
-- SSE/WebSocket progress transport.
-- A dedicated toast/activity-log notification component (the backend `message` field exists and is real; only a scrolling-log UI was not built).
-- A standalone "operator console" page layout matching the full visual mockup (current implementation is a real, tested, additive panel on the existing Backtesting page).
-- A dedicated multi-instrument/multi-month performance benchmark with measured numbers.
-- Scenario C proven end-to-end at the orchestrator/API level (proven today only at the coverage-service level, which is the mechanically load-bearing layer).
+- The real Dhan credential's VALUE was never printed, logged, echoed, or written to any file in this repository — verified by inspecting every command/script used for the connectivity check; only non-secret metadata (lengths, boolean shape checks, JWT `exp`/`iat`/`iss`/`dhanClientId`-matches boolean) was ever displayed.
+- `.env` remains git-ignored (`git check-ignore -v .env` confirmed).
+- The new `token_state`/`token_expires_at` API/UI fields carry only a state name and a timestamp — never the token itself (mirrors the existing, unmodified secret-handling convention this project has enforced since Checkpoint 22).
+- Temporary local verification scripts used for the live connectivity check were deleted after use and were never part of the git-tracked repository.
+- `git status` confirms nothing secret is staged (see Git below).
 
-## Risks
+## Remaining Gaps
 
-- The synthetic provider's OHLCV values are NOT real market data — any result produced against them has zero predictive value; this is already true of the entire pre-existing backtesting engine's `FIXTURE01` data and is not a new risk this checkpoint introduces, but is now reachable across a wider (any NSE symbol) surface, making it more important that this disclosure travel with any output.
-- `instrument_ids`/`strategy_id` validation happens at the serializer/domain-enum level (unknown exchange, invalid timeframe) but an unknown `strategy_id` is only caught at scan time per-instrument (recorded as a failed instrument), not rejected up front at run-creation — a minor UX rough edge, not a correctness or safety issue.
-- No browser-rendered visual QA this session — layout bugs at specific breakpoints cannot be ruled out from code/test review alone.
+Everything the 32-section brief asked for that was NOT attempted this
+checkpoint, named explicitly rather than silently dropped:
+- Reconnect-with-backoff state machine.
+- Watchdog / worker health monitoring.
+- A real, dynamic subscription manager (watchlist/strategy-universe-
+  driven, not just "any symbol CAN be resolved" — this checkpoint closed
+  the resolution mechanism, not the selection UI).
+- Automatic token renewal (Dhan's `RenewToken` API).
+- Wiring a real connection into `manage.py run_market_data_worker` /
+  the ingestion runtime (blocked today by the expired credential, but
+  also simply not attempted).
+- Signal/execution separability as a first-class communication model.
+- Event-driven (SignalGenerated → ... → PositionClosed) communication architecture.
+- Full-day deterministic paper session simulation with injected disconnect.
+- Real-time operator dashboard.
+- User-controlled live scanner UI (timeframe/universe/strategy selectors that actually drive a live runtime).
+- Performance/load testing at any scale.
+- Full-signal latency tracing (tick → notification timestamp chain).
+- Data-gap detection/reconciliation on reconnect.
+- New report types (Signal Report, Portfolio Report, Risk Decision Report, System Health Report, Daily Session Report).
+
+## Blockers
+
+1. **The configured Dhan access token is expired** (verified directly this checkpoint — issued 2026-08-17 07:10 UTC, expired 2026-08-18 07:10 UTC, ~24h TTL per Dhan's documentation). This blocks any further REAL live-data verification until a fresh token is obtained and configured. The Settings page now shows this state directly (`token_state: EXPIRED`) instead of it being invisible.
+2. Everything downstream of a real connection (reconnect, watchdog, live TRADING_GRADE_BAR promotion, live signal generation) cannot be genuinely verified until blocker 1 is resolved — it can be BUILT and unit-tested against synthetic/injected failures, but not proven against the real feed.
+
+## Product Readiness
+
+**"Can I start the application before market open tomorrow, leave it
+running in PAPER mode, and trust it to receive live Dhan market data,
+recover from normal feed interruptions, detect stale data, produce
+strategy signals, apply risk, create paper trades, maintain positions,
+publish audited signals, and perform EOD reconciliation?"**
+
+**Answer: NO.**
+
+Exact blockers, in priority order:
+1. The configured Dhan credential is expired — no live connection is currently possible at all (verified directly, not assumed).
+2. No reconnect-with-backoff exists — even with a fresh token, a single network hiccup would silently stop the feed for the rest of the day.
+3. No watchdog exists — nothing would alert an operator that the feed had stopped.
+4. No production code path wires the real WebSocket transport into the actual worker/ingestion runtime yet — the transport was proven reachable this checkpoint, but nothing in `manage.py run_market_data_worker` uses it for anything other than the local synthetic test servers.
+5. The live-quote universe, while no longer architecturally capped at 4 symbols, still has no operator-facing selection UI to choose what it actually watches at runtime.
 
 ## Performance Ranking
 
-Not separately benchmarked against alternative implementations this checkpoint (no alternative was built) — the chosen design (bulk upsert, one coverage query per instrument, injected DB-backed repository reusing the unmodified engine) was the only approach implemented, selected specifically to avoid the "one query per bar" / "duplicated engine" anti-patterns the brief warned against, not chosen from among measured alternatives.
+Not applicable this checkpoint — no alternative implementations were built or compared; the increments implemented (token lifecycle, universe widening) had one natural design each, not several measured alternatives.
 
 ## Honest Final Conclusion
 
-1. **DOES THE SCANNER ALWAYS PREFER DATABASE DATA?** **YES.** `HistoricalDataPreparationService.prepare()` checks coverage before ever calling the provider, and `BacktestingService.run()` (the actual scanner) is only ever constructed with a DB-backed repository — proven by a provider that raises if called and the scan still succeeding.
-2. **WHEN DATA IS MISSING, DOES THE SYSTEM FETCH IT FROM API, STORE IT IN DATABASE, AND THEN SCAN FROM DATABASE?** **YES.** Scenario A and the "full sequence" orchestrator test prove exactly this sequence, including a re-verification read from the DB after persistence, before scanning begins.
-3. **CAN THE SCANNER COMPLETE SUCCESSFULLY WITH THE EXTERNAL HISTORICAL API DISABLED AFTER DATA PREPARATION?** **YES** — proven directly (Scenario E), the strongest test in this checkpoint.
-4. **CAN THE SYSTEM DETECT PARTIAL HISTORICAL DATA COVERAGE?** **YES**, at the coverage-service level with an exact-range test; not separately re-proven at the full orchestrator/API level (disclosed gap).
-5. **DOES THE PROGRESS BAR REPRESENT REAL BACKEND WORK?** **YES.** Every `BacktestRun` field update follows a specific completed action; no timer-driven progress exists anywhere in this codebase.
-6. **DOES THE UI SHOW CURRENT STOCK, STRATEGY, PHASE, BARS, SIGNALS, ELAPSED TIME AND ETA FROM REAL BACKEND STATE?** **YES**, all sourced from the real polled progress response, proven by a frontend test that advances through two distinct backend-driven poll states to a terminal `COMPLETED`.
-7. **DOES THE BACKTEST USE THE SAME STRATEGY LOGIC AS THE LIVE SCANNER?** **YES**, by construction — `BacktestingService`/`run_backtest`/`compute_feature_series` are used completely unmodified; only the injected data repository differs.
-8. **IS LOOK-AHEAD BIAS TESTED?** **YES**, by the pre-existing, unmodified engine's own extensive test suite, which this checkpoint's reuse-not-rewrite design keeps fully applicable to the new DB-first path.
-9. **CAN A REPEAT BACKTEST RUN WITHOUT UNNECESSARY API FETCHES?** **YES** — proven twice, at the preparation-service level and through the real HTTP API (Scenario B): `api_requests == 0` on an identical repeat run.
-10. **IS THE PoC READY FOR LARGE-SCALE HISTORICAL BACKTESTING?** **PARTIALLY.** The architecture, correctness guarantees, and test coverage for the DB-first pipeline itself are real and proven. What remains before "large-scale" is genuinely ready: (a) a real historical-data provider (the synthetic stand-in is honestly disclosed but not production data), (b) a measured multi-instrument/multi-month performance benchmark (none was completed this session), (c) multi-strategy-per-run support, (d) cancellation, and (e) actual browser-rendered visual verification of the new frontend panel (no tool available this session). None of these are hidden — each is listed above under Missing/Deferred Capabilities.
+This checkpoint did NOT deliver a live paper trading runtime — that remains
+substantially unbuilt, honestly, per the Remaining Gaps and Blockers above.
+What it DID deliver, for real:
+1. **The first-ever real connectivity attempt against Dhan's actual production WebSocket endpoint** from this codebase, in this environment — the handshake genuinely succeeded, proving the transport layer built in a prior checkpoint is not merely locally-tested theater; it works against the real service.
+2. **A concrete, evidence-based root cause for why live verification is blocked**: not a code defect, but an expired credential — found by decoding the token's own claims, not guessed.
+3. **A real, previously-invisible safety gap closed**: the Settings page's "Connected" badge could be — and in this very environment, WAS — stale relative to the token's actual state. That gap is now closed with a fresh-computed, tested, UI-visible signal.
+4. **A real architectural inconsistency closed**: the live-quote observation universe is no longer capped at 4 hand-maintained symbols; any real NSE instrument can now be named and resolved via the same scrip master the historical/backtesting side already uses.
+
+Both delivered increments are small, but each is directly traceable to something this checkpoint's own readiness gate and live verification actually found — not speculative work done ahead of evidence. The larger runtime (reconnect, watchdog, dashboard, full-day simulation) remains the honest, correctly-sequenced next work, now unblocked to start on as soon as a fresh Dhan credential is available.

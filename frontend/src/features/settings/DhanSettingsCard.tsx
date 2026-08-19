@@ -55,6 +55,46 @@ function describeError(error: unknown): string {
   return "An unexpected error occurred.";
 }
 
+// Checkpoint 64: the "Connected" badge above is driven by a CACHED
+// connection-test result and can go stale relative to the token's
+// actual expiry (Dhan's ~24h token TTL) - this environment's own
+// configured token was found genuinely EXPIRED by a live connectivity
+// check while that badge still said Connected. This badge is computed
+// fresh from the token's own claims on every page load instead.
+function TokenStateBadge(props: {
+  state: DhanSettingsResponse["token_state"];
+  expiresAt: string | null;
+}): JSX.Element {
+  const labels: Record<DhanSettingsResponse["token_state"], string> = {
+    UNCONFIGURED: "Not configured",
+    VALID: "Valid",
+    EXPIRING_SOON: "Expiring soon",
+    EXPIRED: "Expired — renew required",
+    MALFORMED: "Unrecognized token format",
+  };
+  const badgeClass =
+    props.state === "VALID"
+      ? "badge badge--active"
+      : props.state === "EXPIRING_SOON"
+        ? "badge badge--pending"
+        : props.state === "UNCONFIGURED"
+          ? "badge"
+          : "badge badge--danger";
+
+  return (
+    <span>
+      <strong className={badgeClass}>{labels[props.state]}</strong>
+      {props.expiresAt && (
+        <span className="strategy-config-page__help-text">
+          {" "}
+          {props.state === "EXPIRED" ? "Expired at" : "Expires at"}{" "}
+          {new Date(props.expiresAt).toLocaleString()}
+        </span>
+      )}
+    </span>
+  );
+}
+
 export function DhanSettingsCard(): JSX.Element {
   const { state: authState } = useAuth();
   const canWrite =
@@ -146,6 +186,13 @@ export function DhanSettingsCard(): JSX.Element {
             <dd>{loadState.settings.client_id_source}</dd>
             <dt>Access token</dt>
             <dd>{loadState.settings.access_token_configured ? "Configured" : "Not configured"}</dd>
+            <dt>Token status</dt>
+            <dd>
+              <TokenStateBadge
+                state={loadState.settings.token_state}
+                expiresAt={loadState.settings.token_expires_at}
+              />
+            </dd>
           </dl>
 
           {canWrite ? (

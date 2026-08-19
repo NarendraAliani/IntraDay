@@ -140,7 +140,49 @@ def test_dhan_settings_response_never_contains_raw_access_token() -> None:
         "enabled",
         "updated_at",
         "updated_by_username",
+        "token_state",
+        "token_expires_at",
     }
+    # "fake-super-secret-token-never-leak" isn't a real JWT, so the
+    # lifecycle evaluator correctly can't claim VALID/EXPIRED about it -
+    # MALFORMED, never a guessed state (Checkpoint 64).
+    assert body["token_state"] == "MALFORMED"  # noqa: S105 - a state name, not a password
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_dhan_settings_reports_expired_for_a_real_shaped_but_expired_token() -> None:
+    """Checkpoint 64: proves the exact real-world scenario this
+    checkpoint's own live Dhan connectivity check found in THIS
+    environment - a well-formed JWT access token past its own `exp`
+    claim is reported EXPIRED through the real API, not left showing a
+    stale "configured" state with no expiry signal at all."""
+    import base64
+    import json
+    from datetime import UTC, datetime, timedelta
+
+    expired_at = datetime.now(tz=UTC) - timedelta(hours=1)
+    header = base64.urlsafe_b64encode(b'{"alg":"HS512","typ":"JWT"}').rstrip(b"=").decode()
+    payload = (
+        base64.urlsafe_b64encode(json.dumps({"exp": expired_at.timestamp()}).encode())
+        .rstrip(b"=")
+        .decode()
+    )
+    expired_jwt = f"{header}.{payload}.fake-signature-not-verified"
+
+    operator = _client_as_operator()
+    operator.post(
+        "/api/v1/config/settings/dhan/save/",
+        data={"client_id": "1000000123", "access_token": expired_jwt, "enabled": True},
+        content_type="application/json",
+    )
+
+    response = operator.get("/api/v1/config/settings/dhan/")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["token_state"] == "EXPIRED"  # noqa: S105 - a state name, not a password
+    assert body["token_expires_at"] is not None
 
 
 @requires_postgres

@@ -35,6 +35,8 @@ const UNCONFIGURED: DhanSettingsResponse = {
   enabled: false,
   updated_at: null,
   updated_by_username: "",
+  token_state: "UNCONFIGURED",
+  token_expires_at: null,
 };
 
 const CONFIGURED: DhanSettingsResponse = {
@@ -45,6 +47,8 @@ const CONFIGURED: DhanSettingsResponse = {
   enabled: true,
   updated_at: "2026-01-01T09:00:00Z",
   updated_by_username: "operator",
+  token_state: "VALID",
+  token_expires_at: "2026-01-02T09:00:00Z",
 };
 
 const NOT_CONFIGURED_STATUS: ConnectionStatusResponse = {
@@ -90,6 +94,25 @@ describe("DhanSettingsCard", () => {
     await waitFor(() => expect(screen.getByText("10••••23")).toBeInTheDocument());
     expect(screen.getByText("Configured")).toBeInTheDocument();
     expect(screen.queryByText(/^\d{10}$/)).not.toBeInTheDocument();
+  });
+
+  it("shows an expired-token warning distinct from the cached Connected badge - the real bug this closes", async () => {
+    // The exact scenario this checkpoint's own live Dhan connectivity
+    // check found in this environment: a cached "Connected" status
+    // badge alongside a token that has since actually expired.
+    stubTwoGets(
+      { ...CONFIGURED, token_state: "EXPIRED", token_expires_at: "2026-01-01T00:00:00Z" },
+      { status: "CONNECTED", checked_at: "2026-01-01T09:00:00Z", failure_reason_safe: null },
+    );
+
+    renderWithAuth(<DhanSettingsCard />);
+
+    await waitFor(() =>
+      expect(screen.getByText(/Expired — renew required/)).toBeInTheDocument(),
+    );
+    // Both are visible at once - the point is the operator can see the
+    // token state even when the cached connectivity badge is stale.
+    expect(screen.getByText(/Connected/)).toBeInTheDocument();
   });
 
   it("hides the save/test-connection form for a reader without operator capability", async () => {

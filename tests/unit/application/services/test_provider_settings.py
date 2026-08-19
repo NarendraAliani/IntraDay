@@ -14,6 +14,7 @@ from intraday.application.services.provider_settings import (
     DiscordSettingsService,
     TelegramSettingsService,
 )
+from intraday.application.services.token_lifecycle import TokenLifecycleState
 from intraday.infrastructure.persistence.provider_settings_repositories import (
     DjangoDhanCredentialRepository,
     DjangoDiscordCredentialRepository,
@@ -177,6 +178,45 @@ def test_dhan_client_id_is_masked_never_shown_in_full(monkeypatch: pytest.Monkey
 
     assert view.client_id_masked != "1000000123"
     assert "1000000123" not in view.client_id_masked or view.client_id_masked.count("0") < 3
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_dhan_get_display_reports_the_real_token_state_from_a_saved_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Checkpoint 64: proves `get_display()` genuinely wires the token-
+    lifecycle evaluator against the REAL (decrypted) saved access token,
+    not a fixture - a non-JWT saved token is correctly reported
+    MALFORMED, never silently VALID."""
+    repository = DjangoDhanCredentialRepository()
+    repository.save(
+        client_id="db-client-id",
+        access_token="fake-db-token-not-real",  # noqa: S106 - not a real JWT, deliberately
+        enabled=True,
+        actor=ACTOR,
+        actor_user_id=ACTOR_ID,
+        request_id=REQUEST_ID,
+    )
+    service = DhanSettingsService(repository=repository)
+
+    view = service.get_display()
+
+    assert view.token_state is TokenLifecycleState.MALFORMED
+    assert view.token_expires_at is None
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_dhan_get_display_reports_unconfigured_token_state_when_nothing_is_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("DHAN_ACCESS_TOKEN", raising=False)
+    service = DhanSettingsService(repository=DjangoDhanCredentialRepository())
+
+    view = service.get_display()
+
+    assert view.token_state is TokenLifecycleState.UNCONFIGURED
 
 
 @requires_postgres
