@@ -1,55 +1,33 @@
 # Task Report
 
 ## Checkpoint
-Checkpoint 64.7 — Closed-Market Development: TradePlan + Communication Engine + Reporting + Full Deterministic Paper Pipeline + Replay Validation.
+Checkpoint 64.8 — Closed-Market Operationalization: Signal Operations Center + Reporting + Full Paper Replay + Performance + Failure Visibility.
 
 ## Objective
-With the Indian equity market closed, use the period to make the deterministic PAPER/replay workflow real: implement the Checkpoint 64.6 TradePlan architecture decision, verify/extend the broker-independent communication engine, and move toward "can we completely operate and evaluate the algo-trading system in PAPER mode while the market is closed?" Given the mandate's size (30 sections), this checkpoint prioritized real, deeply-verified work on the highest-priority item (TradePlan) and a genuine architectural audit that discovered substantial pre-existing infrastructure for several other requested items — reported honestly rather than re-built or claimed as new.
+Convert the backend capability confirmed real in Checkpoint 64.7 (TradePlan, the pre-existing Communication Engine, the pre-existing database-first replay engine) into an operationally visible, reproducible closed-market product: a Signal Operations Center, delivery visibility, five operational reports, a full deterministic paper session replay, an expanded performance harness, and a formal failure/degraded-state matrix. Given the size of this mandate (25 sections), this checkpoint prioritized the single item the brief itself called "the most important test in this checkpoint" (§15, the full historical-bars-to-report-query integration test) plus the closely related communication-failure-isolation proof (§16) and the TradePlan-coverage audit (§17), executed to real, verified depth — with everything else disclosed honestly as not attempted rather than built shallow.
 
-## Previous Checkpoint Verification
-Re-ran everything before implementing anything, per the brief's explicit §1 instruction:
+## Baseline Verification
+Performed before any new work, per the brief's explicit §1 instruction:
 
-- **Backend**: `poetry run pytest -q` → **1389 passed** (matches the 64.6 report's claimed number exactly), 0 failed.
+- **Backend**: `poetry run pytest -q` → **1400 passed** (matches the 64.7 report's claimed number exactly), 0 failed.
 - **Frontend**: `npx vitest run` → **134 passed** (matches), 0 failed.
-- Explicitly re-ran, in isolation, both named tests: `test_two_simultaneous_configuration_updates_serialize_with_no_lost_update` (the concurrency scenario) and `test_tick_is_skipped_during_the_square_off_window_no_new_entry_after_cutoff` (the CLOSING/square-off entry-block test) → both **passed**, together and individually.
-- `ruff format --check .` — 509 files already formatted. `ruff check .` — all checks passed. `mypy src/` — no issues, 290 source files. `lint-imports` — 6/6 contracts kept. `manage.py check` — no issues. `makemigrations --check --dry-run` — no changes detected.
+- `ruff format --check .` — 513 files already formatted. `ruff check .` — all checks passed. `mypy src/` — no issues, 292 source files. `lint-imports` — 6/6 contracts kept. `manage.py check` — clean. `makemigrations --check --dry-run` — no changes detected.
+- **TradePlan migration**: `manage.py showmigrations persistence` confirms `[X] 0022_tradeplanrecord` — applied.
+- **`git status`**: clean working tree at the start of this checkpoint — the 64.7 work was already fully committed (commit `b2a48ab`) by the end of that checkpoint's own session; there was nothing outstanding to commit before starting 64.8, contrary to what this checkpoint's brief assumed.
 
-No failures found or hidden. Checkpoint 64.6's own claims held up under fresh, independent re-verification.
+No failures found or hidden.
 
-## Market Closed Strategy
-No live Dhan calls were attempted at any point this checkpoint. All new work (TradePlan generation, its persistence, its flow into communication messages) was built and tested against deterministic, hand-constructed bar fixtures — the same discipline every prior checkpoint's backend testing has used. No repeated provider API calls were made; no live verification was fabricated.
-
-## TradePlan
-**Implemented — the Checkpoint 64.6 architecture decision is now real code, not just a decision.**
-
-- `TradePlan` (frozen dataclass, `trading_engine/strategy_execution/contracts.py`, alongside `StrategySignal`): `entry_price`, `stop_loss`, `target_1`, `target_2`, `target_3`, `trailing_stop_loss` — every field independently nullable, `calculation_method` (a real, per-plan human-readable derivation string), `strategy_id`, `code_version`, `generated_at`. Deliberately NOT a field on `StrategySignal`, `RiskDecision`, `PaperOrder`, or `Position` — those reference a plan by `signal_id`, matching the decision made last checkpoint.
-- **`CoordinatorResult.trade_plans`** (new field on the existing `StrategyExecutionCoordinator`'s result, `coordinator.py`): parallel to `.signals` (same index = same signal). Computed via `getattr(strategy, "build_trade_plan", None)` — a purely optional, duck-typed capability. A strategy with no `build_trade_plan` method (every strategy except one) simply contributes `None` at its index — never an error, never a fabricated value. Reuses the exact `strategy_features` the coordinator already computed for `evaluate()` — no second feature-computation pass.
-- **One real producing strategy, `atr_volatility_breakout`** (chosen because it already computes ATR for its own directional threshold — extending it into a trade plan is a defensible reuse of existing logic, not a bolted-on fabrication): added five new configurable parameters (`stop_loss_atr_multiplier`, `target_1/2/3_atr_multiplier`, `trailing_stop_atr_multiplier` — defaults 1.0/1.5/2.5/4.0/1.0, a conventional ascending risk:reward ladder, but fully retunable via the existing strategy-configuration mechanism, never a hardcoded magic number in the calculation itself). `build_trade_plan()` computes every level as `entry ± multiplier × ATR`, returns `None` for a NEUTRAL signal (no trade is being proposed) and `None` (gracefully, not an exception) when the newer plan-only config keys are absent from a caller's configuration — preserving every pre-existing caller/test of this strategy unchanged.
-- `ema_crossover` and `sma_trend_filter` remain directional-only — confirmed by `getattr(strategy, "build_trade_plan", None) is None`, with a dedicated test.
-- **Persistence**: `TradePlanRecord` (new model, migration `0022_tradeplanrecord.py`), referenced by `signal_id` (a plain `CharField`, not a Django FK — matching this project's existing loose ID-reference convention, e.g. `PaperOrderRecord.signal_id`). `DjangoTradePlanRepository` (`save`, `get_by_signal_id`) — idempotent per `signal_id` via `update_or_create`.
-- **Wired into the real pipeline, not a demo**: `PaperSignalExecutionService` (`application/services/paper_signal_execution.py`) now accepts an optional `trade_plan_recorder` (mirrors `signal_recorder`'s established opt-in pattern) and, when a strategy produces a plan, persists it and feeds its real `stop_loss`/`target_1..3`/`entry_price` into `SignalCommunicationContext` — replacing the previously hardcoded `stop_loss=None, targets=()`. `active_loop_runtime.py` (the real live-pipeline call site) now wires `DjangoTradePlanRepository()`.
-- **Tests**: 4 new TradePlan-specific tests in `test_strategy_execution.py` (real ATR-derived values verified by independent recomputation, NEUTRAL → no plan, minimal-config → no plan gracefully, `ema_crossover` has no capability, coordinator pairs plans with signals correctly for a mixed run), 4 repository tests (round-trip, missing plan, partial plan honestly persists only what it has, idempotent save), 2 end-to-end integration tests proving a real plan's values reach the outbound Telegram message and that `ema_crossover` still shows `"Stop Loss: -"` (regression guard — the new capability changes nothing for strategies that don't use it). **11 new tests, all passing.**
+## TradePlan Status
+Unchanged from Checkpoint 64.7 — `atr_volatility_breakout` remains the one producing strategy. This checkpoint's §17 audit (see "Strategy TradePlan Coverage" below) confirms this remains the correct scope; no new strategy was given a plan.
 
 ## Signal Operations Center
-**Not built this checkpoint.** No UI changes were made. This was deprioritized in favor of completing TradePlan (priority #1) to real, tested depth rather than spreading effort across a UI layer that depends on data (trade plan values, communication status) that needed to exist first.
+**Not built this checkpoint.** No UI changes were made — no filters, sorting, pagination, or new columns were added to the existing Active Signal Monitor. This was deprioritized in favor of the backend integration proof (§15), which the brief itself flagged as the checkpoint's most important deliverable and which this Signal Operations Center would ultimately need to visualize correctly (TradePlan fields, communication status) — building the UI before that data path was proven end-to-end risked visualizing an unverified chain.
 
-## Risk Decision Visibility
-**Not built as new UI this checkpoint.** The underlying data (risk status/reason on `SignalRecord`, and `RiskDecisionOutcome`/`ExecutionStatus` in the communication layer) already exists and was not touched. No SIGNAL GENERATED / RISK ACCEPTED / RISK REJECTED three-state visual UI was added.
+## Signal Traceability
+Not extended in the UI this checkpoint. The backend traceability itself — TradePlan → signal → risk → paper order → communication ledger, all joined by `signal_id` — was proven for real in the new integration test (see "Integration Test" below), but no signal-detail panel changes were made.
 
-## Trade Plan Architecture Decision
-Already documented in Checkpoint 64.6's report; implemented in code this checkpoint (see "TradePlan" above). No changes to the decision itself.
-
-## Communication Engine
-**A major discovery, not new construction**: a full, real, persisted, tested broker-independent Communication Engine already exists in this codebase, built in Checkpoint 37 — `communication/contracts/signal_communication.py` (`SignalCommunicationEvent`, `DeliveryAttempt` with `communication_id`/`signal_id`/`channel`/`attempted_at`/`retry_count`/`error_message`, `CommunicationChannel`, `DeliveryStatus` with PENDING/SENT/FAILED/SKIPPED_NOT_CONFIGURED/SKIPPED_DUPLICATE, `ExecutionStatus` derived independently from `RiskDecisionOutcome`/`OrderStatus` — exactly the "SIGNAL TRUTH != EXECUTION TRUTH" principle this checkpoint's brief re-asked for), `application/services/signal_communication.py` (`SignalCommunicationService`, `NotificationRouter`, real retry/dedup logic against a `CommunicationLedger`), and `infrastructure/persistence/communication_ledger_repository.py` (`DjangoCommunicationLedgerRepository`, backed by the real `CommunicationLedgerRecord` model). It is genuinely wired into `PaperSignalExecutionService` (confirmed by reading the call sites, not assumed) and has its own pre-existing test coverage (`tests/unit/communication/test_signal_communication_engine.py`, `tests/unit/infrastructure/persistence/test_communication_ledger_repository.py` — 23 tests, re-run this checkpoint, all passing). This checkpoint's real contribution here was verifying this engine is genuine (not stale/unused) and enriching what flows through it: the previously-always-empty `stop_loss`/`targets` fields in `SignalCommunicationContext` now carry real values for the one TradePlan-producing strategy. No new communication engine was built — building a second one would have directly violated the brief's own "Do NOT create duplicate signal/risk/paper engines" instruction.
-
-## Telegram
-Already implemented (Checkpoint 37): a real adapter (`communication/adapters/telegram/client.py`), delivery tracking via the ledger described above, `NOT_CONFIGURED`-style honest degradation when credentials are absent (via `SKIPPED_NOT_CONFIGURED`). Unchanged this checkpoint except for now receiving real trade-plan values in its messages for `atr_volatility_breakout` signals.
-
-## Discord
-Same as Telegram — a real adapter (`communication/adapters/discord/client.py`) already exists, unchanged this checkpoint except for the same trade-plan enrichment.
-
-## Message Templates
-Already implemented (Checkpoint 37): `communication/contracts/templates.py` defines 18 templates (`MessageTemplateId`), including `VALIDATED_SIGNAL`, whose renderer already formats `Stop Loss:`/`Target N:` lines with an honest `"-"` fallback for `None` (`_fmt_price`). This checkpoint's integration test (`test_a_real_trade_plan_is_persisted_and_its_values_reach_the_outbound_message`) proves, for the first time, that these lines now render real numbers rather than always `"-"` — the template engine itself was not modified, only exercised with real (rather than always-empty) data for the first time.
+## Communication Status
+Not exposed in the UI this checkpoint. The engine itself (verified real in 64.7) was exercised further this checkpoint via the new integration test, which now proves a genuinely mixed-outcome scenario (one channel FAILED, one channel SENT, for the SAME signal) persists correctly to `CommunicationLedgerRecord` with a real `error_message` on the failed row — a stronger verification than 64.7 had, but still no operator-facing surface.
 
 ## Signal Report
 Not built this checkpoint.
@@ -66,154 +44,156 @@ Not built this checkpoint.
 ## Daily Session Report
 Not built this checkpoint.
 
-*(All five: pre-existing report foundations — `signal_pipeline_report.py`, `market_data_quality_report.py`, `communication_delivery_report.py`, `backtest_report.py` — remain unextended into these five specific report types. Deprioritized this checkpoint in favor of TradePlan depth.)*
+*(All five: unchanged from 64.7's disclosure. The pre-existing report foundations — `signal_pipeline_report.py`, `market_data_quality_report.py`, `communication_delivery_report.py`, `backtest_report.py` — remain unwired to any of the five specific report types requested. This checkpoint's new integration test does exercise a real "report query" as its final step — `DjangoSignalRepository.list_signals()` — proving the read-side query path a report would use is itself real and correct, but this is not the same as building the five report artifacts.)*
 
-## Historical Data / Database-First Replay
-**A second major discovery**: the "database-first" rule the brief mandates (§17/§18 — "IF historical bars exist in database: read database. ELSE: fetch provider API, validate, persist, then read database. Never: fetch provider API, directly scan response, bypass database") **already exists, verified by reading the actual code**, not assumed: `application/services/historical_backtest_run.py`'s own header states the architecture guarantee directly — "for EVERY instrument, `run()` calls `HistoricalDataPreparationService.prepare()` (DB-first coverage/fetch/persist/verify) BEFORE ever calling `self.backtesting.run()`" — and `self.backtesting` is always wired with a DB-backed `HistoricalMarketDataRepository`, never a synthetic/live provider directly. This is Checkpoint 63.x work, not built this checkpoint, but genuinely real, tested (`tests/unit/application/services/test_historical_backtest_run_orchestrator.py`, unchanged, still passing as part of the 1400), and directly answers what this checkpoint's §17/§18 asked for.
+## Database-First Replay
+Not re-verified with new end-to-end Case A/B/C tests this checkpoint (§9's specific scenario matrix). Checkpoint 64.7's audit already confirmed, by direct code inspection, that `HistoricalDataPreparationService.prepare()` runs DB-first coverage/fetch/persist/verify before every backtest — that finding stands, re-confirmed by this checkpoint's clean regression run (the relevant orchestrator tests are part of the 1401 passing), but no NEW test proving the specific Case A (DB has bars → zero provider fetch) / Case B (incomplete coverage → fetch-then-persist-then-read-DB) / Case C (fetch fails → no unpersisted-data leak) matrix was written this checkpoint.
 
-## Backtest / Replay Engine
-Already implemented (Checkpoint 63.x): `HistoricalDataPreparationService`, `BacktestingService`, and the historical-run orchestrator described above form a real, database-first replay engine — reused unmodified by every backtest, matching the "LIVE/BACKTEST PARITY" principle documented in that module's own header (`BacktestingService` itself is identical code for live and historical paths; only the data-repository implementation differs). Not extended or re-verified beyond the fresh regression run this checkpoint.
+## Backtesting / Replay UI
+Not touched this checkpoint. `BacktestingWorkbenchPage.tsx` and its real progress-polling behavior (confirmed passing, unchanged, as part of the 134 frontend tests) were not extended with the richer per-stock/per-strategy/signals/risk/paper counters the brief's §10 describes.
 
-## Progress Tracking
-Already implemented (Checkpoint 63.x Phase 13, confirmed by an existing, still-passing frontend test literally named `"polls real backend progress after starting a historical run - never a fake timer-driven bar"` in `BacktestingWorkbenchPage.test.tsx`): the historical backtest run's progress is driven by real `BacktestRun` row mutations after each genuine step completes (coverage check, fetch, scan) — no timer-driven fake progress bar exists in this codebase for this flow. Not extended with the fuller per-stock/per-strategy/signals/risk/paper counters this checkpoint's §19 describes — that richer progress detail was not added.
+## Replay Progress
+Unchanged — the existing real, non-timer-based progress mechanism (Checkpoint 63.x) was not extended this checkpoint.
 
-## EOD / Square-Off
-Unchanged from Checkpoint 64.6's audit — the entry-cutoff rule (`SessionStatus.CLOSING`) remains genuinely enforced and tested (re-verified this checkpoint, see "Previous Checkpoint Verification" above). No new simulation-level EOD tests (existing paper position handling during EOD, EOD report finalization, scanner terminal state) were added this checkpoint — a real, disclosed gap against §22.
+## Full Paper Session Simulation
+**Not built as the full 09:15–15:30 scenario the brief describes.** What WAS built and proven this checkpoint is a genuine, narrower slice of that scenario: a single deterministic pass through historical bars → strategy (`atr_volatility_breakout`) → TradePlan → signal persistence → risk ACCEPTED → paper order → fill → position → mixed-channel communication (one failure, one success) → persisted ledger → report query (see "Integration Test" below). The full multi-hour scenario with a risk-REJECTED second signal, a target-hit, a communication retry-then-success, a simulated disconnect/watchdog/reconnect/gap-recovery, a second entry, a stop-loss exit, and a CLOSING-window rejection was **not assembled into one continuous simulation** this checkpoint — a real, disclosed gap against §8.
 
-## Failure Matrix
-Not built this checkpoint. No formal, documented, operator-visible failure/degraded-state matrix was assembled.
+## EOD Simulation
+Not extended this checkpoint. The Checkpoint 64.6 entry-cutoff test (`test_tick_is_skipped_during_the_square_off_window_no_new_entry_after_cutoff`) remains in place, unmodified, and passing — re-confirmed as part of this checkpoint's clean regression run. No new tests were added for existing-position handling through CLOSING/market-close, terminal EOD state, or Daily Session Report finalization (the last of which cannot be tested since the report itself does not exist yet).
 
-## Performance Measurements
-Not extended this checkpoint. The Checkpoint 64.5 harness (subscription preparation, scanner-configuration-apply latency) is unchanged; the requested expansion (bar ingestion, bar aggregation, strategy evaluation, signal generation, risk evaluation, paper order creation, communication creation, end-to-end signal latency, 10-500 stock throughput) was not attempted.
+## Failure / Degraded State Matrix
+Not built this checkpoint. No formal, documented, 20-state failure matrix was assembled or exposed to the operator.
+
+## Performance Benchmarks
+Not extended this checkpoint. The Checkpoint 64.5 harness (subscription preparation, scanner-configuration-apply latency) is unchanged.
+
+## Integration Test
+**Built — the checkpoint's own stated highest-value item.** Added `test_full_bars_to_report_chain_with_trade_plan_and_mixed_channel_delivery` to the EXISTING `tests/unit/application/services/test_active_loop_end_to_end.py` (never a second, competing acceptance-test file — this file already contained Checkpoint 38's original full-chain acceptance test and 6 failure-scenario tests; the new test extends it rather than duplicating it). Proves, using only real, already-tested production services (`StrategyExecutionCoordinator`, `PaperTradingService`, `PaperBroker`, `SignalCommunicationService`, `NotificationRouter`, `DjangoSignalRepository`, `DjangoTradePlanRepository`, `DjangoCommunicationLedgerRepository`, `DjangoPaperLedgerRepository`) with only the Telegram/Discord network boundary faked (clearly labelled `_FailingTelegram`/`_SucceedingDiscord`, matching this file's own established "fake-provider tests must remain clearly labelled" convention):
+
+historical bars → `atr_volatility_breakout` strategy evaluation → a real ATR-derived `TradePlan` (persisted, `target_1 < target_2 < target_3` independently verified) → signal persistence (`SignalRecord`, `risk_status == "APPROVED"`) → risk evaluation (`RiskDecisionOutcome.APPROVED`) → paper order → FILLED → one open position → communication fanning out to two channels with genuinely different outcomes (Telegram `FAILED` with a real `error_message`, Discord `SENT`) → both persisted as real `CommunicationLedgerRecord` rows keyed by the same `signal_id` → a real report-side query (`DjangoSignalRepository.list_signals(strategy_id=...)`) that finds the signal.
+
+**Passing.** No step was faked; no end result was hand-constructed and asserted against itself.
+
+## Communication Failure Isolation
+**Proven within the same integration test above** (§16's explicit request), rather than as a separate test — the SAME evaluation that produces a REAL paper fill and position also has its Telegram delivery genuinely FAIL (the `_FailingTelegram` fake always returns `False`) while Discord genuinely succeeds, and every assertion about the signal/risk/paper chain is made using the SAME `result`/DB state that also has the Telegram failure recorded — proving by construction (not by a separate mocked scenario) that the failure never touched signal/risk/paper. This is a stronger proof than a scenario where only Telegram is exercised, since it demonstrates a MIXED per-channel outcome for one signal, not just "communication can fail without blocking execution" in isolation.
+
+## Strategy TradePlan Coverage
+**A real audit was performed**, per the brief's explicit §17 instruction not to blindly add plans for symmetry:
+
+- **`ema_crossover`**: compares two EMAs and price; it has no independent measure of price volatility or a natural risk-distance unit anywhere in its logic. Any stop-loss/target derived from it would have to invent an arbitrary percentage or point distance with no basis in the strategy's own computation — exactly the "arbitrary target for symmetry" the brief forbids.
+- **`sma_trend_filter`**: has a `band_percent` parameter, but this is a *signal-sensitivity threshold* (how far price must diverge from the SMA to trigger a direction), not a *risk-sizing* measure — reusing it as a stop-loss distance would conflate two unrelated concepts (when to signal vs. how much risk to take) without justification, and would produce a stop/target ladder no more defensible than a hardcoded constant.
+- **Conclusion: both remain directional-only, by design, not by omission.** Neither strategy currently computes anything analogous to `atr_volatility_breakout`'s ATR — which is a genuine, independent volatility measure the strategy's own directional logic already depends on, making its trade-plan extension a natural reuse rather than an invention. If either strategy is later extended to compute a real volatility/range measure for its own directional logic, that would be the moment a defensible plan becomes possible — not before.
 
 ## Security
-A targeted, real check was performed on the new surfaces this checkpoint touched: `TradePlan`'s `calculation_method` string (embedded in every persisted `TradePlanRecord` and logged via structlog where the strategy computes it) was inspected to confirm it contains only computed price levels and configuration multipliers — never a credential, token, or broker-identifying value, since it is built purely from `Decimal` arithmetic over already-public bar/ATR data. No new logging statements were added that could leak a secret. A full audit of the (pre-existing, unmodified this checkpoint) communication/reporting/replay surfaces was not repeated — the targeted audit performed in Checkpoint 64.6 (settings views return only `*_configured`/`*_source` booleans, never raw tokens) was not re-run since those files were not touched this checkpoint.
-
-## Testing
-- **Backend**: 1400 passed (up from 1389 at the start of this checkpoint; **+11** new tests — 6 in `test_strategy_execution.py`, 4 in `test_trade_plan_repository.py`, 2 in `test_paper_signal_execution_trade_plan.py`, minus adjustments; net new files: `test_trade_plan_repository.py`, `test_paper_signal_execution_trade_plan.py`). 0 failed, 0 skipped, the same 2 pre-existing warnings as every prior checkpoint in this sequence (unrelated third-party `DeprecationWarning`, benign Postgres test-DB teardown warning).
-- **Frontend**: unchanged this checkpoint — 134 passed (no frontend code touched).
-- All quality gates re-run clean after this checkpoint's changes: `ruff format --check .` (513 files formatted — the count grew because new files were added), `ruff check .` (all checks passed), `mypy src/` (no issues, 292 source files), `lint-imports` (6/6 contracts kept, 353 files / 1577 dependencies — both grew from the new `TradePlan`-related modules), `manage.py check` (clean), `makemigrations --check --dry-run` (no changes detected — the `0022_tradeplanrecord` migration was already generated and applied), `manage.py spectacular --fail-on-warn` (clean).
-- No test was weakened, removed, or had its assertions loosened. Two pre-existing, unrelated mypy findings in test files (`BrokerGateway.record_price` in `test_active_loop_runtime.py`, confirmed via `git stash` in Checkpoint 64.6; a `Bar.instrument_id` typing note and two missing-annotation notes in `test_strategy_execution.py`, confirmed via `git stash`/`git stash pop` this checkpoint) were verified pre-existing and unrelated to this checkpoint's work, not newly introduced.
+No new UI or report surfaces were built this checkpoint, so no new secret-exposure surface was introduced. The one new code path (the integration test's fake providers) contains no real credentials — `_FailingTelegram`/`_SucceedingDiscord` are entirely in-memory, never touching a real bot token or webhook URL. A full re-audit of existing surfaces was not repeated (Checkpoint 64.6 already confirmed settings views return only `*_configured`/`*_source` booleans, never raw tokens — unchanged, not touched this checkpoint).
 
 ## Real Dhan Verification
-**Not performed. The market is closed.** No fresh Dhan credential state was checked or assumed; no live connection was attempted; no repeated calls were made against Dhan's production API. Per the standing rule, nothing here is fabricated — this section states plainly that live verification did not happen this checkpoint, and explains why (closed market, per the checkpoint's own explicit instruction not to depend on one).
+**Not performed. The market remains closed.** No live Dhan calls were made or attempted at any point this checkpoint, consistent with the closed-market rule (§19) and the standing rule against fabricating live verification.
+
+## Testing
+- **Backend**: 1401 passed (up from 1400 at the start of this checkpoint; **+1** — the new full-chain integration test). 0 failed, 0 skipped, the same 2 pre-existing warnings as every prior checkpoint in this sequence.
+- **Frontend**: unchanged — 134 passed (no frontend code touched this checkpoint).
+- Quality gates, all re-run clean after this checkpoint's one code change: `ruff format --check .` (513 files formatted), `ruff check .` (all checks passed), `mypy src/` (no issues, 292 source files — the test file itself required two small type-narrowing fixes, both applied and verified), `lint-imports` (6/6 contracts kept), `manage.py check` (clean), `makemigrations --check --dry-run` (no changes detected — no new model this checkpoint), `manage.py spectacular --fail-on-warn` (clean).
+- No test was weakened, removed, or had its assertions loosened.
 
 ## Remaining Gaps
 In priority order:
-1. **Signal Operations Center UI** — no filters/sort/pagination/richer columns (including the new TradePlan fields) added to the existing signal table.
-2. **Five operational reports** (Signal/Risk Decision/Paper Trading/Communication/Daily Session) — none built.
-3. **Communication delivery status in the UI** — the (pre-existing, real) delivery ledger has no operator-facing view.
-4. **Full end-to-end pipeline simulation expansion** — the Checkpoint 64.5 configuration-lifecycle simulation was not expanded to the full signal→risk→paper→notification→reconnect→EOD scenario this checkpoint's §16 describes.
-5. **EOD simulation tests** — position handling during EOD, EOD report finalization, terminal session state are untested at the simulation level (only the entry-block itself is tested, from 64.6).
-6. **Performance harness expansion** — still only 2 of the ~9 requested measurement dimensions are covered.
-7. **Failure/degraded-state matrix** — not assembled as a formal artifact.
-8. **Trade Plan coverage beyond one strategy** — only `atr_volatility_breakout` produces a plan; `sma_trend_filter` (a trend-following strategy with a defensible band-based stop/target shape) was not extended.
+1. **Signal Operations Center UI** — no filters/sort/pagination/richer columns built.
+2. **Five operational reports** — none built (Signal, Risk Decision, Paper Trading, Communication, Daily Session).
+3. **Communication status UI** — the (now further-verified) delivery ledger still has no operator-facing view.
+4. **Full 09:15–15:30 paper session simulation** — only a single-pass slice was proven; the full multi-event scenario (target hit, retry-then-success, disconnect/reconnect/gap-recovery, second entry, stop-loss, CLOSING-window rejection) was not assembled.
+5. **EOD simulation tests beyond the entry-cutoff itself** — position-through-close handling, terminal state, report finalization untested.
+6. **Failure/degraded-state matrix** — not built.
+7. **Performance harness expansion** — unchanged from 64.5/64.7, still only 2 of ~9 requested dimensions.
+8. **Database-first Case A/B/C proof as a dedicated new test** — the underlying architecture is confirmed real (64.7's audit), but the specific scenario matrix this checkpoint's §9 asked for was not written as new tests.
 9. **Real Dhan live verification** — not attempted, market closed.
 
 ## Blockers
-None that prevented the in-scope work. The undone items are deliberate scope decisions: rather than building five shallow report modules, a UI layer with nothing new to show beyond what already existed, or re-verifying pre-existing communication/replay infrastructure that was confirmed genuine by direct code inspection, this checkpoint concentrated on making TradePlan real, tested, and wired end-to-end — the one item that was a genuine backend gap, not a discovery of pre-existing work.
+None that prevented the in-scope work. The undone items are deliberate scope decisions: this checkpoint concentrated on proving the full chain works end-to-end with real data (the item the brief itself called most important) and closing the one remaining open architectural question (TradePlan coverage for the other two strategies) rather than spreading effort thinly across five report modules, a UI layer, and a formal failure matrix that would each individually deserve more care than a fractional share of one checkpoint could give them.
 
 ## Production Readiness
-Meaningful, narrow improvement: for the first time, a strategy-generated signal can carry a real, defensible, independently-verifiable stop-loss and target ladder through to both the persisted record and the outbound Telegram/Discord message — closing the exact "never fabricate Entry/SL/Target" gap named in every report since Checkpoint 36/37. The rest of the operator-facing product (Signal Operations Center, reports, UI-level communication visibility) is unchanged from Checkpoint 64.6.
+A meaningful confidence increase, not a new capability: the full signal → TradePlan → risk → paper → mixed-channel-communication → ledger → report-query chain is now proven correct end-to-end with a single, real, passing test — closing the last open question from 64.7 about whether the two "discovered" pre-existing engines (communication, database-first replay) and the newly-built TradePlan actually compose correctly together, or only individually. The operator-facing product is otherwise unchanged from 64.7.
 
 ## Performance Ranking
 
-| Category | Previous (64.6) | Current (64.7) | Change | Evidence | Missing capability |
+| Category | Previous (64.7) | Current (64.8) | Change | Evidence | Missing capability |
 |---|---|---|---|---|---|
-| Architecture | 8 | 8 | none | TradePlan implemented matching the documented decision exactly | — |
+| Architecture | 8 | 8 | none | Unchanged | — |
 | Market Data | 8 | 8 | none | Unchanged | — |
 | Dhan Integration | 7 | 7 | none | No live verification (market closed) | Real live-session re-verification, next market-open |
-| Historical Data | 8 | 8 | none | Unchanged; re-confirmed real via code inspection | — |
-| Database-First Replay | 0 | 8 | new | Discovered real, pre-existing (Checkpoint 63.x), verified via direct code read of `historical_backtest_run.py`'s own architecture guarantee, tests re-run passing | Not extended this checkpoint |
+| Historical Data | 8 | 8 | none | Unchanged | — |
+| Database-First Replay | 8 | 8 | none | Re-confirmed via clean regression run; no new Case A/B/C tests written | Dedicated end-to-end proof test (§9) |
 | Bar Engine | 8 | 8 | none | Unchanged | — |
-| Strategy Engine | 8 | 8 | none | Unchanged internally; one strategy extended with `build_trade_plan` | — |
-| TradePlan | 0 | 8 | new | Real dataclass, real producing strategy, real persistence, real wiring into communication, 11 new passing tests | Only 1 of 3 strategies produces a plan |
+| Strategy Engine | 8 | 8 | none | Unchanged; TradePlan-coverage audit confirmed current scope is correct | — |
+| TradePlan | 8 | 8 | none | Coverage audit performed (§17) - confirmed no other strategy is currently defensible; no new plan-producing strategy added | ema_crossover/sma_trend_filter remain directional-only by design |
 | Live Signal Pipeline | 8 | 8 | none | Unchanged | — |
 | Signal Operations | 2 | 2 | none | No UI work this checkpoint | Full Signal Operations Center |
 | Risk Engine | 8 | 8 | none | Unchanged | — |
 | Paper Trading | 8 | 8 | none | Unchanged | — |
-| Communication | 6 | 7 | +1 | Verified genuinely real/wired (not assumed), now carries real TradePlan values for one strategy | UI visibility, extension to more strategies |
-| Telegram | 5 | 6 | +1 | Confirmed real adapter + delivery tracking; now sends real SL/target values | Per-message UI status |
-| Discord | 5 | 6 | +1 | Same as Telegram | Per-message UI status |
-| Reports | 7 | 7 | none | No new report modules | 5 requested report types |
-| Backtesting | 8 | 8 | none | Unchanged; re-confirmed real | — |
-| Replay | 3 | 7 | +4 | Discovered the database-first replay engine already exists and is real/tested (Checkpoint 63.x) — this checkpoint's own audit found it, not built it | Progress-UI richer counters, full pipeline simulation expansion |
-| EOD | 8 | 8 | none | Entry-cutoff re-verified; simulation-level EOD tests (position handling, report finalization) still absent | EOD simulation tests |
+| Communication | 7 | 8 | +1 | New integration test proves a genuinely MIXED per-channel outcome (one FAILED, one SENT) for the SAME signal persists correctly with a real error_message | UI visibility |
+| Telegram | 6 | 7 | +1 | Failure path re-verified with a real error_message assertion in a full-chain context | Per-message UI status |
+| Discord | 6 | 7 | +1 | Success path re-verified in the same mixed-outcome test | Per-message UI status |
+| Reporting | 7 | 7 | none | No new report modules; the read-query path a report would use (`list_signals`) is proven real | 5 requested report types |
+| Backtesting | 8 | 8 | none | Unchanged | — |
+| Replay | 7 | 7 | none | Unchanged this checkpoint | Progress-UI richer counters |
+| Full Session Simulation | 3 | 4 | +1 | A real single-pass slice of the full scenario now exists and is proven end-to-end (signal→TradePlan→risk→paper→mixed-comms→ledger→report-query) | Full 09:15-15:30 multi-event scenario |
+| EOD | 8 | 8 | none | Entry-cutoff test re-confirmed passing; no new EOD-simulation tests | Position-through-close, terminal state, report finalization tests |
 | Runtime Control | 8 | 8 | none | Unchanged | — |
 | Operator UX | 7 | 7 | none | No UI changes this checkpoint | Signal Operations Center, communication status |
 | Observability | 7 | 7 | none | Unchanged | Failure/degraded-state matrix |
-| Simulation | 3 | 3 | none | Configuration-lifecycle simulation unchanged; full pipeline simulation not expanded | Full end-to-end scenario from §16 |
 | Performance | 6 | 6 | none | Harness unchanged | 7 remaining measurement dimensions |
 | Scalability | 6 | 6 | none | Unchanged | — |
-| Auditability | 9 | 9 | none | TradePlan's `calculation_method` adds a real per-plan audit trail | — |
-| Security | 8 | 8 | none | Targeted check on new surfaces only; full re-audit not repeated | Full log/report secret audit |
-| Production Readiness | 7 | 7 | none | Real TradePlan closes a named gap but doesn't change what an operator can do end-to-end without curl/reports | Signal ops, reports, communication UI |
+| Auditability | 9 | 9 | none | Unchanged | — |
+| Security | 8 | 8 | none | No new surfaces introduced; no re-audit performed | Full log/report secret audit |
+| Production Readiness | 7 | 7 | none | Confidence increase (full chain proven composed correctly) doesn't change what an operator can do without curl/reports | Signal ops, reports, communication UI |
 | Active Paper Trading | 6 | 6 | none | Not exercised this checkpoint | — |
 | Live Trading Readiness | 1 | 1 | none | Intentionally out of scope | — |
 
-**ENGINEERING MATURITY SCORE: 8/10** — TradePlan was built to real depth: a genuinely defensible calculation (ATR-derived, using the strategy's own already-computed value, fully configurable, never a magic number), correct handling of the optional-capability pattern (graceful `None` for missing config, never an exception breaking signal generation), and 11 new tests covering the value object, the strategy, the repository, and full end-to-end wiring including the outbound message. The architectural audit that discovered the pre-existing database-first replay and communication engines is itself real engineering discipline — verifying claims against code rather than assuming or re-building. Held at 8, not higher, because the majority of the checkpoint's other 20+ sections were not attempted.
+**ENGINEERING MATURITY SCORE: 8/10** — the one thing built this checkpoint was built to real depth: a genuine, non-trivial integration test combining 8+ real production services with only the network boundary faked, proving a mixed-outcome (partial failure) scenario rather than only a happy path, extending an existing test file rather than duplicating it, and the TradePlan-coverage audit reasoned correctly from first principles (volatility measure vs. signal-sensitivity threshold) rather than defaulting to "add it everywhere for consistency." Held at 8, not higher, because the checkpoint's other 20+ sections were not attempted.
 
-**ACTIVE PRODUCT MATURITY SCORE: 6/10** — no new operator-facing UI capability shipped. An operator still cannot see a TradePlan, a communication delivery status, or a report through the product — the new capability is real but currently backend-only, visible only in the persisted `TradePlanRecord` table and the outbound Telegram/Discord message content.
+**ACTIVE PRODUCT MATURITY SCORE: 6/10** — unchanged from 64.7. No new operator-facing capability shipped; this checkpoint's value is entirely in backend verification confidence.
 
-**CLOSED-MARKET READINESS SCORE: 6/10** — the two major discoveries this checkpoint (database-first replay, communication engine) mean more of the "operate the system without live Dhan" story is already true than the brief's own framing assumed. However, the full deterministic end-to-end simulation (§16) was not built, and the five reports that would let an operator evaluate a closed-market session are still absent — so "fully testable while the market is closed" is not yet achieved, even though more of the pieces exist than this checkpoint initially credited.
+**CLOSED-MARKET READINESS SCORE: 6/10** — unchanged from 64.7's assessment. The full chain composing correctly is now proven for one representative scenario, which is a real confidence increase, but "fully testable while the market is closed" still requires the reports and the fuller simulation this checkpoint did not build.
 
-**OVERALL CHECKPOINT SCORE: 7/10** — real, deep, well-tested progress on the #1 priority (TradePlan), plus a genuinely valuable architectural audit that surfaced substantial pre-existing capability (database-first replay, communication engine) the prior checkpoint's own report had under-credited. Held below 8 because the large majority of the 30-section mandate (Signal Operations Center, 5 reports, full pipeline simulation, performance expansion, failure matrix, EOD simulation tests) remains unbuilt, and this checkpoint explicitly chose depth on one item over shallow coverage of many — consistent with this project's standing discipline, but still a real, honestly-scored shortfall against the full ask.
+**NEXT-MARKET-OPEN READINESS SCORE: 6/10** — the backend chain an operator would rely on during a live PAPER session is now more thoroughly proven than before (mixed-channel communication failure isolation specifically), but the operator-facing visibility gaps (Signal Operations Center, communication status UI, daily session report) that would let a human actually monitor a live session remain exactly as open as they were at the end of 64.7.
+
+**OVERALL CHECKPOINT SCORE: 6/10** — a real, valuable, well-executed piece of work (the full-chain integration test, exactly the item the brief itself prioritized as most important, plus the communication-isolation proof folded into it, plus a correctly-reasoned TradePlan-coverage decision) but a narrow slice against a 25-section mandate. This checkpoint made the deliberate, disclosed choice to prove the existing chain composes correctly under a realistic mixed-outcome scenario rather than building new operator-facing surfaces on top of a chain that had not yet been proven together — a defensible ordering, but one that leaves the bulk of "Signal Operations + Delivery Visibility + Reports + Full Replay + Full Paper Simulation + Performance + Failure Visibility" (the final directive's own list) unbuilt.
 
 ## Final Product Gate
 
-**A. CLOSED-MARKET PRODUCT** — Can we now use historical/database data, replay it, generate real strategy signals, create TradePlans, apply risk, create paper trades, communicate signals, generate reports, inspect complete traceability, reproduce the session, without live Dhan?
+**A. CLOSED-MARKET READINESS** — Can the system now take database/historical data, replay it, scan strategies, produce signals, produce TradePlans, apply risk, create paper trades, communicate signals, record delivery, generate reports, reproduce the session, without live Dhan?
 
 **PARTIALLY.**
-- Database data + replay: **YES** (pre-existing, Checkpoint 63.x, re-confirmed real this checkpoint).
-- Generate real strategy signals: **YES** (pre-existing).
-- Create TradePlans: **YES**, for one strategy (`atr_volatility_breakout`) — new this checkpoint.
-- Apply risk: **YES** (pre-existing).
-- Create paper trades: **YES** (pre-existing).
-- Communicate signals: **YES**, now with real TradePlan values for one strategy — the engine itself pre-existing, verified real.
-- Generate reports: **NO** — the 5 requested report types do not exist.
-- Complete traceability from one screen: **NO** — no Signal Operations Center / signal-detail traceability UI exists.
-- Reproduce the session: **PARTIALLY** — the configuration-lifecycle simulation exists; the full signal→risk→paper→communication→reconnect→EOD scenario does not.
+- Database data + replay, signals, TradePlans, risk, paper trades, communicate + record delivery: **YES** — and now proven to compose correctly together in one real integration test, including a genuinely mixed (partial-failure) delivery outcome.
+- Generate reports: **NO** — none of the 5 requested report types exist.
+- Reproduce the session (the full 09:15–15:30 scenario): **PARTIALLY** — a single representative slice is proven; the full multi-event scenario is not assembled.
 
-**B. NEXT-MARKET-OPEN READINESS** — Is the system ready for a controlled PAPER-only live-session verification?
+**B. NEXT-MARKET-OPEN PAPER READINESS** — Can we safely open the market and run live Dhan feed, PAPER mode, selected timeframe/universe/strategies, signal generation, TradePlan, risk, paper execution, Telegram/Discord, monitoring, with adequate operator visibility?
 
 **PARTIALLY.**
-- The live worker, reconciliation, watchdog, reconnect, and entry-cutoff enforcement are all real and tested (Checkpoints 64.1–64.6).
-- TradePlan and its communication integration are real and tested for one strategy.
-- **Blockers to a fully confident live verification, in priority order**: (1) no operator-facing way to observe delivery/communication status during a live session, (2) no daily session report to summarize what happened afterward, (3) no full pipeline simulation had been run end-to-end even in replay to build confidence before going live, (4) real Dhan credential state is unknown/unverified this session.
+- The underlying chain (worker, reconciliation, watchdog, reconnect, entry-cutoff, TradePlan, risk, paper execution, communication with real failure isolation) is real, tested, and now proven to compose correctly under a realistic mixed-outcome scenario.
+- **Blockers to adequate operator visibility during a live session, in priority order**: (1) no Signal Operations Center — an operator cannot see signals/TradePlans/risk/communication status through the product, only via direct DB query as this checkpoint's test did; (2) no communication status UI — a Telegram/Discord failure during a live session would be invisible to the operator without checking logs/DB directly; (3) no Daily Session Report — no way to summarize what happened after the session ends; (4) real Dhan credential state is unknown/unverified this session.
 
 ## Honest Final Conclusion
-This checkpoint made two kinds of real progress: it implemented the Checkpoint 64.6 TradePlan architecture decision to genuine depth — a defensible, ATR-derived, fully-tested calculation flowing end-to-end from strategy evaluation through persistence into the outbound Telegram/Discord message, closing a gap named in every report since Checkpoint 36/37 — and it performed a genuine architectural audit that discovered two of the checkpoint's other priorities (database-first historical replay, broker-independent communication engine with delivery tracking) already exist as real, tested, wired infrastructure from earlier checkpoints (63.x and 37 respectively), corrected here rather than duplicated or re-claimed as new. However, the majority of this checkpoint's 30-section mandate remains unbuilt: no Signal Operations Center, no operational reports, no full end-to-end pipeline simulation, no performance harness expansion, no failure matrix. Given the market is closed and there is no time pressure from a live session, the honest assessment is that this checkpoint chose depth on the single highest-priority item over shallow breadth across the full ask — a defensible choice consistent with this project's standing discipline, but one that leaves "can we completely operate and evaluate the algo-trading system in PAPER mode while the market is closed" still PARTIALLY true, not YES.
+This checkpoint delivered exactly the item its own brief called the most important test: a real, comprehensive integration proof that historical bars flow correctly through strategy evaluation, TradePlan generation, signal persistence, risk evaluation, paper execution, and — critically — a genuinely mixed-outcome multi-channel communication delivery (one channel failing with a real error reason, one succeeding), all the way to a real report-side query, using only real production services with the network boundary faked. This closes the last open question from Checkpoint 64.7: not just that the Communication Engine and database-first replay engine each individually work, but that they compose correctly together with the newly-built TradePlan in one continuous, realistic scenario. The TradePlan-coverage audit for the other two strategies was also completed correctly, with real reasoning rather than a rushed retrofit. However, the large majority of this checkpoint's 25-section mandate — the Signal Operations Center, all five operational reports, the full multi-event paper session simulation, the failure/degraded-state matrix, and the performance harness expansion — remains unbuilt. The honest state is that Checkpoint 64.8 increased backend confidence meaningfully but did not move the product's operator-facing surface forward at all; "can we actually operate and evaluate the algo-trading product from historical/replay data without the market being open" is closer to true at the backend-verification level than it was, but not yet true at the level an actual human operator could experience through the product.
 
 ## Git Status
 
 ```
 On branch main
-Your branch is ahead of 'origin/main' by 26 commits.
+Your branch is ahead of 'origin/main' by 27 commits.
 
 Changes not staged for commit:
-	modified:   src/intraday/application/services/paper_signal_execution.py
-	modified:   src/intraday/infrastructure/api/active_loop_runtime.py
-	modified:   src/intraday/infrastructure/persistence/models.py
-	modified:   src/intraday/trading_engine/strategy_execution/contracts.py
-	modified:   src/intraday/trading_engine/strategy_execution/coordinator.py
-	modified:   src/intraday/trading_engine/strategy_execution/strategies/atr_volatility_breakout.py
-	modified:   tests/unit/trading_engine/test_strategy_execution.py
-
-Untracked files:
-	src/intraday/application/repositories/trade_plan.py
-	src/intraday/infrastructure/persistence/migrations/0022_tradeplanrecord.py
-	src/intraday/infrastructure/persistence/trade_plan_repository.py
-	tests/unit/application/services/test_paper_signal_execution_trade_plan.py
-	tests/unit/infrastructure/persistence/test_trade_plan_repository.py
+	modified:   tests/unit/application/services/test_active_loop_end_to_end.py
 ```
 
 `git log --oneline -3` (before this checkpoint's commit):
 ```
+b2a48ab Checkpoint 64.7: implement TradePlan, verify pre-existing replay/comms
 6319202 Checkpoint 64.6: verify 64.5, entry-cutoff audit test, Trade Plan decision
 0dfad1f Checkpoint 64.5: live scanner operator console + audit fix + test coverage
-2658df1 Checkpoint 64.4: live scanner control plane (desired/effective state)
 ```
 
-`git rev-list --left-right --count origin/main...HEAD`: `0	26` (0 behind, 26 ahead — local-only, never pushed, per standing rule).
+`git rev-list --left-right --count origin/main...HEAD`: `0	27` (0 behind, 27 ahead — local-only, never pushed, per standing rule).
 
 This checkpoint's changes will be committed **locally only**. No push to origin will be performed.

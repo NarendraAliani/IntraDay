@@ -39,7 +39,12 @@ from intraday.infrastructure.brokers.paper.broker import PaperBroker
 from intraday.infrastructure.persistence.communication_ledger_repository import (
     DjangoCommunicationLedgerRepository,
 )
-from intraday.infrastructure.persistence.models import CommunicationLedgerRecord, PaperOrderRecord
+from intraday.infrastructure.persistence.models import (
+    CommunicationLedgerRecord,
+    PaperOrderRecord,
+    SignalRecord,
+    TradePlanRecord,
+)
 from intraday.infrastructure.persistence.paper_ledger_repository import (
     DjangoPaperLedgerRepository,
 )
@@ -351,3 +356,203 @@ def test_scenario_i_reconciliation_mismatch_is_detected_after_a_direct_ledger_ed
     report = reconcile_paper_state(broker=broker, ledger=ledger, now=BASE)
 
     assert not report.is_clean
+
+
+# --------------------------------------------------------------------
+# Checkpoint 64.8 §15/§16: the FULL chain including TradePlan and
+# multi-channel communication isolation, appended to this EXISTING
+# end-to-end suite (never a second, competing acceptance-test file).
+# Reuses every real component (StrategyExecutionCoordinator,
+# PaperTradingService, PaperBroker, SignalCommunicationService,
+# DjangoSignalRepository, DjangoTradePlanRepository,
+# DjangoCommunicationLedgerRepository) - only the Telegram/Discord
+# network boundary is faked, per this file's own established
+# "fake-provider tests must remain clearly labelled" convention.
+# --------------------------------------------------------------------
+
+
+def _breakout_bars() -> tuple[Bar, ...]:
+    flat = [
+        Bar(
+            instrument_id=RELIANCE,
+            timeframe=Timeframe.ONE_MINUTE,
+            timestamp=BASE + timedelta(minutes=i + 1),
+            open=Decimal(100),
+            high=Decimal(101),
+            low=Decimal(99),
+            close=Decimal(100),
+            volume=Decimal("0"),
+        )
+        for i in range(8)
+    ]
+    breakout = Bar(
+        instrument_id=RELIANCE,
+        timeframe=Timeframe.ONE_MINUTE,
+        timestamp=BASE + timedelta(minutes=9),
+        open=Decimal(100),
+        high=Decimal(112),
+        low=Decimal(99),
+        close=Decimal(111),
+        volume=Decimal("0"),
+    )
+    return (*flat, breakout)
+
+
+def _atr_config() -> StrategyConfigurationValues:
+    return StrategyConfigurationValues(
+        "atr_volatility_breakout",
+        "v1",
+        "v1",
+        "v1",
+        {
+            "lookback": 5,
+            "atr_multiplier": Decimal("0.1"),
+            "stop_loss_atr_multiplier": Decimal("1.0"),
+            "target_1_atr_multiplier": Decimal("1.5"),
+            "target_2_atr_multiplier": Decimal("2.5"),
+            "target_3_atr_multiplier": Decimal("4.0"),
+            "trailing_stop_atr_multiplier": Decimal("1.0"),
+        },
+    )
+
+
+class _FailingTelegram:
+    """FAKE - never a real network call. Always fails, deterministically."""
+
+    channel = CommunicationChannel.TELEGRAM
+    provider_name = "telegram-failing"
+    destination_masked = "****fail"
+
+    def __init__(self) -> None:
+        self.attempts = 0
+
+    def send(self, text: str) -> tuple[bool, str | None, str | None, str | None, bool]:
+        self.attempts += 1
+        return False, None, "PROVIDER_ERROR", "simulated permanent failure", False
+
+
+class _SucceedingDiscord:
+    """FAKE - never a real network call. Always succeeds, deterministically."""
+
+    channel = CommunicationChannel.DISCORD
+    provider_name = "discord-fake"
+    destination_masked = "****ok"
+
+    def __init__(self) -> None:
+        self.sent: list[str] = []
+
+    def send(self, text: str) -> tuple[bool, str | None, str | None, str | None, bool]:
+        self.sent.append(text)
+        return True, "discord-msg-1", None, None, False
+
+
+def test_full_bars_to_report_chain_with_trade_plan_and_mixed_channel_delivery() -> None:
+    """Checkpoint 64.8 §15 - "the most important test in this
+    checkpoint": historical bars -> strategy -> TradePlan -> signal
+    persistence -> risk -> paper order -> communication (one channel
+    failing, one succeeding) -> persisted communication ledger -> a
+    real report query (`DjangoSignalRepository.list_signals()`). Every
+    step uses a REAL, already-tested production service/repository -
+    the only fakes are the two network-boundary providers, and even
+    those are exercised through the real `SignalCommunicationService`/
+    `NotificationRouter`, never bypassed."""
+    from intraday.infrastructure.persistence.signal_repository import DjangoSignalRepository
+    from intraday.infrastructure.persistence.trade_plan_repository import (
+        DjangoTradePlanRepository,
+    )
+
+    registry = build_default_registry()
+    registry.activate("atr_volatility_breakout")
+    coordinator = build_coordinator(registry)
+    broker = PaperBroker(
+        initial_capital=Decimal("1000000"), compute_cost=_no_cost, clock=lambda: BASE
+    )
+    paper_ledger = DjangoPaperLedgerRepository()
+    trading_service = PaperTradingService(
+        broker=broker,
+        risk_limits=DEFAULT_LIMITS,
+        risk_configuration_version="v1",
+        max_concurrent_positions=5,
+        max_total_exposure=Decimal("500000"),
+        kill_switch_status_provider=lambda: TradingHaltStatus.ACTIVE,
+        clock=lambda: BASE,
+        ledger=paper_ledger,
+    )
+    telegram = _FailingTelegram()
+    discord = _SucceedingDiscord()
+    communication = SignalCommunicationService(
+        router=NotificationRouter(
+            providers=(telegram, discord), ledger=DjangoCommunicationLedgerRepository()
+        )
+    )
+    service = PaperSignalExecutionService(
+        coordinator=coordinator,
+        paper_trading_service=trading_service,
+        quantity=Decimal("10"),
+        communication=communication,
+        signal_recorder=DjangoSignalRepository(),
+        trade_plan_recorder=DjangoTradePlanRepository(),
+    )
+
+    bars = _breakout_bars()
+    broker.record_price(RELIANCE, bars[-1].close, BASE)
+
+    result = service.evaluate_and_submit(
+        bars=bars,
+        instrument_id=RELIANCE,
+        strategy_id="atr_volatility_breakout",
+        configuration=_atr_config(),
+        strategy_is_active=True,
+        market_session_is_open=True,
+        data_quality_is_stale=False,
+        already_processed_signal_ids=frozenset(),
+        already_submitted_idempotency_keys=frozenset(),
+    )
+    signal_id = result.signal_id
+    assert signal_id is not None
+
+    # --- TradePlan: real, ATR-derived, persisted ---
+    plan = TradePlanRecord.objects.get(signal_id=str(signal_id))
+    assert plan.stop_loss is not None
+    assert plan.target_1 is not None
+    assert plan.target_2 is not None
+    assert plan.target_3 is not None
+    assert plan.target_1 < plan.target_2 < plan.target_3
+
+    # --- Signal persistence: real row exists ---
+    signal_row = SignalRecord.objects.get(signal_id=str(signal_id))
+    assert signal_row.strategy_id == "atr_volatility_breakout"
+    assert signal_row.risk_status == "APPROVED"
+
+    # --- Risk + paper order + fill + position: all real ---
+    assert result.order_result is not None
+    assert result.order_result.risk_decision.outcome.value == "APPROVED"
+    assert result.order_result.broker_report is not None
+    assert result.order_result.broker_report.status.value == "FILLED"
+    assert len(broker.get_positions()) == 1
+    assert PaperOrderRecord.objects.filter(signal_id=str(signal_id)).exists()
+
+    # --- Communication failure isolation (§16): Telegram failed,
+    # Discord succeeded, and NONE of signal/risk/paper were affected by
+    # the Telegram failure - proven above, they already persisted
+    # before this assertion block even runs. ---
+    assert telegram.attempts >= 1
+    assert len(discord.sent) >= 1
+    telegram_rows = CommunicationLedgerRecord.objects.filter(
+        signal_id=str(signal_id), channel="TELEGRAM"
+    )
+    discord_rows = CommunicationLedgerRecord.objects.filter(
+        signal_id=str(signal_id), channel="DISCORD"
+    )
+    assert telegram_rows.exists()
+    assert discord_rows.exists()
+    assert all(row.delivery_status == "FAILED" for row in telegram_rows)
+    assert all(row.delivery_status == "SENT" for row in discord_rows)
+    assert all(row.error_message for row in telegram_rows)  # a safe failure reason was recorded
+
+    # --- Final step: a real report query (not a fabricated summary) ---
+    from intraday.infrastructure.persistence.signal_repository import DjangoSignalRepository as _R
+
+    page = _R().list_signals(strategy_id="atr_volatility_breakout")
+    assert page.total_count >= 1
+    assert any(item.signal_id == str(signal_id) for item in page.items)
