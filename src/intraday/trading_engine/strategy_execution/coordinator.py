@@ -31,6 +31,7 @@ from intraday.domain.market_data.contracts import Bar
 from intraday.trading_engine.strategy_execution.contracts import (
     StrategyConfigurationValues,
     StrategySignal,
+    TradePlan,
 )
 from intraday.trading_engine.strategy_execution.registry import StrategyRegistry
 
@@ -48,6 +49,12 @@ class StrategyExecutionFailure:
 class CoordinatorResult:
     signals: tuple[StrategySignal, ...]
     failures: tuple[StrategyExecutionFailure, ...] = field(default_factory=tuple)
+    # Checkpoint 64.7: parallel to `signals` (same index = same signal) -
+    # `None` at an index means that strategy produced a signal with no
+    # trade plan (e.g. a directional-only strategy), a normal outcome,
+    # never an error. Kept OFF `StrategySignal` itself per the
+    # Checkpoint 64.6 architecture decision - no field duplication.
+    trade_plans: tuple[TradePlan | None, ...] = field(default_factory=tuple)
 
 
 class StrategyExecutionCoordinator:
@@ -91,6 +98,7 @@ class StrategyExecutionCoordinator:
                     break
 
         signals: list[StrategySignal] = []
+        trade_plans: list[TradePlan | None] = []
         failures: list[StrategyExecutionFailure] = []
 
         for strategy in active:
@@ -115,5 +123,20 @@ class StrategyExecutionCoordinator:
 
             if signal is not None:
                 signals.append(signal)
+                # Checkpoint 64.7: `build_trade_plan` is an OPTIONAL,
+                # duck-typed capability - most strategies (e.g.
+                # ema_crossover) do not implement it, and that is a
+                # normal outcome (None), never an error. Reuses the SAME
+                # `strategy_features` already computed above - never a
+                # second feature-computation pass.
+                build_trade_plan = getattr(strategy, "build_trade_plan", None)
+                trade_plan = (
+                    build_trade_plan(latest_bar, strategy_features, config, signal)
+                    if build_trade_plan is not None
+                    else None
+                )
+                trade_plans.append(trade_plan)
 
-        return CoordinatorResult(signals=tuple(signals), failures=tuple(failures))
+        return CoordinatorResult(
+            signals=tuple(signals), failures=tuple(failures), trade_plans=tuple(trade_plans)
+        )

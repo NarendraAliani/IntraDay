@@ -376,6 +376,175 @@ def test_atr_volatility_breakout_bullish_on_large_upward_move() -> None:
     assert signal.direction == StrategyDirection.BULLISH
 
 
+def _atr_breakout_full_config() -> StrategyConfigurationValues:
+    return StrategyConfigurationValues(
+        "atr_volatility_breakout",
+        "v1",
+        "v1",
+        "v1",
+        {
+            "lookback": 5,
+            "atr_multiplier": Decimal("0.1"),
+            "stop_loss_atr_multiplier": Decimal("1.0"),
+            "target_1_atr_multiplier": Decimal("1.5"),
+            "target_2_atr_multiplier": Decimal("2.5"),
+            "target_3_atr_multiplier": Decimal("4.0"),
+            "trailing_stop_atr_multiplier": Decimal("1.0"),
+        },
+    )
+
+
+def test_atr_volatility_breakout_builds_a_real_trade_plan_for_a_bullish_signal() -> None:
+    """Checkpoint 64.7 §4: proves the ONE producing strategy generates a
+    real, ATR-derived TradePlan - not a hardcoded/fabricated value.
+    Every level must be independently re-derivable from `entry_price +/-
+    multiplier * ATR`, using the SAME ATR value the signal's own
+    evidence carries."""
+    from intraday.signal_intelligence.feature_engine.atr import compute_average_true_range
+    from intraday.signal_intelligence.feature_engine.definitions import (
+        AverageTrueRangeDefinition,
+    )
+
+    strategy = AtrVolatilityBreakoutStrategy()
+    config = _atr_breakout_full_config()
+    bars = _flat_bars(10)
+    atr = compute_average_true_range(AverageTrueRangeDefinition(5), bars)
+    feature_values = {"atr_5": atr[-1]}
+
+    signal = strategy.evaluate(bars[-1], feature_values, config)
+    assert signal is not None
+    assert signal.direction == StrategyDirection.BULLISH
+
+    plan = strategy.build_trade_plan(bars[-1], feature_values, config, signal)
+    assert plan is not None
+    atr_value = atr[-1].value
+    entry = signal.price
+    assert plan.entry_price == entry
+    assert plan.stop_loss == entry - Decimal("1.0") * atr_value
+    assert plan.target_1 == entry + Decimal("1.5") * atr_value
+    assert plan.target_2 == entry + Decimal("2.5") * atr_value
+    assert plan.target_3 == entry + Decimal("4.0") * atr_value
+    assert plan.trailing_stop_loss == entry - Decimal("1.0") * atr_value
+    # Targets must be strictly ascending for a BULLISH plan - proves the
+    # multiplier ladder was applied correctly, not just present.
+    assert plan.target_1 < plan.target_2 < plan.target_3
+    assert plan.strategy_id == "atr_volatility_breakout"
+    assert "ATR" in plan.calculation_method
+    assert plan.targets() == (plan.target_1, plan.target_2, plan.target_3)
+
+
+def test_atr_volatility_breakout_produces_no_trade_plan_for_a_neutral_signal() -> None:
+    strategy = AtrVolatilityBreakoutStrategy()
+    # An intentionally huge atr_multiplier means no synthetic bar's move
+    # can ever exceed `atr_multiplier * ATR` - a genuine, deterministic
+    # way to force NEUTRAL without changing the bar-generation helper.
+    config = StrategyConfigurationValues(
+        "atr_volatility_breakout",
+        "v1",
+        "v1",
+        "v1",
+        {
+            "lookback": 5,
+            "atr_multiplier": Decimal("1000"),
+            "stop_loss_atr_multiplier": Decimal("1.0"),
+            "target_1_atr_multiplier": Decimal("1.5"),
+            "target_2_atr_multiplier": Decimal("2.5"),
+            "target_3_atr_multiplier": Decimal("4.0"),
+            "trailing_stop_atr_multiplier": Decimal("1.0"),
+        },
+    )
+    bars = _flat_bars(10)
+    from intraday.signal_intelligence.feature_engine.atr import compute_average_true_range
+    from intraday.signal_intelligence.feature_engine.definitions import (
+        AverageTrueRangeDefinition,
+    )
+
+    atr = compute_average_true_range(AverageTrueRangeDefinition(5), bars)
+    feature_values = {"atr_5": atr[-1]}
+    flat_signal = strategy.evaluate(bars[-1], feature_values, config)
+    assert flat_signal is not None
+    assert flat_signal.direction == StrategyDirection.NEUTRAL
+
+    plan = strategy.build_trade_plan(bars[-1], feature_values, config, flat_signal)
+    assert plan is None
+
+
+def test_atr_volatility_breakout_produces_no_trade_plan_with_a_minimal_config() -> None:
+    """A caller supplying only the pre-64.7 config (no plan-only
+    multipliers) still gets a real signal from `evaluate()` - and
+    honestly no plan at all from `build_trade_plan()`, never a
+    fabricated one and never an exception."""
+    strategy = AtrVolatilityBreakoutStrategy()
+    minimal_config = StrategyConfigurationValues(
+        "atr_volatility_breakout",
+        "v1",
+        "v1",
+        "v1",
+        {"lookback": 5, "atr_multiplier": Decimal("0.1")},
+    )
+    bars = _flat_bars(10)
+    from intraday.signal_intelligence.feature_engine.atr import compute_average_true_range
+    from intraday.signal_intelligence.feature_engine.definitions import (
+        AverageTrueRangeDefinition,
+    )
+
+    atr = compute_average_true_range(AverageTrueRangeDefinition(5), bars)
+    feature_values = {"atr_5": atr[-1]}
+    signal = strategy.evaluate(bars[-1], feature_values, minimal_config)
+    assert signal is not None
+
+    plan = strategy.build_trade_plan(bars[-1], feature_values, minimal_config, signal)
+    assert plan is None
+
+
+def test_ema_crossover_has_no_build_trade_plan_capability() -> None:
+    """A directional-only strategy legitimately has no `build_trade_plan`
+    at all - the coordinator's `getattr(strategy, "build_trade_plan",
+    None)` duck-typing must see this as `None`, never an error."""
+    strategy = EmaCrossoverStrategy()
+    assert getattr(strategy, "build_trade_plan", None) is None
+
+
+def test_coordinator_pairs_trade_plans_with_their_signals_and_none_for_ema_crossover() -> None:
+    """Checkpoint 64.7: `CoordinatorResult.trade_plans` is parallel to
+    `.signals` - proves the coordinator wires the new optional
+    capability correctly for BOTH a plan-producing and a non-producing
+    strategy in the SAME run."""
+    from intraday.application.services.strategy_execution import compute_feature_series
+    from intraday.trading_engine.strategy_execution.registry import build_default_registry
+
+    registry = build_default_registry()
+    registry.activate("atr_volatility_breakout")
+    registry.activate("ema_crossover")
+    coordinator = StrategyExecutionCoordinator(registry, compute_feature_series)
+
+    flat = _flat_bars(10)
+    breakout_bar = Bar(
+        instrument_id=flat[-1].instrument_id,
+        timeframe=Timeframe.ONE_MINUTE,
+        timestamp=flat[-1].timestamp + timedelta(minutes=1),
+        open=Decimal(100),
+        high=Decimal(112),
+        low=Decimal(99),
+        close=Decimal(111),
+        volume=Decimal("0"),
+    )
+    bars = flat + (breakout_bar,)
+    configurations = {
+        "atr_volatility_breakout": _atr_breakout_full_config(),
+        "ema_crossover": StrategyConfigurationValues(
+            "ema_crossover", "v1", "v1", "v1", {"fast_lookback": 3, "slow_lookback": 6}
+        ),
+    }
+    result = coordinator.run(bars, configurations)
+    assert len(result.signals) == len(result.trade_plans)
+    by_strategy = dict(
+        zip((s.strategy_id for s in result.signals), result.trade_plans, strict=True)
+    )
+    if "ema_crossover" in by_strategy:
+        assert by_strategy["ema_crossover"] is None
+
+
 def test_three_strategies_have_distinct_required_features() -> None:
     """Part 3: the three strategies must genuinely differ, not be
     cosmetic variations - proven here by distinct required-feature

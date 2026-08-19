@@ -320,3 +320,46 @@ class StrategySignal:
                 raise ValueError("StrategySignal.evidence timeframe mismatch")
             if feature_value.timestamp != self.timestamp:
                 raise ValueError("StrategySignal.evidence timestamp mismatch")
+
+
+@dataclass(frozen=True, slots=True)
+class TradePlan:
+    """Checkpoint 64.7: the canonical, SOLE owner of entry/stop-loss/
+    target/trailing-stop values (the architecture decision made in
+    Checkpoint 64.6's report). Deliberately NOT a field on
+    `StrategySignal` - a directional-only strategy (e.g.
+    `ema_crossover`) produces a signal with no `TradePlan` at all
+    (`build_trade_plan()` returning `None` is a normal, expected
+    outcome, not an error). Every field below is independently
+    nullable - a strategy may produce a partial plan (e.g. an entry and
+    a stop loss but no targets) - NEVER fabricated to fill a gap.
+    Everything downstream (`RiskDecision`, `PaperOrder`, `Position`,
+    `SignalCommunicationContext`) REFERENCES a plan by `signal_id`
+    rather than duplicating these fields - see
+    `infrastructure/persistence/trade_plan_repository.py` for the one
+    persisted copy."""
+
+    strategy_id: str
+    code_version: str
+    generated_at: datetime
+    calculation_method: str
+    """A human-readable description of exactly how these values were
+    derived (e.g. "ATR(14) volatility-based: entry=breakout close,
+    stop_loss=entry-1.0xATR, target_1=entry+1.5xATR...") - this IS the
+    per-plan "source/calculation/version" record the brief requires;
+    `code_version` above is the "version," `generated_at` is the
+    "timestamp," and this field is the "source/calculation" for every
+    value in the plan (one calculation covers the whole plan, since
+    every level here is derived from the same strategy evaluation, not
+    independently sourced)."""
+    entry_price: Decimal | None = None
+    stop_loss: Decimal | None = None
+    target_1: Decimal | None = None
+    target_2: Decimal | None = None
+    target_3: Decimal | None = None
+    trailing_stop_loss: Decimal | None = None
+
+    def targets(self) -> tuple[Decimal, ...]:
+        """Only the targets that were actually produced - never pads
+        with a fabricated value to reach 3."""
+        return tuple(t for t in (self.target_1, self.target_2, self.target_3) if t is not None)

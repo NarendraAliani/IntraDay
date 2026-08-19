@@ -32,6 +32,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Protocol
 
+from intraday.application.repositories.trade_plan import TradePlanRepository
 from intraday.application.services.exit_plan_policy import derive_default_exit_plan
 from intraday.application.services.paper_trading import (
     PaperOrderSubmissionResult,
@@ -54,6 +55,7 @@ from intraday.trading_engine.position_management.contracts import ExitPlan
 from intraday.trading_engine.strategy_execution.contracts import (
     StrategyConfigurationValues,
     StrategyDirection,
+    TradePlan,
 )
 from intraday.trading_engine.strategy_execution.coordinator import StrategyExecutionCoordinator
 
@@ -190,12 +192,19 @@ class PaperSignalExecutionService:
         exit_plan_attacher: ExitPlanAttacher | None = None,
         apply_default_exit_plan: bool = False,
         signal_recorder: SignalRecorder | None = None,
+        trade_plan_recorder: TradePlanRepository | None = None,
     ) -> None:
         self._coordinator = coordinator
         self._paper_trading_service = paper_trading_service
         self._quantity = quantity
         self._communication = communication
         self._signal_recorder = signal_recorder
+        self._trade_plan_recorder = trade_plan_recorder
+        """Checkpoint 64.7: optional, off by default - mirrors
+        `signal_recorder`'s own opt-in discipline. When supplied AND
+        the evaluating strategy produces a `TradePlan`, it is persisted
+        and its real values (never fabricated) flow into the outbound
+        communication context."""
         """Checkpoint 62.x: optional, off by default - when supplied,
         every REAL signal this service produces (never a skipped/
         neutral/already-processed evaluation) is persisted through it,
@@ -233,7 +242,12 @@ class PaperSignalExecutionService:
             )
 
         result = self._coordinator.run(bars, {strategy_id: configuration})
-        matching = [s for s in result.signals if s.strategy_id == strategy_id]
+        # Checkpoint 64.7: `result.trade_plans` is parallel to
+        # `result.signals` (same index = same signal) - paired here so
+        # the plan travels with its signal through the same filtering
+        # `matching` already did, never a second lookup.
+        paired = list(zip(result.signals, result.trade_plans, strict=True))
+        matching = [pair for pair in paired if pair[0].strategy_id == strategy_id]
         if not matching:
             failure_reasons = [f.message for f in result.failures if f.strategy_id == strategy_id]
             return PaperSignalExecutionResult(
@@ -248,7 +262,7 @@ class PaperSignalExecutionService:
                 order_result=None,
             )
 
-        signal = matching[0]
+        signal, trade_plan = matching[0]
         if signal.direction is StrategyDirection.NEUTRAL:
             return PaperSignalExecutionResult(
                 strategy_id=strategy_id,
@@ -278,6 +292,14 @@ class PaperSignalExecutionService:
             )
 
         side = _side_for_direction(signal.direction)
+        # Checkpoint 64.7: persists the plan BEFORE building the
+        # communication context, so a strategy that produces one (e.g.
+        # `atr_volatility_breakout`) has its real stop_loss/targets
+        # flow into the outbound message - never fabricated for a
+        # strategy that produces no plan (`trade_plan is None` stays
+        # None/() below, exactly as before this checkpoint).
+        if trade_plan is not None and self._trade_plan_recorder is not None:
+            self._trade_plan_recorder.save(str(signal_id), trade_plan)
         context = _build_context(
             instrument_id=instrument_id,
             strategy_id=strategy_id,
@@ -287,6 +309,7 @@ class PaperSignalExecutionService:
             signal_price=signal.price,
             signal_timestamp=signal.timestamp,
             timeframe=str(signal.timeframe),
+            trade_plan=trade_plan,
         )
         # SIGNAL TRUTH != EXECUTION TRUTH: this fires unconditionally,
         # before risk/broker involvement - a strategically audited
@@ -506,6 +529,7 @@ def _build_context(
     signal_price: Decimal,
     signal_timestamp: datetime,
     timeframe: str,
+    trade_plan: TradePlan | None = None,
 ) -> SignalCommunicationContext:
     exchange, _, symbol = str(instrument_id).partition(":")
     return SignalCommunicationContext(
@@ -518,10 +542,19 @@ def _build_context(
         timeframe=timeframe,
         spot_price=signal_price,
         direction=side,
-        entry_price=signal_price,
-        stop_loss=None,  # ema_crossover does not compute a stop loss - never fabricated
-        targets=(),  # ema_crossover does not compute targets - never fabricated
-        trailing_stop_enabled=False,
+        entry_price=(
+            trade_plan.entry_price
+            if trade_plan is not None and trade_plan.entry_price is not None
+            else signal_price
+        ),
+        # Checkpoint 64.7: real, persisted TradePlan values when the
+        # evaluating strategy produced one (e.g.
+        # `atr_volatility_breakout`) - `None`/`()` otherwise, exactly as
+        # before this checkpoint (e.g. `ema_crossover`) - never
+        # fabricated.
+        stop_loss=trade_plan.stop_loss if trade_plan is not None else None,
+        targets=trade_plan.targets() if trade_plan is not None else (),
+        trailing_stop_enabled=trade_plan is not None and trade_plan.trailing_stop_loss is not None,
         confidence=None,
         signal_status=SignalStatus.VALIDATED,
         execution_status=ExecutionStatus.NOT_EVALUATED,

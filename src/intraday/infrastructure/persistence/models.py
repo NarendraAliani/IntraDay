@@ -1268,3 +1268,32 @@ class SignalRecord(models.Model):
         app_label = "persistence"
         indexes = [models.Index(fields=["-signal_timestamp"])]
         ordering = ["-signal_timestamp"]
+
+
+class TradePlanRecord(models.Model):
+    """Checkpoint 64.7: the ONE persisted record of a strategy-produced
+    `TradePlan` (trading_engine.strategy_execution.contracts.TradePlan)
+    - implements the Checkpoint 64.6 architecture decision that entry/
+    stop-loss/target/trailing-stop values live in exactly one place,
+    referenced by `signal_id` (never a Django FK to `SignalRecord` -
+    matching this project's existing loose ID-reference convention,
+    e.g. `PaperOrderRecord.signal_id`, rather than a hard foreign key).
+    Every price field is nullable - a strategy may produce a partial
+    plan; `null=True` here is a real, not incidental, modeling choice."""
+
+    signal_id = models.CharField(max_length=100, db_index=True)
+    strategy_id = models.CharField(max_length=100)
+    code_version = models.CharField(max_length=32)
+    calculation_method = models.TextField(blank=True, default="")
+    entry_price = models.DecimalField(max_digits=18, decimal_places=4, null=True)
+    stop_loss = models.DecimalField(max_digits=18, decimal_places=4, null=True)
+    target_1 = models.DecimalField(max_digits=18, decimal_places=4, null=True)
+    target_2 = models.DecimalField(max_digits=18, decimal_places=4, null=True)
+    target_3 = models.DecimalField(max_digits=18, decimal_places=4, null=True)
+    trailing_stop_loss = models.DecimalField(max_digits=18, decimal_places=4, null=True)
+    generated_at = models.DateTimeField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        app_label = "persistence"
+        indexes = [models.Index(fields=["signal_id"])]
