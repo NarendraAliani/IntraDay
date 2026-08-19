@@ -1081,6 +1081,40 @@ class BacktestRun(models.Model):
         ordering = ["-created_at"]
 
 
+class WorkerRuntimeStatus(models.Model):
+    """Checkpoint 64.3: THE "persist or expose runtime state" gap the
+    review named - `manage.py run_market_data_worker --provider dhan`
+    runs as a SEPARATE OS process from the Django web process serving
+    the API/frontend, so the only way an operator can see its live
+    state is through a shared, persisted row this worker process
+    writes to and the API reads from - mirrors
+    `ProviderConnectionStatus`'s own established "one row per provider,
+    written by whichever process actually knows, read by the API"
+    pattern (Checkpoint 22), never a new architecture.
+
+    ONE singleton row (`provider="dhan"`, the only real provider this
+    applies to) - updated by `WorkerHealthTracker` (infrastructure
+    layer) on every aggregation pass, read by a plain GET view. Never
+    carries a credential or a raw provider response body - only the
+    same safe, already-derived facts `MarketDataWatchdogSnapshot`
+    itself carries."""
+
+    provider = models.CharField(max_length=32, unique=True, default="dhan")
+    worker_state = models.CharField(max_length=32, default="STOPPED")
+    token_state = models.CharField(max_length=32, default="UNCONFIGURED")
+    watchdog_state = models.CharField(max_length=32, default="DISCONNECTED")
+    last_packet_at = models.DateTimeField(null=True, blank=True)
+    last_bar_at = models.DateTimeField(null=True, blank=True)
+    reconnect_count = models.PositiveIntegerField(default=0)
+    consecutive_failures = models.PositiveIntegerField(default=0)
+    subscribed_instrument_count = models.PositiveIntegerField(default=0)
+    last_error_safe = models.CharField(max_length=500, blank=True, default="")
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        app_label = "persistence"
+
+
 class MarketDataSyncRun(models.Model):
     """Follow-up to Checkpoint 63.x: a persistent, pollable record of one
     manual "fetch real historical data from Dhan into the database" run

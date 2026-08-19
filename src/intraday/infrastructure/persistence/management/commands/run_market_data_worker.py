@@ -85,6 +85,10 @@ from intraday.infrastructure.market_data_providers.dhan.reconnect_supervisor imp
 )
 from intraday.infrastructure.market_data_providers.dhan.websocket_transport import (
     DhanWebSocketTransport,
+    DhanWebSocketTransportError,
+)
+from intraday.infrastructure.market_data_providers.dhan.worker_health_tracker import (
+    WorkerHealthTracker,
 )
 from intraday.infrastructure.market_data_providers.dhan.worker_state import WorkerState
 from intraday.infrastructure.persistence.live_market_data_repositories import (
@@ -93,6 +97,9 @@ from intraday.infrastructure.persistence.live_market_data_repositories import (
 )
 from intraday.infrastructure.persistence.provider_settings_repositories import (
     DjangoDhanCredentialRepository,
+)
+from intraday.infrastructure.persistence.worker_runtime_status_repository import (
+    DjangoWorkerRuntimeStatusRepository,
 )
 
 DHAN_LIVE_FEED_ENDPOINT = "wss://api-feed.dhan.co"
@@ -178,7 +185,8 @@ class _QuoteSink:
         stdout: Callable[[str], None],
         *,
         strategy_id: str = SIGNAL_STRATEGY_ID,
-        connection_is_healthy: Callable[[], bool] = lambda: True,
+        health_tracker: WorkerHealthTracker | None = None,
+        runtime_status_provider: str | None = None,
     ) -> None:
         self._stdout = stdout
         self._quote_repository = DjangoLiveQuoteRepository()
@@ -188,24 +196,34 @@ class _QuoteSink:
         )
         self._quotes_since_last_aggregation = 0
         self._strategy_id = strategy_id
-        # Checkpoint 64.2: a CALLABLE, not a bare bool captured once at
-        # construction time - the reconnect-supervised `--provider dhan`
-        # path re-creates this sink once per worker run, but connection
-        # health can change WITHIN a single connection's lifetime
-        # (heartbeat degrade/recover, Checkpoint 53's own WorkerState).
-        # Defaults to always-healthy for the synthetic fake/fake-ws
-        # providers, which have no independent health signal of their
-        # own to report.
-        self._connection_is_healthy = connection_is_healthy
+        # Checkpoint 64.3: `None` for the synthetic fake/fake-ws test
+        # providers (never persisted - they'd otherwise overwrite the
+        # real "dhan" status row with test-run data). Set to "dhan" only
+        # for the real production provider, so an operator-facing status
+        # API always reflects the real worker, never a test run.
+        self._runtime_status_provider = runtime_status_provider
+        self._runtime_status_repository = DjangoWorkerRuntimeStatusRepository()
+        # Checkpoint 64.3: THE truthful-health fix - `is_healthy()` is
+        # now evaluated fresh, from real tracked facts, every time a bar
+        # is about to be promoted - never a captured-once bool/callable
+        # that can't reflect a mid-run reconnect. Defaults to a tracker
+        # that's already `mark_connected()` (below) for the synthetic
+        # fake/fake-ws providers, which have no independent health
+        # signal of their own to report and were always intended to
+        # behave as "healthy" for their own deterministic test purposes.
+        self.health_tracker = health_tracker or WorkerHealthTracker()
+        if health_tracker is None:
+            self.health_tracker.mark_token_state("VALID")
+            self.health_tracker.mark_connected(subscribed_instrument_count=0)
 
     async def on_quote(self, quote: Quote) -> None:
         # Django's ORM refuses synchronous DB access from inside an
         # async context (`SynchronousOnlyOperation`) - `sync_to_async`
         # is the standard, documented bridge, not a workaround unique
         # to this module.
-        await sync_to_async(self._quote_repository.save_all)(
-            (quote,), fetched_at=dt.datetime.now(tz=dt.UTC)
-        )
+        now = dt.datetime.now(tz=dt.UTC)
+        await sync_to_async(self._quote_repository.save_all)((quote,), fetched_at=now)
+        self.health_tracker.record_packet(now=now)
         self._stdout(
             f"  quote: {quote.instrument_id} last_price={quote.last_price} "
             f"at={quote.timestamp.isoformat()}"
@@ -221,29 +239,34 @@ class _QuoteSink:
     async def aggregate_now(self) -> None:
         clock = dt.datetime.now(tz=dt.UTC)
         aggregation = await sync_to_async(self._bar_service.aggregate_and_persist)(as_of=clock)
+        if aggregation.bars:
+            self.health_tracker.record_bar(now=clock)
         self._stdout(
             f"  aggregated {len(aggregation.bars)} bar(s) so far "
             f"(missing_intervals={len(aggregation.missing_intervals)} "
             f"anomalous_observations={len(aggregation.anomalous_observations)})"
         )
 
-        # Checkpoint 64.2: the "single largest remaining gap" Checkpoint
-        # 64.1's own report named - newly-closed bars now actually reach
-        # the EXISTING strategy -> signal -> risk -> PaperBroker ->
-        # position-management -> signal-communication pipeline
-        # (`signal_pipeline_runtime.py`, the SAME function
-        # `market_data_ingestion_runtime.py`'s REST path already uses -
-        # never a second, duplicated implementation). A bar is promoted
-        # to TRADING_GRADE_BAR by the REAL, unmodified gate - never
-        # skipped just because a WebSocket happens to be connected.
-        session = session_for_instant(clock)  # pure, no I/O - no sync_to_async bridge needed
+        # Checkpoint 64.2/64.3: newly-closed bars reach the shared
+        # strategy/signal/risk/paper pipeline - `connection_is_healthy`
+        # is now a REAL, freshly-evaluated fact from the watchdog
+        # (Checkpoint 64.1), never a hard-coded truthy value (the
+        # review's own explicitly-named safety-critical gap). A bar is
+        # never promotable just because a process happens to be
+        # running.
+        session = session_for_instant(clock)
         pipeline_outcome = await sync_to_async(promote_bars_and_trigger_signals)(
             aggregation,
             session=session,
             clock=clock,
-            connection_is_healthy=self._connection_is_healthy(),
+            connection_is_healthy=self.health_tracker.is_healthy(now=clock),
             strategy_id=self._strategy_id,
         )
+        if self._runtime_status_provider is not None:
+            await sync_to_async(self.health_tracker.persist)(
+                self._runtime_status_repository, provider=self._runtime_status_provider, now=clock
+            )
+
         if pipeline_outcome.promoted_count or pipeline_outcome.active_loop_invocations:
             self._stdout(
                 f"  promoted {pipeline_outcome.promoted_count} bar(s) to TRADING_GRADE_BAR, "
@@ -333,7 +356,18 @@ class Command(BaseCommand):
         self, provider: str, packet_count: int, max_reconnect_attempts: int
     ) -> AsyncWorkerRunResult:
         if provider == "dhan":
-            sink = _QuoteSink(stdout=self.stdout.write)
+            # Checkpoint 64.3: a REAL tracker, not the sink's own
+            # default always-healthy one - `_run_dhan()` mutates this
+            # at every real connection-lifecycle event (connecting,
+            # connected, reconnecting, failed) so `is_healthy()`
+            # reflects genuine worker state, never a hard-coded truthy
+            # value.
+            health_tracker = WorkerHealthTracker()
+            sink = _QuoteSink(
+                stdout=self.stdout.write,
+                health_tracker=health_tracker,
+                runtime_status_provider="dhan",
+            )
             result = await self._run_dhan(sink, max_reconnect_attempts)
             await sink.flush_remainder()
             await sync_to_async(close_old_connections)()
@@ -421,6 +455,7 @@ class Command(BaseCommand):
 
         client_id, access_token = credentials
         token_status = evaluate_dhan_token_lifecycle(access_token, now=dt.datetime.now(tz=dt.UTC))
+        sink.health_tracker.mark_token_state(token_status.state.value)
         if token_status.state not in (TokenLifecycleState.VALID, TokenLifecycleState.EXPIRING_SOON):
             self.stdout.write(
                 self.style.ERROR(
@@ -450,17 +485,39 @@ class Command(BaseCommand):
         self.stdout.write(f"  subscribing to {len(subscribe_batch)} instrument(s)")
 
         async def connect_and_run() -> AsyncWorkerRunResult:
+            sink.health_tracker.mark_connecting()
             uri = (
                 f"{DHAN_LIVE_FEED_ENDPOINT}?version=2&token={access_token}"
                 f"&clientId={client_id}&authType=2"
             )
             transport = DhanWebSocketTransport(uri=uri)
-            await transport.connect()
+            try:
+                await transport.connect()
+            except DhanWebSocketTransportError as exc:
+                # The connection attempt itself failed (handshake
+                # refused, DNS failure, etc.) - reported to the
+                # supervisor as RECONNECTING (never raised past it), so
+                # the bounded-backoff retry logic handles it exactly
+                # like a mid-stream disconnect.
+                sink.health_tracker.mark_reconnecting(reason=f"connect_failed:{exc!r}")
+                return AsyncWorkerRunResult(final_state=WorkerState.RECONNECTING)
+            sink.health_tracker.mark_connected(subscribed_instrument_count=len(subscribe_batch))
             try:
                 await transport.send_json_text(subscribe_message)
-                return await run_worker_against_websocket(
+                result = await run_worker_against_websocket(
                     transport, security_id_to_symbol=security_id_to_symbol, on_quote=sink.on_quote
                 )
+                if result.final_state is WorkerState.RECONNECTING:
+                    sink.health_tracker.mark_reconnecting(reason="connection_lost")
+                elif result.final_state in (
+                    WorkerState.FAILED,
+                    WorkerState.AUTH_FAILED,
+                    WorkerState.TOKEN_EXPIRED,
+                ):
+                    sink.health_tracker.mark_failed(
+                        result.final_state, reason=result.final_state.value
+                    )
+                return result
             finally:
                 await transport.close()
 

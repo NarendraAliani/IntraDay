@@ -28,6 +28,7 @@ from intraday.infrastructure.api import (
     system_readiness_view,
     universe_views,
     watchlist_views,
+    worker_runtime_status_views,
 )
 
 app_name = "config_api"
@@ -206,6 +207,12 @@ urlpatterns = [
         "market-data/sync-runs/<str:run_id>/progress/",
         market_data_sync_views.get_market_data_sync_run_progress,
         name="market-data-sync-run-progress",
+    ),
+    # --- Checkpoint 64.3: live worker runtime status (operator-facing) ----
+    path(
+        "market-data/worker-status/",
+        worker_runtime_status_views.worker_runtime_status,
+        name="worker-runtime-status",
     ),
     # --- Checkpoint 27: research watchlists -------------------------------
     path("watchlists/", watchlist_views.list_watchlists, name="watchlists-list"),

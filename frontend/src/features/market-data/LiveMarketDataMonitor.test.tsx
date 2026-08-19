@@ -118,6 +118,23 @@ const RELIANCE_SIGNAL: SignalResponse = {
   created_at: "2026-08-14T06:00:00Z",
 };
 
+const WORKER_STATUS_UNCONFIGURED = {
+  provider: "dhan",
+  worker_state: "STOPPED",
+  token_state: "UNCONFIGURED",
+  watchdog_state: "DISCONNECTED",
+  last_packet_at: null,
+  last_bar_at: null,
+  packet_age_seconds: null,
+  bar_age_seconds: null,
+  reconnect_count: 0,
+  consecutive_failures: 0,
+  subscribed_instrument_count: 0,
+  last_error_safe: "",
+  updated_at: null,
+  is_configured: false,
+};
+
 function stubEndpoints(options: {
   session?: SessionResponse;
   health?: MarketDataHealthResponse;
@@ -125,6 +142,7 @@ function stubEndpoints(options: {
   bars?: BarResponse[];
   strategies?: StrategySummary[];
   signals?: SignalListResponse;
+  workerStatus?: typeof WORKER_STATUS_UNCONFIGURED;
 }): ReturnType<typeof vi.fn> {
   const {
     session = SESSION,
@@ -133,9 +151,11 @@ function stubEndpoints(options: {
     bars = [],
     strategies = [EMA_STRATEGY],
     signals = EMPTY_SIGNALS,
+    workerStatus = WORKER_STATUS_UNCONFIGURED,
   } = options;
   const fetchMock = vi.fn((input: RequestInfo | URL) => {
     const url = String(input);
+    if (url.includes("/worker-status/")) return Promise.resolve(jsonResponse(workerStatus));
     if (url.includes("/session/")) return Promise.resolve(jsonResponse(session));
     if (url.includes("/health/")) return Promise.resolve(jsonResponse(health));
     if (url.includes("/bars/")) return Promise.resolve(jsonResponse(bars));
@@ -226,6 +246,43 @@ describe("LiveMarketDataMonitor (Active Signal Monitor)", () => {
 
     await waitFor(() => expect(screen.getByText("Market Session")).toBeInTheDocument());
     expect(screen.getAllByText("RELIANCE").length).toBeGreaterThan(0);
+  });
+
+  it("shows the truthful live worker status once diagnostics are expanded", async () => {
+    stubEndpoints({
+      workerStatus: {
+        ...WORKER_STATUS_UNCONFIGURED,
+        is_configured: true,
+        worker_state: "RUNNING",
+        token_state: "VALID",
+        watchdog_state: "HEALTHY",
+        subscribed_instrument_count: 4,
+        reconnect_count: 2,
+      },
+    });
+
+    renderWithAuth(<LiveMarketDataMonitor />);
+
+    await waitFor(() => expect(screen.getByText(/market data health/i)).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: /market data health/i }));
+
+    await waitFor(() => expect(screen.getByText("Live Worker Status")).toBeInTheDocument());
+    expect(screen.getByText("Healthy")).toBeInTheDocument();
+    expect(screen.getByText("RUNNING")).toBeInTheDocument();
+    expect(screen.getByText("4")).toBeInTheDocument();
+  });
+
+  it("shows an honest 'never run' note when the worker has no reported status", async () => {
+    stubEndpoints({});
+
+    renderWithAuth(<LiveMarketDataMonitor />);
+
+    await waitFor(() => expect(screen.getByText(/market data health/i)).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: /market data health/i }));
+
+    await waitFor(() =>
+      expect(screen.getByText(/has never run in this environment/i)).toBeInTheDocument(),
+    );
   });
 
   it("never renders an order-placement control (button, quantity input, or submit form)", async () => {

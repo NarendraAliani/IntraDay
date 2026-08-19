@@ -11,6 +11,10 @@ export type SessionResponse = components["schemas"]["SessionResponse"];
 export type MarketDataHealthResponse = components["schemas"]["MarketDataHealthResponse"];
 export type QuoteResponse = components["schemas"]["QuoteResponse"];
 export type BarResponse = components["schemas"]["BarResponse"];
+// Checkpoint 64.3: the live WebSocket worker's own runtime status -
+// distinct from MarketDataHealthResponse above (the REST-polling
+// health signal) - see worker_runtime_status_views.py's own docstring.
+export type WorkerRuntimeStatusResponse = components["schemas"]["WorkerRuntimeStatusResponse"];
 
 export function getMarketSession(): Promise<SessionResponse> {
   return apiGet<SessionResponse>("/api/v1/config/market-data/session/");
@@ -18,6 +22,10 @@ export function getMarketSession(): Promise<SessionResponse> {
 
 export function getMarketDataHealth(): Promise<MarketDataHealthResponse> {
   return apiGet<MarketDataHealthResponse>("/api/v1/config/market-data/health/");
+}
+
+export function getWorkerRuntimeStatus(): Promise<WorkerRuntimeStatusResponse> {
+  return apiGet<WorkerRuntimeStatusResponse>("/api/v1/config/market-data/worker-status/");
 }
 
 export function getCurrentQuotes(): Promise<QuoteResponse[]> {

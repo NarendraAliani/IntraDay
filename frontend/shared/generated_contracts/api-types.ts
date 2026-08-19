@@ -480,6 +480,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/config/market-data/worker-status/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["api_v1_config_market_data_worker_status_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/config/paper-trading/expire-session/": {
         parameters: {
             query?: never;
@@ -2088,6 +2104,27 @@ export interface components {
             name: string;
             instrument_ids: string[];
         };
+        WorkerRuntimeStatusResponse: {
+            provider: string;
+            worker_state: string;
+            token_state: string;
+            watchdog_state: string;
+            /** Format: date-time */
+            last_packet_at: string | null;
+            /** Format: date-time */
+            last_bar_at: string | null;
+            /** Format: double */
+            packet_age_seconds: number | null;
+            /** Format: double */
+            bar_age_seconds: number | null;
+            reconnect_count: number;
+            consecutive_failures: number;
+            subscribed_instrument_count: number;
+            last_error_safe: string;
+            /** Format: date-time */
+            updated_at: string | null;
+            is_configured: boolean;
+        };
     };
     responses: never;
     parameters: never;
@@ -2675,6 +2712,25 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ApiError"];
+                };
+            };
+        };
+    };
+    api_v1_config_market_data_worker_status_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerRuntimeStatusResponse"];
                 };
             };
         };

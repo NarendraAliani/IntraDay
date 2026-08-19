@@ -30,6 +30,7 @@ import {
   getMarketDataHealth,
   getMarketSession,
   getRecentBars,
+  getWorkerRuntimeStatus,
   refreshMarketData,
 } from "../../common/api/marketDataApi";
 import { ApiNetworkError, ApiRequestError } from "../../common/api/client";
@@ -44,6 +45,7 @@ import type {
   MarketDataHealthResponse,
   QuoteResponse,
   SessionResponse,
+  WorkerRuntimeStatusResponse,
 } from "../../common/api/marketDataApi";
 import type { SignalResponse } from "../../common/api/signalApi";
 import type { StrategySummary } from "../../common/api/strategyApi";
@@ -134,6 +136,98 @@ function symbolFromInstrumentId(instrumentId: string): string {
   // own display convention.
   const parts = instrumentId.split(":");
   return parts.length > 1 ? parts[1] : instrumentId;
+}
+
+// Checkpoint 64.3: THE operator-facing "is the live WebSocket worker
+// actually healthy" surface - a truthful watchdog classification
+// (`GET /market-data/worker-status/`), never derived from "the process
+// is running." Self-contained (its own fetch/poll), additive to the
+// existing REST-polling "Connection Health" card above, never
+// replacing it - they answer genuinely different questions (REST quote
+// freshness vs. the continuous WebSocket worker's own state).
+const WORKER_STATUS_POLL_MS = 10000;
+
+const WATCHDOG_LABELS: Record<string, string> = {
+  HEALTHY: "Healthy",
+  DEGRADED: "Degraded",
+  STALE: "Stale",
+  DISCONNECTED: "Disconnected",
+  FAILED: "Failed",
+};
+
+const WATCHDOG_CLASS: Record<string, string> = {
+  HEALTHY: "badge--active",
+  DEGRADED: "badge--pending",
+  STALE: "badge--pending",
+  DISCONNECTED: "badge--historical",
+  FAILED: "badge--danger",
+};
+
+function WorkerStatusCard(): JSX.Element {
+  const [status, setStatus] = useState<WorkerRuntimeStatusResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function load(): Promise<void> {
+      try {
+        const result = await getWorkerRuntimeStatus();
+        if (!cancelled) {
+          setStatus(result);
+          setError(null);
+        }
+      } catch (err) {
+        if (!cancelled) setError(describeError(err));
+      }
+    }
+
+    void load();
+    const interval = setInterval(() => void load(), WORKER_STATUS_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
+
+  return (
+    <section className="market-data-monitor__card" aria-labelledby="worker-status-heading">
+      <h2 id="worker-status-heading">Live Worker Status</h2>
+      {error && <p role="alert" className="dialog__error">{error}</p>}
+      {!error && !status && <p className="strategy-config-page__help-text">Loading…</p>}
+      {!error && status && !status.is_configured && (
+        <p className="strategy-config-page__help-text">
+          The live market-data worker has never run in this environment (no --provider dhan
+          process has reported status yet).
+        </p>
+      )}
+      {!error && status && status.is_configured && (
+        <>
+          <span className={`badge ${WATCHDOG_CLASS[status.watchdog_state] ?? ""}`}>
+            {WATCHDOG_LABELS[status.watchdog_state] ?? status.watchdog_state}
+          </span>
+          <dl>
+            <dt>Worker State</dt>
+            <dd>{status.worker_state}</dd>
+            <dt>Token State</dt>
+            <dd>{status.token_state}</dd>
+            <dt>Last Packet</dt>
+            <dd>
+              {status.packet_age_seconds !== null ? formatAge(status.packet_age_seconds) : "Never"}
+            </dd>
+            <dt>Last Bar</dt>
+            <dd>{status.bar_age_seconds !== null ? formatAge(status.bar_age_seconds) : "Never"}</dd>
+            <dt>Instruments Subscribed</dt>
+            <dd>{status.subscribed_instrument_count}</dd>
+            <dt>Reconnect Count</dt>
+            <dd>{status.reconnect_count}</dd>
+            <dt>Last Error</dt>
+            <dd>{status.last_error_safe || "None"}</dd>
+          </dl>
+        </>
+      )}
+    </section>
+  );
 }
 
 type MarketDataState =
@@ -693,6 +787,8 @@ export function LiveMarketDataMonitor(): JSX.Element {
                           </p>
                         )}
                       </section>
+
+                      <WorkerStatusCard />
                     </div>
 
                     <section aria-labelledby="instruments-heading">
