@@ -6,11 +6,14 @@
 # read.
 from __future__ import annotations
 
+import uuid
+
 import pytest
 from django.contrib.auth.models import Group, User
 from django.test import Client
 
 from intraday.infrastructure.api.permissions import CONFIGURATION_OPERATOR_GROUP
+from intraday.infrastructure.persistence.models import AuditLogEntry
 from intraday.infrastructure.persistence.worker_runtime_status_repository import (
     DjangoWorkerRuntimeStatusRepository,
 )
@@ -185,3 +188,34 @@ def test_status_is_degraded_when_the_universe_was_truncated() -> None:
 
     response = client.get("/api/v1/config/market-data/scanner-config/")
     assert response.json()["status"] == "DEGRADED"
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_audit_record_carries_the_real_authenticated_user_id_and_a_genuine_request_uuid() -> None:
+    """Checkpoint 64.5: regression guard against the two audit-trail
+    defects flagged in review - `actor_user_id=0` (a fabricated system
+    actor id instead of the real authenticated user) and a
+    non-UUID `request_id` (previously a truncated change-summary
+    string). Both must reflect real request data, never placeholders."""
+    client = _client_as_operator()
+    operator = User.objects.get(username=OPERATOR_USERNAME)
+
+    client.post(
+        "/api/v1/config/market-data/scanner-config/update/",
+        data=_payload(),
+        content_type="application/json",
+    )
+
+    entry = AuditLogEntry.objects.filter(
+        resource_type="scanner_configuration", resource_id="dhan"
+    ).latest("id")
+
+    assert entry.actor_user_id == operator.pk
+    assert entry.actor_user_id != 0
+    assert entry.actor_username == OPERATOR_USERNAME
+    # request_id must be a genuine UUID4, never a truncated change-summary string.
+    parsed = uuid.UUID(entry.request_id)
+    assert parsed.version == 4
+    assert entry.version_identifier == "2"
+    assert entry.previous_version == "1"

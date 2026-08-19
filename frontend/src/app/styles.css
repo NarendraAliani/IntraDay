@@ -1681,3 +1681,74 @@ dd {
   border: none;
   padding: var(--space-1) 0;
 }
+
+/* Checkpoint 64.5: Live Scanner operator console. Reuses existing
+   tokens (var(--space-*), var(--color-*), var(--radius-*)) and the
+   established .market-data-monitor__card / .signal-monitor__field
+   patterns above - no page-specific colors introduced. */
+.live-scanner__section {
+  margin-bottom: var(--space-6);
+}
+
+.live-scanner__control-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--space-4);
+  align-items: start;
+}
+
+.live-scanner__fieldset {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+}
+
+.live-scanner__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+
+.live-scanner__stop-button {
+  background: var(--color-danger-border);
+  color: var(--color-on-accent);
+  border: none;
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-4);
+  cursor: pointer;
+}
+
+.live-scanner__stop-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.live-scanner__apply-status {
+  font-weight: 600;
+  margin-top: var(--space-2);
+}
+
+.live-scanner__state-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--space-4);
+  margin-bottom: var(--space-6);
+}
+
+@media (max-width: 768px) {
+  .live-scanner__control-grid,
+  .live-scanner__state-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 480px) {
+  .live-scanner__actions {
+    flex-direction: column;
+  }
+
+  .live-scanner__actions button {
+    width: 100%;
+  }
+}

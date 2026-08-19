@@ -67,6 +67,7 @@ def resolve_scanner_universe(
 def _resolve_symbols(raw_instrument_ids: list[str]) -> tuple[DhanInstrument, ...]:
     master = _instrument_master()
     resolved: list[DhanInstrument] = []
+    seen_security_ids: set[int] = set()
     for raw_id in raw_instrument_ids:
         try:
             exchange, symbol = parse_instrument_id(raw_id)  # type: ignore[arg-type]
@@ -82,6 +83,12 @@ def _resolve_symbols(raw_instrument_ids: list[str]) -> tuple[DhanInstrument, ...
         if match is None or match.security_id is None:
             logger.warning("scanner_universe.unresolvable_instrument", instrument_id=raw_id)
             continue
+        if match.security_id in seen_security_ids:
+            # Checkpoint 64.5 §22: a duplicate configured symbol must never
+            # produce a duplicate subscribe entry.
+            logger.warning("scanner_universe.duplicate_instrument_skipped", instrument_id=raw_id)
+            continue
+        seen_security_ids.add(match.security_id)
         segment = "NSE_EQ" if exchange.value == "NSE" else "BSE_EQ"
         resolved.append(
             DhanInstrument(symbol=symbol, security_id=match.security_id, exchange_segment=segment)

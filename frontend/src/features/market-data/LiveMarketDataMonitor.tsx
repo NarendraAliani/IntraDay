@@ -58,7 +58,11 @@ const SIGNAL_PAGE_SIZE = 10;
 // members but not meaningful choices for an intraday SCANNING
 // workflow, so they are deliberately excluded from this control rather
 // than exposed merely because the enum has them).
-const TIMEFRAME_OPTIONS = ["1m", "3m", "5m", "15m", "30m", "1h"] as const;
+// Exported so the Live Scanner console (Checkpoint 64.5) shares the
+// same list - no backend "supported timeframes" endpoint exists yet
+// (disclosed in taskReport.md), so this is the one place the frontend
+// enumerates them, not duplicated per screen.
+export const TIMEFRAME_OPTIONS = ["1m", "3m", "5m", "15m", "30m", "1h"] as const;
 
 type UniverseMode = "all" | "selected";
 
@@ -163,7 +167,10 @@ const WATCHDOG_CLASS: Record<string, string> = {
   FAILED: "badge--danger",
 };
 
-function WorkerStatusCard(): JSX.Element {
+// Exported so the Checkpoint 64.5 Live Scanner console can reuse this
+// exact card - one health evaluator, never a second one built because a
+// second screen needed it (§13 of that checkpoint's brief).
+export function WorkerStatusCard(): JSX.Element {
   const [status, setStatus] = useState<WorkerRuntimeStatusResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
 

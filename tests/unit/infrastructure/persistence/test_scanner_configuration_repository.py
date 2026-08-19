@@ -7,7 +7,11 @@
 # pattern, Checkpoint 12).
 from __future__ import annotations
 
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+
 import pytest
+from django.db import connections
 
 from intraday.infrastructure.persistence.models import AuditLogEntry
 from intraday.infrastructure.persistence.scanner_configuration_repository import (
@@ -122,3 +126,72 @@ def test_repeated_saves_each_bump_the_version_and_record_the_previous_one() -> N
     previous = [e.previous_version for e in audit_entries]
     assert versions[-1] == str(second.configuration_version)
     assert previous[-1] == str(first.configuration_version)
+
+
+@requires_postgres
+@pytest.mark.django_db(transaction=True)
+def test_two_simultaneous_configuration_updates_serialize_with_no_lost_update() -> None:
+    """Checkpoint 64.5 §21: simulates two operator sessions (or a
+    double-click) submitting `save()` at the same instant on separate
+    DB connections. `select_for_update()` inside `save()` must
+    serialize them - both bumps must land (no lost update), the
+    resulting versions must be consecutive, and each audit row's
+    `previous_version` must truthfully reflect what it actually
+    overwrote (not a value guessed from request order)."""
+    DjangoScannerConfigurationRepository().save(
+        "dhan",
+        enabled=True,
+        timeframe="1m",
+        universe_mode="ALL_CONFIGURED",
+        selected_instrument_ids=[],
+        selected_watchlist_name="",
+        selected_strategy_ids=["ema_crossover"],
+        requested_by="operator",
+        requested_by_user_id=1,
+        request_id=str(uuid.uuid4()),
+    )
+
+    def _save(timeframe: str) -> None:
+        try:
+            DjangoScannerConfigurationRepository().save(
+                "dhan",
+                enabled=True,
+                timeframe=timeframe,
+                universe_mode="ALL_CONFIGURED",
+                selected_instrument_ids=[],
+                selected_watchlist_name="",
+                selected_strategy_ids=["ema_crossover"],
+                requested_by="operator",
+                requested_by_user_id=1,
+                request_id=str(uuid.uuid4()),
+            )
+        finally:
+            connections.close_all()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(_save, "5m"), executor.submit(_save, "15m")]
+        for future in futures:
+            future.result()
+
+    audit_entries = list(
+        AuditLogEntry.objects.filter(
+            resource_type="scanner_configuration", resource_id="dhan"
+        ).order_by("id")
+    )
+    versions = [int(e.version_identifier or "0") for e in audit_entries]
+    previous = [int(e.previous_version or "0") for e in audit_entries]
+
+    # Both concurrent writes landed - no lost update.
+    assert len(audit_entries) == 3  # seed save + two concurrent saves
+    # Each entry's version is strictly the previous entry's version + 1:
+    # the row-lock in save() serialized the two threads correctly.
+    for version, prev in zip(versions[1:], versions[:-1], strict=True):
+        assert version == prev + 1
+    # previous_version on each entry (after the seed) must match the
+    # version that actually preceded it, not a value assumed from
+    # submission order.
+    for entry_previous, actual_previous_version in zip(previous[1:], versions[:-1], strict=True):
+        assert entry_previous == actual_previous_version
+
+    final = DjangoScannerConfigurationRepository().get("dhan")
+    assert final.configuration_version == versions[-1]

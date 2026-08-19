@@ -132,6 +132,8 @@ def update_scanner_configuration(request: Request) -> Response:
         except UnknownStrategyError as exc:
             return invalid_configuration(exc)
 
+    assert request.user.pk is not None  # noqa: S101 - narrows for mypy; IsAuthenticated guarantees this
+
     provider = _DEFAULT_PROVIDER
     DjangoScannerConfigurationRepository().save(
         provider,
@@ -142,7 +144,7 @@ def update_scanner_configuration(request: Request) -> Response:
         selected_watchlist_name=data.get("selected_watchlist_name", ""),
         selected_strategy_ids=list(data.get("selected_strategy_ids", [])),
         requested_by=request.user.get_username(),
-        requested_by_user_id=request.user.pk or 0,
+        requested_by_user_id=request.user.pk,
         request_id=str(uuid.uuid4()),
     )
     return _compose_response(provider)

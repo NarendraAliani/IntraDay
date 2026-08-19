@@ -428,6 +428,47 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/config/market-data/scanner-config/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["api_v1_config_market_data_scanner_config_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config/market-data/scanner-config/update/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Checkpoint 64.4 §3/§11: writes the DESIRED configuration -
+         *     version-bumped and audited by the repository (never a separate,
+         *     un-audited path). The worker reconciles against this on its own
+         *     next cycle - this view never touches the worker process directly
+         *     (they communicate ONLY through this durable row, per this
+         *     checkpoint's own architecture decision: a separate OS process
+         *     cannot be reached synchronously from an HTTP request).
+         */
+        post: operations["api_v1_config_market_data_scanner_config_update_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/config/market-data/session/": {
         parameters: {
             query?: never;
@@ -1930,6 +1971,47 @@ export interface components {
          * @enum {string}
          */
         RiskOutcomeEnum: "APPROVED" | "REJECTED";
+        ScannerConfigurationResponse: {
+            provider: string;
+            desired: components["schemas"]["ScannerConfigurationState"];
+            effective: components["schemas"]["ScannerConfigurationState"];
+            status: components["schemas"]["ScannerConfigurationResponseStatusEnum"];
+            requested_by: string;
+            /** Format: date-time */
+            requested_at: string | null;
+        };
+        /**
+         * @description * `EFFECTIVE` - EFFECTIVE
+         *     * `APPLYING` - APPLYING
+         *     * `DEGRADED` - DEGRADED
+         *     * `STOPPED` - STOPPED
+         * @enum {string}
+         */
+        ScannerConfigurationResponseStatusEnum: "EFFECTIVE" | "APPLYING" | "DEGRADED" | "STOPPED";
+        /**
+         * @description Shared shape for both the DESIRED and EFFECTIVE halves of the
+         *     response - Checkpoint 64.4's own explicit "the UI must never lie"
+         *     requirement is met by showing both side by side, never merged into
+         *     one ambiguous state.
+         */
+        ScannerConfigurationState: {
+            timeframe: string;
+            universe_mode?: string;
+            universe_requested_count: number;
+            universe_subscribed_count: number;
+            strategy_ids: string[];
+            configuration_version: number;
+            enabled?: boolean;
+        };
+        ScannerConfigurationUpdateRequest: {
+            enabled: boolean;
+            timeframe: string;
+            universe_mode: components["schemas"]["UniverseModeEnum"];
+            selected_instrument_ids?: string[];
+            /** @default  */
+            selected_watchlist_name: string;
+            selected_strategy_ids?: string[];
+        };
         SessionResponse: {
             /** Format: date */
             session_date: string;
@@ -2079,6 +2161,13 @@ export interface components {
             instrument_id: string;
             status: string;
         };
+        /**
+         * @description * `ALL_CONFIGURED` - ALL_CONFIGURED
+         *     * `SELECTED` - SELECTED
+         *     * `WATCHLIST` - WATCHLIST
+         * @enum {string}
+         */
+        UniverseModeEnum: "ALL_CONFIGURED" | "SELECTED" | "WATCHLIST";
         /**
          * @description Response shape for a universe version. `is_active` is computed by
          *     the view — see `RiskConfigurationResponseSerializer`'s docstring for
@@ -2626,6 +2715,58 @@ export interface operations {
                 };
             };
             429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+        };
+    };
+    api_v1_config_market_data_scanner_config_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScannerConfigurationResponse"];
+                };
+            };
+        };
+    };
+    api_v1_config_market_data_scanner_config_update_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScannerConfigurationUpdateRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["ScannerConfigurationUpdateRequest"];
+                "multipart/form-data": components["schemas"]["ScannerConfigurationUpdateRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScannerConfigurationResponse"];
+                };
+            };
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };

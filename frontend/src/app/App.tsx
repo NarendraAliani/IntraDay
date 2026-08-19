@@ -32,6 +32,7 @@ import { LoadingState } from "../common/components/LoadingState";
 import { ConfigurationViewer } from "../features/configuration/ConfigurationViewer";
 import { LoginScreen } from "../features/auth/LoginScreen";
 import { LiveMarketDataMonitor } from "../features/market-data/LiveMarketDataMonitor";
+import { LiveScannerConsole } from "../features/market-data/LiveScannerConsole";
 import { SettingsPage } from "../features/settings/SettingsPage";
 import { StrategyConfigurationPage } from "../features/strategy-config/StrategyConfigurationPage";
 import { BacktestingWorkbenchPage } from "../features/backtesting/BacktestingWorkbenchPage";
@@ -44,6 +45,7 @@ import { PaperTradingPage } from "../features/paper-trading/PaperTradingPage";
 type Screen =
   | "configuration"
   | "settings"
+  | "live-scanner"
   | "market-data"
   | "strategies"
   | "backtesting"
@@ -56,6 +58,7 @@ type Screen =
 const NAV_ITEMS: Array<{ id: Screen; label: string }> = [
   { id: "configuration", label: "Configuration" },
   { id: "settings", label: "Settings" },
+  { id: "live-scanner", label: "Live Scanner" },
   { id: "market-data", label: "Market Data" },
   { id: "strategies", label: "Strategies" },
   { id: "backtesting", label: "Backtesting" },
@@ -107,6 +110,7 @@ function AppShell(): JSX.Element {
       </header>
       {screen === "configuration" && <ConfigurationViewer />}
       {screen === "settings" && <SettingsPage />}
+      {screen === "live-scanner" && <LiveScannerConsole />}
       {screen === "market-data" && <LiveMarketDataMonitor />}
       {screen === "strategies" && <StrategyConfigurationPage />}
       {screen === "backtesting" && <BacktestingWorkbenchPage />}
