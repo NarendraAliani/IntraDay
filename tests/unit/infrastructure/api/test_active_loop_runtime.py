@@ -37,6 +37,14 @@ RELIANCE = make_instrument_id(Exchange.NSE, "RELIANCE")
 # 2026-01-05 is a Monday, not an NSE_HOLIDAYS_2026 date.
 MARKET_OPEN_INSTANT = datetime(2026, 1, 5, 6, 0, tzinfo=UTC)  # ~11:30 IST, well inside OPEN
 MARKET_HOLIDAY_INSTANT = datetime(2026, 1, 26, 6, 0, tzinfo=UTC)  # Republic Day 2026
+# Checkpoint 64.6 §10: the square-off/entry-cutoff window itself -
+# SQUARE_OFF_DEADLINE_IST is 15:20 IST (09:50 UTC), MARKET_CLOSE_IST is
+# 15:30 IST (10:00 UTC) - 09:55 UTC falls strictly inside
+# [square_off_deadline, market_close), i.e. SessionStatus.CLOSING, not
+# CLOSED or HOLIDAY. Distinct from the already-tested HOLIDAY case -
+# proves the entry-cutoff rule itself is enforced, not just "some
+# session-status check exists."
+MARKET_CLOSING_WINDOW_INSTANT = datetime(2026, 1, 5, 9, 55, tzinfo=UTC)
 
 
 def _bars(prices: list[int], base: datetime) -> tuple[Bar, ...]:
@@ -84,6 +92,28 @@ def test_tick_is_skipped_on_a_holiday_without_evaluating_the_strategy() -> None:
     )
     assert outcome.ran is False
     assert outcome.session_status is SessionStatus.HOLIDAY
+    assert "market_session_not_open" in (outcome.skipped_reason or "")
+    assert not PaperOrderRecord.objects.exists()
+
+
+def test_tick_is_skipped_during_the_square_off_window_no_new_entry_after_cutoff() -> None:
+    """Checkpoint 64.6 §10: audits and proves the entry-cutoff rule
+    (`SQUARE_OFF_DEADLINE_IST`, `domain/session/calendar.py`) is
+    genuinely ENFORCED at the point a new order would be created, not
+    merely defined as a constant. `SessionStatus.CLOSING` (the market
+    is still technically open until `market_close`, but past
+    `square_off_deadline`) must be rejected exactly like `HOLIDAY` -
+    both mean "no new order may be submitted" per the session
+    contract's own documented rule."""
+    outcome = run_active_loop_tick(
+        instrument_id=RELIANCE,
+        strategy_id="ema_crossover",
+        configuration=_config(),
+        bars=_uptrend_bars(MARKET_CLOSING_WINDOW_INSTANT),
+        now=MARKET_CLOSING_WINDOW_INSTANT,
+    )
+    assert outcome.ran is False
+    assert outcome.session_status is SessionStatus.CLOSING
     assert "market_session_not_open" in (outcome.skipped_reason or "")
     assert not PaperOrderRecord.objects.exists()
 
