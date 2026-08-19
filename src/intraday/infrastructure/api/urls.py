@@ -39,6 +39,11 @@ urlpatterns = [
     path("system/readiness/", system_readiness_view.system_readiness, name="system-readiness"),
     # --- Checkpoint 62.x: read-only, real, persisted strategy signals -----
     path("signals/", signal_views.list_signals, name="signals-list"),
+    path(
+        "signals/<str:signal_id>/communication/",
+        signal_views.signal_communication_history,
+        name="signals-communication-history",
+    ),
     # --- Checkpoint 23: read-only live market data ------------------------
     path("market-data/session/", market_data_views.session_status, name="market-data-session"),
     path("market-data/health/", market_data_views.health_status, name="market-data-health"),

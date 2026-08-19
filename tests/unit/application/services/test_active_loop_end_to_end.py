@@ -555,4 +555,4 @@ def test_full_bars_to_report_chain_with_trade_plan_and_mixed_channel_delivery() 
 
     page = _R().list_signals(strategy_id="atr_volatility_breakout")
     assert page.total_count >= 1
-    assert any(item.signal_id == str(signal_id) for item in page.items)
+    assert any(item.record.signal_id == str(signal_id) for item in page.items)

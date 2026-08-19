@@ -50,7 +50,7 @@ def test_record_and_list_a_single_signal() -> None:
 
     assert page.total_count == 1
     assert len(page.items) == 1
-    assert page.items[0].signal_id == "sig-1"
+    assert page.items[0].record.signal_id == "sig-1"
 
 
 def test_recording_the_same_signal_id_twice_never_duplicates() -> None:
@@ -77,8 +77,8 @@ def test_pagination_returns_the_correct_page() -> None:
     assert first_page.total_count == 5
     assert len(first_page.items) == 2
     assert len(second_page.items) == 2
-    assert {item.signal_id for item in first_page.items}.isdisjoint(
-        {item.signal_id for item in second_page.items}
+    assert {item.record.signal_id for item in first_page.items}.isdisjoint(
+        {item.record.signal_id for item in second_page.items}
     )
 
 
@@ -90,7 +90,7 @@ def test_filter_by_strategy_id() -> None:
     page = repository.list_signals(strategy_id="sma_trend_filter")
 
     assert page.total_count == 1
-    assert page.items[0].signal_id == "sig-b"
+    assert page.items[0].record.signal_id == "sig-b"
 
 
 def test_filter_by_instrument_id() -> None:
@@ -101,7 +101,7 @@ def test_filter_by_instrument_id() -> None:
     page = repository.list_signals(instrument_id=str(TCS))
 
     assert page.total_count == 1
-    assert page.items[0].signal_id == "sig-b"
+    assert page.items[0].record.signal_id == "sig-b"
 
 
 def test_page_size_is_bounded_to_200() -> None:

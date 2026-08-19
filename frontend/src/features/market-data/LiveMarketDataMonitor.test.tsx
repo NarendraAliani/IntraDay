@@ -116,6 +116,9 @@ const RELIANCE_SIGNAL: SignalResponse = {
   risk_reason: "",
   order_status: "FILLED",
   created_at: "2026-08-14T06:00:00Z",
+  trade_plan: null,
+  telegram: null,
+  discord: null,
 };
 
 const WORKER_STATUS_UNCONFIGURED = {
@@ -161,6 +164,9 @@ function stubEndpoints(options: {
     if (url.includes("/bars/")) return Promise.resolve(jsonResponse(bars));
     if (url.includes("/quotes/")) return Promise.resolve(jsonResponse(quotes));
     if (url.includes("/strategy-engine/strategies/")) return Promise.resolve(jsonResponse(strategies));
+    if (url.includes("/communication/")) {
+      return Promise.resolve(jsonResponse({ signal_id: "sig-1", attempts: [] }));
+    }
     if (url.includes("/signals/")) return Promise.resolve(jsonResponse(signals));
     return Promise.resolve(jsonResponse(health));
   });
@@ -210,7 +216,7 @@ describe("LiveMarketDataMonitor (Active Signal Monitor)", () => {
     expect(screen.queryByText(/breakout hunter/i)).not.toBeInTheDocument();
   });
 
-  it("shows signal details with an honest 'not available' note for SL/targets/explanation", async () => {
+  it("shows signal details with an honest 'not provided' note when no TradePlan exists", async () => {
     stubEndpoints({
       signals: { items: [RELIANCE_SIGNAL], total_count: 1, page: 1, page_size: 10 },
     });
@@ -229,8 +235,7 @@ describe("LiveMarketDataMonitor (Active Signal Monitor)", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Signal Details")).toBeInTheDocument();
-      const unavailableNotes = screen.getAllByText(/not available from the current signal contract/i);
-      expect(unavailableNotes.length).toBeGreaterThanOrEqual(2); // SL/targets AND explanation
+      expect(screen.getByText(/directional-only and does not compute a trade plan/i)).toBeInTheDocument();
     });
   });
 
@@ -342,6 +347,109 @@ describe("LiveMarketDataMonitor (Active Signal Monitor)", () => {
         String(call[0]).includes("timeframe=15m"),
       );
       expect(calledWith15m).toBe(true);
+    });
+  });
+
+  it("Checkpoint 64.9: shows real TradePlan values and communication badges in the signal table", async () => {
+    const signalWithPlan: SignalResponse = {
+      ...RELIANCE_SIGNAL,
+      signal_id: "sig-plan",
+      trade_plan: {
+        entry_price: "100.0000",
+        stop_loss: "98.0000",
+        target_1: "103.0000",
+        target_2: "105.0000",
+        target_3: "108.0000",
+        trailing_stop_loss: "99.0000",
+        calculation_method: "ATR test plan",
+      },
+      telegram: {
+        status: "SENT",
+        attempted_at: "2026-08-14T06:00:00Z",
+        delivered_at: "2026-08-14T06:00:00Z",
+        retry_count: 0,
+        error_message: "",
+      },
+      discord: {
+        status: "FAILED",
+        attempted_at: "2026-08-14T06:00:00Z",
+        delivered_at: null,
+        retry_count: 2,
+        error_message: "simulated failure",
+      },
+    };
+    stubEndpoints({
+      signals: { items: [signalWithPlan], total_count: 1, page: 1, page_size: 25 },
+    });
+
+    renderWithAuth(<LiveMarketDataMonitor />);
+
+    await waitFor(() => expect(screen.getByText("₹98.0000")).toBeInTheDocument());
+    expect(screen.getByText("₹103.0000")).toBeInTheDocument();
+    expect(screen.getByText("SENT")).toBeInTheDocument();
+    expect(screen.getByText("FAILED")).toBeInTheDocument();
+  });
+
+  it("Checkpoint 64.9: shows 'Not provided' for a directional-only strategy's TradePlan columns, never fabricated values", async () => {
+    stubEndpoints({
+      signals: { items: [RELIANCE_SIGNAL], total_count: 1, page: 1, page_size: 25 },
+    });
+
+    renderWithAuth(<LiveMarketDataMonitor />);
+
+    await waitFor(() => expect(screen.getAllByText("Not provided").length).toBeGreaterThan(0));
+    expect(screen.getAllByText("No attempt yet").length).toBeGreaterThan(0);
+  });
+
+  it("Checkpoint 64.9: changing the risk-status filter re-requests signals with the real query parameter", async () => {
+    const fetchMock = stubEndpoints({});
+
+    renderWithAuth(<LiveMarketDataMonitor />);
+
+    await waitFor(() => expect(screen.getByText(/no active signals/i)).toBeInTheDocument());
+    fetchMock.mockClear();
+
+    fireEvent.change(screen.getByLabelText(/risk status/i), { target: { value: "REJECTED" } });
+
+    await waitFor(() => {
+      const called = fetchMock.mock.calls.some((call) =>
+        String(call[0]).includes("risk_status=REJECTED"),
+      );
+      expect(called).toBe(true);
+    });
+  });
+
+  it("Checkpoint 64.9: changing the sort order re-requests signals with the real sort parameter", async () => {
+    const fetchMock = stubEndpoints({});
+
+    renderWithAuth(<LiveMarketDataMonitor />);
+
+    await waitFor(() => expect(screen.getByText(/no active signals/i)).toBeInTheDocument());
+    fetchMock.mockClear();
+
+    fireEvent.change(screen.getByLabelText(/^sort$/i), { target: { value: "oldest" } });
+
+    await waitFor(() => {
+      const called = fetchMock.mock.calls.some((call) => String(call[0]).includes("sort=oldest"));
+      expect(called).toBe(true);
+    });
+  });
+
+  it("Checkpoint 64.9: changing rows-per-page re-requests signals with the real page_size parameter", async () => {
+    const fetchMock = stubEndpoints({});
+
+    renderWithAuth(<LiveMarketDataMonitor />);
+
+    await waitFor(() => expect(screen.getByText(/no active signals/i)).toBeInTheDocument());
+    fetchMock.mockClear();
+
+    fireEvent.change(screen.getByLabelText(/rows per page/i), { target: { value: "100" } });
+
+    await waitFor(() => {
+      const called = fetchMock.mock.calls.some((call) =>
+        String(call[0]).includes("page_size=100"),
+      );
+      expect(called).toBe(true);
     });
   });
 });

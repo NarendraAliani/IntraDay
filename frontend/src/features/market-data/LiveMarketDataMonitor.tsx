@@ -34,7 +34,7 @@ import {
   refreshMarketData,
 } from "../../common/api/marketDataApi";
 import { ApiNetworkError, ApiRequestError } from "../../common/api/client";
-import { listSignals } from "../../common/api/signalApi";
+import { getSignalCommunicationHistory, listSignals } from "../../common/api/signalApi";
 import { listStrategies } from "../../common/api/strategyApi";
 import { useAuth } from "../../common/auth/AuthContext";
 import { EmptyState } from "../../common/components/EmptyState";
@@ -47,11 +47,11 @@ import type {
   SessionResponse,
   WorkerRuntimeStatusResponse,
 } from "../../common/api/marketDataApi";
-import type { SignalResponse } from "../../common/api/signalApi";
+import type { CommunicationAttempt, SignalResponse } from "../../common/api/signalApi";
 import type { StrategySummary } from "../../common/api/strategyApi";
 
 const AUTO_REFRESH_INTERVAL_MS = 5000;
-const SIGNAL_PAGE_SIZE = 10;
+const PAGE_SIZE_OPTIONS = [25, 50, 100] as const;
 
 // The real, intraday-relevant subset of `domain.shared_kernel.contracts
 // .Timeframe` (Checkpoint 62.x Phase 4 - `TICK` and `1d` are real enum
@@ -142,6 +142,37 @@ function symbolFromInstrumentId(instrumentId: string): string {
   return parts.length > 1 ? parts[1] : instrumentId;
 }
 
+// Checkpoint 64.9: a TradePlan field is `null` whenever the evaluating
+// strategy is directional-only (e.g. ema_crossover) - shown honestly as
+// "Not provided," never a fabricated value.
+function formatTradeValue(value: string | null | undefined): string {
+  if (value === null || value === undefined) return "Not provided";
+  return `₹${value}`;
+}
+
+const CHANNEL_STATUS_CLASS: Record<string, string> = {
+  SENT: "badge--active",
+  FAILED: "badge--danger",
+  RETRYING: "badge--pending",
+  PENDING: "badge--pending",
+  SKIPPED_NOT_CONFIGURED: "badge--historical",
+  SKIPPED_DUPLICATE: "badge--historical",
+};
+
+// Checkpoint 64.9 §4/§5: "signal generated" != "trade executed" !=
+// "Telegram delivered" - a signal with no communication attempt yet
+// shows an honest neutral state, never a fabricated SENT/FAILED.
+function renderChannelBadge(status: SignalResponse["telegram"]): JSX.Element {
+  if (!status) {
+    return <span className="badge badge--historical">No attempt yet</span>;
+  }
+  return (
+    <span className={`badge ${CHANNEL_STATUS_CLASS[status.status] ?? ""}`} title={status.error_message || undefined}>
+      {status.status}
+    </span>
+  );
+}
+
 // Checkpoint 64.3: THE operator-facing "is the live WebSocket worker
 // actually healthy" surface - a truthful watchdog classification
 // (`GET /market-data/worker-status/`), never derived from "the process
@@ -170,6 +201,65 @@ const WATCHDOG_CLASS: Record<string, string> = {
 // Exported so the Checkpoint 64.5 Live Scanner console can reuse this
 // exact card - one health evaluator, never a second one built because a
 // second screen needed it (§13 of that checkpoint's brief).
+// Checkpoint 64.9: the FULL communication attempt history (every
+// retry, not just current status) for one signal - fetched on demand
+// only when its detail panel is open, never for the whole list.
+function SignalCommunicationPanel({ signalId }: { signalId: string }): JSX.Element {
+  const [attempts, setAttempts] = useState<CommunicationAttempt[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setAttempts(null);
+    setError(null);
+    getSignalCommunicationHistory(signalId)
+      .then((result) => {
+        if (!cancelled) setAttempts(result.attempts);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(describeError(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [signalId]);
+
+  if (error) return <ErrorState message={error} />;
+  if (attempts === null) return <LoadingState label="Loading communication history…" />;
+  if (attempts.length === 0) {
+    return <p className="signal-monitor__unavailable">No communication attempt yet.</p>;
+  }
+
+  return (
+    <table className="signal-monitor__table">
+      <thead>
+        <tr>
+          <th scope="col">Channel</th>
+          <th scope="col">Status</th>
+          <th scope="col">Attempted At</th>
+          <th scope="col">Retry Count</th>
+          <th scope="col">Failure Reason</th>
+        </tr>
+      </thead>
+      <tbody>
+        {attempts.map((attempt) => (
+          <tr key={attempt.communication_id}>
+            <td>{attempt.channel}</td>
+            <td>
+              <span className={`badge ${CHANNEL_STATUS_CLASS[attempt.delivery_status] ?? ""}`}>
+                {attempt.delivery_status}
+              </span>
+            </td>
+            <td>{attempt.attempted_at ? formatTimestamp(attempt.attempted_at) : "—"}</td>
+            <td>{attempt.retry_count}</td>
+            <td>{attempt.error_message || "—"}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
 export function WorkerStatusCard(): JSX.Element {
   const [status, setStatus] = useState<WorkerRuntimeStatusResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -277,7 +367,18 @@ export function LiveMarketDataMonitor(): JSX.Element {
   // --- Signals (the primary table) ---
   const [signalState, setSignalState] = useState<SignalListState>({ phase: "loading" });
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
   const [selectedSignal, setSelectedSignal] = useState<SignalResponse | null>(null);
+  // Checkpoint 64.9: the Signal Operations Center's own real,
+  // server-side filters/sort - never a cosmetic client-side-only
+  // control over an already-fetched page.
+  const [riskStatusFilter, setRiskStatusFilter] = useState<string>("");
+  const [paperStatusFilter, setPaperStatusFilter] = useState<string>("");
+  const [telegramStatusFilter, setTelegramStatusFilter] = useState<string>("");
+  const [discordStatusFilter, setDiscordStatusFilter] = useState<string>("");
+  const [sortOrder, setSortOrder] = useState<
+    "newest" | "oldest" | "strategy" | "stock" | "risk_status"
+  >("newest");
 
   const loadMarketData = useCallback(async (): Promise<void> => {
     try {
@@ -354,16 +455,32 @@ export function LiveMarketDataMonitor(): JSX.Element {
     try {
       const result = await listSignals({
         page,
-        pageSize: SIGNAL_PAGE_SIZE,
+        pageSize,
         timeframe,
         strategyId: activeStrategyFilter,
         instrumentId: activeInstrumentFilter,
+        riskStatus: riskStatusFilter || undefined,
+        orderStatus: paperStatusFilter || undefined,
+        telegramStatus: telegramStatusFilter || undefined,
+        discordStatus: discordStatusFilter || undefined,
+        sort: sortOrder,
       });
       setSignalState({ phase: "ready", items: result.items, totalCount: result.total_count });
     } catch (error) {
       setSignalState({ phase: "error", message: describeError(error) });
     }
-  }, [page, timeframe, activeStrategyFilter, activeInstrumentFilter]);
+  }, [
+    page,
+    pageSize,
+    timeframe,
+    activeStrategyFilter,
+    activeInstrumentFilter,
+    riskStatusFilter,
+    paperStatusFilter,
+    telegramStatusFilter,
+    discordStatusFilter,
+    sortOrder,
+  ]);
 
   useEffect(() => {
     void loadSignals();
@@ -371,7 +488,17 @@ export function LiveMarketDataMonitor(): JSX.Element {
 
   useEffect(() => {
     setPage(1);
-  }, [timeframe, activeStrategyFilter, activeInstrumentFilter]);
+  }, [
+    timeframe,
+    activeStrategyFilter,
+    activeInstrumentFilter,
+    riskStatusFilter,
+    paperStatusFilter,
+    telegramStatusFilter,
+    discordStatusFilter,
+    sortOrder,
+    pageSize,
+  ]);
 
   async function handleRefreshClick(): Promise<void> {
     setRefreshing(true);
@@ -405,7 +532,7 @@ export function LiveMarketDataMonitor(): JSX.Element {
   }
 
   const totalPages =
-    signalState.phase === "ready" ? Math.max(1, Math.ceil(signalState.totalCount / SIGNAL_PAGE_SIZE)) : 1;
+    signalState.phase === "ready" ? Math.max(1, Math.ceil(signalState.totalCount / pageSize)) : 1;
 
   return (
     <div className="signal-monitor">
@@ -528,6 +655,97 @@ export function LiveMarketDataMonitor(): JSX.Element {
           </div>
 
           <div className="signal-monitor__field">
+            <label htmlFor="risk-status-filter">Risk Status</label>
+            <select
+              id="risk-status-filter"
+              value={riskStatusFilter}
+              onChange={(event) => setRiskStatusFilter(event.target.value)}
+            >
+              <option value="">Any</option>
+              <option value="APPROVED">Approved</option>
+              <option value="REJECTED">Rejected</option>
+            </select>
+          </div>
+
+          <div className="signal-monitor__field">
+            <label htmlFor="paper-status-filter">Paper Status</label>
+            <select
+              id="paper-status-filter"
+              value={paperStatusFilter}
+              onChange={(event) => setPaperStatusFilter(event.target.value)}
+            >
+              <option value="">Any</option>
+              <option value="FILLED">Filled</option>
+              <option value="REJECTED">Rejected</option>
+              <option value="PENDING">Pending</option>
+            </select>
+          </div>
+
+          <div className="signal-monitor__field">
+            <label htmlFor="telegram-status-filter">Telegram Status</label>
+            <select
+              id="telegram-status-filter"
+              value={telegramStatusFilter}
+              onChange={(event) => setTelegramStatusFilter(event.target.value)}
+            >
+              <option value="">Any</option>
+              <option value="SENT">Sent</option>
+              <option value="FAILED">Failed</option>
+              <option value="SKIPPED_NOT_CONFIGURED">Not Configured</option>
+              <option value="SKIPPED_DUPLICATE">Skipped (Duplicate)</option>
+              <option value="PENDING">Pending</option>
+            </select>
+          </div>
+
+          <div className="signal-monitor__field">
+            <label htmlFor="discord-status-filter">Discord Status</label>
+            <select
+              id="discord-status-filter"
+              value={discordStatusFilter}
+              onChange={(event) => setDiscordStatusFilter(event.target.value)}
+            >
+              <option value="">Any</option>
+              <option value="SENT">Sent</option>
+              <option value="FAILED">Failed</option>
+              <option value="SKIPPED_NOT_CONFIGURED">Not Configured</option>
+              <option value="SKIPPED_DUPLICATE">Skipped (Duplicate)</option>
+              <option value="PENDING">Pending</option>
+            </select>
+          </div>
+
+          <div className="signal-monitor__field">
+            <label htmlFor="signal-sort-order">Sort</label>
+            <select
+              id="signal-sort-order"
+              value={sortOrder}
+              onChange={(event) =>
+                setSortOrder(event.target.value as typeof sortOrder)
+              }
+            >
+              <option value="newest">Newest First</option>
+              <option value="oldest">Oldest First</option>
+              <option value="strategy">Strategy</option>
+              <option value="stock">Stock</option>
+              <option value="risk_status">Risk Status</option>
+            </select>
+          </div>
+
+          <div className="signal-monitor__field">
+            <label htmlFor="signal-page-size">Rows Per Page</label>
+            <select
+              id="signal-page-size"
+              value={pageSize}
+              onChange={(event) => setPageSize(Number(event.target.value))}
+            >
+              {PAGE_SIZE_OPTIONS.map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="signal-monitor__field">
             <span className="signal-monitor__field-label">Scan Source</span>
             <p className="signal-monitor__hint">
               Signals shown here are recorded by the platform's own scheduled active loop whenever a
@@ -595,56 +813,74 @@ export function LiveMarketDataMonitor(): JSX.Element {
 
             {signalState.phase === "ready" && signalState.items.length > 0 && (
               <>
-                <table className="signal-monitor__table">
-                  <thead>
-                    <tr>
-                      <th scope="col">Strategy</th>
-                      <th scope="col">Stock</th>
-                      <th scope="col">Direction</th>
-                      <th scope="col">Timeframe</th>
-                      <th scope="col">Signal Time</th>
-                      <th scope="col">Signal Price</th>
-                      <th scope="col">Risk</th>
-                      <th scope="col">Order</th>
-                      <th scope="col" aria-label="Details" />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {signalState.items.map((signal) => (
-                      <tr key={signal.signal_id}>
-                        <td>{signal.strategy_id}</td>
-                        <td>{symbolFromInstrumentId(signal.instrument_id)}</td>
-                        <td>
-                          <span
-                            className={`badge ${signal.direction === "BULLISH" ? "badge--active" : "badge--danger"}`}
-                          >
-                            {signal.direction}
-                          </span>
-                        </td>
-                        <td>{signal.timeframe}</td>
-                        <td>{formatTimestamp(signal.signal_timestamp)}</td>
-                        <td>₹{signal.price}</td>
-                        <td>
-                          <span
-                            className={`badge ${signal.risk_status === "APPROVED" ? "badge--active" : "badge--danger"}`}
-                          >
-                            {signal.risk_status}
-                          </span>
-                        </td>
-                        <td>{signal.order_status || "—"}</td>
-                        <td>
-                          <button
-                            type="button"
-                            className="signal-monitor__link-button"
-                            onClick={() => setSelectedSignal(signal)}
-                          >
-                            Details
-                          </button>
-                        </td>
+                <div className="table-scroll">
+                  <table className="signal-monitor__table">
+                    <thead>
+                      <tr>
+                        <th scope="col">Time</th>
+                        <th scope="col">Strategy</th>
+                        <th scope="col">Stock</th>
+                        <th scope="col">Timeframe</th>
+                        <th scope="col">Direction</th>
+                        <th scope="col">Spot</th>
+                        <th scope="col">Entry</th>
+                        <th scope="col">Stop Loss</th>
+                        <th scope="col">Target 1</th>
+                        <th scope="col">Target 2</th>
+                        <th scope="col">Target 3</th>
+                        <th scope="col">Trailing SL</th>
+                        <th scope="col">Risk</th>
+                        <th scope="col">Paper</th>
+                        <th scope="col">Telegram</th>
+                        <th scope="col">Discord</th>
+                        <th scope="col" aria-label="Details" />
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {signalState.items.map((signal) => (
+                        <tr key={signal.signal_id}>
+                          <td>{formatTimestamp(signal.signal_timestamp)}</td>
+                          <td>{signal.strategy_id}</td>
+                          <td>{symbolFromInstrumentId(signal.instrument_id)}</td>
+                          <td>{signal.timeframe}</td>
+                          <td>
+                            <span
+                              className={`badge ${signal.direction === "BULLISH" ? "badge--active" : "badge--danger"}`}
+                            >
+                              {signal.direction}
+                            </span>
+                          </td>
+                          <td>₹{signal.price}</td>
+                          <td>{formatTradeValue(signal.trade_plan?.entry_price)}</td>
+                          <td>{formatTradeValue(signal.trade_plan?.stop_loss)}</td>
+                          <td>{formatTradeValue(signal.trade_plan?.target_1)}</td>
+                          <td>{formatTradeValue(signal.trade_plan?.target_2)}</td>
+                          <td>{formatTradeValue(signal.trade_plan?.target_3)}</td>
+                          <td>{formatTradeValue(signal.trade_plan?.trailing_stop_loss)}</td>
+                          <td>
+                            <span
+                              className={`badge ${signal.risk_status === "APPROVED" ? "badge--active" : "badge--danger"}`}
+                            >
+                              {signal.risk_status}
+                            </span>
+                          </td>
+                          <td>{signal.order_status || "—"}</td>
+                          <td>{renderChannelBadge(signal.telegram)}</td>
+                          <td>{renderChannelBadge(signal.discord)}</td>
+                          <td>
+                            <button
+                              type="button"
+                              className="signal-monitor__link-button"
+                              onClick={() => setSelectedSignal(signal)}
+                            >
+                              Details
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
 
                 <div className="signal-monitor__pagination">
                   <button type="button" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
@@ -705,19 +941,40 @@ export function LiveMarketDataMonitor(): JSX.Element {
                 )}
                 <dt>Order Status</dt>
                 <dd>{selectedSignal.order_status || "—"}</dd>
-                <dt>Entry / Stop Loss / Targets</dt>
-                <dd className="signal-monitor__unavailable">
-                  Not available from the current signal contract - this platform's signal
-                  pipeline does not yet compute or persist per-signal entry/stop-loss/target
-                  levels.
-                </dd>
-                <dt>Why this signal?</dt>
-                <dd className="signal-monitor__unavailable">
-                  Not available from the current signal contract - the strategy engine does not
-                  yet expose a per-condition evidence trail (which indicator conditions passed or
-                  failed) through this API.
-                </dd>
               </dl>
+
+              <h3>Trade Plan</h3>
+              {selectedSignal.trade_plan ? (
+                <dl className="signal-monitor__details-grid">
+                  <dt>Entry</dt>
+                  <dd>{formatTradeValue(selectedSignal.trade_plan.entry_price)}</dd>
+                  <dt>Stop Loss</dt>
+                  <dd>{formatTradeValue(selectedSignal.trade_plan.stop_loss)}</dd>
+                  <dt>Target 1</dt>
+                  <dd>{formatTradeValue(selectedSignal.trade_plan.target_1)}</dd>
+                  <dt>Target 2</dt>
+                  <dd>{formatTradeValue(selectedSignal.trade_plan.target_2)}</dd>
+                  <dt>Target 3</dt>
+                  <dd>{formatTradeValue(selectedSignal.trade_plan.target_3)}</dd>
+                  <dt>Trailing SL</dt>
+                  <dd>{formatTradeValue(selectedSignal.trade_plan.trailing_stop_loss)}</dd>
+                  <dt>Calculation Method</dt>
+                  <dd>{selectedSignal.trade_plan.calculation_method || "—"}</dd>
+                </dl>
+              ) : (
+                <p className="signal-monitor__unavailable">
+                  Not provided - this strategy is directional-only and does not compute a trade
+                  plan (see taskReport.md, "Strategy TradePlan Coverage").
+                </p>
+              )}
+
+              <h3>Communication</h3>
+              <p className="signal-monitor__hint">
+                A signal being generated, a trade being executed, and a notification being
+                delivered are three separate, independent facts - shown here separately, never
+                merged into one status.
+              </p>
+              <SignalCommunicationPanel signalId={selectedSignal.signal_id} />
             </section>
           )}
 

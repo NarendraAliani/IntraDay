@@ -887,14 +887,36 @@ export interface paths {
         };
         /**
          * @description Read-only, server-side paginated list of REAL, persisted
-         *     strategy signals - never a fabricated row. Query params:
-         *     `page` (default 1), `page_size` (default 25, max 200),
-         *     `strategy_id`, `instrument_id`, `timeframe`, `direction`
-         *     (all optional filters - the Active Signal Monitor UI's controls
-         *     bind directly to these, never a frontend-only filter over an
-         *     unbounded fetch).
+         *     strategy signals - never a fabricated row. Every filter/sort maps
+         *     to a real query parameter `DjangoSignalRepository.list_signals()`
+         *     actually applies - never a frontend-only filter over an unbounded
+         *     fetch. Each item is enriched with its real TradePlan (`None` when
+         *     the strategy produced none) and current Telegram/Discord delivery
+         *     status (`None` when no attempt exists yet).
          */
         get: operations["api_v1_config_signals_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config/signals/{signal_id}/communication/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Checkpoint 64.9: the FULL communication attempt history (every
+         *     retry, not just the current status) for ONE signal - powers the
+         *     signal detail screen's traceability panel. Reuses the existing
+         *     `CommunicationLedgerRecord` table verbatim - no new persistence.
+         */
+        get: operations["api_v1_config_signals_communication_retrieve"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1452,6 +1474,27 @@ export interface components {
          * @enum {string}
          */
         BarResponseStatusEnum: "FORMING" | "CLOSED";
+        ChannelStatus: {
+            status: string;
+            /** Format: date-time */
+            attempted_at: string | null;
+            /** Format: date-time */
+            delivered_at: string | null;
+            retry_count: number;
+            error_message: string;
+        };
+        CommunicationAttempt: {
+            communication_id: string;
+            channel: string;
+            provider: string;
+            delivery_status: string;
+            /** Format: date-time */
+            attempted_at: string | null;
+            retry_count: number;
+            error_message: string;
+            /** Format: date-time */
+            created_at: string;
+        };
         ConnectionStatusResponse: {
             provider: components["schemas"]["ProviderEnum"];
             status: components["schemas"]["ConnectionStatusResponseStatusEnum"];
@@ -2037,6 +2080,10 @@ export interface components {
          * @enum {string}
          */
         SideEnum: "BUY" | "SELL";
+        SignalCommunicationHistoryResponse: {
+            signal_id: string;
+            attempts: components["schemas"]["CommunicationAttempt"][];
+        };
         SignalListResponse: {
             items: components["schemas"]["SignalResponse"][];
             total_count: number;
@@ -2058,6 +2105,9 @@ export interface components {
             order_status: string;
             /** Format: date-time */
             created_at: string;
+            trade_plan: components["schemas"]["TradePlanField"] | null;
+            telegram: components["schemas"]["ChannelStatus"] | null;
+            discord: components["schemas"]["ChannelStatus"] | null;
         };
         StrategyConfigurationResponse: {
             strategy_id: string;
@@ -2152,6 +2202,21 @@ export interface components {
          * @enum {string}
          */
         TokenStateEnum: "UNCONFIGURED" | "VALID" | "EXPIRING_SOON" | "EXPIRED" | "MALFORMED";
+        TradePlanField: {
+            /** Format: decimal */
+            entry_price: string | null;
+            /** Format: decimal */
+            stop_loss: string | null;
+            /** Format: decimal */
+            target_1: string | null;
+            /** Format: decimal */
+            target_2: string | null;
+            /** Format: decimal */
+            target_3: string | null;
+            /** Format: decimal */
+            trailing_stop_loss: string | null;
+            calculation_method: string;
+        };
         /**
          * @description Mirrors `domain.universe.UniverseMember` — `instrument_id` is the
          *     domain-owned, broker-neutral identity (e.g. "NSE:RELIANCE"), never a
@@ -3357,7 +3422,15 @@ export interface operations {
     };
     api_v1_config_signals_retrieve: {
         parameters: {
-            query?: never;
+            query?: {
+                date_from?: string;
+                date_to?: string;
+                discord_status?: string;
+                order_status?: string;
+                risk_status?: string;
+                sort?: string;
+                telegram_status?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -3370,6 +3443,27 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SignalListResponse"];
+                };
+            };
+        };
+    };
+    api_v1_config_signals_communication_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                signal_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignalCommunicationHistoryResponse"];
                 };
             };
         };
