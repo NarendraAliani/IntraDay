@@ -38,6 +38,7 @@ import enum
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Protocol
 
 EXPIRING_SOON_THRESHOLD = timedelta(hours=1)
 """Dhan's own documented access-token lifetime is ~24 hours - warning an
@@ -67,6 +68,32 @@ class TokenLifecycleState(enum.Enum):
     """A non-empty value is configured but it does not decode as a JWT
     with a readable `exp` claim - never silently treated as VALID or
     EXPIRED, since neither claim can honestly be made about it."""
+
+    # Checkpoint 64.1: reachable ONLY through `attempt_dhan_token_renewal()`
+    # below, never through `evaluate_dhan_token_lifecycle()` alone -
+    # these require an actual renewal ATTEMPT, not just reading claims.
+    RENEWED = "RENEWED"
+    """A renewal call to Dhan's `/v2/RenewToken` succeeded - the caller
+    now holds a genuinely new access token."""
+    AUTH_FAILURE = "AUTH_FAILURE"
+    """A renewal attempt was made (token was `EXPIRING_SOON`) and Dhan
+    rejected it - distinct from `EXPIRED`, which never even attempts
+    renewal (Dhan's own documented rule: an expired token cannot be
+    renewed via this endpoint at all)."""
+    OPERATOR_ACTION_REQUIRED = "OPERATOR_ACTION_REQUIRED"
+    """The token is `EXPIRED`/`MALFORMED`/`UNCONFIGURED` - Dhan's
+    `RenewToken` endpoint is documented to reject an already-expired
+    token outright, so no automatic recovery is possible; a human must
+    obtain a fresh token. The worker must never pretend to be connected
+    in this state (Checkpoint 64.1's own explicit requirement)."""
+
+    # NOTE: no `RENEWING` member exists. That would be an in-flight
+    # status for an asynchronous renewal job - this project has no such
+    # job/queue for token renewal (renewal is a single synchronous
+    # call, see `attempt_dhan_token_renewal()`) - adding a state this
+    # code can never actually occupy would be exactly the "state name
+    # with no real logic behind it" this checkpoint's own review
+    # criticized about the PRE-Checkpoint-64 token handling.
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,9 +148,70 @@ def evaluate_dhan_token_lifecycle(
     return TokenLifecycleStatus(state=TokenLifecycleState.VALID, expires_at=expires_at)
 
 
+class TokenRenewalError(Exception):
+    """The application layer's own boundary exception for a failed
+    renewal attempt - NEVER a Dhan-specific exception type (application
+    must not depend on infrastructure, Contract 6 of `.importlinter`).
+    The infrastructure-layer adapter that implements `TokenRenewer`
+    below is responsible for translating any real Dhan client error
+    into this one generic type."""
+
+
+@dataclass(frozen=True, slots=True)
+class TokenRenewalResult:
+    new_access_token: str
+
+
+class TokenRenewer(Protocol):
+    """The Protocol `attempt_dhan_token_renewal()` depends on - the
+    real implementation (`token_renewal_client.py::renew_dhan_token`,
+    infrastructure layer) is injected by the composition root, never
+    imported here directly."""
+
+    def __call__(self, *, client_id: str, current_access_token: str) -> TokenRenewalResult: ...
+
+
+def attempt_dhan_token_renewal(
+    *, client_id: str, access_token: str | None, now: datetime, renew: TokenRenewer
+) -> tuple[TokenLifecycleState, str | None]:
+    """Returns `(new_state, new_access_token)` - `new_access_token` is
+    non-`None` ONLY when `new_state is RENEWED`.
+
+    Renewal is attempted ONLY from `EXPIRING_SOON` - Dhan's own
+    documented `/v2/RenewToken` behavior: "This only renews tokens
+    which are active. If you try to renew an expired token, it will
+    return an error." Calling it for an already-`EXPIRED` token would
+    not be a bug-tolerant retry, it would be a call the endpoint is
+    documented to always reject - so `EXPIRED`/`MALFORMED`/`UNCONFIGURED`
+    go straight to `OPERATOR_ACTION_REQUIRED` without ever calling
+    `renew`, and a `VALID` token needs no action at all."""
+    current = evaluate_dhan_token_lifecycle(access_token, now=now)
+
+    if current.state in (
+        TokenLifecycleState.EXPIRED,
+        TokenLifecycleState.MALFORMED,
+        TokenLifecycleState.UNCONFIGURED,
+    ):
+        return TokenLifecycleState.OPERATOR_ACTION_REQUIRED, None
+    if current.state is TokenLifecycleState.VALID:
+        return TokenLifecycleState.VALID, None
+
+    assert current.state is TokenLifecycleState.EXPIRING_SOON
+    assert access_token is not None  # EXPIRING_SOON is unreachable without a configured token
+    try:
+        result = renew(client_id=client_id, current_access_token=access_token)
+    except TokenRenewalError:
+        return TokenLifecycleState.AUTH_FAILURE, None
+    return TokenLifecycleState.RENEWED, result.new_access_token
+
+
 __all__ = [
     "TokenLifecycleState",
     "TokenLifecycleStatus",
     "evaluate_dhan_token_lifecycle",
     "EXPIRING_SOON_THRESHOLD",
+    "TokenRenewalError",
+    "TokenRenewalResult",
+    "TokenRenewer",
+    "attempt_dhan_token_renewal",
 ]

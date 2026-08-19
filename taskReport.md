@@ -2,305 +2,287 @@
 
 ## Checkpoint
 
-Checkpoint 64 — Live Paper Trading Runtime (Readiness Gate + First Increments).
-This report OVERWRITES the previous `taskReport.md` per this checkpoint's
-own instruction — it describes only this checkpoint's work. The full
-backtesting/DB-first checkpoint report this superseded is preserved in git
-history, not here.
+Checkpoint 64.1 — Live Market-Data Runtime Implementation + Recovery +
+Watchdog + Dynamic Subscription (partial) + Paper Signal Pipeline (not
+reached). This file OVERWRITES the previous `taskReport.md` per this
+checkpoint's own instruction.
 
 ## Objective
 
-Turn the already-built signal → risk → paper-execution pipeline into
-something that runs continuously against **real** Dhan market data, while
-keeping real (live) order placement disabled. This checkpoint's own
-32-section brief asked for the full runtime (WebSocket connection,
-reconnect, token lifecycle, watchdog, universe widening, dashboard,
-performance testing, full-day simulation, new reports) in one pass.
+Per the explicit directive: do not wait for a fresh Dhan token to
+implement everything that can be built and tested deterministically.
+Implement the production Dhan provider path, connection state handling,
+reconnect-with-backoff, a watchdog, and move toward the dynamic
+subscription/live signal pipeline — without ever placing a real order.
 
-**Honest scope statement up front**: that full scope is genuinely
-multi-week work. This checkpoint completed the mandatory readiness gate,
-performed a REAL (not simulated) Dhan connectivity verification, and
-implemented two concrete, fully-tested increments that came directly out
-of what that verification found. It did not attempt the remaining ~28
-sections of the brief (reconnect state machine, watchdog, subscription
-manager, dashboard, performance/load testing, full-day simulation,
-new reports) — each is named explicitly under Remaining Gaps, not silently
+**Honest scope statement up front**: the full 27-section brief remains
+genuinely multi-week work. This checkpoint implemented the highest-
+leverage, most foundational pieces that were both (a) directly enabled by
+Checkpoint 64's own findings and (b) genuinely completable and testable
+without a live connection. It did NOT reach the dashboard, live-scanner
+UI wiring, event-driven communication, new reports, full-day simulation,
+or performance benchmarking — each named explicitly below, not silently
 dropped.
+
+## Previous Checkpoint Findings
+
+From Checkpoint 64 (unchanged, re-confirmed, not repeated live this
+round per the explicit "do not repeatedly attempt live connections with
+an expired token" instruction):
+1. The real Dhan WebSocket endpoint (`wss://api-feed.dhan.co`) is reachable — the RFC 6455 handshake genuinely succeeded.
+2. The transport (`DhanWebSocketTransport`) works against the real endpoint, not just a local test server.
+3. This environment's configured Dhan access token is EXPIRED (verified by decoding its own `exp` claim).
+4. The Settings page's "Connected" badge was stale relative to that real expiry — fixed with a live token-state evaluator.
+5. The live-quote universe is no longer architecturally capped at 4 symbols (scrip-master fallback added).
 
 ## Readiness Gate
 
-Traced against the ACTUAL current code (not documentation), by reading the
-real modules listed in the Files column.
+Re-traced against the code AFTER this checkpoint's own changes:
 
-| Component | Exists | Tested | Integrated | Production-Verified | Blocker |
-|---|---|---|---|---|---|
-| Dhan credentials (Settings/env) | Yes | Yes | Yes | **This checkpoint** | Configured token was found **EXPIRED** — see Real Dhan Verification below |
-| Dhan WebSocket endpoint (`wss://api-feed.dhan.co`) | N/A (external) | — | — | **This checkpoint** | Handshake succeeds; app-level auth rejects the current token |
-| WebSocket authentication (query-param scheme) | Yes (`websocket_transport.py`) | Yes (local fake server only, pre-existing) | Partial | **This checkpoint, real endpoint** | Token expiry (see above) |
-| Token lifecycle | **New this checkpoint** (`token_lifecycle.py`) | Yes (8 unit + 4 integration/API tests) | Yes (Settings API + UI) | N/A (pure/local, no network) | Only claims-based (exp), not renewal — see Remaining Gaps |
-| Instrument master (scrip master) | Yes (built prior session) | Yes | Yes (backtesting) | Real, cached fetch | — |
-| Subscription manager (live-quote universe) | Partial — widened this checkpoint | Yes (8 tests) | Partial | Not live-tested (blocked by token) | No dynamic/UI-driven subscription set yet — see §6 gap below |
-| Tick decoder (`packet_decoder.py`) | Yes (pre-existing) | Yes (fixture-based) | Yes | No (never decoded a real Dhan packet — connection never reached data) | Blocked by token expiry |
-| Quote processing (`packet_to_quote.py`) | Yes (pre-existing) | Yes | Yes | No | Same |
-| Bar aggregation | Yes (pre-existing) | Yes | Yes | Only against synthetic feed | Same |
-| Trading-grade data gate | Yes (pre-existing) | Yes | Yes | Only 2/6 conditions ever exercised live | Unchanged this checkpoint |
-| Strategy engine | Yes (pre-existing) | Yes | Yes | Proven vs. backtest/replay data | — |
-| Signal persistence | Yes (pre-existing) | Yes | Yes | — | — |
-| Risk engine | Yes (pre-existing) | Yes | Yes | — | — |
-| PaperBroker | Yes (pre-existing) | Yes | Yes | — | — |
-| Position management | Yes (pre-existing) | Yes | Yes | — | — |
-| Reconciliation | Yes (pre-existing) | Yes | Yes | — | — |
-| EOD | Yes (pre-existing) | Yes | Yes | — | — |
-| Telegram/Discord communication | Yes (pre-existing) | Yes | Yes | Not against real credentials this checkpoint | — |
-| Operator UI | Yes (Settings/Backtesting/Paper Trading/Market Data pages) | Yes | Yes | — | No unified operational dashboard yet |
-| Reports | Partial (3/11 types real) | Yes for what exists | Partial | — | Unchanged this checkpoint |
-| Monitoring/Logs | Partial (`structlog` throughout) | — | Yes | — | No worker-health signal |
-| Reconnect | **No** | — | — | — | Not attempted this checkpoint |
-| Watchdog | **No** | — | — | — | Not attempted this checkpoint |
-
-## Research Performed
-
-Fetched Dhan's current official documentation directly (not from memory)
-for the Live Market Feed API — confirmed against `https://dhanhq.co/docs/v2/live-market-feed/`:
-- WebSocket URL/auth: `wss://api-feed.dhan.co?version=2&token=...&clientId=...&authType=2` — unchanged from Checkpoint 53's original research.
-- Subscribe request shape: `{"RequestCode": 15, "InstrumentCount": N, "InstrumentList": [{"ExchangeSegment": "NSE_EQ", "SecurityId": "..."}]}`.
-- Limits: 5 connections/user, 5,000 instruments/connection, 100 instruments/message.
-- Heartbeat: 10s server ping, 40s client timeout.
-- Disconnect request: `{"RequestCode": 12}`.
-
-All of this matched the codebase's pre-existing `websocket_transport.py`/
-`packet_decoder.py` assumptions exactly — no code needed to change because
-of this research; it served to confirm the existing implementation is
-still current, not stale.
-
-## Official Sources
-
-- `https://dhanhq.co/docs/v2/live-market-feed/` (fetched live this checkpoint).
-- This project's own prior primary-source research (`docs/research/CHECKPOINT_53_DHAN_WEBSOCKET_PROTOCOL_RESEARCH.md`), re-confirmed rather than re-done from scratch.
-
-## Real Dhan Verification
-
-**Performed for real, not simulated.** Using the actual credentials
-configured in this environment's Settings/`.env` (never printed, logged,
-or committed anywhere — see Security below):
-
-1. Confirmed credentials are present (`DhanSettingsService.effective_credentials()` returns a real client ID + token) — presence and shape checked only (lengths, "looks numeric"/"looks like a JWT"), never the values themselves.
-2. Connected a real `DhanWebSocketTransport` instance to Dhan's real production endpoint `wss://api-feed.dhan.co` with the real configured credentials in the query string.
-   - **Result: `RESULT=CONNECTED connect_latency_ms=139`** — the RFC 6455 handshake genuinely succeeded.
-3. Sent a real subscribe request for RELIANCE (NSE_EQ, security_id 2885).
-   - **Result: connection closed abnormally (WebSocket close code 1006) within seconds**, before any data packet arrived.
-4. Repeated the connection attempt with NO subscribe message sent at all, to isolate whether the abrupt close was caused by the subscribe message or something upstream of it.
-   - **Result: identical 1006 abnormal closure, purely from connecting** — proving the issue is not the subscribe message format.
-5. Decoded (payload only, never the signature) the configured access token's own JWT claims to check its real expiry.
-   - **Result: `token_issued_at_utc = 2026-08-17 07:10:54`, `token_expires_at_utc = 2026-08-18 07:10:54`, `now_utc = 2026-08-19 08:14:23`, `token_is_expired = True`.**
-
-**Conclusion**: `REAL-DHAN-VERIFICATION = BLOCKED — configured access token is expired` (issued with Dhan's documented ~24h TTL, now over a day past its own expiry). This is not a code defect in this project's WebSocket transport — the transport-level handshake genuinely succeeded against the real endpoint, and the request/response shapes matched current official documentation exactly. The block is purely credential freshness, and it is now visible on the Settings page (see Implementation below) rather than hidden behind a stale cached "Connected" badge.
-
-**Safe evidence retained above**: connection state, latency, close code, and non-secret JWT claims (`iss`, `exp`, `iat`, `dhanClientId`-matches-configured boolean) only. No access token, client ID value, signature, or header value was printed, logged, or written to any file in this repository at any point.
+| Component | Exists | Tested | Integrated | Notes |
+|---|---|---|---|---|
+| Real Dhan provider (`--provider dhan`) | **New this checkpoint** | Yes (credential/token-gating refusal paths — never a real network call in tests) | Yes (`manage.py run_market_data_worker`) | Market data only; refuses to connect without a usable token |
+| Connection state machine | Pre-existing (Checkpoint 53's `WorkerState`) | Yes | Yes, reused unmodified | Already matched Checkpoint 64.1's own requested vocabulary almost exactly — no new state machine was built, the existing one was reused |
+| Token lifecycle (extended) | Extended this checkpoint | Yes (26 tests total across both token files) | Partial (Settings API/UI show the claims-only states; renewal is not auto-invoked anywhere yet) | `RENEWED`/`AUTH_FAILURE`/`OPERATOR_ACTION_REQUIRED` added; real `/v2/RenewToken` client built and unit-tested (never exercised against a real active token — none exists in this environment) |
+| Reconnect-with-backoff | **New this checkpoint** | Yes (6 tests, deterministic fake sleep/transport) | Yes (wraps `--provider dhan`) | Bounded exponential backoff + jitter; never retries an unrecoverable auth/token failure |
+| Watchdog | **New this checkpoint** (`control_plane/market_data_watchdog`) | Yes (10 tests) | **No** — not yet wired into the running worker's own loop to produce a live snapshot; the evaluator exists and is correct, nothing calls it periodically yet | Pure evaluator only |
+| Dynamic subscription manager | Partial (Checkpoint 64 widened symbol resolution) | Yes | Partial — `--provider dhan` now subscribes to the FULL configured `observation_universe()` (capped at Dhan's documented 100-per-message limit) | Still NOT watchlist/strategy-universe-driven — no UI selection propagates to it |
+| Live signal pipeline wiring | Unchanged | — | **No** | `_QuoteSink` persists quotes/bars; nothing calls the strategy/risk/paper pipeline from the live worker yet |
+| Operator dashboard | Unchanged | — | No | Not built |
+| Reports | Unchanged | — | No | Not built |
+| Full-day simulation | Unchanged | — | No | Not built |
+| Performance benchmarking | Unchanged | — | No | Not attempted |
 
 ## Implementation
 
-### 1. Token lifecycle (`application/services/token_lifecycle.py`)
-A pure, I/O-free evaluator: given an access token string and the current
-time, decodes the JWT payload's `exp` claim (never the signature) and
-returns one of `UNCONFIGURED` / `VALID` / `EXPIRING_SOON` (within 1h of
-expiry) / `EXPIRED` / `MALFORMED`. Wired into `DhanSettingsService.get_display()`
-so it's computed fresh on every Settings page load — the exact live
-finding above (a stale "Connected" badge next to a token that had
-actually expired) is now surfaced directly.
+### Real Dhan Provider
+`manage.py run_market_data_worker --provider dhan` (new). Reuses the
+EXISTING `DhanWebSocketTransport`/`packet_decoder`/`packet_to_quote`/
+`BarAggregationService`/`_QuoteSink` pipeline verbatim — no second
+WebSocket implementation. Builds the real Dhan URI
+(`wss://api-feed.dhan.co?version=2&token=...&clientId=...&authType=2`,
+verified against Dhan's own docs at Checkpoint 64) and sends the real
+documented subscribe request (`RequestCode: 15`) for the full configured
+`observation_universe()`, capped at Dhan's documented 100-instruments-
+per-message limit (subscribing more than 100 in one message is a named,
+undone gap — see Remaining Gaps). **Market data only** — this command
+has no code path to any order-placement API, mechanically verified by
+the pre-existing `test_live_market_data_boundaries.py` (re-run this
+checkpoint, still passing, still scans this entire directory).
 
-### 2. Settings API + UI
-`DhanSettingsResponseSerializer` gained `token_state`/`token_expires_at`.
-`DhanSettingsCard.tsx` gained a `TokenStateBadge` shown alongside the
-existing (cached) connection-status badge, so an operator sees both
-signals side by side rather than only the stale one.
+**Refuses to connect at all** if: (a) no Dhan credentials are configured, or (b) the token's own claims report anything other than `VALID`/`EXPIRING_SOON`. Both refusal paths are unit-tested (a real, well-formed-but-expired JWT is used to prove case (b) — never a real network call).
 
-### 3. Widened live-quote observation universe (`instruments.py`)
-`observation_universe()` previously raised for any symbol not in a
-4-entry hardcoded table. It now falls back to the real Dhan scrip master
-(the same one built for historical/backtesting data in the prior session,
-which carries real `security_id` values) for any symbol the hardcoded
-table doesn't cover — closing the architectural inconsistency
-NewStatus.md named (live universe capped at 4 symbols vs. ~3,100 for
-historical). The 4-symbol default path makes zero network calls, exactly
-as before (proven by a dedicated test injecting a master that raises if
-called) — this is a strict widening, not a behavior change for existing
-callers.
+### Connection State Machine
+Not rebuilt. Checkpoint 53's existing `WorkerState`/`WorkerEvent`/
+`apply_event()` already covers almost exactly the vocabulary this
+checkpoint's own brief asked for (`STARTING`/`CONNECTING`/`RUNNING`/
+`DEGRADED`/`RECONNECTING`/`AUTH_FAILED`/`TOKEN_EXPIRED`/`STOPPING`/
+`FAILED`, plus an exhaustive legal-transition table and an
+`UNTRUSTWORTHY_STATES` set) — reused verbatim by the new reconnect
+supervisor, never duplicated.
 
-**Honest scope limit on this piece**: this is the resolution mechanism
-only (any real NSE symbol can now be named in `MARKET_DATA_OBSERVATION_SYMBOLS`).
-It is NOT a subscription-manager UI, NOT a dynamic watchlist/strategy-
-universe selector, and does NOT itself change what's actually subscribed
-to at runtime — those remain undone (see Remaining Gaps).
+### Token Lifecycle
+Extended `TokenLifecycleState` with `RENEWED`, `AUTH_FAILURE`,
+`OPERATOR_ACTION_REQUIRED` (no `RENEWING` — no async job exists for it,
+adding an unreachable state was rejected as dishonest). New
+`attempt_dhan_token_renewal()` orchestrates: `EXPIRED`/`MALFORMED`/
+`UNCONFIGURED` → `OPERATOR_ACTION_REQUIRED` (never attempts renewal —
+Dhan's own docs say renewing an expired token always fails);
+`EXPIRING_SOON` → attempts a real renewal call via an injected
+`TokenRenewer` Protocol → `RENEWED` or `AUTH_FAILURE`. The real Dhan
+`/v2/RenewToken` client (`token_renewal_client.py`) is built and unit-
+tested against the documented response shape — **never exercised
+against a real active token**, since this environment's only configured
+token is already expired and Dhan's endpoint is documented to reject
+renewal of an expired one. Not wired into any scheduled task or UI
+button yet (see Remaining Gaps).
 
-## Files Created
-- `src/intraday/application/services/token_lifecycle.py`
-- `tests/unit/application/services/test_token_lifecycle.py`
-- `NewStatus.md` (prior turn, not this implementation pass)
+### Reconnect
+New `reconnect_supervisor.py::run_worker_with_reconnect()` — a
+transport-agnostic outer loop around one connection attempt at a time
+(`connect_and_run: Callable[[], Awaitable[AsyncWorkerRunResult]]`).
+Bounded exponential backoff with jitter
+(`min(initial * 2**(attempt-1), max) * (0.5 + jitter*0.5)`), a hard
+`max_attempts` cap, and an explicit refusal to ever retry an
+unrecoverable state (`AUTH_FAILED`/`TOKEN_EXPIRED`/`FAILED`) — proven
+directly by a test that fails the connection with `TOKEN_EXPIRED` and
+asserts `connect_and_run` was called exactly once. A `stop_event` set
+mid-backoff stops immediately without a further attempt.
 
-## Files Modified
-- `src/intraday/application/services/provider_settings.py` — wires token lifecycle into `DhanSettingsService.get_display()`.
-- `src/intraday/application/contracts/settings.py` — `token_state`/`token_expires_at` fields.
-- `src/intraday/infrastructure/api/settings_views.py` — serializes the new fields.
-- `src/intraday/infrastructure/market_data_providers/dhan/instruments.py` — scrip-master fallback for `observation_universe()`.
-- `frontend/src/features/settings/DhanSettingsCard.tsx` — `TokenStateBadge`.
-- `frontend/shared/generated_contracts/api-types.ts` — regenerated from the updated OpenAPI schema.
-- Test files: `test_provider_settings.py`, `test_settings_api.py`, `test_instruments.py`, `DhanSettingsCard.test.tsx`.
+### Watchdog
+New bounded context `control_plane/market_data_watchdog` (deliberately
+separate from the pre-existing `market_data_health`, which is scoped to
+the REST-polling refresh pattern and cannot express packet/quote/bar-
+level continuous-worker staleness). Pure evaluator,
+`evaluate_market_data_watchdog()`: precedence token-unusable → FAILED,
+connection-state FAILED → FAILED, connection-state
+disconnected/reconnecting/stopping → DISCONNECTED, no packet ever
+received → DISCONNECTED, packet older than 30s (chosen inside Dhan's
+own documented 40s hard-close window) → STALE, no bar ever closed or
+bar older than a configurable threshold → DEGRADED, otherwise HEALTHY.
+**Not yet wired into the running worker** — the evaluator exists and is
+tested, but nothing in `run_market_data_worker.py` calls it periodically
+to produce a live snapshot yet (see Remaining Gaps).
 
-## Live Market Data
+### Subscription Manager
+Partial. `--provider dhan` now subscribes to the entire configured
+`observation_universe()` (real scrip-master-backed, per Checkpoint 64),
+not a hardcoded 4-symbol list — capped at Dhan's documented 100-per-
+message limit (a universe larger than 100 is truncated to the first 100
+today, named as a real, undone gap, not silently handled). Still NOT a
+dynamic, watchlist/strategy-universe-driven selector with an operator-
+facing UI — that remains undone.
 
-Not implemented this checkpoint beyond the verification above. The
-transport (`DhanWebSocketTransport`) is unchanged and was proven, for the
-first time, to genuinely reach Dhan's real endpoint. No production code
-path (worker command, ingestion runtime) was wired to use a real
-connection this checkpoint — `manage.py run_market_data_worker` still only
-supports `--provider fake`/`--provider fake-ws` (local synthetic
-servers), unchanged.
+### Live Signal Pipeline
+**Not implemented this checkpoint.** `_QuoteSink` still only persists
+quotes and aggregates bars — nothing calls the strategy engine, risk
+engine, or `PaperBroker` from the live worker. This is the single
+largest remaining gap and the correctly-named next increment once the
+provider/reconnect/watchdog foundation above is in place.
 
-## Token Lifecycle
+### Communication
+Not implemented this checkpoint.
 
-See Implementation §1 above. Explicitly NOT implemented: automatic
-renewal (Dhan's `RenewToken` API was not integrated), and the richer
-`RENEWING`/`RENEWED`/`AUTH_FAILURE`/`OPERATOR_ACTION_REQUIRED` states the
-brief asked for — those require an actual renewal attempt or a real
-connectivity check, not just reading the token's own claims. What exists
-now is the honest, narrower "what does the token's own expiry say" signal.
+### Dashboard
+Not implemented this checkpoint.
 
-## Reconnect / Recovery
+### Reports
+Not implemented this checkpoint.
 
-**Not implemented this checkpoint.** Still exactly as NewStatus.md
-described: the worker detects a disconnect and stops; it does not retry.
+## Full-Day Simulation
 
-## Watchdog
-
-**Not implemented this checkpoint.**
-
-## Bar/Data Quality
-
-Unchanged this checkpoint. The `SAMPLE_BAR` → `TRADING_GRADE_BAR` gate
-was not exercised against real Dhan data this checkpoint, since the real
-connection never reached the data-receiving stage (blocked by the expired
-token before any packet arrived).
-
-## Signal Pipeline
-
-Unchanged this checkpoint — no new live signal path work was done. The
-existing strategy/signal/risk/paper pipeline (built pre-session) remains
-the one and only implementation; nothing new was built or duplicated.
-
-## Risk / Paper Trading
-
-Unchanged this checkpoint.
-
-## Communication
-
-Unchanged this checkpoint. The signal/execution-separation and
-event-driven communication architecture the brief described (§§12-14)
-was not implemented.
-
-## Operator Dashboard
-
-Not built this checkpoint. The Settings page's Dhan card is the one piece
-of operator-facing surface touched — it now shows real token state, not a
-full operational dashboard.
-
-## Reports
-
-Unchanged this checkpoint.
-
-## Performance Measurements
-
-Not attempted this checkpoint (still `RED` per NewStatus.md — unchanged).
+Not built this checkpoint — still blocked on the live signal pipeline
+above not existing yet; simulating a pipeline that doesn't route
+signals would not be a genuine simulation.
 
 ## Failure Injection
 
-Not attempted this checkpoint (no reconnect/watchdog subsystem exists yet
-to inject failures against).
+Only the pieces that exist were tested against injected failure:
+reconnect supervisor (network-loss-then-recovery, permanent failure,
+unrecoverable auth failure, mid-backoff stop), watchdog (every state
+transition), and the `--provider dhan` credential/token-gating refusal
+paths. NOT tested: heartbeat timeout mid-connection, DB/Redis outage,
+malformed/duplicate/delayed packets in the reconnect context (the
+underlying decoder-level cases were already covered by pre-existing
+Checkpoint 53/57 tests, not re-covered here), worker restart.
 
-## Full-Day Paper Simulation
+## Performance Measurements
 
-Not built this checkpoint — a genuinely separate, substantial undertaking
-this checkpoint's real-connectivity finding (expired token) makes
-premature: a full-day live simulation needs a working live connection
-first, which this checkpoint proved is currently blocked.
+Not attempted this checkpoint (still explicitly out of scope until the
+live signal pipeline exists — measuring latency through a pipeline that
+doesn't yet route signals would not produce meaningful numbers).
 
 ## Tests
 
-- Backend: **1314 passed** (up from 1300 before this checkpoint — 14 new: 8 token-lifecycle unit tests, 4 provider-settings/API tests, plus the widened-universe test additions net of edits).
-- Frontend: **127 passed** (up from 126 — 1 new: the expired-token-badge test).
+- Backend: **1342 passed** (up from 1314 — 28 new/changed: 8 watchdog, 6 reconnect supervisor, 8 token-lifecycle/renewal orchestration, 5 renewal-client, 2 dhan-provider-refusal in the management command test file, plus the existing unsupported-provider test updated since `dhan` is now a real choice).
 - `ruff format --check` / `ruff check`: clean.
-- `mypy src/`: clean, 272 source files.
-- `lint-imports`: 6/6 contracts kept.
+- `mypy src/`: clean, 278 source files.
+- `lint-imports`: 6/6 contracts kept (the new `market_data_watchdog` bounded context and the new infrastructure modules all respect the existing layering).
 - `python manage.py check`: clean.
 - `python manage.py makemigrations --check --dry-run`: no changes (no model fields changed this checkpoint).
-- `python manage.py spectacular --fail-on-warn`: clean.
-- No test was weakened to pass — every failure encountered during this checkpoint's work was fixed in the implementation, not the test.
+- No test was weakened to pass; the one pre-existing test that needed changing (`test_command_rejects_an_unsupported_provider`) needed it because `dhan` genuinely became a supported value, not because a real behavior was removed.
+- Frontend: unchanged this checkpoint (no frontend work was done) — the 127 tests from Checkpoint 64 remain valid and were not touched.
 
-## Security
+## Real Dhan Verification
 
-- The real Dhan credential's VALUE was never printed, logged, echoed, or written to any file in this repository — verified by inspecting every command/script used for the connectivity check; only non-secret metadata (lengths, boolean shape checks, JWT `exp`/`iat`/`iss`/`dhanClientId`-matches boolean) was ever displayed.
-- `.env` remains git-ignored (`git check-ignore -v .env` confirmed).
-- The new `token_state`/`token_expires_at` API/UI fields carry only a state name and a timestamp — never the token itself (mirrors the existing, unmodified secret-handling convention this project has enforced since Checkpoint 22).
-- Temporary local verification scripts used for the live connectivity check were deleted after use and were never part of the git-tracked repository.
-- `git status` confirms nothing secret is staged (see Git below).
-
-## Remaining Gaps
-
-Everything the 32-section brief asked for that was NOT attempted this
-checkpoint, named explicitly rather than silently dropped:
-- Reconnect-with-backoff state machine.
-- Watchdog / worker health monitoring.
-- A real, dynamic subscription manager (watchlist/strategy-universe-
-  driven, not just "any symbol CAN be resolved" — this checkpoint closed
-  the resolution mechanism, not the selection UI).
-- Automatic token renewal (Dhan's `RenewToken` API).
-- Wiring a real connection into `manage.py run_market_data_worker` /
-  the ingestion runtime (blocked today by the expired credential, but
-  also simply not attempted).
-- Signal/execution separability as a first-class communication model.
-- Event-driven (SignalGenerated → ... → PositionClosed) communication architecture.
-- Full-day deterministic paper session simulation with injected disconnect.
-- Real-time operator dashboard.
-- User-controlled live scanner UI (timeframe/universe/strategy selectors that actually drive a live runtime).
-- Performance/load testing at any scale.
-- Full-signal latency tracing (tick → notification timestamp chain).
-- Data-gap detection/reconciliation on reconnect.
-- New report types (Signal Report, Portfolio Report, Risk Decision Report, System Health Report, Daily Session Report).
+**Deliberately NOT repeated this checkpoint**, per the explicit
+instruction not to repeatedly attempt live connections with a known-
+expired token. `--provider dhan`'s credential/token-gating refusal logic
+was proven with a real, well-formed-but-expired JWT fixture (never a
+real network call) — this is the correct, bounded way to prove "the
+worker refuses to pretend it is connected" without needing a live
+connection attempt. `REAL-DHAN-VERIFICATION = BLOCKED` (unchanged from
+Checkpoint 64 — configured token still expired). When a fresh token is
+available, `python manage.py run_market_data_worker --provider dhan` is
+now the real, ready-to-run command to perform that verification through
+— nothing further needs to be built first to attempt it.
 
 ## Blockers
 
-1. **The configured Dhan access token is expired** (verified directly this checkpoint — issued 2026-08-17 07:10 UTC, expired 2026-08-18 07:10 UTC, ~24h TTL per Dhan's documentation). This blocks any further REAL live-data verification until a fresh token is obtained and configured. The Settings page now shows this state directly (`token_state: EXPIRED`) instead of it being invisible.
-2. Everything downstream of a real connection (reconnect, watchdog, live TRADING_GRADE_BAR promotion, live signal generation) cannot be genuinely verified until blocker 1 is resolved — it can be BUILT and unit-tested against synthetic/injected failures, but not proven against the real feed.
+1. **The configured Dhan access token remains expired** (unchanged from Checkpoint 64) — `--provider dhan` will correctly refuse to connect until a fresh token is configured. This is now a real, working refusal, not a missing capability.
+2. The live signal pipeline (bar → strategy → signal → risk → paper order) is not wired to the live worker — even with a fresh token, a live connection today produces persisted quotes/bars only, not paper trades.
+3. The watchdog is not yet wired into the running worker's own loop — it exists and is correct but produces no live snapshot yet.
 
-## Product Readiness
+## Remaining Gaps
 
-**"Can I start the application before market open tomorrow, leave it
-running in PAPER mode, and trust it to receive live Dhan market data,
-recover from normal feed interruptions, detect stale data, produce
-strategy signals, apply risk, create paper trades, maintain positions,
-publish audited signals, and perform EOD reconciliation?"**
+Named explicitly, not silently dropped:
+- Live signal pipeline wiring (bar → strategy → risk → PaperBroker from the live worker) — the single largest remaining gap.
+- Watchdog wired into the actual running worker loop (periodic snapshot + an API endpoint/UI surface).
+- Dynamic, watchlist/strategy-universe-driven subscription selection with an operator-facing UI (today: the full configured universe, capped at 100 instruments, with no UI control).
+- Subscribing to more than 100 instruments (would need batching into multiple subscribe messages — not implemented).
+- Automatic token renewal actually invoked on a schedule or from a UI action (the renewal client + orchestration exist and are tested; nothing calls them yet).
+- Signal/execution separation as a first-class communication model.
+- Event-driven (SignalGenerated → ... → PositionClosed) communication architecture.
+- Real-time operator dashboard.
+- User-controlled live scanner UI wired to the runtime.
+- Full-day deterministic paper session simulation with injected disconnect.
+- Gap reconciliation on reconnect (using the existing DB-first historical pipeline to backfill a disconnect gap) — not attempted.
+- Performance/load testing at any scale.
+- Full-signal latency tracing (tick → notification timestamp chain).
+- New report types (Signal Report, Paper Trading Report, Risk Decision Report, System Health Report, Daily Session Report).
+
+## Production Readiness
+
+**"Can I start this before market open, leave it running in PAPER mode,
+and trust it to connect to Dhan, detect stale data, recover from
+disconnects, generate real signals, apply risk, create paper trades,
+publish signals, maintain positions, reconcile, complete EOD?"**
 
 **Answer: NO.**
 
 Exact blockers, in priority order:
-1. The configured Dhan credential is expired — no live connection is currently possible at all (verified directly, not assumed).
-2. No reconnect-with-backoff exists — even with a fresh token, a single network hiccup would silently stop the feed for the rest of the day.
-3. No watchdog exists — nothing would alert an operator that the feed had stopped.
-4. No production code path wires the real WebSocket transport into the actual worker/ingestion runtime yet — the transport was proven reachable this checkpoint, but nothing in `manage.py run_market_data_worker` uses it for anything other than the local synthetic test servers.
-5. The live-quote universe, while no longer architecturally capped at 4 symbols, still has no operator-facing selection UI to choose what it actually watches at runtime.
+1. The configured Dhan credential is expired — no live connection is possible until a fresh token is configured (unchanged from Checkpoint 64, now correctly and safely REFUSED rather than silently attempted).
+2. Even with a fresh token, the live worker does not yet call the strategy/risk/paper pipeline at all — a live connection today would persist quotes and bars, not generate paper trades.
+3. The watchdog exists but is not wired into the running worker to produce a live health signal an operator or dashboard could actually see.
+4. No operator dashboard or live-scanner UI exists to control or observe any of this.
 
 ## Performance Ranking
 
-Not applicable this checkpoint — no alternative implementations were built or compared; the increments implemented (token lifecycle, universe widening) had one natural design each, not several measured alternatives.
+| Area | Previous score | Current score | Change | Evidence / remaining gap |
+|---|---:|---:|---|---|
+| Architecture | 9.2 | 9.3 | ↑ | New bounded context (watchdog) added cleanly, respecting existing layering; reconnect supervisor is genuinely transport-agnostic, reused nothing duplicated |
+| Market Data (real feed) | 3.5 | 4.5 | ↑ | Real provider now exists and is wired into the actual worker command; still never received real data (token expired) |
+| Dhan Integration | 3.5 | 5.0 | ↑ | Real WebSocket connect proven (Checkpoint 64); real RenewToken client built (untested against a live token); real production provider now callable |
+| Historical Data | 7.5 | 7.5 | — | Unchanged this checkpoint |
+| Backtesting | 8.0 | 8.0 | — | Unchanged |
+| Bar Engine | — | 6.0 | new | Aggregation logic unchanged and real, but still only ever fed synthetic/local data |
+| Strategy Engine | 8.0 | 8.0 | — | Unchanged; still not reachable from the live worker |
+| Signal Pipeline (live) | — | 1.0 | new | Exists for backtesting only; zero live wiring |
+| Risk Engine | 8.5 | 8.5 | — | Unchanged; still not reachable from the live worker |
+| Paper Trading | 8.5 | 8.5 | — | Unchanged; still not reachable from the live worker |
+| Communication | — | 2.0 | new | Existing Telegram/Discord infra real (pre-session); no live/event wiring |
+| Token Lifecycle | 2.5 | 5.5 | ↑ | Real evaluator + real (untested-live) renewal client + orchestration, all tested; not yet auto-invoked anywhere |
+| Reconnect | 3.0 | 6.0 | ↑ | Real, tested, bounded backoff supervisor now exists and is wired into `--provider dhan`; never exercised against a real disconnect (no live connection reached RUNNING) |
+| Watchdog | 2.0 | 4.5 | ↑ | Real, tested pure evaluator exists; not wired into any running process yet |
+| Observability | 4.5 | 4.5 | — | No new API/UI surface added for any of this checkpoint's new signals |
+| Frontend | 7.0 | 7.0 | — | Untouched this checkpoint |
+| Reports | 4.5 | 4.5 | — | Unchanged |
+| Performance | 2.0 | 2.0 | — | Not attempted |
+| Scalability | 2.0 | 2.0 | — | Not attempted; 100-instrument subscribe cap now a known, real limit |
+| Security | — | 8.0 | new | No secret ever printed/logged/committed this checkpoint either; renewal client headers verified against docs, never logged |
+| Production Readiness | 4.5 | 4.5 | — | Still blocked on the same fundamentals |
+| Active Paper Trading | 5.8 | 5.8 | — | Unchanged — live wiring is what would move this |
+| Live Trading Readiness | 1.0 | 1.0 | — | By design — real order placement remains untouched |
+
+Scores did not increase merely because code was added — Reconnect,
+Watchdog, and Dhan Integration moved up because each now has real,
+tested, wired-in behavior reachable from the actual production command,
+not just a design. Strategy/Risk/Paper/Backtesting stayed flat because
+nothing about them changed. Live Trading Readiness stayed at 1.0
+deliberately.
 
 ## Honest Final Conclusion
 
-This checkpoint did NOT deliver a live paper trading runtime — that remains
-substantially unbuilt, honestly, per the Remaining Gaps and Blockers above.
-What it DID deliver, for real:
-1. **The first-ever real connectivity attempt against Dhan's actual production WebSocket endpoint** from this codebase, in this environment — the handshake genuinely succeeded, proving the transport layer built in a prior checkpoint is not merely locally-tested theater; it works against the real service.
-2. **A concrete, evidence-based root cause for why live verification is blocked**: not a code defect, but an expired credential — found by decoding the token's own claims, not guessed.
-3. **A real, previously-invisible safety gap closed**: the Settings page's "Connected" badge could be — and in this very environment, WAS — stale relative to the token's actual state. That gap is now closed with a fresh-computed, tested, UI-visible signal.
-4. **A real architectural inconsistency closed**: the live-quote observation universe is no longer capped at 4 hand-maintained symbols; any real NSE instrument can now be named and resolved via the same scrip master the historical/backtesting side already uses.
-
-Both delivered increments are small, but each is directly traceable to something this checkpoint's own readiness gate and live verification actually found — not speculative work done ahead of evidence. The larger runtime (reconnect, watchdog, dashboard, full-day simulation) remains the honest, correctly-sequenced next work, now unblocked to start on as soon as a fresh Dhan credential is available.
+This checkpoint moved the live-market-data runtime from "transport
+proven reachable" (Checkpoint 64) to "a real, safe, reconnect-capable,
+credential-aware production provider exists and is wired into the actual
+operator command" — genuinely new, tested capability, not a repeat of
+the readiness gate. What it did NOT do, honestly: connect the live
+worker to the strategy/risk/paper pipeline at all (the single largest
+remaining gap), wire the watchdog into a running process, build any
+operator-facing dashboard or live-scanner control, or attempt
+performance/load testing. The correct next increment, now that this
+foundation exists, is the live signal pipeline wiring — everything
+downstream of it (strategy, risk, paper broker, position management,
+reconciliation, EOD) already exists and is tested; it needs to be
+CALLED from `_QuoteSink`'s bar-aggregation output, not rebuilt.

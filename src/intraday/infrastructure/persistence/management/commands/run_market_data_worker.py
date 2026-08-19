@@ -11,12 +11,23 @@
 # infrastructure/composition-root code, exactly like every other
 # `infrastructure/api/*_runtime.py` module in this project).
 #
-# HONEST SCOPE LIMIT, stated as plainly as every prior Dhan checkpoint
-# in this project: neither `--provider fake` (raw TCP, Checkpoint 57)
-# nor `--provider fake-ws` (real WebSocket, Checkpoint 62) is a live
-# Dhan connection - both are local, synthetic, PAPER-safe. No real
-# `--provider dhan` mode exists yet (this environment's Dhan credential
-# remains unusable for live verification, Checkpoint 41, unchanged).
+# CHECKPOINT 64.1 ADDS: `--provider dhan` - a REAL production provider,
+# using the exact same `DhanWebSocketTransport`/`packet_decoder`/
+# `packet_to_quote`/bar-aggregation pipeline the fake/fake-ws providers
+# already exercise (never a second, parallel implementation), wrapped
+# in the new `run_worker_with_reconnect()` bounded-backoff supervisor.
+# MARKET DATA ONLY - this command has no code path to any order-
+# placement API at all (mechanically verified by
+# tests/unit/architecture/test_live_market_data_boundaries.py, which
+# scans this entire directory for a forbidden `trading_engine` import).
+# Refuses to even attempt a connection if Dhan credentials are absent
+# or the access token's own claims report anything other than VALID/
+# EXPIRING_SOON (Checkpoint 64.1's own explicit requirement: "the
+# worker must never pretend to be connected when the token is known to
+# be expired"). This environment's own configured token was found
+# EXPIRED at Checkpoint 64 - `--provider dhan` in THIS environment
+# will therefore refuse to start until a fresh token is configured;
+# that refusal is itself the correct, honest behavior, not a bug.
 #
 # Checkpoint 59 CORRECTION to Checkpoint 58: bar aggregation
 # (`_aggregate_now()`) is triggered PERIODICALLY, every
@@ -39,6 +50,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import json
 import struct
 from collections.abc import Callable
 
@@ -47,6 +59,11 @@ from django.core.management.base import BaseCommand, CommandParser
 from django.db import close_old_connections
 
 from intraday.application.services.bar_aggregation import BarAggregationService
+from intraday.application.services.provider_settings import DhanSettingsService
+from intraday.application.services.token_lifecycle import (
+    TokenLifecycleState,
+    evaluate_dhan_token_lifecycle,
+)
 from intraday.domain.market_data.contracts import Quote
 from intraday.infrastructure.market_data_providers.dhan.async_worker import (
     AsyncWorkerRunResult,
@@ -58,13 +75,33 @@ from intraday.infrastructure.market_data_providers.dhan.fake_websocket_server im
     FakeDhanWebSocketServer,
 )
 from intraday.infrastructure.market_data_providers.dhan.instruments import observation_universe
+from intraday.infrastructure.market_data_providers.dhan.reconnect_supervisor import (
+    run_worker_with_reconnect,
+)
 from intraday.infrastructure.market_data_providers.dhan.websocket_transport import (
     DhanWebSocketTransport,
 )
+from intraday.infrastructure.market_data_providers.dhan.worker_state import WorkerState
 from intraday.infrastructure.persistence.live_market_data_repositories import (
     DjangoAggregatedBarRepository,
     DjangoLiveQuoteRepository,
 )
+from intraday.infrastructure.persistence.provider_settings_repositories import (
+    DjangoDhanCredentialRepository,
+)
+
+DHAN_LIVE_FEED_ENDPOINT = "wss://api-feed.dhan.co"
+"""Verified directly against Dhan's own official documentation
+(https://dhanhq.co/docs/v2/live-market-feed/) at Checkpoint 64/64.1 -
+never invented. The `version`/`token`/`clientId`/`authType` query
+parameters below match that same source exactly."""
+_SUBSCRIBE_REQUEST_CODE = 15
+_MAX_INSTRUMENTS_PER_SUBSCRIBE_MESSAGE = 100
+"""Dhan's own documented per-message limit (verified this checkpoint) -
+a universe larger than this would need to be split into multiple
+subscribe messages, NOT attempted this checkpoint (see this command's
+own module docstring for the honest scope limit: only the first 100
+configured instruments are ever subscribed to today)."""
 
 _HEADER_STRUCT = struct.Struct("<BHBi")
 _DEFAULT_PACKET_COUNT = 20
@@ -182,46 +219,64 @@ class _QuoteSink:
 
 class Command(BaseCommand):
     help = (
-        "Runs the market-data worker persistently against a synthetic "
-        "(fake) Dhan-shaped feed. PAPER-safe: makes no broker call, "
-        "places no order, and has no code path to any order-placement "
-        "API (see tests/unit/architecture/test_live_market_data_boundaries.py). "
-        "--provider fake (raw TCP) and --provider fake-ws (real WebSocket) "
-        "are the only supported modes - neither is a live Dhan connection."
+        "Runs the market-data worker persistently. --provider fake/fake-ws "
+        "are local, synthetic, PAPER-safe test modes. --provider dhan is the "
+        "REAL production provider (market data only - makes no broker call, "
+        "places no order, and has no code path to any order-placement API, "
+        "see tests/unit/architecture/test_live_market_data_boundaries.py) - "
+        "it refuses to connect at all unless a usable Dhan token is "
+        "configured (see this command's own module docstring)."
     )
 
     def add_arguments(self, parser: CommandParser) -> None:
         parser.add_argument(
             "--provider",
-            choices=["fake", "fake-ws"],
+            choices=["fake", "fake-ws", "dhan"],
             default="fake",
             help="Market-data provider to run against. 'fake' uses a real local "
             "raw-TCP socket (Checkpoint 56/57); 'fake-ws' uses a real local "
-            "RFC 6455 WebSocket connection (Checkpoint 61/62) - the SAME "
-            "transport a real Dhan provider would eventually use. Neither is "
-            "a live Dhan connection - see this command's own module docstring.",
+            "RFC 6455 WebSocket connection (Checkpoint 61/62); 'dhan' "
+            "(Checkpoint 64.1) is the REAL production Dhan feed - market data "
+            "only, refuses to start without a usable token. See this "
+            "command's own module docstring.",
         )
         parser.add_argument(
             "--packet-count",
             type=int,
             default=_DEFAULT_PACKET_COUNT,
-            help="How many synthetic packets the fake provider sends before the "
-            "stream ends cleanly (default: %(default)s). A REAL provider would "
-            "run indefinitely; this is bounded so the command terminates "
-            "deterministically for operators/tests running it directly.",
+            help="How many synthetic packets the fake/fake-ws provider sends "
+            "before the stream ends cleanly (default: %(default)s). Ignored "
+            "for --provider dhan, which runs indefinitely (bounded reconnect, "
+            "never a fixed packet count) until stopped or a genuinely "
+            "unrecoverable state is reached.",
+        )
+        parser.add_argument(
+            "--max-reconnect-attempts",
+            type=int,
+            default=5,
+            help="--provider dhan only: how many connection attempts the "
+            "reconnect supervisor makes (with bounded exponential backoff) "
+            "before reporting FAILED (default: %(default)s). Never applies "
+            "to an unrecoverable state (expired/invalid token) - that is "
+            "never retried, regardless of this value.",
         )
 
     def handle(self, *args: object, **options: object) -> None:
         packet_count = int(str(options["packet_count"]))
         provider = str(options["provider"])
+        max_reconnect_attempts = int(str(options["max_reconnect_attempts"]))
         self.stdout.write(
             self.style.WARNING(
-                f"Starting market-data worker (provider={provider}, "
-                f"packet_count={packet_count}) - PAPER-safe synthetic run, "
-                f"NOT a live Dhan connection."
+                f"Starting market-data worker (provider={provider}"
+                + (f", packet_count={packet_count}" if provider != "dhan" else "")
+                + (
+                    ") - MARKET DATA ONLY, real Dhan feed."
+                    if provider == "dhan"
+                    else ") - PAPER-safe synthetic run, NOT a live Dhan connection."
+                )
             )
         )
-        result = asyncio.run(self._run(provider, packet_count))
+        result = asyncio.run(self._run(provider, packet_count, max_reconnect_attempts))
         self.stdout.write(
             self.style.SUCCESS(
                 f"Worker finished: final_state={result.final_state.value} "
@@ -231,7 +286,16 @@ class Command(BaseCommand):
             )
         )
 
-    async def _run(self, provider: str, packet_count: int) -> AsyncWorkerRunResult:
+    async def _run(
+        self, provider: str, packet_count: int, max_reconnect_attempts: int
+    ) -> AsyncWorkerRunResult:
+        if provider == "dhan":
+            sink = _QuoteSink(stdout=self.stdout.write)
+            result = await self._run_dhan(sink, max_reconnect_attempts)
+            await sink.flush_remainder()
+            await sync_to_async(close_old_connections)()
+            return result
+
         instruments = observation_universe()
         security_id_to_symbol = {i.security_id: i.symbol for i in instruments}
         script = _build_synthetic_script(packet_count)
@@ -291,3 +355,81 @@ class Command(BaseCommand):
                 await transport.close()
         finally:
             await server.stop()
+
+    async def _run_dhan(
+        self, sink: _QuoteSink, max_reconnect_attempts: int
+    ) -> AsyncWorkerRunResult:
+        """Checkpoint 64.1: the real production provider. MARKET DATA
+        ONLY - see this command's own module docstring for the
+        mechanically-enforced boundary. Refuses to attempt ANY
+        connection unless the token's own claims currently report
+        VALID or EXPIRING_SOON - `_select_historical_bar_provider()`'s
+        own honest-fallback discipline (infrastructure/api/tasks.py)
+        extended here to "refuse outright," since a live worker
+        pretending to be connected with a known-bad token is a real
+        safety hazard a backtest's fallback-to-synthetic is not."""
+        dhan_service = DhanSettingsService(repository=DjangoDhanCredentialRepository())
+        credentials = await sync_to_async(dhan_service.effective_credentials)()
+        if credentials is None:
+            self.stdout.write(
+                self.style.ERROR("Dhan credentials are not configured - refusing to connect.")
+            )
+            return AsyncWorkerRunResult(final_state=WorkerState.AUTH_FAILED)
+
+        client_id, access_token = credentials
+        token_status = evaluate_dhan_token_lifecycle(access_token, now=dt.datetime.now(tz=dt.UTC))
+        if token_status.state not in (TokenLifecycleState.VALID, TokenLifecycleState.EXPIRING_SOON):
+            self.stdout.write(
+                self.style.ERROR(
+                    f"Dhan token_state={token_status.state.value} - refusing to start a live "
+                    "connection with a known-unusable token. This worker will never pretend "
+                    "to be connected while the token is known bad."
+                )
+            )
+            return AsyncWorkerRunResult(final_state=WorkerState.TOKEN_EXPIRED)
+
+        instruments = observation_universe()
+        if not instruments:
+            self.stdout.write(self.style.ERROR("No instruments configured - refusing to connect."))
+            return AsyncWorkerRunResult(final_state=WorkerState.FAILED)
+        security_id_to_symbol = {i.security_id: i.symbol for i in instruments}
+        subscribe_batch = instruments[:_MAX_INSTRUMENTS_PER_SUBSCRIBE_MESSAGE]
+        subscribe_message = json.dumps(
+            {
+                "RequestCode": _SUBSCRIBE_REQUEST_CODE,
+                "InstrumentCount": len(subscribe_batch),
+                "InstrumentList": [
+                    {"ExchangeSegment": i.exchange_segment, "SecurityId": str(i.security_id)}
+                    for i in subscribe_batch
+                ],
+            }
+        )
+        self.stdout.write(f"  subscribing to {len(subscribe_batch)} instrument(s)")
+
+        async def connect_and_run() -> AsyncWorkerRunResult:
+            uri = (
+                f"{DHAN_LIVE_FEED_ENDPOINT}?version=2&token={access_token}"
+                f"&clientId={client_id}&authType=2"
+            )
+            transport = DhanWebSocketTransport(uri=uri)
+            await transport.connect()
+            try:
+                await transport.send_json_text(subscribe_message)
+                return await run_worker_against_websocket(
+                    transport, security_id_to_symbol=security_id_to_symbol, on_quote=sink.on_quote
+                )
+            finally:
+                await transport.close()
+
+        supervisor_result = await run_worker_with_reconnect(
+            connect_and_run, max_attempts=max_reconnect_attempts
+        )
+        self.stdout.write(
+            f"  reconnect_count={supervisor_result.reconnect_count} "
+            f"attempts={supervisor_result.attempts} "
+            f"last_disconnect_reason={supervisor_result.last_disconnect_reason}"
+        )
+        return AsyncWorkerRunResult(
+            final_state=supervisor_result.final_state,
+            quotes_processed=supervisor_result.total_quotes_processed,
+        )

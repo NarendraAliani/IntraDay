@@ -13,6 +13,9 @@ from datetime import UTC, datetime, timedelta
 from intraday.application.services.token_lifecycle import (
     EXPIRING_SOON_THRESHOLD,
     TokenLifecycleState,
+    TokenRenewalError,
+    TokenRenewalResult,
+    attempt_dhan_token_renewal,
     evaluate_dhan_token_lifecycle,
 )
 
@@ -78,3 +81,74 @@ def test_expiry_boundary_is_treated_as_expired_not_valid() -> None:
     exp = NOW.timestamp()
     status = evaluate_dhan_token_lifecycle(_jwt(exp), now=NOW)
     assert status.state is TokenLifecycleState.EXPIRED
+
+
+# --- attempt_dhan_token_renewal() -------------------------------------------
+
+
+def _always_succeeds(*, client_id: str, current_access_token: str) -> TokenRenewalResult:
+    return TokenRenewalResult(new_access_token="renewed-fake-token")  # noqa: S106
+
+
+def _always_rejects(*, client_id: str, current_access_token: str) -> TokenRenewalResult:
+    raise TokenRenewalError("Dhan rejected the renewal.")
+
+
+def test_an_expired_token_goes_straight_to_operator_action_required_never_calls_renew() -> None:
+    """Dhan's own documented rule: renewing an already-expired token is
+    an endpoint the docs say will always fail - never attempted."""
+    exp = (NOW - timedelta(hours=1)).timestamp()
+
+    def _raises_if_called(**kwargs: object) -> TokenRenewalResult:
+        raise AssertionError("renew() must never be called for an EXPIRED token")
+
+    state, new_token = attempt_dhan_token_renewal(
+        client_id="fake-client-id", access_token=_jwt(exp), now=NOW, renew=_raises_if_called
+    )
+
+    assert state is TokenLifecycleState.OPERATOR_ACTION_REQUIRED
+    assert new_token is None
+
+
+def test_unconfigured_goes_straight_to_operator_action_required() -> None:
+    state, new_token = attempt_dhan_token_renewal(
+        client_id="fake-client-id", access_token=None, now=NOW, renew=_always_succeeds
+    )
+    assert state is TokenLifecycleState.OPERATOR_ACTION_REQUIRED
+    assert new_token is None
+
+
+def test_a_valid_token_needs_no_renewal() -> None:
+    exp = (NOW + timedelta(hours=12)).timestamp()
+
+    def _raises_if_called(**kwargs: object) -> TokenRenewalResult:
+        raise AssertionError("renew() must never be called for a VALID token")
+
+    state, new_token = attempt_dhan_token_renewal(
+        client_id="fake-client-id", access_token=_jwt(exp), now=NOW, renew=_raises_if_called
+    )
+
+    assert state is TokenLifecycleState.VALID
+    assert new_token is None
+
+
+def test_expiring_soon_attempts_renewal_and_succeeds() -> None:
+    exp = (NOW + timedelta(minutes=30)).timestamp()
+
+    state, new_token = attempt_dhan_token_renewal(
+        client_id="fake-client-id", access_token=_jwt(exp), now=NOW, renew=_always_succeeds
+    )
+
+    assert state is TokenLifecycleState.RENEWED
+    assert new_token == "renewed-fake-token"  # noqa: S105
+
+
+def test_expiring_soon_renewal_rejected_reports_auth_failure() -> None:
+    exp = (NOW + timedelta(minutes=30)).timestamp()
+
+    state, new_token = attempt_dhan_token_renewal(
+        client_id="fake-client-id", access_token=_jwt(exp), now=NOW, renew=_always_rejects
+    )
+
+    assert state is TokenLifecycleState.AUTH_FAILURE
+    assert new_token is None

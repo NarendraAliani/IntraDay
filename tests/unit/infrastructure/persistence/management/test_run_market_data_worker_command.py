@@ -32,6 +32,7 @@ import io
 import pytest
 from django.core.management import call_command
 
+from intraday.application.services.provider_settings import DhanSettingsService
 from intraday.infrastructure.persistence.models import (
     AggregatedBarObservation,
     LiveQuoteObservation,
@@ -77,8 +78,12 @@ def test_command_defaults_to_twenty_packets_when_unspecified() -> None:
 def test_command_rejects_an_unsupported_provider() -> None:
     from django.core.management.base import CommandError
 
+    # Checkpoint 64.1: "dhan" is now a genuinely supported provider -
+    # use a value that is still unsupported to keep proving this.
     with pytest.raises((CommandError, SystemExit)):
-        call_command("run_market_data_worker", "--provider", "dhan", stdout=io.StringIO())
+        call_command(
+            "run_market_data_worker", "--provider", "not-a-real-provider", stdout=io.StringIO()
+        )
 
 
 @requires_postgres
@@ -162,3 +167,63 @@ def test_command_over_websocket_actually_persists_quotes_and_aggregates_bars() -
     assert LiveQuoteObservation.objects.count() - quotes_before == 8
     assert AggregatedBarObservation.objects.count() >= bars_before
     assert "aggregated" in out.getvalue()
+
+
+# --- Checkpoint 64.1: --provider dhan - never a real network call in this
+# file. Proves ONLY the credential/token-gating refusal logic, which is
+# genuinely testable without a live connection - the actual live
+# connection was verified separately and manually at Checkpoint 64/64.1
+# (see taskReport.md), never inside the automated test suite.
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_dhan_provider_refuses_to_connect_with_no_credentials_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(DhanSettingsService, "effective_credentials", lambda self: None)
+    out = io.StringIO()
+
+    call_command("run_market_data_worker", "--provider", "dhan", stdout=out)
+
+    assert "final_state=AUTH_FAILED" in out.getvalue()
+    assert "refusing to connect" in out.getvalue()
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_dhan_provider_refuses_to_connect_with_a_known_expired_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """THE real safety requirement Checkpoint 64.1's own brief named:
+    "the worker should refuse to pretend it is connected when the
+    token is known to be expired." Proven with a real, well-formed but
+    expired JWT - never a real network attempt."""
+    import base64
+    import json
+    from datetime import UTC, datetime, timedelta
+
+    expired_at = datetime.now(tz=UTC) - timedelta(hours=1)
+    header = base64.urlsafe_b64encode(b'{"alg":"HS512","typ":"JWT"}').rstrip(b"=").decode()
+    payload = (
+        base64.urlsafe_b64encode(json.dumps({"exp": expired_at.timestamp()}).encode())
+        .rstrip(b"=")
+        .decode()
+    )
+    expired_jwt = f"{header}.{payload}.fake-signature-not-verified"
+
+    monkeypatch.setattr(
+        DhanSettingsService,
+        "effective_credentials",
+        lambda self: ("fake-client-id", expired_jwt),
+    )
+    out = io.StringIO()
+
+    call_command("run_market_data_worker", "--provider", "dhan", stdout=out)
+
+    assert "final_state=TOKEN_EXPIRED" in out.getvalue()
+    assert "token_state=EXPIRED" in out.getvalue()
+    assert "refusing to start a live connection" in out.getvalue()
+    # The real, live-verified finding this checkpoint's readiness gate
+    # produced - this command must never claim otherwise.
+    assert expired_jwt not in out.getvalue()
