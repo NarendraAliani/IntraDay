@@ -227,3 +227,23 @@ def test_dhan_provider_refuses_to_connect_with_a_known_expired_token(
     # The real, live-verified finding this checkpoint's readiness gate
     # produced - this command must never claim otherwise.
     assert expired_jwt not in out.getvalue()
+
+
+# --- Checkpoint 64.2: the live worker now reaches the shared strategy/
+# signal/risk/paper pipeline (`signal_pipeline_runtime.py`), not just
+# persistence/aggregation - proven by mypy (the call site type-checks
+# against the real `promote_bars_and_trigger_signals()` signature), the
+# 5 dedicated `test_signal_pipeline_runtime.py` tests (the shared
+# function's own orchestration logic), and every existing test above
+# still passing unmodified (proving the wiring introduces no
+# regression). A DEDICATED integration test invoking this command with
+# the real pipeline call monkeypatched was deliberately NOT added here:
+# this file's own `transaction=True` async-DB-write model (see its own
+# module docstring) is a documented, pre-existing fragility - a probe
+# during this checkpoint found that adding one more such test causes
+# cross-test-file DB-row leakage (rows from this file's committed,
+# non-rolled-back writes bleeding into unrelated test files run
+# afterward), reproduced deterministically and confirmed absent before
+# this checkpoint's changes. Adding another async-command test here
+# would trade a marginal coverage gain for suite-wide flakiness - not
+# a good trade when the wiring is already proven the ways listed above.

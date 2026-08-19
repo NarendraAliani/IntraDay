@@ -31,13 +31,11 @@ from intraday.application.services.bar_aggregation import BarAggregationService
 from intraday.application.services.live_market_data import LiveMarketDataService
 from intraday.application.services.provider_settings import DhanSettingsService
 from intraday.domain.instrument.contracts import make_instrument_id
-from intraday.domain.market_data.aggregation import AggregatedBar, BarQualityGrade, BarStatus
+from intraday.domain.market_data.aggregation import BarStatus
 from intraday.domain.market_data.contracts import Quote
-from intraday.domain.market_data.promotion import evaluate_bar_promotion
 from intraday.domain.session.calendar import session_for_instant
 from intraday.domain.session.contracts import SessionStatus, TradingSession
 from intraday.domain.shared_kernel.contracts import Exchange
-from intraday.infrastructure.api.active_loop_runtime import run_active_loop_tick
 from intraday.infrastructure.api.emergency_square_off_trigger import (
     check_and_trigger_automatic_square_off,
 )
@@ -47,6 +45,7 @@ from intraday.infrastructure.api.position_monitor_runtime import (
     PositionMonitorTickOutcome,
     run_position_monitor_tick,
 )
+from intraday.infrastructure.api.signal_pipeline_runtime import promote_bars_and_trigger_signals
 from intraday.infrastructure.market_data_providers.dhan.client import (
     DhanAuthenticationError,
     DhanConnectionError,
@@ -67,7 +66,6 @@ from intraday.infrastructure.persistence.provider_settings_repositories import (
     DjangoDhanCredentialRepository,
 )
 from intraday.infrastructure.scheduling.distributed_lock import acquire
-from intraday.trading_engine.strategy_execution.contracts import StrategyConfigurationValues
 
 logger = structlog.get_logger(__name__)
 
@@ -215,47 +213,24 @@ def _run_locked(*, session: TradingSession, clock: dt.datetime) -> IngestionTick
         bar_repository=DjangoAggregatedBarRepository(),
     )
     aggregation_result = bar_service.aggregate_and_persist(as_of=clock)
-    closed_bars = [b for b in aggregation_result.bars if b.status is BarStatus.CLOSED]
+    closed_bar_count = sum(1 for b in aggregation_result.bars if b.status is BarStatus.CLOSED)
 
-    promoted_count = 0
-    active_loop_invocations = 0
-    connection_is_healthy = True  # this tick itself just completed a successful HTTP round trip
-
-    by_instrument: dict[str, list[AggregatedBar]] = {}
-    for bar in sorted(closed_bars, key=lambda b: b.interval_end):
-        by_instrument.setdefault(str(bar.instrument_id), []).append(bar)
-
-    for bars_for_instrument in by_instrument.values():
-        preceding: list[AggregatedBar] = []
-        for bar in bars_for_instrument:
-            promotion = evaluate_bar_promotion(
-                bar=bar,
-                session=session,
-                preceding_bars=tuple(preceding),
-                connection_is_healthy=connection_is_healthy,
-                now=clock,
-            )
-            preceding.append(bar)
-            if promotion.grade is not BarQualityGrade.TRADING_GRADE_BAR:
-                continue
-            promoted_count += 1
-
-            configuration = StrategyConfigurationValues(DEFAULT_STRATEGY_ID, "v1", "v1", "v1", {})
-            run_active_loop_tick(
-                instrument_id=bar.instrument_id,
-                strategy_id=DEFAULT_STRATEGY_ID,
-                configuration=configuration,
-                # The FULL closed-bar history up to and including this
-                # bar (not just this one bar) - the strategy coordinator
-                # needs warm-up history (e.g. EMA lookback periods) to
-                # evaluate correctly, exactly like every other caller of
-                # evaluate_and_submit() in this codebase supplies a full
-                # series, never a single bar.
-                bars=tuple(b.to_bar() for b in preceding),
-                quantity=DEFAULT_QUANTITY,
-                now=clock,
-            )
-            active_loop_invocations += 1
+    # Checkpoint 64.2: this promotion-gate -> strategy/signal/risk/
+    # paper trigger sequence is now shared with the live WebSocket
+    # worker (`signal_pipeline_runtime.py`) - never a second,
+    # duplicated implementation of this same logic.
+    pipeline_outcome = promote_bars_and_trigger_signals(
+        aggregation_result,
+        session=session,
+        clock=clock,
+        # This tick itself just completed a successful HTTP round trip
+        # - that IS the connection-health signal for the REST path.
+        connection_is_healthy=True,
+        strategy_id=DEFAULT_STRATEGY_ID,
+        quantity=DEFAULT_QUANTITY,
+    )
+    promoted_count = pipeline_outcome.promoted_count
+    active_loop_invocations = pipeline_outcome.active_loop_invocations
 
     reconciliation_divergence_count: int | None = None
     if active_loop_invocations > 0 or monitor_outcome.exits_triggered > 0:
@@ -280,7 +255,7 @@ def _run_locked(*, session: TradingSession, clock: dt.datetime) -> IngestionTick
     logger.info(
         "market_data_ingestion.completed",
         instrument_count=len(quotes),
-        bars_aggregated=len(closed_bars),
+        bars_aggregated=closed_bar_count,
         bars_promoted=promoted_count,
         active_loop_invocations=active_loop_invocations,
     )
@@ -289,7 +264,7 @@ def _run_locked(*, session: TradingSession, clock: dt.datetime) -> IngestionTick
         ran=True,
         skipped_reason=None,
         session_status=session.status,
-        bars_aggregated=len(closed_bars),
+        bars_aggregated=closed_bar_count,
         bars_promoted=promoted_count,
         active_loop_invocations=active_loop_invocations,
         reconciliation_divergence_count=reconciliation_divergence_count,

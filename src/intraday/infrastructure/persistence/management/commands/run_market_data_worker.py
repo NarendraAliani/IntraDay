@@ -65,6 +65,11 @@ from intraday.application.services.token_lifecycle import (
     evaluate_dhan_token_lifecycle,
 )
 from intraday.domain.market_data.contracts import Quote
+from intraday.domain.session.calendar import session_for_instant
+from intraday.infrastructure.api.signal_pipeline_runtime import (
+    DEFAULT_STRATEGY_ID as SIGNAL_STRATEGY_ID,
+)
+from intraday.infrastructure.api.signal_pipeline_runtime import promote_bars_and_trigger_signals
 from intraday.infrastructure.market_data_providers.dhan.async_worker import (
     AsyncWorkerRunResult,
     run_worker_against_stream,
@@ -168,7 +173,13 @@ class _QuoteSink:
     rest of the pipeline does not care which transport it came from"
     discipline (`websocket_transport.py`'s own module docstring)."""
 
-    def __init__(self, stdout: Callable[[str], None]) -> None:
+    def __init__(
+        self,
+        stdout: Callable[[str], None],
+        *,
+        strategy_id: str = SIGNAL_STRATEGY_ID,
+        connection_is_healthy: Callable[[], bool] = lambda: True,
+    ) -> None:
         self._stdout = stdout
         self._quote_repository = DjangoLiveQuoteRepository()
         self._bar_service = BarAggregationService(
@@ -176,6 +187,16 @@ class _QuoteSink:
             bar_repository=DjangoAggregatedBarRepository(),
         )
         self._quotes_since_last_aggregation = 0
+        self._strategy_id = strategy_id
+        # Checkpoint 64.2: a CALLABLE, not a bare bool captured once at
+        # construction time - the reconnect-supervised `--provider dhan`
+        # path re-creates this sink once per worker run, but connection
+        # health can change WITHIN a single connection's lifetime
+        # (heartbeat degrade/recover, Checkpoint 53's own WorkerState).
+        # Defaults to always-healthy for the synthetic fake/fake-ws
+        # providers, which have no independent health signal of their
+        # own to report.
+        self._connection_is_healthy = connection_is_healthy
 
     async def on_quote(self, quote: Quote) -> None:
         # Django's ORM refuses synchronous DB access from inside an
@@ -198,14 +219,36 @@ class _QuoteSink:
             await self.aggregate_now()
 
     async def aggregate_now(self) -> None:
-        aggregation = await sync_to_async(self._bar_service.aggregate_and_persist)(
-            as_of=dt.datetime.now(tz=dt.UTC)
-        )
+        clock = dt.datetime.now(tz=dt.UTC)
+        aggregation = await sync_to_async(self._bar_service.aggregate_and_persist)(as_of=clock)
         self._stdout(
             f"  aggregated {len(aggregation.bars)} bar(s) so far "
             f"(missing_intervals={len(aggregation.missing_intervals)} "
             f"anomalous_observations={len(aggregation.anomalous_observations)})"
         )
+
+        # Checkpoint 64.2: the "single largest remaining gap" Checkpoint
+        # 64.1's own report named - newly-closed bars now actually reach
+        # the EXISTING strategy -> signal -> risk -> PaperBroker ->
+        # position-management -> signal-communication pipeline
+        # (`signal_pipeline_runtime.py`, the SAME function
+        # `market_data_ingestion_runtime.py`'s REST path already uses -
+        # never a second, duplicated implementation). A bar is promoted
+        # to TRADING_GRADE_BAR by the REAL, unmodified gate - never
+        # skipped just because a WebSocket happens to be connected.
+        session = session_for_instant(clock)  # pure, no I/O - no sync_to_async bridge needed
+        pipeline_outcome = await sync_to_async(promote_bars_and_trigger_signals)(
+            aggregation,
+            session=session,
+            clock=clock,
+            connection_is_healthy=self._connection_is_healthy(),
+            strategy_id=self._strategy_id,
+        )
+        if pipeline_outcome.promoted_count or pipeline_outcome.active_loop_invocations:
+            self._stdout(
+                f"  promoted {pipeline_outcome.promoted_count} bar(s) to TRADING_GRADE_BAR, "
+                f"triggered {pipeline_outcome.active_loop_invocations} active-loop tick(s)"
+            )
 
     async def flush_remainder(self) -> None:
         # A final aggregation catches any REMAINDER quotes that
