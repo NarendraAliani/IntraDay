@@ -66,6 +66,7 @@ from intraday.application.services.token_lifecycle import (
 )
 from intraday.domain.market_data.contracts import Quote
 from intraday.domain.session.calendar import session_for_instant
+from intraday.domain.shared_kernel.contracts import Timeframe
 from intraday.infrastructure.api.signal_pipeline_runtime import (
     DEFAULT_STRATEGY_ID as SIGNAL_STRATEGY_ID,
 )
@@ -79,9 +80,15 @@ from intraday.infrastructure.market_data_providers.dhan.fake_tcp_server import F
 from intraday.infrastructure.market_data_providers.dhan.fake_websocket_server import (
     FakeDhanWebSocketServer,
 )
-from intraday.infrastructure.market_data_providers.dhan.instruments import observation_universe
+from intraday.infrastructure.market_data_providers.dhan.instruments import (
+    DhanInstrument,
+    observation_universe,
+)
 from intraday.infrastructure.market_data_providers.dhan.reconnect_supervisor import (
     run_worker_with_reconnect,
+)
+from intraday.infrastructure.market_data_providers.dhan.scanner_universe import (
+    resolve_scanner_universe,
 )
 from intraday.infrastructure.market_data_providers.dhan.websocket_transport import (
     DhanWebSocketTransport,
@@ -98,6 +105,10 @@ from intraday.infrastructure.persistence.live_market_data_repositories import (
 from intraday.infrastructure.persistence.provider_settings_repositories import (
     DjangoDhanCredentialRepository,
 )
+from intraday.infrastructure.persistence.repositories import DjangoWatchlistRepository
+from intraday.infrastructure.persistence.scanner_configuration_repository import (
+    DjangoScannerConfigurationRepository,
+)
 from intraday.infrastructure.persistence.worker_runtime_status_repository import (
     DjangoWorkerRuntimeStatusRepository,
 )
@@ -109,11 +120,39 @@ never invented. The `version`/`token`/`clientId`/`authType` query
 parameters below match that same source exactly."""
 _SUBSCRIBE_REQUEST_CODE = 15
 _MAX_INSTRUMENTS_PER_SUBSCRIBE_MESSAGE = 100
-"""Dhan's own documented per-message limit (verified this checkpoint) -
-a universe larger than this would need to be split into multiple
-subscribe messages, NOT attempted this checkpoint (see this command's
-own module docstring for the honest scope limit: only the first 100
-configured instruments are ever subscribed to today)."""
+"""Dhan's own documented per-message limit (verified against
+https://dhanhq.co/docs/v2/live-market-feed/) - Checkpoint 64.4 closes
+the "silently truncates to 100" gap named in Checkpoint 64.3's own
+report: a universe larger than this is now split into MULTIPLE
+subscribe messages (`_build_subscribe_messages()` below), never
+truncated."""
+
+
+def _build_subscribe_messages(
+    instruments: tuple[DhanInstrument, ...],
+    chunk_size: int = _MAX_INSTRUMENTS_PER_SUBSCRIBE_MESSAGE,
+) -> list[str]:
+    """Splits `instruments` into `chunk_size`-sized batches, each
+    encoded as its own real `RequestCode: 15` subscribe message -
+    e.g. 287 instruments -> 3 messages of 100/100/87. Never silently
+    drops anything past the first `chunk_size`."""
+    messages: list[str] = []
+    for start in range(0, len(instruments), chunk_size):
+        batch = instruments[start : start + chunk_size]
+        messages.append(
+            json.dumps(
+                {
+                    "RequestCode": _SUBSCRIBE_REQUEST_CODE,
+                    "InstrumentCount": len(batch),
+                    "InstrumentList": [
+                        {"ExchangeSegment": i.exchange_segment, "SecurityId": str(i.security_id)}
+                        for i in batch
+                    ],
+                }
+            )
+        )
+    return messages
+
 
 _HEADER_STRUCT = struct.Struct("<BHBi")
 _DEFAULT_PACKET_COUNT = 20
@@ -187,6 +226,9 @@ class _QuoteSink:
         strategy_id: str = SIGNAL_STRATEGY_ID,
         health_tracker: WorkerHealthTracker | None = None,
         runtime_status_provider: str | None = None,
+        scanner_config_provider: str | None = None,
+        effective_universe_requested_count: int = 0,
+        effective_universe_subscribed_count: int = 0,
     ) -> None:
         self._stdout = stdout
         self._quote_repository = DjangoLiveQuoteRepository()
@@ -203,6 +245,25 @@ class _QuoteSink:
         # API always reflects the real worker, never a test run.
         self._runtime_status_provider = runtime_status_provider
         self._runtime_status_repository = DjangoWorkerRuntimeStatusRepository()
+        # Checkpoint 64.4: the DESIRED scanner configuration is
+        # re-read FRESH on every aggregation cycle (never cached across
+        # cycles) - `enabled`/`timeframe`/`selected_strategy_ids` are
+        # genuinely live-reconfigurable this way, without a process
+        # restart. `None` for the synthetic providers, which have no
+        # desired-configuration concept of their own (they keep the
+        # single `strategy_id`/1m-timeframe behavior from before this
+        # checkpoint, unchanged).
+        self._scanner_config_provider = scanner_config_provider
+        self._scanner_config_repository = DjangoScannerConfigurationRepository()
+        # Universe resolution happens ONCE per connection (at connect
+        # time, before this sink is constructed for that attempt) -
+        # changing universe_mode/selected instruments takes effect on
+        # the NEXT reconnect, not instantly - an honest, documented
+        # limitation (unlike timeframe/strategy, applying a universe
+        # change live would mean resubscribing mid-stream, a bigger,
+        # separate piece of work not attempted this checkpoint).
+        self._effective_universe_requested_count = effective_universe_requested_count
+        self._effective_universe_subscribed_count = effective_universe_subscribed_count
         # Checkpoint 64.3: THE truthful-health fix - `is_healthy()` is
         # now evaluated fresh, from real tracked facts, every time a bar
         # is about to be promoted - never a captured-once bool/callable
@@ -238,7 +299,35 @@ class _QuoteSink:
 
     async def aggregate_now(self) -> None:
         clock = dt.datetime.now(tz=dt.UTC)
-        aggregation = await sync_to_async(self._bar_service.aggregate_and_persist)(as_of=clock)
+
+        # Checkpoint 64.4: RECONCILIATION - the desired configuration is
+        # read fresh, every cycle, never cached across cycles. This is
+        # what makes timeframe/strategy/enabled changes genuinely live-
+        # reconfigurable without a process restart - see this class's
+        # own __init__ docstring for what is NOT (universe changes,
+        # which still require a reconnect).
+        strategy_ids: tuple[str, ...] = (self._strategy_id,)
+        timeframe = Timeframe.ONE_MINUTE
+        enabled = True
+        configuration_version = 0
+        if self._scanner_config_provider is not None:
+            desired = await sync_to_async(self._scanner_config_repository.get)(
+                self._scanner_config_provider
+            )
+            enabled = desired.enabled
+            configuration_version = desired.configuration_version
+            try:
+                timeframe = Timeframe(desired.timeframe)
+            except ValueError:
+                self._stdout(
+                    f"  desired timeframe {desired.timeframe!r} is not a real Timeframe - "
+                    "keeping the previous effective timeframe"
+                )
+            strategy_ids = desired.selected_strategy_ids or (self._strategy_id,)
+
+        aggregation = await sync_to_async(self._bar_service.aggregate_and_persist)(
+            as_of=clock, timeframe=timeframe
+        )
         if aggregation.bars:
             self.health_tracker.record_bar(now=clock)
         self._stdout(
@@ -247,30 +336,61 @@ class _QuoteSink:
             f"anomalous_observations={len(aggregation.anomalous_observations)})"
         )
 
+        if self._scanner_config_provider is not None:
+            await sync_to_async(self._runtime_status_repository.save_effective_scanner_state)(
+                self._scanner_config_provider,
+                effective_configuration_version=configuration_version,
+                effective_timeframe=timeframe.value,
+                effective_strategy_ids=list(strategy_ids),
+                effective_universe_requested_count=self._effective_universe_requested_count,
+                effective_universe_subscribed_count=self._effective_universe_subscribed_count,
+            )
+
+        if not enabled:
+            # Checkpoint 64.4: THE real, in-scope PAUSE/STOP mechanism -
+            # bars still aggregate and persist (never lost), but the
+            # signal pipeline is skipped entirely. Existing positions/
+            # history are completely untouched.
+            self._stdout("  scanner disabled (desired configuration) - signal pipeline skipped")
+            return
+
         # Checkpoint 64.2/64.3: newly-closed bars reach the shared
         # strategy/signal/risk/paper pipeline - `connection_is_healthy`
         # is now a REAL, freshly-evaluated fact from the watchdog
         # (Checkpoint 64.1), never a hard-coded truthy value (the
         # review's own explicitly-named safety-critical gap). A bar is
         # never promotable just because a process happens to be
-        # running.
+        # running. Checkpoint 64.4: now loops over EVERY desired
+        # strategy, never just one - `promote_bars_and_trigger_signals`
+        # itself is unmodified (still single-strategy-per-call), this
+        # is the multi-strategy fan-out, kept at the call site rather
+        # than inside the shared function so the REST-ingestion path
+        # (still genuinely single-strategy) is unaffected.
         session = session_for_instant(clock)
-        pipeline_outcome = await sync_to_async(promote_bars_and_trigger_signals)(
-            aggregation,
-            session=session,
-            clock=clock,
-            connection_is_healthy=self.health_tracker.is_healthy(now=clock),
-            strategy_id=self._strategy_id,
-        )
+        connection_is_healthy = self.health_tracker.is_healthy(now=clock)
+        total_promoted = 0
+        total_invocations = 0
+        for strategy_id in strategy_ids:
+            pipeline_outcome = await sync_to_async(promote_bars_and_trigger_signals)(
+                aggregation,
+                session=session,
+                clock=clock,
+                connection_is_healthy=connection_is_healthy,
+                strategy_id=strategy_id,
+            )
+            total_promoted += pipeline_outcome.promoted_count
+            total_invocations += pipeline_outcome.active_loop_invocations
+
         if self._runtime_status_provider is not None:
             await sync_to_async(self.health_tracker.persist)(
                 self._runtime_status_repository, provider=self._runtime_status_provider, now=clock
             )
 
-        if pipeline_outcome.promoted_count or pipeline_outcome.active_loop_invocations:
+        if total_promoted or total_invocations:
             self._stdout(
-                f"  promoted {pipeline_outcome.promoted_count} bar(s) to TRADING_GRADE_BAR, "
-                f"triggered {pipeline_outcome.active_loop_invocations} active-loop tick(s)"
+                f"  promoted {total_promoted} bar(s) to TRADING_GRADE_BAR, "
+                f"triggered {total_invocations} active-loop tick(s) across "
+                f"{len(strategy_ids)} strategy(ies)"
             )
 
     async def flush_remainder(self) -> None:
@@ -356,19 +476,7 @@ class Command(BaseCommand):
         self, provider: str, packet_count: int, max_reconnect_attempts: int
     ) -> AsyncWorkerRunResult:
         if provider == "dhan":
-            # Checkpoint 64.3: a REAL tracker, not the sink's own
-            # default always-healthy one - `_run_dhan()` mutates this
-            # at every real connection-lifecycle event (connecting,
-            # connected, reconnecting, failed) so `is_healthy()`
-            # reflects genuine worker state, never a hard-coded truthy
-            # value.
-            health_tracker = WorkerHealthTracker()
-            sink = _QuoteSink(
-                stdout=self.stdout.write,
-                health_tracker=health_tracker,
-                runtime_status_provider="dhan",
-            )
-            result = await self._run_dhan(sink, max_reconnect_attempts)
+            sink, result = await self._run_dhan(max_reconnect_attempts)
             await sink.flush_remainder()
             await sync_to_async(close_old_connections)()
             return result
@@ -434,8 +542,8 @@ class Command(BaseCommand):
             await server.stop()
 
     async def _run_dhan(
-        self, sink: _QuoteSink, max_reconnect_attempts: int
-    ) -> AsyncWorkerRunResult:
+        self, max_reconnect_attempts: int
+    ) -> tuple[_QuoteSink, AsyncWorkerRunResult]:
         """Checkpoint 64.1: the real production provider. MARKET DATA
         ONLY - see this command's own module docstring for the
         mechanically-enforced boundary. Refuses to attempt ANY
@@ -444,18 +552,31 @@ class Command(BaseCommand):
         own honest-fallback discipline (infrastructure/api/tasks.py)
         extended here to "refuse outright," since a live worker
         pretending to be connected with a known-bad token is a real
-        safety hazard a backtest's fallback-to-synthetic is not."""
+        safety hazard a backtest's fallback-to-synthetic is not.
+
+        Checkpoint 64.4: the DESIRED `ScannerConfiguration` (provider
+        "dhan") is resolved ONCE here, at connect time - this is what
+        universe/subscription reflects for the lifetime of this
+        connection. `strategy_ids`/`timeframe`/`enabled` are re-read
+        FRESH on every aggregation cycle instead (see `_QuoteSink.
+        aggregate_now()`), genuinely live-reconfigurable without a
+        reconnect."""
+        health_tracker = WorkerHealthTracker()
+        scanner_config_repository = DjangoScannerConfigurationRepository()
+        desired = await sync_to_async(scanner_config_repository.get)("dhan")
+
         dhan_service = DhanSettingsService(repository=DjangoDhanCredentialRepository())
         credentials = await sync_to_async(dhan_service.effective_credentials)()
         if credentials is None:
             self.stdout.write(
                 self.style.ERROR("Dhan credentials are not configured - refusing to connect.")
             )
-            return AsyncWorkerRunResult(final_state=WorkerState.AUTH_FAILED)
+            sink = _QuoteSink(stdout=self.stdout.write, health_tracker=health_tracker)
+            return sink, AsyncWorkerRunResult(final_state=WorkerState.AUTH_FAILED)
 
         client_id, access_token = credentials
         token_status = evaluate_dhan_token_lifecycle(access_token, now=dt.datetime.now(tz=dt.UTC))
-        sink.health_tracker.mark_token_state(token_status.state.value)
+        health_tracker.mark_token_state(token_status.state.value)
         if token_status.state not in (TokenLifecycleState.VALID, TokenLifecycleState.EXPIRING_SOON):
             self.stdout.write(
                 self.style.ERROR(
@@ -464,28 +585,43 @@ class Command(BaseCommand):
                     "to be connected while the token is known bad."
                 )
             )
-            return AsyncWorkerRunResult(final_state=WorkerState.TOKEN_EXPIRED)
+            sink = _QuoteSink(stdout=self.stdout.write, health_tracker=health_tracker)
+            return sink, AsyncWorkerRunResult(final_state=WorkerState.TOKEN_EXPIRED)
 
-        instruments = observation_universe()
-        if not instruments:
-            self.stdout.write(self.style.ERROR("No instruments configured - refusing to connect."))
-            return AsyncWorkerRunResult(final_state=WorkerState.FAILED)
-        security_id_to_symbol = {i.security_id: i.symbol for i in instruments}
-        subscribe_batch = instruments[:_MAX_INSTRUMENTS_PER_SUBSCRIBE_MESSAGE]
-        subscribe_message = json.dumps(
-            {
-                "RequestCode": _SUBSCRIBE_REQUEST_CODE,
-                "InstrumentCount": len(subscribe_batch),
-                "InstrumentList": [
-                    {"ExchangeSegment": i.exchange_segment, "SecurityId": str(i.security_id)}
-                    for i in subscribe_batch
-                ],
-            }
+        watchlist_repository = DjangoWatchlistRepository()
+        instruments = await sync_to_async(resolve_scanner_universe)(
+            desired, watchlist_repository=watchlist_repository
         )
-        self.stdout.write(f"  subscribing to {len(subscribe_batch)} instrument(s)")
+        requested_count = (
+            len(desired.selected_instrument_ids)
+            if desired.universe_mode == "SELECTED"
+            else len(instruments)
+        )
+        if not instruments:
+            self.stdout.write(self.style.ERROR("No instruments resolved - refusing to connect."))
+            sink = _QuoteSink(stdout=self.stdout.write, health_tracker=health_tracker)
+            return sink, AsyncWorkerRunResult(final_state=WorkerState.FAILED)
+
+        security_id_to_symbol = {i.security_id: i.symbol for i in instruments}
+        # Checkpoint 64.4: real batching - never truncates past 100,
+        # splits into as many subscribe messages as needed instead.
+        subscribe_messages = _build_subscribe_messages(instruments)
+        self.stdout.write(
+            f"  subscribing to {len(instruments)} instrument(s) "
+            f"({len(subscribe_messages)} subscribe message(s), requested={requested_count})"
+        )
+
+        sink = _QuoteSink(
+            stdout=self.stdout.write,
+            health_tracker=health_tracker,
+            runtime_status_provider="dhan",
+            scanner_config_provider="dhan",
+            effective_universe_requested_count=requested_count,
+            effective_universe_subscribed_count=len(instruments),
+        )
 
         async def connect_and_run() -> AsyncWorkerRunResult:
-            sink.health_tracker.mark_connecting()
+            health_tracker.mark_connecting()
             uri = (
                 f"{DHAN_LIVE_FEED_ENDPOINT}?version=2&token={access_token}"
                 f"&clientId={client_id}&authType=2"
@@ -499,24 +635,23 @@ class Command(BaseCommand):
                 # supervisor as RECONNECTING (never raised past it), so
                 # the bounded-backoff retry logic handles it exactly
                 # like a mid-stream disconnect.
-                sink.health_tracker.mark_reconnecting(reason=f"connect_failed:{exc!r}")
+                health_tracker.mark_reconnecting(reason=f"connect_failed:{exc!r}")
                 return AsyncWorkerRunResult(final_state=WorkerState.RECONNECTING)
-            sink.health_tracker.mark_connected(subscribed_instrument_count=len(subscribe_batch))
+            health_tracker.mark_connected(subscribed_instrument_count=len(instruments))
             try:
-                await transport.send_json_text(subscribe_message)
+                for message in subscribe_messages:
+                    await transport.send_json_text(message)
                 result = await run_worker_against_websocket(
                     transport, security_id_to_symbol=security_id_to_symbol, on_quote=sink.on_quote
                 )
                 if result.final_state is WorkerState.RECONNECTING:
-                    sink.health_tracker.mark_reconnecting(reason="connection_lost")
+                    health_tracker.mark_reconnecting(reason="connection_lost")
                 elif result.final_state in (
                     WorkerState.FAILED,
                     WorkerState.AUTH_FAILED,
                     WorkerState.TOKEN_EXPIRED,
                 ):
-                    sink.health_tracker.mark_failed(
-                        result.final_state, reason=result.final_state.value
-                    )
+                    health_tracker.mark_failed(result.final_state, reason=result.final_state.value)
                 return result
             finally:
                 await transport.close()
@@ -529,7 +664,7 @@ class Command(BaseCommand):
             f"attempts={supervisor_result.attempts} "
             f"last_disconnect_reason={supervisor_result.last_disconnect_reason}"
         )
-        return AsyncWorkerRunResult(
+        return sink, AsyncWorkerRunResult(
             final_state=supervisor_result.final_state,
             quotes_processed=supervisor_result.total_quotes_processed,
         )

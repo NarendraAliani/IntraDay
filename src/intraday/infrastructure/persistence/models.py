@@ -1111,6 +1111,62 @@ class WorkerRuntimeStatus(models.Model):
     last_error_safe = models.CharField(max_length=500, blank=True, default="")
     updated_at = models.DateTimeField(auto_now=True)
 
+    # Checkpoint 64.4: EFFECTIVE scanner state - what the worker
+    # actually applied, distinct from `ScannerConfiguration` (desired).
+    # Written by the worker at reconciliation time; the API composes
+    # both into one desired-vs-effective response, never conflating
+    # them into a single row (the whole POINT of this distinction is
+    # that they can legitimately differ - e.g. a truncated universe).
+    effective_configuration_version = models.PositiveIntegerField(default=0)
+    effective_timeframe = models.CharField(max_length=8, blank=True, default="")
+    effective_strategy_ids = models.JSONField(default=list)
+    effective_universe_requested_count = models.PositiveIntegerField(default=0)
+    effective_universe_subscribed_count = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        app_label = "persistence"
+
+
+class ScannerConfiguration(models.Model):
+    """Checkpoint 64.4: the live scanner's DESIRED state - what the
+    operator wants the live worker to do, set through the UI/API, never
+    mutated by the worker itself (the worker only READS this, the same
+    "write path is the API, read path is the worker" split
+    `WorkerRuntimeStatus` uses in the opposite direction - see that
+    model's own docstring). ONE singleton row (`provider="dhan"`) -
+    the worker reconciles against it once per aggregation cycle,
+    genuinely applying timeframe/strategy changes without a process
+    restart (see `signal_pipeline_runtime.py`'s own reconciliation
+    comment for exactly what is and is not live-reconfigurable).
+
+    `EFFECTIVE` state (what the worker actually applied) is recorded
+    separately, on `WorkerRuntimeStatus` (below) - never duplicated
+    here. This row is ALWAYS the desired state, even while the worker
+    is still catching up to it."""
+
+    UNIVERSE_MODE_CHOICES = [(m, m) for m in ("ALL_CONFIGURED", "SELECTED", "WATCHLIST")]
+
+    provider = models.CharField(max_length=32, unique=True, default="dhan")
+    enabled = models.BooleanField(default=False)
+    """The real, in-scope meaning of START/STOP/PAUSE/RESUME this
+    checkpoint delivers: `True` means the worker's next reconciliation
+    cycle resumes triggering the signal pipeline; `False` means it
+    stops triggering it (existing positions/history are untouched -
+    this never affects `PaperBroker` state). Spawning/killing the OS
+    process itself remains a separate, manual `manage.py
+    run_market_data_worker` action - NOT controlled by this flag,
+    named honestly as a real limitation, not silently implied."""
+    timeframe = models.CharField(max_length=8, default="1m")
+    universe_mode = models.CharField(
+        max_length=16, choices=UNIVERSE_MODE_CHOICES, default="ALL_CONFIGURED"
+    )
+    selected_instrument_ids = models.JSONField(default=list)
+    selected_watchlist_name = models.CharField(max_length=200, blank=True, default="")
+    selected_strategy_ids = models.JSONField(default=list)
+    configuration_version = models.PositiveIntegerField(default=1)
+    requested_by = models.CharField(max_length=150, blank=True, default="")
+    requested_at = models.DateTimeField(auto_now=True)
+
     class Meta:
         app_label = "persistence"
 

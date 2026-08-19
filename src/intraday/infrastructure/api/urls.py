@@ -20,6 +20,7 @@ from intraday.infrastructure.api import (
     market_data_views,
     paper_trading_views,
     risk_views,
+    scanner_configuration_views,
     settings_views,
     signal_views,
     strategy_configuration_views,
@@ -213,6 +214,17 @@ urlpatterns = [
         "market-data/worker-status/",
         worker_runtime_status_views.worker_runtime_status,
         name="worker-runtime-status",
+    ),
+    # --- Checkpoint 64.4: live scanner control plane (desired/effective) --
+    path(
+        "market-data/scanner-config/",
+        scanner_configuration_views.get_scanner_configuration,
+        name="scanner-config-get",
+    ),
+    path(
+        "market-data/scanner-config/update/",
+        scanner_configuration_views.update_scanner_configuration,
+        name="scanner-config-update",
     ),
     # --- Checkpoint 27: research watchlists -------------------------------
     path("watchlists/", watchlist_views.list_watchlists, name="watchlists-list"),

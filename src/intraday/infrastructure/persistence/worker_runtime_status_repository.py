@@ -29,6 +29,11 @@ class DjangoWorkerRuntimeStatusRepository:
             subscribed_instrument_count=row.subscribed_instrument_count,
             last_error_safe=row.last_error_safe,
             updated_at=row.updated_at,
+            effective_configuration_version=row.effective_configuration_version,
+            effective_timeframe=row.effective_timeframe,
+            effective_strategy_ids=tuple(row.effective_strategy_ids),
+            effective_universe_requested_count=row.effective_universe_requested_count,
+            effective_universe_subscribed_count=row.effective_universe_subscribed_count,
         )
 
     def save(
@@ -57,6 +62,27 @@ class DjangoWorkerRuntimeStatusRepository:
                 "consecutive_failures": consecutive_failures,
                 "subscribed_instrument_count": subscribed_instrument_count,
                 "last_error_safe": last_error_safe,
+            },
+        )
+
+    def save_effective_scanner_state(
+        self,
+        provider: str,
+        *,
+        effective_configuration_version: int,
+        effective_timeframe: str,
+        effective_strategy_ids: list[str],
+        effective_universe_requested_count: int,
+        effective_universe_subscribed_count: int,
+    ) -> None:
+        WorkerRuntimeStatus.objects.update_or_create(
+            provider=provider,
+            defaults={
+                "effective_configuration_version": effective_configuration_version,
+                "effective_timeframe": effective_timeframe,
+                "effective_strategy_ids": effective_strategy_ids,
+                "effective_universe_requested_count": effective_universe_requested_count,
+                "effective_universe_subscribed_count": effective_universe_subscribed_count,
             },
         )
 
