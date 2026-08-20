@@ -1127,6 +1127,39 @@ class WorkerRuntimeStatus(models.Model):
         app_label = "persistence"
 
 
+class ScannerScanProgress(models.Model):
+    """Checkpoint 64.18 §2/§5: "what is the scanner doing RIGHT NOW" -
+    mirrors `WorkerRuntimeStatus`'s own established "ONE singleton row
+    per provider, written by the worker process, read by the API"
+    pattern exactly, never a new lifecycle framework. Written ONLY by
+    the worker's own scan loop (`run_market_data_worker.py`'s
+    `aggregate_now()`) - the frontend/API NEVER write to this row (§3).
+
+    `universe_remaining`/`progress_percent` are deliberately NOT columns
+    here - both are pure derivations the API computes at read time
+    (`universe_total - universe_processed`, `universe_processed /
+    universe_total * 100`), so there is exactly one source of truth for
+    the raw counters (§2's explicit instruction)."""
+
+    provider = models.CharField(max_length=32, unique=True, default="dhan")
+    scan_id = models.CharField(max_length=64, blank=True, default="")
+    scan_started_at = models.DateTimeField(null=True, blank=True)
+    timeframe = models.CharField(max_length=8, blank=True, default="")
+    universe_total = models.PositiveIntegerField(default=0)
+    universe_processed = models.PositiveIntegerField(default=0)
+    current_instrument = models.CharField(max_length=100, blank=True, default="")
+    current_strategy = models.CharField(max_length=100, blank=True, default="")
+    strategies_total = models.PositiveIntegerField(default=0)
+    strategies_processed = models.PositiveIntegerField(default=0)
+    signals_found = models.PositiveIntegerField(default=0)
+    last_progress_at = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(max_length=16, default="IDLE")
+    last_error_safe = models.CharField(max_length=500, blank=True, default="")
+
+    class Meta:
+        app_label = "persistence"
+
+
 class ScannerConfiguration(models.Model):
     """Checkpoint 64.4: the live scanner's DESIRED state - what the
     operator wants the live worker to do, set through the UI/API, never
@@ -1302,6 +1335,30 @@ class TradePlanRecord(models.Model):
     target_2 = models.DecimalField(max_digits=18, decimal_places=4, null=True)
     target_3 = models.DecimalField(max_digits=18, decimal_places=4, null=True)
     trailing_stop_loss = models.DecimalField(max_digits=18, decimal_places=4, null=True)
+    generated_at = models.DateTimeField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        app_label = "persistence"
+        indexes = [models.Index(fields=["signal_id"])]
+
+
+class SignalEvidenceRecord(models.Model):
+    """Checkpoint 64.18 §8-11: the ONE persisted record of a strategy-
+    produced `SignalEvidence` (`trading_engine.strategy_execution.
+    evidence.SignalEvidence`) - mirrors `TradePlanRecord`'s own
+    established "referenced by signal_id, never a Django FK" pattern
+    exactly (audited before creating this model, per §10's explicit
+    instruction). `fields` is a JSONField storing a list of
+    `[label, value]` pairs - a STRUCTURED, bounded shape (never an
+    uncontrolled dump of arbitrary Python objects; every value is
+    already a plain string by the time `SignalEvidence` is built, see
+    that module's own docstring), preserving field order exactly."""
+
+    signal_id = models.CharField(max_length=100, db_index=True)
+    strategy_id = models.CharField(max_length=100)
+    schema_version = models.CharField(max_length=16)
+    fields = models.JSONField(default=list)
     generated_at = models.DateTimeField()
     created_at = models.DateTimeField(auto_now_add=True)
 

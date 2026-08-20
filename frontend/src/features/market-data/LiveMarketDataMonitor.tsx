@@ -23,7 +23,7 @@
 // dropdown filtering an already-fetched array. The strategy list and
 // observed-instrument universe are both read from real backend sources
 // (`listStrategies()`, `getCurrentQuotes()`), never hard-coded.
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   getCurrentQuotes,
@@ -1055,6 +1055,31 @@ export function LiveMarketDataMonitor(): JSX.Element {
                 <p className="signal-monitor__unavailable">
                   Not provided - this strategy is directional-only and does not compute a trade
                   plan (see taskReport.md, "Strategy TradePlan Coverage").
+                </p>
+              )}
+
+              <h3>Why This Signal?</h3>
+              {/* Checkpoint 64.18 §7/§13: a GENERIC renderer - no
+                  EMA-specific/ATR-specific branch here at all. Every
+                  field comes from the strategy's own persisted
+                  evidence (`SignalEvidence`); a strategy with no
+                  registered evidence describer shows an honest
+                  "not available" note, never fabricated prose. */}
+              {selectedSignal.evidence ? (
+                <dl className="signal-monitor__details-grid">
+                  {(selectedSignal.evidence.fields as Array<{ label: string; value: string }>).map(
+                    (field) => (
+                      <Fragment key={field.label}>
+                        <dt>{field.label}</dt>
+                        <dd>{field.value}</dd>
+                      </Fragment>
+                    ),
+                  )}
+                </dl>
+              ) : (
+                <p className="signal-monitor__unavailable">
+                  Strategy evidence is not available for this signal - either it predates this
+                  capability, or this strategy has no registered evidence description yet.
                 </p>
               )}
 

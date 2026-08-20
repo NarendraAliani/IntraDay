@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from collections.abc import Callable
 from dataclasses import dataclass
 from decimal import Decimal
 
@@ -55,6 +56,7 @@ def promote_bars_and_trigger_signals(
     connection_is_healthy: bool,
     strategy_id: str = DEFAULT_STRATEGY_ID,
     quantity: Decimal = DEFAULT_QUANTITY,
+    on_instrument_progress: Callable[[str, int, int], None] | None = None,
 ) -> SignalPipelineOutcome:
     """For every newly-CLOSED bar, per instrument, in chronological
     order: run the REAL `evaluate_bar_promotion()` gate (never skipped,
@@ -70,7 +72,18 @@ def promote_bars_and_trigger_signals(
     completed HTTP round trip proves it), while the live WebSocket
     worker should pass its own actual current connection state, not a
     blind constant (see `run_market_data_worker.py`'s own caller for
-    how it derives this)."""
+    how it derives this).
+
+    Checkpoint 64.18 §5: `on_instrument_progress` is an OPTIONAL
+    callback, `None` by default (every pre-existing caller, including
+    the REST-ingestion path, is unaffected) - called
+    `(instrument_id, processed_count, universe_total)` once PER
+    INSTRUMENT, after all of that instrument's bars have been evaluated
+    for this strategy. This function itself stays persistence-free
+    (Contract 6) - it never imports a repository; the actual progress
+    WRITE happens in the caller's closure
+    (`run_market_data_worker.py`), matching this project's existing
+    `SignalRecorder`/`ExitPlanAttacher` Protocol-injection convention."""
     closed_bars = [b for b in aggregation_result.bars if b.status is BarStatus.CLOSED]
 
     promoted_count = 0
@@ -80,7 +93,10 @@ def promote_bars_and_trigger_signals(
     for bar in sorted(closed_bars, key=lambda b: b.interval_end):
         by_instrument.setdefault(str(bar.instrument_id), []).append(bar)
 
-    for bars_for_instrument in by_instrument.values():
+    universe_total = len(by_instrument)
+    for processed_index, (instrument_key, bars_for_instrument) in enumerate(
+        by_instrument.items(), start=1
+    ):
         preceding: list[AggregatedBar] = []
         for bar in bars_for_instrument:
             promotion = evaluate_bar_promotion(
@@ -105,6 +121,9 @@ def promote_bars_and_trigger_signals(
                 now=clock,
             )
             active_loop_invocations += 1
+
+        if on_instrument_progress is not None:
+            on_instrument_progress(instrument_key, processed_index, universe_total)
 
     return SignalPipelineOutcome(
         promoted_count=promoted_count, active_loop_invocations=active_loop_invocations

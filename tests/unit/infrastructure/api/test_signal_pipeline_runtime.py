@@ -183,3 +183,67 @@ def test_each_instrument_gets_its_own_independent_bar_history(
     assert instrument_ids == {RELIANCE, TCS}
     # Neither instrument's history should have been contaminated by the other's.
     assert all(len(call["bars"]) == 1 for call in calls)  # type: ignore[arg-type]
+
+
+def test_on_instrument_progress_is_called_once_per_instrument_with_running_totals(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Checkpoint 64.18 §5: the ONE injection point scanner-progress
+    writers use - `None` by default (every pre-existing caller,
+    including the REST-ingestion path, is unaffected)."""
+
+    def _always_promotes(**kwargs: object) -> PromotionResult:
+        return PromotionResult(
+            grade=BarQualityGrade.TRADING_GRADE_BAR, failed_conditions=(), evaluated_at=NOW
+        )
+
+    def _fake_active_loop(**kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(signal_pipeline_runtime, "evaluate_bar_promotion", _always_promotes)
+    monkeypatch.setattr(signal_pipeline_runtime, "run_active_loop_tick", _fake_active_loop)
+
+    result = BarAggregationResult(
+        bars=(_bar(RELIANCE, minute=0), _bar(TCS, minute=0)),
+        missing_intervals=(),
+        anomalous_observations=(),
+    )
+    progress_calls: list[tuple[str, int, int]] = []
+
+    promote_bars_and_trigger_signals(
+        result,
+        session=SESSION,
+        clock=NOW,
+        connection_is_healthy=True,
+        on_instrument_progress=lambda instrument_id, processed, total: progress_calls.append(
+            (instrument_id, processed, total)
+        ),
+    )
+
+    assert len(progress_calls) == 2
+    processed_counts = [call[1] for call in progress_calls]
+    assert processed_counts == [1, 2]  # running total, never reset mid-loop
+    totals = {call[2] for call in progress_calls}
+    assert totals == {2}  # universe_total is constant across the whole call
+
+
+def test_on_instrument_progress_defaults_to_none_and_is_never_called_unless_supplied(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _always_promotes(**kwargs: object) -> PromotionResult:
+        return PromotionResult(
+            grade=BarQualityGrade.TRADING_GRADE_BAR, failed_conditions=(), evaluated_at=NOW
+        )
+
+    monkeypatch.setattr(signal_pipeline_runtime, "evaluate_bar_promotion", _always_promotes)
+    monkeypatch.setattr(signal_pipeline_runtime, "run_active_loop_tick", lambda **kwargs: None)
+
+    result = BarAggregationResult(
+        bars=(_bar(RELIANCE, minute=0),), missing_intervals=(), anomalous_observations=()
+    )
+
+    # Must not raise even though no callback was supplied.
+    outcome = promote_bars_and_trigger_signals(
+        result, session=SESSION, clock=NOW, connection_is_healthy=True
+    )
+    assert outcome.promoted_count == 1

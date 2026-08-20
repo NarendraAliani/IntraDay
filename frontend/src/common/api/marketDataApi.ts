@@ -90,6 +90,7 @@ export function stopLivePaperSession(): Promise<LivePaperSessionResponse> {
 // serializer was not used) - `ReadinessCheckItem` below documents the
 // real, backend-guaranteed shape of each entry for callers.
 export type LivePaperWorkbenchResponse = components["schemas"]["LivePaperWorkbenchResponse"];
+export type ScannerProgressResponse = components["schemas"]["ScannerProgressResponse"];
 export type EffectiveSessionConfiguration =
   components["schemas"]["EffectiveSessionConfiguration"];
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -285,3 +286,141 @@ def test_workbench_reports_failed_session_state_on_a_real_worker_failure() -> No
 
     assert response.status_code == 200
     assert response.json()["session_state"] == "FAILED"
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_workbench_scanner_progress_is_null_before_any_scan_has_started() -> None:
+    """Checkpoint 64.18 §2/§6: an honest absence, never a fabricated
+    all-zero progress row."""
+    client = _client()
+
+    response = client.get("/api/v1/config/market-data/live-paper-workbench/")
+
+    assert response.status_code == 200
+    assert response.json()["scanner_progress"] is None
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_workbench_scanner_progress_computes_remaining_and_progress_percent() -> None:
+    """`remaining`/`progress_percent` are derived at read time from the
+    two real stored counters - never a second, independently-stored
+    value that could drift."""
+    from intraday.infrastructure.persistence.scanner_scan_progress_repository import (
+        DjangoScannerScanProgressRepository,
+    )
+
+    repo = DjangoScannerScanProgressRepository()
+    repo.start_scan(
+        "dhan",
+        scan_id="scan-1",
+        scan_started_at=datetime.now(tz=UTC),
+        timeframe="5m",
+        universe_total=4,
+        strategies_total=2,
+    )
+    repo.update_progress(
+        "dhan",
+        status="SCANNING",
+        current_instrument="NSE:RELIANCE",
+        current_strategy="ema_crossover",
+        universe_processed=3,
+        strategies_processed=1,
+        signals_found=2,
+    )
+    client = _client()
+
+    response = client.get("/api/v1/config/market-data/live-paper-workbench/")
+
+    assert response.status_code == 200
+    progress = response.json()["scanner_progress"]
+    assert progress["status"] == "SCANNING"
+    assert progress["universe_total"] == 4
+    assert progress["universe_processed"] == 3
+    assert progress["remaining"] == 1
+    assert progress["progress_percent"] == 75.0
+    assert progress["current_instrument"] == "NSE:RELIANCE"
+    assert progress["current_strategy"] == "ema_crossover"
+    assert progress["strategies_total"] == 2
+    assert progress["strategies_processed"] == 1
+    assert progress["signals_found"] == 2
+    assert progress["stale"] is False
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_workbench_scanner_progress_is_stale_when_last_progress_at_is_old_and_not_terminal() -> (
+    None
+):
+    from intraday.infrastructure.persistence.models import ScannerScanProgress
+
+    ScannerScanProgress.objects.create(
+        provider="dhan",
+        scan_id="scan-1",
+        scan_started_at=datetime.now(tz=UTC) - timedelta(minutes=10),
+        timeframe="5m",
+        universe_total=4,
+        universe_processed=1,
+        status="SCANNING",
+        last_progress_at=datetime.now(tz=UTC) - timedelta(minutes=10),
+    )
+    client = _client()
+
+    response = client.get("/api/v1/config/market-data/live-paper-workbench/")
+
+    assert response.status_code == 200
+    assert response.json()["scanner_progress"]["stale"] is True
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_workbench_scanner_progress_completed_is_never_marked_stale_regardless_of_age() -> None:
+    """A COMPLETED scan is a real, finished terminal state - it must
+    never flip to `stale` just because time has passed since it
+    finished (that would be a fabricated "still running" implication)."""
+    from intraday.infrastructure.persistence.models import ScannerScanProgress
+
+    ScannerScanProgress.objects.create(
+        provider="dhan",
+        scan_id="scan-1",
+        scan_started_at=datetime.now(tz=UTC) - timedelta(hours=2),
+        timeframe="5m",
+        universe_total=4,
+        universe_processed=4,
+        status="COMPLETED",
+        last_progress_at=datetime.now(tz=UTC) - timedelta(hours=2),
+    )
+    client = _client()
+
+    response = client.get("/api/v1/config/market-data/live-paper-workbench/")
+
+    assert response.status_code == 200
+    assert response.json()["scanner_progress"]["stale"] is False
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_workbench_scanner_progress_never_exposes_a_credential() -> None:
+    client = _client()
+    from intraday.infrastructure.persistence.scanner_scan_progress_repository import (
+        DjangoScannerScanProgressRepository,
+    )
+
+    DjangoScannerScanProgressRepository().start_scan(
+        "dhan",
+        scan_id="scan-1",
+        scan_started_at=datetime.now(tz=UTC),
+        timeframe="5m",
+        universe_total=1,
+        strategies_total=1,
+    )
+
+    response = client.get("/api/v1/config/market-data/live-paper-workbench/")
+
+    # "token" alone legitimately appears in safe remediation prose
+    # (e.g. "Renew the Dhan access token") - the real assertion is that
+    # no JWT-shaped credential VALUE ever appears, matching this file's
+    # own established `test_response_never_contains_the_configured_
+    # token_value` pattern.
+    assert not re.search(r"eyJ[a-zA-Z0-9._-]{10,}", response.content.decode())

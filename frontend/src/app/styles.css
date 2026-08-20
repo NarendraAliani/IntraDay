@@ -1821,3 +1821,26 @@ dd {
     align-items: flex-start;
   }
 }
+
+/* Checkpoint 64.18: Scanner Progress bar - existing tokens only. */
+.live-paper-console__progress-track {
+  width: 100%;
+  height: 0.6rem;
+  border-radius: 999px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  overflow: hidden;
+  margin: var(--space-3) 0;
+}
+
+.live-paper-console__progress-fill {
+  height: 100%;
+  background: var(--color-active-border);
+  transition: width 0.3s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-paper-console__progress-fill {
+    transition: none;
+  }
+}

@@ -119,6 +119,7 @@ const RELIANCE_SIGNAL: SignalResponse = {
   trade_plan: null,
   telegram: null,
   discord: null,
+  evidence: null,
 };
 
 const WORKER_STATUS_UNCONFIGURED = {
@@ -255,6 +256,52 @@ describe("LiveMarketDataMonitor (Active Signal Monitor)", () => {
       expect(screen.getByText("Signal Details")).toBeInTheDocument();
       expect(screen.getByText(/directional-only and does not compute a trade plan/i)).toBeInTheDocument();
     });
+  });
+
+  it("Checkpoint 64.18: shows an honest 'not available' note when no signal evidence is persisted", async () => {
+    stubEndpoints({
+      signals: { items: [RELIANCE_SIGNAL], total_count: 1, page: 1, page_size: 10 },
+    });
+
+    renderWithAuth(<LiveMarketDataMonitor />);
+
+    const detailsButton = await waitFor(() => screen.getByRole("button", { name: /details/i }));
+    fireEvent.click(detailsButton);
+
+    await waitFor(() => expect(screen.getByText("Why This Signal?")).toBeInTheDocument());
+    expect(
+      screen.getByText(/Strategy evidence is not available for this signal/),
+    ).toBeInTheDocument();
+  });
+
+  it("Checkpoint 64.18: shows the real, persisted strategy evidence generically - never hardcoded per strategy", async () => {
+    const signalWithEvidence: SignalResponse = {
+      ...RELIANCE_SIGNAL,
+      evidence: {
+        schema_version: "1",
+        fields: [
+          { label: "Fast EMA", value: "1234.50" },
+          { label: "Slow EMA", value: "1229.40" },
+          { label: "Crossover", value: "Bullish" },
+        ],
+      },
+    };
+    stubEndpoints({
+      signals: { items: [signalWithEvidence], total_count: 1, page: 1, page_size: 10 },
+    });
+
+    renderWithAuth(<LiveMarketDataMonitor />);
+
+    const detailsButton = await waitFor(() => screen.getByRole("button", { name: /details/i }));
+    fireEvent.click(detailsButton);
+
+    await waitFor(() => expect(screen.getByText("Why This Signal?")).toBeInTheDocument());
+    expect(screen.getByText("Fast EMA")).toBeInTheDocument();
+    expect(screen.getByText("1234.50")).toBeInTheDocument();
+    expect(screen.getByText("Slow EMA")).toBeInTheDocument();
+    expect(screen.getByText("1229.40")).toBeInTheDocument();
+    expect(screen.getByText("Crossover")).toBeInTheDocument();
+    expect(screen.getByText("Bullish")).toBeInTheDocument();
   });
 
   it("keeps market-data diagnostics collapsed by default, expandable on demand", async () => {

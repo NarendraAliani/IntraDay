@@ -23,6 +23,7 @@ from decimal import Decimal
 from intraday.domain.shared_kernel.contracts import InstrumentId, SignalId
 from intraday.infrastructure.persistence.models import (
     CommunicationLedgerRecord,
+    SignalEvidenceRecord,
     SignalRecord,
     TradePlanRecord,
 )
@@ -62,11 +63,23 @@ class ChannelStatus:
 
 
 @dataclass(frozen=True, slots=True)
+class SignalEvidenceEnrichment:
+    """Checkpoint 64.18 §12: the operator-facing shape - `fields` is a
+    tuple of `(label, value)` pairs, in the strategy's own order,
+    matching `SignalEvidence.fields` exactly (never re-sorted/re-keyed
+    here)."""
+
+    schema_version: str
+    fields: tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True, slots=True)
 class EnrichedSignal:
     record: SignalRecord
     trade_plan: TradePlanEnrichment | None
     telegram: ChannelStatus | None
     discord: ChannelStatus | None
+    evidence: SignalEvidenceEnrichment | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -220,6 +233,11 @@ class DjangoSignalRepository:
         signal_ids = [r.signal_id for r in records]
         plans = {p.signal_id: p for p in TradePlanRecord.objects.filter(signal_id__in=signal_ids)}
         ledger = _latest_ledger_rows(signal_ids)
+        # Checkpoint 64.18 §12: ONE bulk query, same "never a per-row
+        # N+1" discipline `plans`/`ledger` above already established.
+        evidence_rows = {
+            e.signal_id: e for e in SignalEvidenceRecord.objects.filter(signal_id__in=signal_ids)
+        }
 
         items = tuple(
             EnrichedSignal(
@@ -239,6 +257,16 @@ class DjangoSignalRepository:
                 ),
                 telegram=_to_channel_status(ledger.get((record.signal_id, "TELEGRAM"))),
                 discord=_to_channel_status(ledger.get((record.signal_id, "DISCORD"))),
+                evidence=(
+                    SignalEvidenceEnrichment(
+                        schema_version=evidence_rows[record.signal_id].schema_version,
+                        fields=tuple(
+                            (pair[0], pair[1]) for pair in evidence_rows[record.signal_id].fields
+                        ),
+                    )
+                    if record.signal_id in evidence_rows
+                    else None
+                ),
             )
             for record in records
         )
@@ -261,6 +289,7 @@ __all__ = [
     "ChannelStatus",
     "DjangoSignalRepository",
     "EnrichedSignal",
+    "SignalEvidenceEnrichment",
     "SignalListPage",
     "TradePlanEnrichment",
 ]

@@ -29,7 +29,7 @@
 // own `market_state` checklist item reports BLOCKED, this screen shows
 // that BLOCKED state honestly (§16), it does not simulate an OPEN
 // market to look more complete.
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ApiNetworkError, ApiRequestError } from "../../common/api/client";
 import {
@@ -103,6 +103,16 @@ const READINESS_STATE_CLASS: Record<string, string> = {
   CREDENTIAL_INVALID: "badge--danger",
   PROVIDER_UNAVAILABLE: "badge--pending",
   BLOCKED_BY_SAFETY: "badge--danger",
+};
+
+const SCAN_STATUS_CLASS: Record<string, string> = {
+  IDLE: "badge--historical",
+  STARTING: "badge--pending",
+  SCANNING: "badge--pending",
+  COMPLETED: "badge--active",
+  DEGRADED: "badge--pending",
+  FAILED: "badge--danger",
+  STOPPED: "badge--historical",
 };
 
 function formatTimestamp(value: string): string {
@@ -290,6 +300,7 @@ export function LivePaperOperationsConsole(): JSX.Element {
   const readiness = workbench?.readiness ?? null;
   const checklist = (workbench?.checklist ?? []) as unknown as ReadinessCheckItem[];
   const effectiveConfig = workbench?.effective_session_configuration ?? null;
+  const scannerProgress = workbench?.scanner_progress ?? null;
 
   const canStart = Boolean(readiness?.can_start) && sessionState !== "RUNNING";
   const isRunning = sessionState === "RUNNING" || sessionState === "STARTING";
@@ -491,6 +502,71 @@ export function LivePaperOperationsConsole(): JSX.Element {
         </>
       )}
 
+      {/* Checkpoint 64.18 §2-7: Scanner Progress - real backend state
+          only, written exclusively by the worker's own scan loop. This
+          screen only READS it; it never estimates/increments progress
+          itself. */}
+      <section aria-labelledby="lpc-scanner-progress-heading" className="live-scanner__section">
+        <h2 id="lpc-scanner-progress-heading">Scanner Progress</h2>
+        {!scannerProgress && (
+          <p className="market-data-monitor__empty">
+            No scan has started yet - the scanner has never run in this environment, or the
+            market is closed.
+          </p>
+        )}
+        {scannerProgress && (
+          <div className="market-data-monitor__card">
+            <span
+              role="status"
+              className={`badge ${SCAN_STATUS_CLASS[scannerProgress.status] ?? ""}`}
+            >
+              {scannerProgress.status}
+            </span>
+            {scannerProgress.stale && (
+              <span role="status" className="badge badge--danger">
+                STALE
+              </span>
+            )}
+            {scannerProgress.status === "FAILED" && (
+              <p role="alert" className="dialog__error">
+                {scannerProgress.last_error_safe || "The scan failed."}
+              </p>
+            )}
+            <ScannerProgressBar percent={scannerProgress.progress_percent} />
+            <dl>
+              <dt>Timeframe</dt>
+              <dd>{scannerProgress.timeframe || "—"}</dd>
+              <dt>Instruments</dt>
+              <dd>{scannerProgress.universe_total}</dd>
+              <dt>Processed</dt>
+              <dd>{scannerProgress.universe_processed}</dd>
+              <dt>Remaining</dt>
+              <dd>{scannerProgress.remaining}</dd>
+              <dt>Progress %</dt>
+              <dd>{scannerProgress.progress_percent}%</dd>
+              <dt>Current Stock</dt>
+              <dd>{scannerProgress.current_instrument || "—"}</dd>
+              <dt>Current Strategy</dt>
+              <dd>{scannerProgress.current_strategy || "—"}</dd>
+              <dt>Strategies</dt>
+              <dd>
+                {scannerProgress.strategies_processed} of {scannerProgress.strategies_total}
+              </dd>
+              <dt>Signals Found</dt>
+              <dd>{scannerProgress.signals_found}</dd>
+              <dt>Started</dt>
+              <dd>{scannerProgress.started_at ? formatTimestamp(scannerProgress.started_at) : "—"}</dd>
+              <dt>Last Update</dt>
+              <dd>
+                {scannerProgress.last_progress_at
+                  ? formatTimestamp(scannerProgress.last_progress_at)
+                  : "—"}
+              </dd>
+            </dl>
+          </div>
+        )}
+      </section>
+
       {/* §10: Live Data Monitor - reuses WorkerStatusCard verbatim. */}
       <section aria-labelledby="lpc-monitor-heading" className="live-scanner__section">
         <h2 id="lpc-monitor-heading">Live Data Monitor</h2>
@@ -645,6 +721,34 @@ function SummaryCard({ label, value }: { label: string; value: number }): JSX.El
     <div className="signal-monitor__summary-card">
       <span className="signal-monitor__summary-label">{label}</span>
       <span className="signal-monitor__summary-value">{value}</span>
+    </div>
+  );
+}
+
+// Sets the fill width imperatively via a ref (never a JSX inline-style
+// object prop, per this project's existing "no inline styles" CSS
+// quality gate, `styles.quality.test.ts`) - the only genuinely dynamic
+// value here is the numeric percent itself, driven entirely by real
+// backend state.
+function ScannerProgressBar({ percent }: { percent: number }): JSX.Element {
+  const fillRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (fillRef.current) {
+      fillRef.current.style.width = `${percent}%`;
+    }
+  }, [percent]);
+
+  return (
+    <div
+      role="progressbar"
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={percent}
+      aria-label="Scanner progress"
+      className="live-paper-console__progress-track"
+    >
+      <div ref={fillRef} className="live-paper-console__progress-fill" />
     </div>
   );
 }

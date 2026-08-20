@@ -391,6 +391,67 @@ def test_daily_session_report_exposes_the_current_configuration_version() -> Non
 
 @requires_postgres
 @pytest.mark.django_db
+def test_daily_session_report_uses_the_real_historical_configuration_version_for_a_past_date() -> (
+    None
+):
+    """Checkpoint 64.18 §17: for a PAST session_date, the report must
+    show the configuration_version that was ACTUALLY active that day
+    (from the real AuditLogEntry trail), never today's current value."""
+    from intraday.infrastructure.persistence.models import AuditLogEntry
+    from intraday.infrastructure.persistence.scanner_configuration_repository import (
+        DjangoScannerConfigurationRepository,
+    )
+
+    past_date = datetime(2026, 1, 5, tzinfo=UTC)
+    AuditLogEntry.objects.create(
+        occurred_at=past_date,
+        actor_username="operator",
+        actor_user_id=1,
+        action="scanner_configuration.update",
+        resource_type="scanner_configuration",
+        resource_id="dhan",
+        version_identifier="3",
+        previous_version="2",
+        outcome="updated",
+        request_id="req-past",
+    )
+    # The CURRENT configuration is a much later version - must NOT leak
+    # into the report for the past date.
+    DjangoScannerConfigurationRepository().save(
+        "dhan",
+        enabled=False,
+        timeframe="5m",
+        universe_mode="ALL_CONFIGURED",
+        selected_instrument_ids=[],
+        selected_watchlist_name="",
+        selected_strategy_ids=["ema_crossover"],
+        requested_by="operator",
+        requested_by_user_id=1,
+        request_id="req-current",
+    )
+    client = _client()
+
+    response = client.get("/api/v1/config/reports/daily-session/?date=2026-01-05")
+
+    assert response.status_code == 200
+    assert response.json()["configuration_version"] == 3
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_daily_session_report_config_version_null_for_past_date_without_audit_trail() -> None:
+    """Honest absence, never a fabricated historical claim, when no
+    audit entry exists for that date at all."""
+    client = _client()
+
+    response = client.get("/api/v1/config/reports/daily-session/?date=2020-01-01")
+
+    assert response.status_code == 200
+    assert response.json()["configuration_version"] is None
+
+
+@requires_postgres
+@pytest.mark.django_db
 def test_daily_session_report_computes_session_duration_from_real_start_stop_timestamps() -> None:
     """Checkpoint 64.17 §10: never derived from WorkerRuntimeStatus.updated_at."""
     from intraday.infrastructure.persistence.scanner_configuration_repository import (
@@ -432,20 +493,46 @@ def test_daily_session_report_session_duration_is_null_before_any_session_starte
     assert response.json()["session_duration_seconds"] is None
 
 
+def _seed_position_with_bar(*, index: int, symbol: str, when: datetime) -> None:
+    from intraday.infrastructure.persistence.models import (
+        AggregatedBarObservation,
+        PaperPositionRecord,
+    )
+
+    PaperPositionRecord.objects.create(
+        position_id=f"pos-{index}",
+        instrument_id=f"NSE:{symbol}",
+        direction="BUY",
+        quantity=Decimal("10"),
+        average_entry_price=Decimal("100"),
+        status="OPEN",
+        opened_at=when,
+    )
+    AggregatedBarObservation.objects.create(
+        instrument_symbol=symbol,
+        exchange="NSE",
+        timeframe="5m",
+        interval_start=when,
+        interval_end=when,
+        open_price=Decimal("100"),
+        high_price=Decimal("110"),
+        low_price=Decimal("95"),
+        close_price=Decimal("105"),
+        status="CLOSED",
+        observation_count=1,
+        data_source="test",
+    )
+
+
 @requires_postgres
 @pytest.mark.django_db
-def test_daily_session_report_unrealized_pnl_query_count_scales_linearly_not_quadratically() -> (
-    None
-):
-    """Checkpoint 64.17 §18: a lightweight, deterministic N+1 regression
-    guard - `_unrealized_pnl_total()` issues exactly one mark-price query
-    PER OPEN POSITION (bounded in practice by `max_concurrent_positions`,
-    typically small), never a per-position query that itself scales with
-    the total number of persisted bars or an unbounded nested loop. This
-    test proves the query count grows by exactly 1 per additional open
-    position (never faster), and documents the current, disclosed
-    (not yet further batched) N+1-per-position shape rather than hiding
-    it."""
+def test_daily_session_report_unrealized_pnl_query_count_is_constant_not_per_position() -> None:
+    """Checkpoint 64.18 §16: closes the bounded N+1 64.17 disclosed -
+    `_latest_close_prices()` now issues exactly ONE query for the whole
+    open-position set, never one query per position. Proven directly:
+    the total query count for 2 open positions must equal the total
+    query count for 6 open positions - if it scaled per-position, the
+    6-position run would issue 4 more queries than the 2-position run."""
     from django.db import connection
     from django.test.utils import CaptureQueriesContext
 
@@ -456,37 +543,29 @@ def test_daily_session_report_unrealized_pnl_query_count_scales_linearly_not_qua
 
     when = datetime(2026, 1, 5, 6, 0, tzinfo=UTC)
     for i, symbol in enumerate(["RELIANCE", "TCS"]):
-        PaperPositionRecord.objects.create(
-            position_id=f"pos-{i}",
-            instrument_id=f"NSE:{symbol}",
-            direction="BUY",
-            quantity=Decimal("10"),
-            average_entry_price=Decimal("100"),
-            status="OPEN",
-            opened_at=when,
-        )
-        AggregatedBarObservation.objects.create(
-            instrument_symbol=symbol,
-            exchange="NSE",
-            timeframe="5m",
-            interval_start=when,
-            interval_end=when,
-            open_price=Decimal("100"),
-            high_price=Decimal("110"),
-            low_price=Decimal("95"),
-            close_price=Decimal("105"),
-            status="CLOSED",
-            observation_count=1,
-            data_source="test",
-        )
+        _seed_position_with_bar(index=i, symbol=symbol, when=when)
     client = _client()
 
-    with CaptureQueriesContext(connection) as captured:
-        response = client.get("/api/v1/config/reports/daily-session/?date=2026-01-05")
+    with CaptureQueriesContext(connection) as captured_two:
+        response_two = client.get("/api/v1/config/reports/daily-session/?date=2026-01-05")
 
-    assert response.status_code == 200
-    assert response.json()["unrealized_pnl_total"] is not None
-    # A generous ceiling, not an exact count (auth/session queries vary) -
-    # the point is proving this does NOT scale with the number of
-    # persisted bars/signals, only with the (small) open-position count.
-    assert len(captured.captured_queries) < 30
+    assert response_two.status_code == 200
+    assert response_two.json()["unrealized_pnl_total"] is not None
+
+    PaperPositionRecord.objects.all().delete()
+    AggregatedBarObservation.objects.all().delete()
+    for i, symbol in enumerate(["RELIANCE", "TCS", "INFY", "HDFC", "SBIN", "WIPRO"]):
+        _seed_position_with_bar(index=i, symbol=symbol, when=when)
+
+    with CaptureQueriesContext(connection) as captured_six:
+        response_six = client.get("/api/v1/config/reports/daily-session/?date=2026-01-05")
+
+    assert response_six.status_code == 200
+    assert response_six.json()["unrealized_pnl_total"] is not None
+
+    # A true per-position N+1 would add at least 4 more queries for the
+    # 4 extra positions - session/auth query counts vary slightly
+    # between requests (unrelated noise), so this allows a small
+    # margin while still failing if the N+1 pattern returns.
+    query_count_difference = len(captured_six.captured_queries) - len(captured_two.captured_queries)
+    assert query_count_difference < 4

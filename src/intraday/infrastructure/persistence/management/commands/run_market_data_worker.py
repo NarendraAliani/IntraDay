@@ -64,6 +64,7 @@ from intraday.application.services.token_lifecycle import (
     TokenLifecycleState,
     evaluate_dhan_token_lifecycle,
 )
+from intraday.domain.market_data.aggregation import BarStatus
 from intraday.domain.market_data.contracts import Quote
 from intraday.domain.session.calendar import session_for_instant
 from intraday.domain.shared_kernel.contracts import Timeframe
@@ -102,12 +103,16 @@ from intraday.infrastructure.persistence.live_market_data_repositories import (
     DjangoAggregatedBarRepository,
     DjangoLiveQuoteRepository,
 )
+from intraday.infrastructure.persistence.models import SignalRecord
 from intraday.infrastructure.persistence.provider_settings_repositories import (
     DjangoDhanCredentialRepository,
 )
 from intraday.infrastructure.persistence.repositories import DjangoWatchlistRepository
 from intraday.infrastructure.persistence.scanner_configuration_repository import (
     DjangoScannerConfigurationRepository,
+)
+from intraday.infrastructure.persistence.scanner_scan_progress_repository import (
+    DjangoScannerScanProgressRepository,
 )
 from intraday.infrastructure.persistence.worker_runtime_status_repository import (
     DjangoWorkerRuntimeStatusRepository,
@@ -255,6 +260,11 @@ class _QuoteSink:
         # checkpoint, unchanged).
         self._scanner_config_provider = scanner_config_provider
         self._scanner_config_repository = DjangoScannerConfigurationRepository()
+        # Checkpoint 64.18 §2/§5: the ONLY writer of scanner scan
+        # progress anywhere in this codebase - `None` for the synthetic
+        # providers, same discipline as `_runtime_status_provider` above.
+        self._scan_progress_provider = runtime_status_provider
+        self._scan_progress_repository = DjangoScannerScanProgressRepository()
         # Universe resolution happens ONCE per connection (at connect
         # time, before this sink is constructed for that attempt) -
         # changing universe_mode/selected instruments takes effect on
@@ -352,6 +362,10 @@ class _QuoteSink:
             # signal pipeline is skipped entirely. Existing positions/
             # history are completely untouched.
             self._stdout("  scanner disabled (desired configuration) - signal pipeline skipped")
+            if self._scan_progress_provider is not None:
+                await sync_to_async(self._scan_progress_repository.mark_idle)(
+                    self._scan_progress_provider
+                )
             return
 
         # Checkpoint 64.2/64.3: newly-closed bars reach the shared
@@ -370,16 +384,105 @@ class _QuoteSink:
         connection_is_healthy = self.health_tracker.is_healthy(now=clock)
         total_promoted = 0
         total_invocations = 0
-        for strategy_id in strategy_ids:
-            pipeline_outcome = await sync_to_async(promote_bars_and_trigger_signals)(
-                aggregation,
-                session=session,
-                clock=clock,
-                connection_is_healthy=connection_is_healthy,
-                strategy_id=strategy_id,
+
+        # Checkpoint 64.18 §2/§4/§5: ONE scan = one aggregate_now() cycle
+        # across every desired strategy. `universe_total` is computed
+        # ONCE, before the strategy loop, from the SAME closed-bar set
+        # `promote_bars_and_trigger_signals` itself will iterate (never a
+        # second, divergent count).
+        scan_degraded = False
+        if self._scan_progress_provider is not None:
+            closed_instrument_ids = {
+                str(b.instrument_id) for b in aggregation.bars if b.status is BarStatus.CLOSED
+            }
+            await sync_to_async(self._scan_progress_repository.start_scan)(
+                self._scan_progress_provider,
+                scan_id=clock.isoformat(),
+                scan_started_at=clock,
+                timeframe=timeframe.value,
+                universe_total=len(closed_instrument_ids),
+                strategies_total=len(strategy_ids),
             )
-            total_promoted += pipeline_outcome.promoted_count
-            total_invocations += pipeline_outcome.active_loop_invocations
+
+        for strategy_index, strategy_id in enumerate(strategy_ids, start=1):
+            if self._scan_progress_provider is not None:
+
+                def _report_progress(
+                    instrument_id: str,
+                    processed_count: int,
+                    _total: int,
+                    *,
+                    _strategy_id: str = strategy_id,
+                ) -> None:
+                    # Called from inside `sync_to_async(promote_bars_and_
+                    # trigger_signals)(...)` below - already running on the
+                    # sync-context thread, so this repository call is a
+                    # plain (not `await sync_to_async(...)`) call, matching
+                    # how Django's `sync_to_async` executes its wrapped
+                    # callable's own nested synchronous calls.
+                    self._scan_progress_repository.update_progress(
+                        self._scan_progress_provider,  # type: ignore[arg-type]
+                        status="SCANNING",
+                        current_instrument=instrument_id,
+                        current_strategy=_strategy_id,
+                        universe_processed=processed_count,
+                    )
+
+                await sync_to_async(self._scan_progress_repository.update_progress)(
+                    self._scan_progress_provider,
+                    status="SCANNING",
+                    current_strategy=strategy_id,
+                    strategies_processed=strategy_index - 1,
+                )
+            else:
+                _report_progress = None  # type: ignore[assignment]
+
+            try:
+                pipeline_outcome = await sync_to_async(promote_bars_and_trigger_signals)(
+                    aggregation,
+                    session=session,
+                    clock=clock,
+                    connection_is_healthy=connection_is_healthy,
+                    strategy_id=strategy_id,
+                    on_instrument_progress=_report_progress,
+                )
+                total_promoted += pipeline_outcome.promoted_count
+                total_invocations += pipeline_outcome.active_loop_invocations
+            except Exception as exc:  # noqa: BLE001 - one strategy's
+                # failure must not abort the whole scan (§4's explicit
+                # instruction) - caught, recorded as DEGRADED, safely
+                # logged (never a raw traceback in the persisted state),
+                # and the loop continues to the remaining strategies.
+                scan_degraded = True
+                self._stdout(f"  strategy {strategy_id!r} failed during this scan: {exc}")
+                if self._scan_progress_provider is not None:
+                    await sync_to_async(self._scan_progress_repository.update_progress)(
+                        self._scan_progress_provider,
+                        status="DEGRADED",
+                        last_error_safe=f"strategy {strategy_id} failed",
+                    )
+
+            if self._scan_progress_provider is not None:
+                await sync_to_async(self._scan_progress_repository.update_progress)(
+                    self._scan_progress_provider,
+                    status="DEGRADED" if scan_degraded else "SCANNING",
+                    strategies_processed=strategy_index,
+                )
+
+        if self._scan_progress_provider is not None:
+            # `created_at` (`auto_now_add`) is the row's real wall-clock
+            # insertion time - `clock` was captured at the START of this
+            # very cycle, before any signal this cycle could produce was
+            # written, so this precisely counts "signals created during
+            # THIS scan," never an approximated time window.
+            signals_found = await sync_to_async(
+                lambda: SignalRecord.objects.filter(created_at__gte=clock).count()
+            )()
+            await sync_to_async(self._scan_progress_repository.update_progress)(
+                self._scan_progress_provider,
+                status="DEGRADED" if scan_degraded else "COMPLETED",
+                signals_found=signals_found,
+            )
 
         if self._runtime_status_provider is not None:
             await sync_to_async(self.health_tracker.persist)(

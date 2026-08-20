@@ -17,6 +17,7 @@ type LivePaperSessionResponse = components["schemas"]["LivePaperSessionResponse"
 type WorkerRuntimeStatusResponse = components["schemas"]["WorkerRuntimeStatusResponse"];
 type DailySessionReportResponse = components["schemas"]["DailySessionReportResponse"];
 type SignalResponse = components["schemas"]["SignalResponse"];
+type ScannerProgressResponse = components["schemas"]["ScannerProgressResponse"];
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -91,12 +92,31 @@ const EFFECTIVE_CONFIG_DRIFT = {
   drift: true,
 };
 
+const SAMPLE_SCAN_PROGRESS: ScannerProgressResponse = {
+  status: "SCANNING",
+  timeframe: "5m",
+  universe_total: 4,
+  universe_processed: 3,
+  remaining: 1,
+  progress_percent: 75,
+  current_instrument: "NSE:RELIANCE",
+  current_strategy: "ema_crossover",
+  strategies_total: 2,
+  strategies_processed: 1,
+  signals_found: 2,
+  started_at: "2026-08-20T09:15:00Z",
+  last_progress_at: "2026-08-20T09:20:00Z",
+  stale: false,
+  last_error_safe: "",
+};
+
 function workbench(overrides: Partial<LivePaperWorkbenchResponse> = {}): LivePaperWorkbenchResponse {
   return {
     readiness: READINESS_BLOCKED,
     checklist: TEN_CHECKS,
     session_state: "NOT_READY",
     effective_session_configuration: EFFECTIVE_CONFIG_DRIFT,
+    scanner_progress: null,
     ...overrides,
   };
 }
@@ -167,6 +187,7 @@ const SAMPLE_SIGNAL: SignalResponse = {
   },
   telegram: { status: "SENT", attempted_at: "2026-08-20T10:00:01Z", delivered_at: "2026-08-20T10:00:01Z", retry_count: 0, error_message: "" },
   discord: null,
+  evidence: null,
 };
 
 function stubEndpoints(
@@ -506,6 +527,59 @@ describe("LivePaperOperationsConsole", () => {
     const text = container.textContent ?? "";
     expect(text).not.toMatch(/eyJ[a-zA-Z0-9._-]{10,}/); // no JWT-shaped string
     expect(text).not.toMatch(/https:\/\/discord\.com\/api\/webhooks/);
+  });
+
+  it("shows Scanner Progress as unavailable when no scan has ever started", async () => {
+    stubEndpoints({ workbench: workbench({ scanner_progress: null }) });
+
+    renderWithAuth(<LivePaperOperationsConsole />);
+
+    await waitFor(() => expect(screen.getByText("Scanner Progress")).toBeInTheDocument());
+    expect(screen.getByText(/No scan has started yet/)).toBeInTheDocument();
+  });
+
+  it("shows real scanner progress from backend state with an accessible progressbar", async () => {
+    stubEndpoints({ workbench: workbench({ scanner_progress: SAMPLE_SCAN_PROGRESS }) });
+
+    renderWithAuth(<LivePaperOperationsConsole />);
+
+    await waitFor(() => expect(screen.getByRole("progressbar")).toBeInTheDocument());
+    const bar = screen.getByRole("progressbar");
+    expect(bar).toHaveAttribute("aria-valuemin", "0");
+    expect(bar).toHaveAttribute("aria-valuemax", "100");
+    expect(bar).toHaveAttribute("aria-valuenow", "75");
+    const scannerSection = screen.getByText("Scanner Progress").closest("section") as HTMLElement;
+    expect(within(scannerSection).getByText("NSE:RELIANCE")).toBeInTheDocument();
+    expect(within(scannerSection).getByText("ema_crossover")).toBeInTheDocument();
+    expect(within(scannerSection).getByText("1 of 2")).toBeInTheDocument();
+    expect(within(scannerSection).getByText("Signals Found").nextSibling).toHaveTextContent("2");
+  });
+
+  it("clearly shows STALE when the scan has stopped updating", async () => {
+    stubEndpoints({
+      workbench: workbench({ scanner_progress: { ...SAMPLE_SCAN_PROGRESS, stale: true } }),
+    });
+
+    renderWithAuth(<LivePaperOperationsConsole />);
+
+    await waitFor(() => expect(screen.getByText("STALE")).toBeInTheDocument());
+  });
+
+  it("clearly shows FAILED with a safe error message", async () => {
+    stubEndpoints({
+      workbench: workbench({
+        scanner_progress: {
+          ...SAMPLE_SCAN_PROGRESS,
+          status: "FAILED",
+          last_error_safe: "strategy ema_crossover failed",
+        },
+      }),
+    });
+
+    renderWithAuth(<LivePaperOperationsConsole />);
+
+    await waitFor(() => expect(screen.getByText("FAILED")).toBeInTheDocument());
+    expect(screen.getByText("strategy ema_crossover failed")).toBeInTheDocument();
   });
 
   it("disables session control for a read-only (non-operator) user", async () => {

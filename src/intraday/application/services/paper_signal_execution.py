@@ -32,6 +32,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Protocol
 
+from intraday.application.repositories.signal_evidence import SignalEvidenceRepository
 from intraday.application.repositories.trade_plan import TradePlanRepository
 from intraday.application.services.exit_plan_policy import derive_default_exit_plan
 from intraday.application.services.paper_trading import (
@@ -58,6 +59,7 @@ from intraday.trading_engine.strategy_execution.contracts import (
     TradePlan,
 )
 from intraday.trading_engine.strategy_execution.coordinator import StrategyExecutionCoordinator
+from intraday.trading_engine.strategy_execution.evidence import build_signal_evidence
 
 
 class SignalRecorder(Protocol):
@@ -193,6 +195,7 @@ class PaperSignalExecutionService:
         apply_default_exit_plan: bool = False,
         signal_recorder: SignalRecorder | None = None,
         trade_plan_recorder: TradePlanRepository | None = None,
+        evidence_recorder: SignalEvidenceRepository | None = None,
     ) -> None:
         self._coordinator = coordinator
         self._paper_trading_service = paper_trading_service
@@ -200,6 +203,13 @@ class PaperSignalExecutionService:
         self._communication = communication
         self._signal_recorder = signal_recorder
         self._trade_plan_recorder = trade_plan_recorder
+        self._evidence_recorder = evidence_recorder
+        """Checkpoint 64.18: optional, off by default - mirrors
+        `trade_plan_recorder`'s own opt-in discipline. When supplied,
+        `build_signal_evidence(signal)` (a pure formatter over the
+        signal's OWN already-computed `evidence`/`price`/`direction` -
+        never a new calculation) is persisted for every REAL signal,
+        never a skipped/neutral/already-processed evaluation."""
         """Checkpoint 64.7: optional, off by default - mirrors
         `signal_recorder`'s own opt-in discipline. When supplied AND
         the evaluating strategy produces a `TradePlan`, it is persisted
@@ -300,6 +310,10 @@ class PaperSignalExecutionService:
         # None/() below, exactly as before this checkpoint).
         if trade_plan is not None and self._trade_plan_recorder is not None:
             self._trade_plan_recorder.save(str(signal_id), trade_plan)
+        if self._evidence_recorder is not None:
+            evidence = build_signal_evidence(signal)
+            if evidence is not None:
+                self._evidence_recorder.save(str(signal_id), evidence)
         context = _build_context(
             instrument_id=instrument_id,
             strategy_id=strategy_id,

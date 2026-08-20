@@ -22,7 +22,7 @@ from __future__ import annotations
 import datetime as dt
 from decimal import Decimal
 
-from django.db.models import Sum
+from django.db.models import Q, Sum
 from django.db.models.query import QuerySet
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import serializers
@@ -44,6 +44,7 @@ from intraday.application.reporting.signal_report import SignalSummaryRow, build
 from intraday.domain.shared_kernel.contracts import Side
 from intraday.infrastructure.persistence.models import (
     AggregatedBarObservation,
+    AuditLogEntry,
     CommunicationLedgerRecord,
     PaperOrderRecord,
     PaperPositionRecord,
@@ -129,30 +130,51 @@ def _parse_date(value: str | None) -> dt.date | None:
     return dt.date.fromisoformat(value)
 
 
-def _latest_close_price(instrument_id: str) -> Decimal | None:
-    """Checkpoint 64.17 §9: the ONE authoritative, already-persisted
-    mark-price source this reporting layer reads - `AggregatedBarObservation`
-    (Checkpoint 24A, the same table `market_data_views.recent_bars` reads)
-    - never a second, independent Dhan call from this reporting layer.
-    Returns `None` when no bar has ever been persisted for this
-    instrument, which the caller must treat as "unrealized P&L cannot be
-    safely calculated," never as a zero price."""
-    exchange, _, symbol = instrument_id.partition(":")
-    row = (
-        AggregatedBarObservation.objects.filter(instrument_symbol=symbol, exchange=exchange)
-        .order_by("-interval_start")
-        .first()
+def _latest_close_prices(instrument_ids: list[str]) -> dict[str, Decimal]:
+    """Checkpoint 64.17 §9 / 64.18 §16: the ONE authoritative, already-
+    persisted mark-price source this reporting layer reads -
+    `AggregatedBarObservation` (Checkpoint 24A, the same table `market_
+    data_views.recent_bars` reads) - never a second, independent Dhan
+    call from this reporting layer.
+
+    ONE query for every requested instrument (not one query per
+    instrument) - 64.17 disclosed this as a real, bounded-but-avoidable
+    N+1; closed here by fetching every candidate row for the whole
+    instrument set in a single query, then picking the latest per
+    instrument in Python. An instrument absent from the returned dict
+    has no persisted bar at all - the caller must treat that as
+    "unrealized P&L cannot be safely calculated," never as a zero
+    price."""
+    if not instrument_ids:
+        return {}
+    pairs = {tuple(instrument_id.split(":", 1)) for instrument_id in instrument_ids}
+    query = Q()
+    for exchange, symbol in pairs:
+        query |= Q(exchange=exchange, instrument_symbol=symbol)
+    rows = AggregatedBarObservation.objects.filter(query).order_by(
+        "exchange", "instrument_symbol", "-interval_start"
     )
-    return row.close_price if row is not None else None
+    latest_by_pair: dict[tuple[str, str], Decimal] = {}
+    for row in rows:
+        key = (row.exchange, row.instrument_symbol)
+        if key not in latest_by_pair:  # first seen per pair, given the order_by, is the latest
+            latest_by_pair[key] = row.close_price
+    return {
+        f"{exchange}:{symbol}": latest_by_pair[(exchange, symbol)]
+        for exchange, symbol in pairs
+        if (exchange, symbol) in latest_by_pair
+    }
 
 
 def _unrealized_pnl_total(open_positions_qs: QuerySet[PaperPositionRecord]) -> Decimal | None:
     """Checkpoint 64.17 §9: `None` (not a partial sum) the moment ANY
     open position's mark price is unavailable - a fabricated partial
     total would be indistinguishable from a genuinely complete one."""
+    positions = list(open_positions_qs)
+    mark_prices = _latest_close_prices([p.instrument_id for p in positions])
     total: Decimal | None = None
-    for position in open_positions_qs:
-        mark_price = _latest_close_price(position.instrument_id)
+    for position in positions:
+        mark_price = mark_prices.get(position.instrument_id)
         if mark_price is None:
             return None
         direction_sign = 1 if position.direction == Side.BUY.value else -1
@@ -161,6 +183,38 @@ def _unrealized_pnl_total(open_positions_qs: QuerySet[PaperPositionRecord]) -> D
         )
         total = position_pnl if total is None else total + position_pnl
     return total
+
+
+def _configuration_version_for_session_date(
+    *, provider: str, session_date: dt.date, current_version: int
+) -> int | None:
+    """Checkpoint 64.18 §17: prefers the REAL, historical
+    `AuditLogEntry` trail over "whatever the version is right now" -
+    64.17 disclosed the latter as wrong for a past `session_date`. The
+    latest `scanner_configuration.*` audit entry at or before the END
+    of `session_date` (23:59:59 UTC) is the actual configuration that
+    was active for that session - not a guess, the same durable trail
+    every other audit-backed feature in this project already uses
+    (Checkpoint 12). Falls back to the CURRENT version only for
+    TODAY'S date (the common case: no audit entry needed to know "this
+    is what's active right now"); for any other date with no matching
+    audit entry, returns `None` (honest absence) rather than the
+    current value, which would be a fabricated historical claim."""
+    end_of_day = dt.datetime.combine(session_date, dt.time.max, tzinfo=dt.UTC)
+    entry = (
+        AuditLogEntry.objects.filter(
+            resource_type="scanner_configuration",
+            resource_id=provider,
+            occurred_at__lte=end_of_day,
+        )
+        .order_by("-occurred_at")
+        .first()
+    )
+    if entry is not None and entry.version_identifier.isdigit():
+        return int(entry.version_identifier)
+    if session_date == dt.datetime.now(tz=dt.UTC).date():
+        return current_version
+    return None
 
 
 def _session_duration_seconds(
@@ -358,7 +412,11 @@ def daily_session_report(request: Request) -> Response:
         closed_positions=closed_positions,
         unrealized_pnl_total=unrealized_pnl_total,
         session_duration_seconds=session_duration_seconds,
-        configuration_version=scanner_config.configuration_version,
+        configuration_version=_configuration_version_for_session_date(
+            provider="dhan",
+            session_date=session_date,
+            current_version=scanner_config.configuration_version,
+        ),
     )
     data = DailySessionReportResponseSerializer(
         {

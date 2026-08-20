@@ -35,6 +35,7 @@ from intraday.infrastructure.persistence.signal_repository import (
     ChannelStatus,
     DjangoSignalRepository,
     EnrichedSignal,
+    SignalEvidenceEnrichment,
 )
 
 
@@ -74,6 +75,17 @@ class SignalResponseSerializer(serializers.Serializer[dict[str, object]]):
     trade_plan = TradePlanFieldSerializer(allow_null=True)
     telegram = ChannelStatusSerializer(allow_null=True)
     discord = ChannelStatusSerializer(allow_null=True)
+    # Checkpoint 64.18: `None` (never a fabricated value) when no
+    # evidence was persisted for this signal (a strategy with no
+    # registered describer, or a signal predating this checkpoint).
+    # A plain `DictField`, not a nested Serializer class - a Serializer
+    # attribute literally named `fields` collides with DRF's own
+    # `Serializer.fields` (a `BindingDict` property) at the mypy/
+    # djangorestframework-stubs level (the same class of issue
+    # `ReadinessCheckSerializer` already documented for `label`,
+    # Checkpoint 64.14) - the wire shape stays exactly
+    # `{"schema_version": ..., "fields": [{"label": ..., "value": ...}]}`.
+    evidence = serializers.DictField(allow_null=True)
 
 
 class SignalListResponseSerializer(serializers.Serializer[dict[str, object]]):
@@ -141,6 +153,16 @@ def _enriched_to_response_data(enriched: EnrichedSignal) -> dict[str, object]:
         ),
         "telegram": _channel_status_data(enriched.telegram),
         "discord": _channel_status_data(enriched.discord),
+        "evidence": _evidence_data(enriched.evidence),
+    }
+
+
+def _evidence_data(evidence: SignalEvidenceEnrichment | None) -> dict[str, object] | None:
+    if evidence is None:
+        return None
+    return {
+        "schema_version": evidence.schema_version,
+        "fields": [{"label": label, "value": value} for label, value in evidence.fields],
     }
 
 

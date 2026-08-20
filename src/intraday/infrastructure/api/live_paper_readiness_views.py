@@ -29,6 +29,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from intraday.application.repositories.scanner_configuration import ScannerConfigurationRecord
+from intraday.application.repositories.scanner_scan_progress import ScannerScanProgressRecord
 from intraday.application.repositories.worker_runtime_status import WorkerRuntimeStatusRecord
 from intraday.application.services.live_paper_readiness import (
     LivePaperReadiness,
@@ -48,11 +49,21 @@ from intraday.infrastructure.persistence.provider_settings_repositories import (
 from intraday.infrastructure.persistence.scanner_configuration_repository import (
     DjangoScannerConfigurationRepository,
 )
+from intraday.infrastructure.persistence.scanner_scan_progress_repository import (
+    DjangoScannerScanProgressRepository,
+)
 from intraday.infrastructure.persistence.worker_runtime_status_repository import (
     DjangoWorkerRuntimeStatusRepository,
 )
 
 _DEFAULT_PROVIDER = "dhan"
+
+# Checkpoint 64.18 §3/§7: how old `last_progress_at` may be before the
+# API itself reports `stale=True` - a non-terminal status (STARTING/
+# SCANNING) that has not moved in over this long means the worker has
+# stopped updating it (crashed, hung, or the process itself died) -
+# the frontend must never treat a stuck progress row as current.
+_SCAN_PROGRESS_STALE_THRESHOLD_SECONDS = 120
 
 
 class LivePaperReadinessResponseSerializer(serializers.Serializer[dict[str, object]]):
@@ -110,11 +121,42 @@ class EffectiveSessionConfigurationSerializer(serializers.Serializer[dict[str, o
     drift = serializers.BooleanField()
 
 
+class ScannerProgressResponseSerializer(serializers.Serializer[dict[str, object]]):
+    """Checkpoint 64.18 §6: reuses the existing workbench endpoint
+    rather than a second one - one GET already composes readiness,
+    checklist, and session state, so adding "what is the scanner doing
+    right now" here is the smallest correct extension. `remaining`/
+    `progress_percent` are computed HERE, at read time, from the two
+    real stored counters (`universe_total`/`universe_processed`) -
+    never a second stored value that could drift (§2's explicit
+    instruction). `stale` is also computed here (§3/§7): `true` when
+    `last_progress_at` is older than `_STALE_THRESHOLD_SECONDS`, so the
+    frontend never has to guess or run its own timer-based staleness
+    check."""
+
+    status = serializers.CharField()
+    timeframe = serializers.CharField()
+    universe_total = serializers.IntegerField()
+    universe_processed = serializers.IntegerField()
+    remaining = serializers.IntegerField()
+    progress_percent = serializers.FloatField()
+    current_instrument = serializers.CharField()
+    current_strategy = serializers.CharField()
+    strategies_total = serializers.IntegerField()
+    strategies_processed = serializers.IntegerField()
+    signals_found = serializers.IntegerField()
+    started_at = serializers.DateTimeField(allow_null=True)
+    last_progress_at = serializers.DateTimeField(allow_null=True)
+    stale = serializers.BooleanField()
+    last_error_safe = serializers.CharField()
+
+
 class LivePaperWorkbenchResponseSerializer(serializers.Serializer[dict[str, object]]):
     readiness = LivePaperReadinessResponseSerializer()
     checklist = serializers.ListField(child=serializers.DictField())
     session_state = serializers.CharField()
     effective_session_configuration = EffectiveSessionConfigurationSerializer()
+    scanner_progress = ScannerProgressResponseSerializer(allow_null=True)
 
 
 def _build_readiness_and_context(
@@ -166,6 +208,46 @@ def _readiness_data(readiness: LivePaperReadiness) -> dict[str, object]:
     }
 
 
+def _scanner_progress_data(
+    record: ScannerScanProgressRecord | None, *, now: dt.datetime
+) -> dict[str, object] | None:
+    """Checkpoint 64.18 §2/§6: `None` before any scan has ever started
+    (an honest absence, never a fabricated all-zero row).
+    `remaining`/`progress_percent` are computed HERE, never stored -
+    the ONE source of truth is `universe_total`/`universe_processed`."""
+    if record is None:
+        return None
+    remaining = max(record.universe_total - record.universe_processed, 0)
+    progress_percent = (
+        (record.universe_processed / record.universe_total * 100)
+        if record.universe_total > 0
+        else 0.0
+    )
+    is_terminal = record.status in ("COMPLETED", "FAILED", "STOPPED", "IDLE")
+    stale = (
+        not is_terminal
+        and record.last_progress_at is not None
+        and (now - record.last_progress_at).total_seconds() > _SCAN_PROGRESS_STALE_THRESHOLD_SECONDS
+    )
+    return {
+        "status": record.status,
+        "timeframe": record.timeframe,
+        "universe_total": record.universe_total,
+        "universe_processed": record.universe_processed,
+        "remaining": remaining,
+        "progress_percent": round(progress_percent, 1),
+        "current_instrument": record.current_instrument,
+        "current_strategy": record.current_strategy,
+        "strategies_total": record.strategies_total,
+        "strategies_processed": record.strategies_processed,
+        "signals_found": record.signals_found,
+        "started_at": record.scan_started_at,
+        "last_progress_at": record.last_progress_at,
+        "stale": stale,
+        "last_error_safe": record.last_error_safe,
+    }
+
+
 @extend_schema(responses={200: LivePaperReadinessResponseSerializer})
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
@@ -206,6 +288,8 @@ def live_paper_workbench(request: Request) -> Response:
     session_state = derive_live_paper_session_state(
         desired=desired, effective=worker_status, readiness=readiness
     )
+    scan_progress_record = DjangoScannerScanProgressRepository().get(provider)
+    scanner_progress = _scanner_progress_data(scan_progress_record, now=dt.datetime.now(tz=dt.UTC))
 
     effective_configuration_version = (
         worker_status.effective_configuration_version if worker_status is not None else 0
@@ -248,6 +332,7 @@ def live_paper_workbench(request: Request) -> Response:
                 "effective_requested_stock_count": effective_requested_stock_count,
                 "drift": effective_configuration_version != desired.configuration_version,
             },
+            "scanner_progress": scanner_progress,
         }
     ).data
     return Response(data)

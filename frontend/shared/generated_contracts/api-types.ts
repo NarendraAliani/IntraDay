@@ -1984,6 +1984,7 @@ export interface components {
             }[];
             session_state: string;
             effective_session_configuration: components["schemas"]["EffectiveSessionConfiguration"];
+            scanner_progress: components["schemas"]["ScannerProgressResponse"] | null;
         };
         /**
          * @description Request body for `POST /api/v1/auth/login/`. `password` is
@@ -2319,6 +2320,39 @@ export interface components {
             selected_watchlist_name: string;
             selected_strategy_ids?: string[];
         };
+        /**
+         * @description Checkpoint 64.18 §6: reuses the existing workbench endpoint
+         *     rather than a second one - one GET already composes readiness,
+         *     checklist, and session state, so adding "what is the scanner doing
+         *     right now" here is the smallest correct extension. `remaining`/
+         *     `progress_percent` are computed HERE, at read time, from the two
+         *     real stored counters (`universe_total`/`universe_processed`) -
+         *     never a second stored value that could drift (§2's explicit
+         *     instruction). `stale` is also computed here (§3/§7): `true` when
+         *     `last_progress_at` is older than `_STALE_THRESHOLD_SECONDS`, so the
+         *     frontend never has to guess or run its own timer-based staleness
+         *     check.
+         */
+        ScannerProgressResponse: {
+            status: string;
+            timeframe: string;
+            universe_total: number;
+            universe_processed: number;
+            remaining: number;
+            /** Format: double */
+            progress_percent: number;
+            current_instrument: string;
+            current_strategy: string;
+            strategies_total: number;
+            strategies_processed: number;
+            signals_found: number;
+            /** Format: date-time */
+            started_at: string | null;
+            /** Format: date-time */
+            last_progress_at: string | null;
+            stale: boolean;
+            last_error_safe: string;
+        };
         SessionResponse: {
             /** Format: date */
             session_date: string;
@@ -2389,6 +2423,9 @@ export interface components {
             trade_plan: components["schemas"]["TradePlanField"] | null;
             telegram: components["schemas"]["ChannelStatus"] | null;
             discord: components["schemas"]["ChannelStatus"] | null;
+            evidence: {
+                [key: string]: unknown;
+            } | null;
         };
         StrategyConfigurationResponse: {
             strategy_id: string;

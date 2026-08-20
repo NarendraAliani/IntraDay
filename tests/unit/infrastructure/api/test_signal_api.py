@@ -147,6 +147,64 @@ def test_signals_endpoint_shows_not_provided_when_no_trade_plan_exists() -> None
     assert body["items"][0]["trade_plan"] is None
     assert body["items"][0]["telegram"] is None
     assert body["items"][0]["discord"] is None
+    assert body["items"][0]["evidence"] is None
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_signals_endpoint_shows_real_persisted_signal_evidence() -> None:
+    """Checkpoint 64.18 §12: the actual, persisted strategy evidence -
+    never a fabricated explanation."""
+    from datetime import UTC, datetime
+    from decimal import Decimal
+
+    from intraday.domain.instrument.contracts import make_instrument_id
+    from intraday.domain.shared_kernel.contracts import Exchange, SignalId
+    from intraday.infrastructure.persistence.signal_evidence_repository import (
+        DjangoSignalEvidenceRepository,
+    )
+    from intraday.trading_engine.strategy_execution.evidence import (
+        SignalEvidence,
+        SignalEvidenceField,
+    )
+
+    DjangoSignalRepository().record_signal(
+        signal_id=SignalId("evidence-sig"),
+        strategy_id="ema_crossover",
+        instrument_id=make_instrument_id(Exchange.NSE, "RELIANCE"),
+        direction="BULLISH",
+        price=Decimal("1236.00"),
+        timeframe="Timeframe.ONE_MINUTE",
+        signal_timestamp=datetime(2026, 1, 5, 6, 0, tzinfo=UTC),
+        risk_status="APPROVED",
+        risk_reason="",
+        order_status="FILLED",
+    )
+    DjangoSignalEvidenceRepository().save(
+        "evidence-sig",
+        SignalEvidence(
+            schema_version="1",
+            strategy_id="ema_crossover",
+            fields=(
+                SignalEvidenceField(label="Fast EMA", value="1234.50"),
+                SignalEvidenceField(label="Slow EMA", value="1229.40"),
+                SignalEvidenceField(label="Crossover", value="Bullish"),
+            ),
+        ),
+    )
+    client = _client()
+
+    response = client.get("/api/v1/config/signals/")
+
+    assert response.status_code == 200
+    evidence = response.json()["items"][0]["evidence"]
+    assert evidence is not None
+    assert evidence["schema_version"] == "1"
+    assert evidence["fields"] == [
+        {"label": "Fast EMA", "value": "1234.50"},
+        {"label": "Slow EMA", "value": "1229.40"},
+        {"label": "Crossover", "value": "Bullish"},
+    ]
 
 
 @requires_postgres

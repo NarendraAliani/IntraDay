@@ -456,6 +456,9 @@ def test_full_bars_to_report_chain_with_trade_plan_and_mixed_channel_delivery() 
     the only fakes are the two network-boundary providers, and even
     those are exercised through the real `SignalCommunicationService`/
     `NotificationRouter`, never bypassed."""
+    from intraday.infrastructure.persistence.signal_evidence_repository import (
+        DjangoSignalEvidenceRepository,
+    )
     from intraday.infrastructure.persistence.signal_repository import DjangoSignalRepository
     from intraday.infrastructure.persistence.trade_plan_repository import (
         DjangoTradePlanRepository,
@@ -492,6 +495,7 @@ def test_full_bars_to_report_chain_with_trade_plan_and_mixed_channel_delivery() 
         communication=communication,
         signal_recorder=DjangoSignalRepository(),
         trade_plan_recorder=DjangoTradePlanRepository(),
+        evidence_recorder=DjangoSignalEvidenceRepository(),
     )
 
     bars = _breakout_bars()
@@ -523,6 +527,14 @@ def test_full_bars_to_report_chain_with_trade_plan_and_mixed_channel_delivery() 
     signal_row = SignalRecord.objects.get(signal_id=str(signal_id))
     assert signal_row.strategy_id == "atr_volatility_breakout"
     assert signal_row.risk_status == "APPROVED"
+
+    # --- Signal evidence (Checkpoint 64.18): real, persisted, traceable
+    # from the signal that actually produced it ---
+    evidence_record = DjangoSignalEvidenceRepository().get_by_signal_id(str(signal_id))
+    assert evidence_record is not None
+    assert evidence_record.strategy_id == "atr_volatility_breakout"
+    evidence_labels = {label for label, _value in evidence_record.fields}
+    assert {"ATR", "Price", "Breakout"} <= evidence_labels
 
     # --- Risk + paper order + fill + position: all real ---
     assert result.order_result is not None
@@ -575,6 +587,9 @@ def test_full_bars_to_report_chain_with_trade_plan_and_mixed_channel_delivery() 
 
 
 def test_scenario_j_risk_rejected_signal_is_persisted_queryable_and_communicated() -> None:
+    from intraday.infrastructure.persistence.signal_evidence_repository import (
+        DjangoSignalEvidenceRepository,
+    )
     from intraday.infrastructure.persistence.signal_repository import DjangoSignalRepository
 
     registry = build_default_registry()
@@ -606,6 +621,7 @@ def test_scenario_j_risk_rejected_signal_is_persisted_queryable_and_communicated
         quantity=Decimal("10"),
         communication=communication,
         signal_recorder=DjangoSignalRepository(),
+        evidence_recorder=DjangoSignalEvidenceRepository(),
     )
     bars = _uptrend_bars()
     broker.record_price(RELIANCE, bars[-1].close, BASE)
@@ -639,6 +655,13 @@ def test_scenario_j_risk_rejected_signal_is_persisted_queryable_and_communicated
 
     page = DjangoSignalRepository().list_signals(strategy_id="ema_crossover")
     assert any(item.record.signal_id == str(signal_id) for item in page.items)
+
+    # --- Evidence independence: a risk-rejected signal is STILL fully
+    # explainable - the strategy's own evidence is never withheld just
+    # because the trade could not execute. ---
+    evidence_record = DjangoSignalEvidenceRepository().get_by_signal_id(str(signal_id))
+    assert evidence_record is not None
+    assert evidence_record.strategy_id == "ema_crossover"
 
     # --- Communication independence: BOTH channels still attempted,
     # entirely independent of the risk rejection and of each other. ---

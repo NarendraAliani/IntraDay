@@ -98,13 +98,14 @@ class DailySessionReport:
     updated_at` (that field is a "last write" timestamp, not a session
     start)."""
     configuration_version: int | None
-    """Checkpoint 64.17 §11: the `ScannerConfiguration.configuration_version`
-    active on the provider at report-generation time - `None` when no
-    scanner configuration has ever been saved. Disclosed limitation: no
-    per-date historical configuration-version index exists yet, so for a
-    PAST `session_date` this is the CURRENT version, not necessarily the
-    version that was actually active that day - the `AuditLogEntry` trail
-    remains the authoritative historical record until that gap is closed."""
+    """Checkpoint 64.17 §11 / 64.18 §17: the configuration_version
+    actually active for THIS `session_date` - for a PAST date, resolved
+    from the real `AuditLogEntry` audit trail (the latest
+    `scanner_configuration.*` entry at or before that day's end), never
+    from "whatever the version happens to be right now" (64.17's own
+    disclosed limitation, closed this checkpoint). `None` when no
+    audit entry exists for that date at all (an honest absence, never a
+    fabricated historical claim)."""
 
 
 def build_daily_session_report(
