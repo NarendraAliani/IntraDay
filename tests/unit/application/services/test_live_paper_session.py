@@ -204,6 +204,69 @@ def test_derive_state_stopped_when_disabled_but_worker_has_reported() -> None:
     assert state is LivePaperSessionState.STOPPED
 
 
+def test_derive_state_stopping_when_disabled_but_worker_has_not_yet_reconciled() -> None:
+    """Checkpoint 64.14 §9: `desired.enabled is False` alone is NOT
+    STOPPED - it must be STOPPING until the worker's own effective
+    version catches up."""
+    effective = WorkerRuntimeStatusRecord(
+        provider="dhan",
+        worker_state="RUNNING",
+        token_state="VALID",
+        watchdog_state="HEALTHY",
+        last_packet_at=None,
+        last_bar_at=None,
+        reconnect_count=0,
+        consecutive_failures=0,
+        subscribed_instrument_count=0,
+        last_error_safe="",
+        updated_at=None,
+        effective_configuration_version=1,  # stale - desired is already version 2 (stopped)
+        effective_timeframe="5m",
+        effective_strategy_ids=(),
+        effective_universe_requested_count=0,
+        effective_universe_subscribed_count=0,
+    )
+    state = derive_live_paper_session_state(
+        desired=_record(enabled=False, version=2),
+        effective=effective,
+        readiness=_readiness(can_start=True),
+    )
+    assert state is LivePaperSessionState.STOPPING
+
+
+def test_derive_state_failed_when_the_worker_reports_a_real_failure_state() -> None:
+    """Checkpoint 64.14 §8: FAILED is derived from the REAL,
+    already-existing WorkerState vocabulary (AUTH_FAILED/TOKEN_EXPIRED/
+    FAILED, Checkpoint 53) - never fabricated - and takes priority over
+    every other derivation, since a failed worker cannot genuinely be
+    RUNNING regardless of what `desired.enabled` says."""
+    for failed_state in ("FAILED", "AUTH_FAILED", "TOKEN_EXPIRED"):
+        effective = WorkerRuntimeStatusRecord(
+            provider="dhan",
+            worker_state=failed_state,
+            token_state="EXPIRED",
+            watchdog_state="DISCONNECTED",
+            last_packet_at=None,
+            last_bar_at=None,
+            reconnect_count=0,
+            consecutive_failures=3,
+            subscribed_instrument_count=0,
+            last_error_safe="safe error",
+            updated_at=None,
+            effective_configuration_version=2,
+            effective_timeframe="5m",
+            effective_strategy_ids=(),
+            effective_universe_requested_count=0,
+            effective_universe_subscribed_count=0,
+        )
+        state = derive_live_paper_session_state(
+            desired=_record(enabled=True, version=2),
+            effective=effective,
+            readiness=_readiness(can_start=False),
+        )
+        assert state is LivePaperSessionState.FAILED, failed_state
+
+
 def test_derive_state_starting_when_enabled_but_not_yet_reconciled() -> None:
     state = derive_live_paper_session_state(
         desired=_record(enabled=True, version=2),

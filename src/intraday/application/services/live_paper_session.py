@@ -62,6 +62,20 @@ class LivePaperSessionResult:
     remediation: str | None
 
 
+_FAILED_WORKER_STATES = frozenset({"FAILED", "AUTH_FAILED", "TOKEN_EXPIRED"})
+"""Checkpoint 64.14 §8: the REAL, ALREADY-EXISTING `WorkerState` values
+(`infrastructure/market_data_providers/dhan/worker_state.py`, Checkpoint
+53) `run_market_data_worker.py` itself sets as `final_state` on a
+genuine, unrecoverable startup/runtime failure - persisted verbatim
+into `WorkerRuntimeStatus.worker_state` (confirmed by reading
+`worker_runtime_status_repository.py`'s own `save()`). This is NOT a
+fabricated condition invented for test coverage - it is the SAME field
+the worker command already writes on: bad/expired credentials at
+startup (`AUTH_FAILED`/`TOKEN_EXPIRED`, `run_market_data_worker.py`'s
+own `_run_dhan()` guard clauses) or no instruments resolved / an
+unrecoverable connection failure (`FAILED`)."""
+
+
 def derive_live_paper_session_state(
     *,
     desired: ScannerConfigurationRecord,
@@ -76,19 +90,35 @@ def derive_live_paper_session_state(
     distinct session-lifecycle state - the shortfall itself remains
     visible via `effective_universe_subscribed_count` on the existing
     scanner-config GET response, never hidden, just not re-modeled as
-    a session state of its own."""
+    a session state of its own.
+
+    §9's explicit instruction is honored precisely: `desired.enabled`
+    ALONE is never treated as RUNNING - `RUNNING` requires the
+    `effective_configuration_version` to actually MATCH `desired`'s,
+    i.e. real evidence the worker reconciled. The same discipline
+    applies in the stop direction: `STOPPING` (not `STOPPED`) is
+    returned while `desired.enabled is False` but the worker's last
+    reported `configuration_version` has not yet caught up."""
+    if effective is not None and effective.worker_state in _FAILED_WORKER_STATES:
+        return LivePaperSessionState.FAILED
+
+    version_reconciled = (
+        effective is not None
+        and effective.effective_configuration_version == desired.configuration_version
+    )
+
     if not desired.enabled:
-        if effective is not None:
-            return LivePaperSessionState.STOPPED
+        if effective is None:
+            return (
+                LivePaperSessionState.READY
+                if readiness.can_start
+                else LivePaperSessionState.NOT_READY
+            )
         return (
-            LivePaperSessionState.READY if readiness.can_start else LivePaperSessionState.NOT_READY
+            LivePaperSessionState.STOPPED if version_reconciled else LivePaperSessionState.STOPPING
         )
-    if (
-        effective is None
-        or effective.effective_configuration_version != desired.configuration_version
-    ):
-        return LivePaperSessionState.STARTING
-    return LivePaperSessionState.RUNNING
+
+    return LivePaperSessionState.RUNNING if version_reconciled else LivePaperSessionState.STARTING
 
 
 def start_live_paper_session(
@@ -137,6 +167,7 @@ def start_live_paper_session(
         requested_by=requested_by,
         requested_by_user_id=requested_by_user_id,
         request_id=request_id,
+        action="live_paper_session.start",
     )
     return LivePaperSessionResult(
         accepted=True,
@@ -184,6 +215,7 @@ def stop_live_paper_session(
         requested_by=requested_by,
         requested_by_user_id=requested_by_user_id,
         request_id=request_id,
+        action="live_paper_session.stop",
     )
     return LivePaperSessionResult(
         accepted=True,

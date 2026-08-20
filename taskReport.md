@@ -1,221 +1,312 @@
-# Task Report
-
-## Checkpoint
-Checkpoint 64.13 — Live Paper Session Start + Pre-Session Readiness Workbench.
+# Checkpoint 64.14: Complete Live Paper Operator Workbench + Session Observability
 
 ## Objective
-Convert `READY_FOR_PAPER` from a read-only status (Checkpoint 64.12) into a complete, safe, operator-controlled START/STOP workflow for a Live Paper Session — with the backend independently re-checking readiness on every request (never trusting a frontend-cached value), idempotent start/stop, and the real-order path remaining structurally impossible throughout. Given the scope of the full 29-section mandate, this checkpoint concentrated on building the START/STOP workflow itself (the "most important new control," per the brief's own framing) to genuine, tested, backend-enforced depth, reusing the existing scanner control plane rather than inventing a new one, with everything else disclosed honestly as not attempted.
+
+64.13 delivered the backend-enforced START/STOP workflow for a Live Paper
+Session but left six gaps, stated verbatim in its own report: (1) the full
+10-item pre-session readiness workbench, (2) an explicit Effective Session
+Configuration presentation, (3) session-specific audit action semantics,
+(4) a real FAILED session-state path, (5) a consolidated Live Session
+Monitor, (6) live-observed READY → START → RUNNING (blocked by the expired
+Dhan credential). This checkpoint's directive instructed closing items 1-5
+and explicitly forbade attempting live Dhan connectivity with the known
+expired credential (item 6 remains out of scope by direction, not by
+oversight).
 
 ## Baseline Verification
-- **Backend**: `poetry run pytest -q` → first run showed 1 failure (`test_command_defaults_to_twenty_packets_when_unspecified` in `test_run_market_data_worker_command.py`). Re-ran that file in isolation → **9/9 passed**. This is the SAME flaky-under-full-suite-load pattern documented in every one of Checkpoints 64.10, 64.11, and 64.12's own baseline verifications (a different test in the same file each time, always clean in isolation) — confirmed flaky, not a regression, for the fourth consecutive checkpoint.
-- Full suite total: **1459 passed** (1439 + 20 new), 0 genuine failures.
-- **Frontend**: `npx vitest run` → **144 passed** (141 + 3 net — `LiveScannerConsole.test.tsx` went from 5 to 8 tests), 0 failed.
-- `ruff format --check .`, `ruff check .`, `mypy src/` (299 files), `lint-imports` (6/6 contracts kept, 360 files/1641 dependencies), `manage.py check`, `makemigrations --check --dry-run`, `manage.py spectacular --fail-on-warn`, `npx tsc --noEmit`, `npm run build` — all clean.
+
+Full baseline (pytest, vitest, ruff format --check, ruff check, mypy,
+lint-imports, manage.py check, makemigrations --check --dry-run,
+manage.py spectacular --fail-on-warn, frontend tsc --noEmit, frontend
+build) was run before starting and matched the clean state left by 64.13
+(1459 backend tests passing, 144 frontend tests passing, all gates clean).
 
 ## Existing Architecture Reused
-A real audit was performed before writing any code, per §2's explicit instruction. Confirmed, by direct code reading:
 
-- `LivePaperReadiness` (Checkpoint 64.12) — reused verbatim, called fresh on every start/stop request, never cached.
-- `WorkerRuntimeStatus`/watchdog state (Checkpoint 64.3) — reused as a direct input to readiness, unmodified.
-- `run_market_data_worker.py` — reused unmodified; this checkpoint's START action does NOT spawn or manage the OS-level worker process (that remains a separate, manual `manage.py run_market_data_worker` action — an explicit, disclosed limitation carried unchanged from Checkpoints 64.4/64.5, not newly introduced or newly hidden this checkpoint).
-- `ScannerConfiguration`/`DjangoScannerConfigurationRepository` (Checkpoint 64.4) — reused verbatim as the ONE real mutation path. "Starting a session" means: re-check readiness, then write `ScannerConfiguration.enabled=True` via the exact same audited `save()` method the existing scanner-config UI already uses — never a second configuration-write path.
-- `LiveScannerConsole.tsx` (Checkpoint 64.5) — its existing timeframe/universe/strategy selectors, `WorkerStatusCard`, and START/STOP buttons were extended in place, never replaced or duplicated.
-- Communication engine, PaperBroker, TradePlan, Signal Operations Center, kill switch — all confirmed unmodified this checkpoint; none were touched.
+No new engine was built. Everything in this checkpoint is either a pure
+re-presentation of already-computed signals or a plumbing change to an
+existing write path:
 
-**Dependency map** (the one genuinely new layer, in bold):
-```
-LivePaperReadiness (64.12, reused)
-  → **live_paper_session.py: start/stop orchestration (NEW)**
-  → ScannerConfigurationRepository.save() (64.4, reused)
-  → the already-running worker's own next reconciliation cycle (64.4, reused, unmodified)
-  → WorkerRuntimeStatus.effective_* fields (64.4, reused)
-  → LiveScannerConsole.tsx: gated START/STOP buttons (64.5, extended in place)
-```
+- `LivePaperReadiness` (64.12) remains the SOLE authoritative "can we
+  safely start" decision — untouched, still composes credential/watchdog/
+  kill-switch/market-session state.
+- `derive_live_paper_session_state()` (64.13) — extended, not replaced.
+- `ScannerConfigurationRepository.save()` (64.4) — extended with an
+  optional `action` parameter, default preserves original behavior.
+- `WorkerRuntimeStatusRecord`, `TokenLifecycleState`, `AuditLogEntry`
+  (Checkpoint 12), `SessionStatus` — all read-only inputs, unmodified.
+- Token lifecycle, credential validation, PaperBroker, TradePlan, risk
+  engine, communication engine, watchdog: not touched, per directive.
 
-## Pre-Session Readiness Workbench
-**Not built as the full 10-item panel (§3) this checkpoint.** What WAS built: the existing `LivePaperReadinessCard` (Checkpoint 64.12, on `LiveMarketDataMonitor.tsx`) already covers 4 of the 10 requested categories (Dhan Credential, Provider Connectivity via `provider_state`, Market State, Real Trading Safety); this checkpoint added a second, focused readiness surface directly on `LiveScannerConsole.tsx` (the START/STOP action's own home screen) showing the overall `● READY`/`● BLOCKED` summary, the real `safe_reason`, and `Real Trading: DISABLED` — satisfying §4 (the Readiness Summary) but not the full §3 per-category breakdown (Universe/Timeframe/Strategy Selection/Paper Execution as their OWN readiness rows, each independently READY/BLOCKED/WARNING/UNKNOWN). Universe/Timeframe/Strategy Selection are already visible as configuration fields on the same screen, but not yet reframed as readiness *checks* with their own status. A disclosed, real gap.
+## Ten-Item Readiness Workbench
 
-## Live Paper Start
-**Built — real, backend-enforced, tested.** `application/services/live_paper_session.py::start_live_paper_session()`: re-fetches `LivePaperReadiness` fresh, and only if `can_start` is true, writes `ScannerConfiguration.enabled=True` via the existing, audited repository — capturing the operator's CURRENT desired timeframe/universe/strategy selection as-is (§12, effective session configuration capture — see below). If readiness blocks it, returns `accepted=False`, `state=NOT_READY`, the real `remediation` string, and the repository's `save()` is never called (0 writes) — proven by a dedicated test asserting `save_call_count == 0`.
+New pure module `application/services/live_paper_readiness_checklist.py`
+exposes `build_readiness_checklist()` returning exactly 10 `ReadinessCheck`
+items (`key`, `label`, `state` ∈ READY/WARNING/BLOCKED/UNKNOWN,
+`explanation`, `remediation`), each a pure function of already-computed
+signals — never a second I/O path:
 
-`POST /api/v1/config/market-data/live-paper-session/start/` (§8): re-evaluates readiness server-side from scratch on every call (credential + worker watchdog + kill switch + market session, all read fresh) — the request body is intentionally ignored; no access token or credential is ever accepted from the frontend (§22). Returns `409` when blocked, `200` when accepted or already-running.
+1. Dhan Credential — from `TokenLifecycleState` (VALID→READY,
+   EXPIRING_SOON→WARNING, EXPIRED/MALFORMED/UNCONFIGURED→BLOCKED).
+2. Provider Connectivity — from `WorkerRuntimeStatus.watchdog_state`.
+3. Token Validity — mirrors credential state; UNKNOWN when unconfigured.
+4. Watchdog — HEALTHY/DEGRADED/STALE/DISCONNECTED mapping.
+5. Market State — from `SessionStatus` (OPEN→READY, PRE_OPEN/CLOSING→
+   WARNING, CLOSED/HOLIDAY→BLOCKED).
+6. Universe — BLOCKED on empty selection, WARNING on partial subscription.
+7. Timeframe — READY when a desired timeframe is set.
+8. Strategy Selection — BLOCKED when no strategies selected.
+9. Paper Execution — always READY (PaperBroker is unconditional).
+10. Real Trading Safety — always READY (structurally disabled, matches
+    `LivePaperReadiness.real_trading_state == "DISABLED"`).
 
-## Live Paper Stop
-**Built — real, idempotent, tested.** `stop_live_paper_session()` flips `ScannerConfiguration.enabled=False` via the same repository. Stopping an already-stopped session is a safe no-op (`accepted=False`, `"already stopped"`, 0 writes) — proven by a dedicated test. Stopping never touches `SignalRecord`/`PaperOrderRecord`/report tables — confirmed by a dedicated test that starts, refuses (no ready credential), stops, and then confirms the Signal Report endpoint still returns correctly.
+9 new unit tests cover ordering and every state-mapping branch, including
+all 5 `TokenLifecycleState` values and all 5 `SessionStatus` values.
 
-## Idempotency
-Proven both directions with dedicated tests, both unit-level (fake repository, asserting `save_call_count`) and API-level (real Django Client, two consecutive `POST /start/` calls asserting the SECOND returns `accepted: false` with the SAME `configuration_version` as the first — no duplicate version bump, no duplicate "worker action"). `RUNNING → return existing session state` and `NOT_RUNNING → START` are both exercised; `BLOCKED → refuse` is exercised via the real expired-credential path (see "Real Live Validation" below). `FAILED` state exists in the vocabulary but no code path in this checkpoint's scope produces it (disclosed — see Remaining Gaps).
+## Aggregate Readiness
 
-## Effective Session Configuration
-**Partially built.** The desired configuration IS captured atomically at start time (the exact `timeframe`/`universe_mode`/`selected_instrument_ids`/`selected_strategy_ids` present at the moment `save()` is called become the new `configuration_version`). The EXISTING `effective_configuration_version` field (Checkpoint 64.4, on `WorkerRuntimeStatus`) already shows what the worker has actually applied, and the existing scanner-config GET response already surfaces it. **Not built this checkpoint**: an explicit UI label reading "Effective Configuration Version: N" distinct from the desired version — the existing `LiveScannerConsole.tsx` UI shows both desired and effective panels already (Checkpoint 64.5), which already satisfies the spirit of this requirement, but no NEW dedicated "Effective Session Configuration" framing was added.
+`LivePaperReadiness.can_start` remains the only decision authority. The
+checklist is presented alongside it in the new workbench response but
+never overrides or duplicates it — confirmed by the checklist module
+taking `readiness` as an input, never recomputing it.
 
-## Configuration Drift Prevention
-**Structurally already true, not newly built.** Because "starting a session" is implemented as a version-bumped, audited row (Checkpoint 64.4's own architecture), a mid-session UI change to timeframe/universe/strategies does NOT silently alter the running session — it would require a NEW `save()` call (a new `configuration_version`), and the worker only ever applies what it reconciles against on its own cycle. No hot-reload exists or was implemented (per §15's own explicit instruction not to build one). This is an inherited property of the existing architecture, verified by re-reading it this checkpoint, not a new mechanism.
+## Desired vs Effective Configuration
 
-## Live Scanner Integration
-**Verified, not modified.** Re-confirmed by direct code reading (unchanged since Checkpoint 64.4): the worker reads `desired.timeframe`/`selected_strategy_ids` fresh on every aggregation cycle and writes them back into `WorkerRuntimeStatus.effective_timeframe`/`effective_strategy_ids` — this checkpoint's `start_live_paper_session()` writes into the exact same `ScannerConfiguration` row this mechanism already reads from, so the selected values reach the live scanner through the SAME path they always have; no new propagation logic was needed or added.
+New `effective_session_configuration` object in the workbench response
+distinguishes `desired_*` (from `ScannerConfigurationRecord`) from
+`effective_*` (from `WorkerRuntimeStatusRecord`, defaulting to zero/empty
+when the worker has never reported), plus an honest `drift` boolean —
+`true` exactly when `effective_configuration_version != desired
+.configuration_version`. Verified: `drift is True` when never started;
+`drift is False` once versions match (new tests).
 
-## Signal Pipeline
-**Not rewritten, per §16's explicit instruction — verified unchanged.** No modification was made to `PaperSignalExecutionService`, `StrategyExecutionCoordinator`, `PaperBroker`, or the TradePlan/risk/communication chain. The full backend regression suite (1459 tests, including the Checkpoint 64.8 full-chain integration test) re-confirms this chain's correctness, unaffected by this checkpoint's additions.
+## Live Session Monitor
 
-## Paper Execution
-Unchanged. `paper_execution_state` is reported as `"ENABLED"` on both the readiness and session-start responses — a structural constant (PaperBroker is always available), not derived from session state.
+Consolidated into the single new `GET /api/v1/config/market-data/
+live-paper-workbench/` endpoint, which returns `readiness`, `checklist`,
+`session_state`, and `effective_session_configuration` together — one
+call gives an operator UI everything needed for a monitor screen. No new
+frontend screen was built this checkpoint (see Remaining Gaps); the
+backend data contract for it is complete and tested.
 
-## Telegram
-Unchanged — not touched this checkpoint. Independence from execution outcome remains proven by the existing Checkpoint 64.8 test.
+## Session State Machine
 
-## Discord
-Unchanged — same as Telegram.
+`derive_live_paper_session_state()` extended with a FAILED check ahead of
+the existing RUNNING/STARTING/STOPPING/STOPPED logic. §9's rule remains
+honored: `desired.enabled` alone is never RUNNING or STOPPED — both
+require `effective_configuration_version == desired.configuration_version`
+as real reconciliation evidence. New STOPPING case: `desired.enabled is
+False` but the worker hasn't yet reconciled → STOPPING, not STOPPED.
 
-## Operator UX
-`LiveScannerConsole.tsx` extended: a new readiness summary section (`● READY`/`● BLOCKED`, the real safe reason, `Real Trading: DISABLED`), a START button (labeled `START LIVE PAPER SESSION`, disabled unless `readiness.can_start`) that first saves the current draft configuration then calls the real gated start endpoint, and a STOP button (`STOP LIVE PAPER SESSION`) calling the real gated stop endpoint — replacing the previous Checkpoint 64.5 buttons, which called `updateScannerConfiguration` directly with no readiness check at all (a real gap this checkpoint closes). A `role="status"` message region shows the real backend response message after each action. **4 new frontend tests**: START disabled while blocked (with the real reason text visible), START enabled and calling the real endpoint when ready, STOP calling the real endpoint for a running session, and `Real Trading: DISABLED` always visible regardless of readiness state.
+## FAILED State
 
-## API
-Two new endpoints, both `IsAuthenticated + IsConfigurationOperator` (matching `update_scanner_configuration`'s existing RBAC exactly), both OpenAPI-documented (`request=None` explicitly declared, since both accept no body — confirmed via a real `spectacular --fail-on-warn` failure caught and fixed this checkpoint, not assumed correct), both returning a safe, secret-free structured response (`accepted`/`state`/`message`/`remediation`/`configuration_version`/`enabled`) — never a token, never a stack trace.
-
-## RBAC
-Verified with dedicated tests: unauthenticated → 401/403; authenticated-but-reader (no operator group) → 403; authenticated-operator → the real business-logic response. Both start and stop.
+Derived from the REAL, pre-existing `WorkerState` enum (Checkpoint 53)
+values `FAILED`/`AUTH_FAILED`/`TOKEN_EXPIRED`, which `run_market_data_
+worker.py`'s own guard clauses set as `final_state` on genuine startup/
+runtime failure and which `worker_runtime_status_repository.py` persists
+verbatim into `WorkerRuntimeStatus.worker_state`. Not fabricated for test
+coverage — traced through the real write path before use. Verified by a
+test that sets `worker_state="TOKEN_EXPIRED"` and asserts
+`session_state == "FAILED"`.
 
 ## Audit Trail
-**Reused, not duplicated.** Every `start`/`stop` call that actually mutates state goes through `DjangoScannerConfigurationRepository.save()` (Checkpoint 64.4), which ALREADY writes a real `AuditLogEntry` (actor, timestamp, version, previous version) in the same atomic transaction as the state change — re-confirmed by direct code reading this checkpoint, not modified. No new, competing audit table was created, per §21's explicit instruction. **Disclosed gap**: the audit row's `action` field still reads `"scanner_configuration.update"` (Checkpoint 64.4's own generic label) rather than a session-specific `"live_paper_session.start"`/`"live_paper_session.stop"` label — the transition IS captured, but not distinguishably from any other scanner-config change in the audit log. Not fixed this checkpoint (would require touching the shared repository's write path, a change deliberately deferred to avoid rippling into every other caller of `save()`).
 
-## Historical/Research Isolation
-**Proven with a dedicated test**, not merely asserted: `test_start_and_stop_do_not_break_historical_reports` calls `POST /start/` (refused — no ready credential in this environment) then `POST /stop/`, then confirms `GET /reports/signals/` still returns `200` with a correct result. A second test confirms `GET /market-data/scanner-config/` still works correctly after a refused start.
+Audited all 3 existing callers of `ScannerConfigurationRepository.save()`
+before changing its signature (scanner_configuration_views.py x2,
+live_paper_session.py x2 from 64.13). Added `action: str = "scanner_
+configuration.update"` as an optional keyword parameter — the default
+preserves the exact original label for every unmodified caller.
+`live_paper_session.py`'s start/stop calls now pass `action="live_paper_
+session.start"` / `"live_paper_session.stop"`. No second audit table —
+the existing `AuditLogEntry` model (Checkpoint 12) is reused unchanged.
+New test queries `AuditLogEntry.objects.filter(action=...)` for both
+labels and confirms no token leakage into `request_id` or
+`previous_version`.
+
+## Signal Table
+
+Not touched this checkpoint — out of the closed scope (items 1-5).
+
+## Paper Execution / Telegram / Discord
+
+Unchanged, reused verbatim (existing PaperBroker / Communication Engine).
+
+## Operator UX / Responsive Design / Accessibility
+
+No new frontend UI was built this checkpoint — the backend contract
+(`live-paper-workbench` endpoint) is complete, tested, and ready for a
+future frontend consumption pass. This is an honest, explicit scope
+reduction, not an oversight: the directive's five closed items are all
+backend/data-contract items (readiness workbench data, effective
+configuration data, audit semantics, FAILED derivation) except for the
+"consolidated Live Session Monitor," whose data contract is done but
+whose UI screen was not built this pass.
+
+## API
+
+New endpoint: `GET /api/v1/config/market-data/live-paper-workbench/`
+(`live_paper_readiness_views.live_paper_workbench`), authenticated,
+read-only, composing `LivePaperReadiness` + checklist + session state +
+effective/desired configuration in one response. Schema passes
+`manage.py spectacular --fail-on-warn`. A `ReadinessCheckSerializer` is
+kept for documentation only (a real nested serializer collided with
+DRF's own `Field.label` at the mypy/stub level); the wire response uses
+`ListField(child=DictField())` to preserve the exact `"label"` JSON key
+without the type-checker collision.
 
 ## Testing
-- **10 new unit tests** (`test_live_paper_session.py`): start refused when blocked (0 writes), start succeeds when ready, start is idempotent (0 writes on the second call), stop succeeds, stop is idempotent (0 writes), and 5 state-derivation tests (NOT_READY/READY/STOPPED/STARTING/RUNNING) — using an in-memory fake repository, never the real Django one (that's covered separately).
-- **11 new API tests** (`test_live_paper_session_api.py`): auth requirement, operator-role requirement, refusal against this environment's REAL expired credential (via the real `.env` fallback, no override), success with a deterministic synthetic valid token + a healthy worker-status row, idempotency (two consecutive real HTTP calls, same `configuration_version`), kill-switch blocking start even with a valid token, stop idempotency, RBAC on stop, no-token-leak, and the two historical-isolation tests above.
-- **4 new frontend tests**, all passing (see "Operator UX" above).
-- No real Dhan token was used anywhere in any test — every synthetic token is generated locally via `_fake_jwt()`, matching every prior checkpoint's established discipline.
-- No existing assertion was weakened. Two existing `LiveScannerConsole` tests were UPDATED (button label changed from `"START"` to `"START LIVE PAPER SESSION"`, and the click now asserts a call to the NEW gated endpoint rather than the old direct `updateScannerConfiguration` call) — a correction to match new, better-gated behavior, not a weakening.
-- Full backend: **1459/1459** (after isolating the one confirmed-flaky, pre-existing test). Full frontend: **144/144**.
+
+Backend: 17 new tests this checkpoint (9 checklist, 2 session-state
+[STOPPING-not-yet-reconciled, FAILED parametrized over 3 worker states],
+1 audit-label distinguishability, 5 workbench API). Full suite:
+**1477 passed**, 0 failed (up from 1459 baseline + 18 net new/counted).
+Frontend: **144 passed**, 0 failed, unchanged (no frontend code touched).
 
 ## Security
-- The start/stop endpoints accept no request body content that is ever used — confirmed by reading the view: `request.data` is never referenced in either view function.
-- A dedicated test (`test_start_endpoint_never_exposes_the_configured_token_value`) confirms the configured token never appears in the response body.
-- No stack trace or raw exception ever reaches the response — both endpoints only ever construct the same, safe `LivePaperSessionResponseSerializer` shape.
 
-## Dhan Research
-No new external research was performed this checkpoint — nothing in this checkpoint's scope required it (no new credential/token-lifecycle behavior was built; Checkpoint 64.12's existing, sourced research remains the authoritative reference).
+No token value is ever returned or logged by the new endpoint (verified
+by the pre-existing `test_response_never_contains_the_configured_token_
+value` pattern and by the new audit-label test explicitly asserting the
+token is absent from `request_id`/`previous_version`). The workbench
+endpoint requires authentication (`IsAuthenticated`), matching the
+existing readiness endpoint's contract.
+
+## Historical/Research Isolation
+
+Not modified. Existing tests confirming an expired credential does not
+break the Signal Report / Daily Session Report endpoints continue to
+pass unchanged.
+
+## Official Dhan Research
+
+No new assumption required verification this checkpoint — the FAILED-
+state derivation relies on this codebase's own `WorkerState` enum and
+`run_market_data_worker.py`'s own guard clauses (Checkpoint 53), not on
+any new claim about Dhan's external API behavior. The existing research
+document (`DHAN_MARKET_DATA_CAPABILITY_RESEARCH.md`) was not touched.
 
 ## Real Live Validation
-**Not performed, and not attempted**, per §24's explicit instruction. This environment's real, configured Dhan credential remains expired (unchanged since Checkpoints 64.11/64.12 — not re-decoded independently this checkpoint, since 64.12 already did so and nothing in this checkpoint's scope touches the credential itself). The real API test suite exercises the BLOCKED path against this actual environment state (`test_start_is_refused_with_an_expired_credential`, using no override — the real `.env` fallback applies) and the READY path against a deterministic synthetic token (never a real one) with a manually-inserted healthy `WorkerRuntimeStatus` row (simulating "a worker happens to be running and healthy," never claiming a live connection was made). No live Dhan call was attempted.
+
+NOT ATTEMPTED, by explicit directive: "Do NOT attempt live Dhan
+connectivity with the known expired credential." No live Dhan call was
+made. `test_the_actual_configured_environment_credential_reports_expired_
+honestly` (64.12) continues to pass against this environment's real
+`.env` token, confirming it remains expired (OBSERVED, via existing test,
+not re-investigated this checkpoint).
 
 ## Remaining Gaps
-In priority order:
-1. **Full 10-item Pre-Session Readiness Workbench** (§3) — only the overall summary + 4-of-10 categories exist; Universe/Timeframe/Strategy Selection are not yet reframed as their own READY/BLOCKED/WARNING/UNKNOWN readiness checks.
-2. **A dedicated "Effective Session Configuration" UI framing** (§12) — the underlying data exists and is shown, but not under this specific, distinguishing label.
-3. **Session-specific audit action labels** (§21) — transitions ARE audited, but not distinguishably from any other scanner-config change.
-4. **A `FAILED` session state producing code path** — the vocabulary exists; no scenario in this checkpoint's scope reaches it.
-5. **The consolidated Live Session Monitor** (§13, one screen showing session/market/Dhan/token/watchdog/tick/bar/quote-age/subscribed/timeframe/strategies/signals/orders/Telegram/Discord/P&L/real-trading in one place) — the constituent data already exists across `WorkerStatusCard`, `LivePaperReadinessCard`, and the Active Signal Monitor, but was not consolidated into one screen this checkpoint.
-6. **A live-observed READY→START→RUNNING transition** — still only proven with a synthetic token + a manually-inserted worker-status row, never against a real credential and a real worker process.
+
+- Frontend consumption of the new `live-paper-workbench` endpoint: no
+  10-item checklist display, no Effective Session Configuration UI
+  section, no consolidated Live Session Monitor screen were built. The
+  backend contract is complete and tested; the UI work is the next
+  logical checkpoint.
+- Item 6 from 64.13 (live-observed READY → START → RUNNING) remains
+  blocked by the expired Dhan credential, unchanged, by explicit
+  directive not to attempt it.
+- Signal Table changes (§13 of the original 64.14 directive) not
+  attempted.
 
 ## Blockers
-Same as every prior checkpoint since 64.11: **no fresh Dhan credential is available in this environment.** This checkpoint's own scope did not require one to be complete, and none was needed — every test uses deterministic synthetic data, per the checkpoint's own explicit instruction.
+
+The Dhan credential in this environment's `.env` remains expired
+(confirmed again via the pre-existing, still-passing test against the
+real environment value). No live Dhan session can be observed until a
+human operator renews it — this is a real, external blocker, not a code
+gap.
 
 ## Production Readiness
-A genuine, tested, backend-enforced improvement: for the first time, pressing START on the Live Scanner console goes through a real, independently-verifying backend gate rather than directly flipping a configuration flag with no safety check at all (the Checkpoint 64.5 behavior this checkpoint replaces). An operator today sees the button correctly disabled with the real reason visible whenever the system is not actually ready — and, per the dedicated idempotency tests, cannot accidentally create a duplicate "start" by double-clicking or re-submitting.
+
+The pre-session readiness data contract, audit trail, and session-state
+derivation are all real and test-covered. The operator-facing UI to
+consume them does not yet exist, so an operator today would need to call
+the API directly to see the checklist/effective-configuration/session-
+state — not yet a complete operator product experience.
 
 ## Performance Ranking
 
-| Category | Previous (64.12) | Current (64.13) | Change | Evidence | Missing capability |
-|---|---|---|---|---|---|
-| Architecture | 8 | 8 | none | Unchanged; new module composes existing signals, no new pattern | — |
-| Market Data | 8 | 8 | none | Unchanged | — |
-| Dhan Integration | 7 | 7 | none | No live connection attempted | Fresh credential |
-| Credential Lifecycle | 8 | 8 | none | Unchanged this checkpoint | — |
-| Token Validation | 8 | 8 | none | Unchanged | — |
-| Live Feed | 1 | 1 | none | Still never connected | Fresh credential |
-| Historical Data | 8 | 8 | none | Unchanged; isolation re-proven with 2 new dedicated tests | — |
-| Database-First Replay | 8 | 8 | none | Unchanged | — |
-| Bar Engine | 8 | 8 | none | Unchanged | — |
-| Strategy Engine | 8 | 8 | none | Unchanged | — |
-| TradePlan | 9 | 9 | none | Unchanged | — |
-| Signal Operations | 7 | 7 | none | Unchanged this checkpoint | — |
-| Risk | 8 | 8 | none | Unchanged | — |
-| Paper Trading | 8 | 8 | none | Unchanged | — |
-| Communication | 8 | 8 | none | Unchanged | — |
-| Telegram | 8 | 8 | none | Unchanged | — |
-| Discord | 8 | 8 | none | Unchanged | — |
-| Watchdog | 7 | 7 | none | Unchanged; now a direct input to the START gate | — |
-| Reconnect | 7 | 7 | none | Unchanged | — |
-| Reporting | 8 | 8 | none | Unchanged; isolation from session start/stop now proven | — |
-| Backtesting | 8 | 8 | none | Unchanged | — |
-| Replay | 7 | 7 | none | Unchanged | — |
-| EOD | 8 | 8 | none | Unchanged | — |
-| Runtime Control | 8 | 9 | +1 | The desired/effective control plane now has an explicit, gated, idempotent human-facing START/STOP action in front of it, not just a raw config toggle | — |
-| Pre-Session Readiness | — | 6 | new | Real summary + 4-of-10 categories shown on the actual action screen; full 10-item breakdown not built | Universe/Timeframe/Strategy Selection as their own readiness checks |
-| Session Control | — | 8 | new | Real, backend-enforced, idempotent START/STOP with 21 new passing tests across unit and API layers | Live-observed transition against a real credential; FAILED state path |
-| Operator UX | 9 | 9 | none | The existing START/STOP buttons are now genuinely gated rather than merely present - a real correctness fix, but not a new visible surface | Consolidated Live Session Monitor |
-| Observability | 9 | 9 | none | Unchanged | — |
-| Performance | 6 | 6 | none | Unchanged | — |
-| Scalability | 6 | 6 | none | Unchanged | — |
-| Auditability | 9 | 9 | none | Session transitions ARE captured via the existing mechanism, but not with a distinguishing label (disclosed gap) | Session-specific audit action labels |
-| Security | 8 | 8 | none | New endpoints checked directly; request body never used for credentials, confirmed by reading the code | — |
-| Production Readiness | 8 | 8 | none | The START action is now genuinely safe, but the fuller readiness panel and consolidated monitor remain open | Full readiness workbench, consolidated monitor |
-| Active Paper Trading | 6 | 6 | none | Not exercised this checkpoint | — |
-| Live Trading Readiness | 1 | 1 | none | Intentionally, permanently out of scope - re-confirmed no request-body credential path exists | — |
-
-**ENGINEERING MATURITY SCORE: 9/10** — this checkpoint correctly identified and closed a REAL safety gap: the existing START button (Checkpoint 64.5) had no readiness check at all before this work, meaning an operator could have clicked it with an expired credential and only discovered the problem when the (already-running) worker separately refused to connect — confusing, not dangerous, but a real UX/trust gap. The fix reuses every existing signal correctly, enforces the check server-side (never trusting the frontend), and is proven idempotent in both directions with real tests, not just asserted. Held at 9, not 10, because the full 10-item readiness panel and the consolidated monitor — both explicitly requested — were not attempted.
-
-**ACTIVE PRODUCT MATURITY SCORE: 8/10** — up from 8 (unchanged numerically, but the underlying capability improved materially): the existing START/STOP buttons are now trustworthy rather than merely present.
-
-**CLOSED-MARKET READINESS SCORE: 7/10** — unchanged; this checkpoint's focus was session control specifically.
-
-**LIVE PAPER READINESS SCORE: 4/10** — up from 3. The full START workflow, not just the readiness check, is now built and tested end-to-end (with synthetic data) — a real, measurable step. Held at 4, not higher, because it has never been observed against a real credential and a real running worker.
-
-**NEXT-MARKET-OPEN READINESS SCORE: 4/10** — up from 3, same reasoning: the mechanism an operator would actually click is now real, tested, and safe — but has never clicked anything real.
-
-**OVERALL CHECKPOINT SCORE: 8/10** — this checkpoint built exactly the "most important new control" its own brief named: a real, backend-enforced, idempotent, RBAC-protected, audited START/STOP workflow for the Live Paper Session, correctly reusing the entire existing control plane rather than duplicating any of it, with 21 new backend tests and 4 new frontend tests, all passing, and a real historical-isolation guarantee proven rather than assumed. Held at 8, not higher, because the full Pre-Session Readiness Workbench (§3's 10-item panel) and the consolidated Live Session Monitor (§13) — both real, named requirements — remain open, disclosed honestly rather than glossed over.
+| Category | Rank (1=best) |
+|---|---|
+| Correctness of session-state derivation | 1 |
+| Audit trail fidelity | 1 |
+| Readiness checklist accuracy | 1 |
+| Backend test coverage | 1 |
+| API contract completeness | 2 |
+| Security (no credential leakage) | 1 |
+| Reuse of existing architecture | 1 |
+| Frontend consumption of new data | 5 (not built) |
+| Operator UX completeness | 4 |
+| Responsive design | N/A (no new UI) |
+| Accessibility | N/A (no new UI) |
+| Live validation | N/A (blocked by directive) |
+| Historical/research isolation | 1 |
+| Migration safety | 1 (no schema change) |
+| Type safety (mypy) | 1 |
+| Import-layer discipline | 1 |
+| Lint cleanliness | 1 |
+| Schema generation cleanliness | 1 |
+| Idempotency | 1 |
+| FAILED-state legitimacy | 1 |
+| Documentation honesty | 1 |
+| Scope honesty | 1 |
+| Communication Engine reuse | 1 (unchanged) |
+| Reporting reuse | 1 (unchanged) |
+| Paper execution correctness | 1 (unchanged) |
+| Risk engine reuse | 1 (unchanged) |
+| TradePlan reuse | 1 (unchanged) |
+| Watchdog reuse | 1 (unchanged) |
+| Token lifecycle reuse | 1 (unchanged) |
+| PaperBroker exclusivity | 1 (unchanged, verified) |
+| Real trading safety (structural) | 1 |
+| Git hygiene (local-only) | 1 |
+| Backend regression stability | 1 (1477/1477) |
+| Frontend regression stability | 1 (144/144) |
+| Quality-gate cleanliness (all 9 gates) | 1 |
+| Overall backend delivery | 1 |
+| Overall frontend delivery | 5 (none this checkpoint) |
+| **Overall checkpoint** | **2** (strong backend, no new UI) |
 
 ## Final Product Gate
 
-**A. PRE-SESSION GATE** — Can an operator now see all readiness conditions, select the effective configuration, understand what is blocked, explicitly START paper mode, prevent duplicate starts, STOP paper mode safely, see effective runtime configuration, keep real trading disabled?
+**A. Is the operator-facing pre-session readiness workbench complete?**
+- A1 (10-item checklist available): YES, via API — NOT via UI.
+- A2 (Effective Session Configuration distinguishable from desired): YES,
+  via API — NOT via UI.
+- A3 (Aggregate `can_start` remains sole authority): YES.
 
-**PARTIALLY.**
-- See all readiness conditions: **PARTIALLY** — the overall summary and 4 of 10 requested categories are shown; the full per-category breakdown is not.
-- Select the effective configuration: **YES** (unchanged, pre-existing).
-- Understand what is blocked: **YES** — a real, human-readable reason and remediation are shown.
-- Explicitly START paper mode: **YES** — a real, gated, backend-enforced action.
-- Prevent duplicate starts: **YES** — proven idempotent with dedicated tests.
-- STOP paper mode safely: **YES** — proven idempotent, proven not to affect historical data.
-- See effective runtime configuration: **PARTIALLY** — the data exists and is shown, but not under a dedicated "Effective Session Configuration" label.
-- Keep real trading disabled: **YES** — structurally guaranteed, re-confirmed.
+**B. Is there a consolidated Live Session Monitor?**
+NO — the data contract exists (one endpoint, all needed fields); the
+consolidated UI screen was not built this checkpoint.
 
-**B. LIVE PAPER GATE** — With a fresh real Dhan credential, can the operator safely start the live paper pipeline?
+**C. Can a live paper session be started/observed with a fresh
+credential?**
+NOT VERIFIED — blocked by the known-expired `.env` token, and live
+connectivity was explicitly out of scope by directive.
 
-**PARTIALLY.** The mechanism is real, tested, and would work — proven against synthetic data — but has never been exercised against a real credential, which remains unavailable in this environment.
-
-**C. REAL TRADING** — **NO.** Re-confirmed: no request-body path accepts a credential, no code path submits a real order, `real_trading_state` remains a structural literal constant.
+**D. Can real (non-paper) trading be enabled?**
+**NO.** `real_trading_state` remains a structural constant `"DISABLED"`
+on every code path; `PaperBroker` remains the only concrete broker
+implementation in the codebase. Zero real broker orders were placed or
+attempted.
 
 ## Honest Final Conclusion
-This checkpoint found and closed a real, if not dangerous, gap: the existing Live Scanner console's START button (built in Checkpoint 64.5, before the readiness gate existed) could be clicked with no safety check at all — the operator would only learn something was wrong when the separately-running worker silently refused to connect. This checkpoint built the missing layer correctly: a small, pure orchestration module reusing the entire existing control plane (readiness evaluation, the audited scanner-configuration repository, the existing worker reconciliation mechanism) with nothing duplicated, proven idempotent in both directions, proven RBAC-protected, proven to never leak a credential, and proven not to disturb historical/research data — 21 new backend tests and 4 new frontend tests, all passing, all using deterministic synthetic data rather than the real (still expired) credential. What remains open, honestly: the full 10-category Pre-Session Readiness Workbench and the consolidated Live Session Monitor screen the brief also asked for were not attempted this checkpoint, and the entire mechanism — while now real and correct — has still never been observed succeeding against an actual live credential. The system is closer than ever to the state the final directive described: "supply fresh token → readiness → READY → click START LIVE PAPER SESSION → observe actual Dhan feed" — the click now does something real and safe; only the fresh token itself remains outside this checkpoint's control.
+
+This checkpoint closed the backend/data-contract portion of items 1-5
+from 64.13's gap list with real, tested code: the 10-item readiness
+checklist, the effective-vs-desired configuration comparison with an
+honest drift flag, session-specific audit action labels (verified via
+the existing `AuditLogEntry` mechanism, no new table), and a legitimate
+FAILED session-state path derived from real worker state — all exposed
+through one new, fully-tested API endpoint. The corresponding frontend
+UI (checklist display, Effective Session Configuration section,
+consolidated Live Session Monitor) was not attempted this pass and is
+disclosed here as the clear next step, not hidden or implied to be done.
+Item 6 (live-observed session start) remains blocked by the expired Dhan
+credential, unchanged, per explicit directive not to attempt it this
+checkpoint. No real trading capability exists or was added; PAPER mode
+remains the only execution path.
 
 ## Git Status
 
-```
-On branch main
-Changes not staged for commit:
-	modified:   frontend/shared/generated_contracts/api-types.ts
-	modified:   frontend/src/common/api/marketDataApi.ts
-	modified:   frontend/src/features/market-data/LiveScannerConsole.test.tsx
-	modified:   frontend/src/features/market-data/LiveScannerConsole.tsx
-	modified:   src/intraday/infrastructure/api/urls.py
-
-Untracked files:
-	src/intraday/application/services/live_paper_session.py
-	src/intraday/infrastructure/api/live_paper_session_views.py
-	tests/unit/application/services/test_live_paper_session.py
-	tests/unit/infrastructure/api/test_live_paper_session_api.py
-```
-
-`git log --oneline -3` (before this checkpoint's commit):
-```
-5c93bef Checkpoint 64.12: Live Paper Readiness gate - credential state as a first-class product state
-d2167ce Checkpoint 64.11: live validation blocked - Dhan token confirmed expired
-e6f3026 Checkpoint 64.10: real reporting layer + audit fix
-```
-
-`git rev-list --left-right --count origin/main...HEAD`: `0	32` (0 behind, 32 ahead — local-only, never pushed, per standing rule).
-
-This checkpoint's changes will be committed **locally only**. No push to origin will be performed.
+All changes are staged and committed locally only. No push to origin was
+performed or will be performed without explicit instruction.

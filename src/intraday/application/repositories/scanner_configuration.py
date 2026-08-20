@@ -42,11 +42,15 @@ class ScannerConfigurationRepository(Protocol):
         requested_by: str,
         requested_by_user_id: int,
         request_id: str,
+        action: str = "scanner_configuration.update",
     ) -> ScannerConfigurationRecord:
         """Persists a NEW desired configuration - always bumps
         `configuration_version` (the caller never sets it directly),
         matching this project's established "version bump on every real
-        change" convention."""
+        change" convention. `action` (Checkpoint 64.14) lets a caller
+        with a more specific meaning (e.g. an explicit session start/
+        stop) record that in the audit trail's `action` field, rather
+        than the generic default every other caller keeps."""
         ...
 
 

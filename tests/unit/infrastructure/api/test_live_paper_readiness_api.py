@@ -194,3 +194,94 @@ def test_expired_credential_does_not_break_the_daily_session_report_endpoint() -
 
     assert response.status_code == 200
     assert response.json()["total_signals"] == 0
+
+
+# --- Checkpoint 64.14: the Pre-Session Readiness Workbench endpoint -----
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_workbench_requires_authentication() -> None:
+    response = Client().get("/api/v1/config/market-data/live-paper-workbench/")
+    assert response.status_code in (401, 403)
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_workbench_returns_all_ten_checklist_items_in_order() -> None:
+    client = _client()
+
+    response = client.get("/api/v1/config/market-data/live-paper-workbench/")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [item["label"] for item in body["checklist"]] == [
+        "Dhan Credential",
+        "Provider Connectivity",
+        "Token Validity",
+        "Watchdog",
+        "Market State",
+        "Universe",
+        "Timeframe",
+        "Strategy Selection",
+        "Paper Execution",
+        "Real Trading Safety",
+    ]
+    for item in body["checklist"]:
+        assert item["state"] in ("READY", "WARNING", "BLOCKED", "UNKNOWN")
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_workbench_reports_a_real_session_state_and_no_drift_when_never_started() -> None:
+    client = _client()
+
+    response = client.get("/api/v1/config/market-data/live-paper-workbench/")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["session_state"] in ("NOT_READY", "READY")
+    config = body["effective_session_configuration"]
+    assert config["effective_configuration_version"] == 0
+    assert config["drift"] is True  # never reconciled at all (desired=1, effective=0)
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_workbench_shows_no_drift_once_desired_and_effective_versions_match() -> None:
+    from intraday.infrastructure.persistence.models import WorkerRuntimeStatus
+
+    WorkerRuntimeStatus.objects.update_or_create(
+        provider="dhan",
+        defaults={
+            "watchdog_state": "HEALTHY",
+            "effective_configuration_version": 1,
+            "effective_timeframe": "1m",
+            "effective_strategy_ids": [],
+        },
+    )
+    client = _client()
+
+    response = client.get("/api/v1/config/market-data/live-paper-workbench/")
+
+    assert response.status_code == 200
+    config = response.json()["effective_session_configuration"]
+    assert config["drift"] is False
+    assert config["effective_configuration_version"] == config["desired_configuration_version"]
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_workbench_reports_failed_session_state_on_a_real_worker_failure() -> None:
+    from intraday.infrastructure.persistence.models import WorkerRuntimeStatus
+
+    WorkerRuntimeStatus.objects.update_or_create(
+        provider="dhan",
+        defaults={"worker_state": "TOKEN_EXPIRED", "watchdog_state": "DISCONNECTED"},
+    )
+    client = _client()
+
+    response = client.get("/api/v1/config/market-data/live-paper-workbench/")
+
+    assert response.status_code == 200
+    assert response.json()["session_state"] == "FAILED"

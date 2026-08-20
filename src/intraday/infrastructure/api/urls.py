@@ -243,6 +243,14 @@ urlpatterns = [
         live_paper_readiness_views.live_paper_readiness,
         name="live-paper-readiness",
     ),
+    # --- Checkpoint 64.14: the 10-item Pre-Session Readiness Workbench
+    # + real session state + effective-session-configuration, all in
+    # ONE response - reuses the same signals as the endpoint above ----
+    path(
+        "market-data/live-paper-workbench/",
+        live_paper_readiness_views.live_paper_workbench,
+        name="live-paper-workbench",
+    ),
     # --- Checkpoint 64.13: explicit, human-triggered START/STOP - the
     # backend re-checks readiness itself, never trusts the frontend ----
     path(

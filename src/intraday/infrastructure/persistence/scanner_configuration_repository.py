@@ -70,7 +70,16 @@ class DjangoScannerConfigurationRepository:
         requested_by: str,
         requested_by_user_id: int,
         request_id: str,
+        action: str = _ACTION,
     ) -> ScannerConfigurationRecord:
+        """Checkpoint 64.14 §10: `action` defaults to the ORIGINAL
+        Checkpoint 64.4 label (`"scanner_configuration.update"`) - every
+        pre-existing caller (`scanner_configuration_views.py`,
+        `scanner_lifecycle_simulation.py`) is unaffected, verified by
+        reading both call sites before this change (neither passes
+        `action`). Only `live_paper_session.py`'s explicit start/stop
+        calls pass a distinguishing label - the smallest architecturally
+        correct extension, never a second audit table."""
         new_values = {
             "enabled": enabled,
             "timeframe": timeframe,
@@ -95,7 +104,7 @@ class DjangoScannerConfigurationRepository:
                 occurred_at=dt.datetime.now(tz=dt.UTC),
                 actor_username=requested_by,
                 actor_user_id=requested_by_user_id,
-                action=_ACTION,
+                action=action,
                 resource_type=_RESOURCE_TYPE,
                 resource_id=provider,
                 version_identifier=str(row.configuration_version),

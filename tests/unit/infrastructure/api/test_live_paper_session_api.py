@@ -126,6 +126,37 @@ def test_start_succeeds_with_a_valid_synthetic_token_and_a_healthy_worker(
 
 @requires_postgres
 @pytest.mark.django_db
+def test_start_and_stop_write_distinguishable_audit_action_labels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Checkpoint 64.14 §10/§11: proves the audit trail can tell a
+    live-paper-session start/stop apart from a generic scanner-config
+    update - never a second audit table, the SAME AuditLogEntry model
+    (Checkpoint 12), just a real, non-generic `action` label. Also
+    confirms no secret is ever logged."""
+    from intraday.infrastructure.persistence.models import AuditLogEntry, WorkerRuntimeStatus
+
+    valid_token = _fake_jwt(exp=datetime.now(tz=UTC) + timedelta(hours=12))
+    _save_credential(access_token=valid_token)
+    WorkerRuntimeStatus.objects.update_or_create(
+        provider="dhan", defaults={"watchdog_state": "HEALTHY"}
+    )
+    client = _operator_client()
+
+    client.post(START_URL)
+    client.post(STOP_URL)
+
+    start_entry = AuditLogEntry.objects.filter(action="live_paper_session.start").latest("id")
+    stop_entry = AuditLogEntry.objects.filter(action="live_paper_session.stop").latest("id")
+    assert start_entry.resource_type == "scanner_configuration"
+    assert start_entry.actor_username == OPERATOR_USERNAME
+    assert stop_entry.actor_username == OPERATOR_USERNAME
+    assert valid_token not in start_entry.request_id
+    assert valid_token not in (start_entry.previous_version or "")
+
+
+@requires_postgres
+@pytest.mark.django_db
 def test_start_is_idempotent_and_does_not_bump_the_version_twice() -> None:
     from intraday.infrastructure.persistence.models import WorkerRuntimeStatus
 
