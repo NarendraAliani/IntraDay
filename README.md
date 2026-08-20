@@ -40,6 +40,14 @@ overnight positions, commodity derivatives, currency derivatives, and crypto
 are permanently out of scope. Indices (e.g. NIFTY, SENSEX) may be used only
 for market context and research — never as tradable instruments.
 
+> **The full, current authoritative scope statement** — execution modes,
+> in-scope capabilities, the permanent real-trading safety boundary, and
+> the platform's strategy-extensibility commitment — lives at
+> [docs/architecture/PRODUCT_SCOPE.md](docs/architecture/PRODUCT_SCOPE.md)
+> (Checkpoint 64.20). This section predates that document and is kept
+> for historical continuity; `PRODUCT_SCOPE.md` is authoritative where
+> the two differ.
+
 ## Start Here (Developers / Architecture)
 
 > Looking to install and run the app instead? See the new-user pointer

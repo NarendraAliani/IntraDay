@@ -107,10 +107,37 @@ def describe_atr_volatility_breakout_evidence(signal: StrategySignal) -> SignalE
     )
 
 
+def describe_test_momentum_evidence(signal: StrategySignal) -> SignalEvidence:
+    """Checkpoint 64.20 §8/§9: NON_PRODUCTION - the proof-of-extensibility
+    `TestMomentumStrategy`'s own evidence describer. `signal.evidence` is
+    `(ema,)` (same single-feature shape as SMA's own describer above).
+    Exists to prove that adding evidence support for a NEW strategy is
+    exactly ONE registration entry below, never a change to
+    `build_signal_evidence()`'s own dispatch logic."""
+    ema_value = signal.evidence[0].value if signal.evidence else None
+    fields = (
+        SignalEvidenceField(
+            label="EMA", value=f"{ema_value}" if ema_value is not None else "Not provided"
+        ),
+        SignalEvidenceField(label="Price", value=f"{signal.price}"),
+        SignalEvidenceField(label="Momentum", value=_direction_label(signal.direction)),
+    )
+    return SignalEvidence(
+        schema_version=SIGNAL_EVIDENCE_SCHEMA_VERSION, strategy_id=signal.strategy_id, fields=fields
+    )
+
+
 _DESCRIBERS = {
     "ema_crossover": describe_ema_crossover_evidence,
     "sma_trend_filter": describe_sma_trend_filter_evidence,
     "atr_volatility_breakout": describe_atr_volatility_breakout_evidence,
+    # Checkpoint 64.20 §8/§9: the ONE registration line the proof-of-
+    # extensibility test strategy needed here - never a change to any
+    # engine's own logic. `test_momentum` is NEVER in
+    # `build_default_registry()` (verified by a dedicated test), so this
+    # entry is dormant/unreachable in production - it only fires when
+    # the dedicated extensibility test constructs its own local registry.
+    "test_momentum": describe_test_momentum_evidence,
 }
 
 
@@ -131,4 +158,5 @@ __all__ = [
     "describe_atr_volatility_breakout_evidence",
     "describe_ema_crossover_evidence",
     "describe_sma_trend_filter_evidence",
+    "describe_test_momentum_evidence",
 ]

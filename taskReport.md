@@ -2,22 +2,38 @@
 
 ## Checkpoint
 
-64.19 — COMMUNICATION EVIDENCE + LIVE SESSION READINESS + PRODUCTION HYGIENE
+64.20 — STRATEGY EXTENSIBILITY + BACKTESTING RESEARCH ARCHITECTURE
+
+## Updated Project Scope
+
+New `docs/architecture/PRODUCT_SCOPE.md` is now the authoritative scope
+statement: Automated Algo Trading System, Indian Equity Market, intraday
+only; capabilities in scope (Historical Research, Backtesting, Replay,
+Strategy Evaluation, Live Market Data, Signal Generation, Signal
+Evidence, TradePlan, Risk Management, Paper Trading, Telegram, Discord,
+Reporting, Operational Monitoring, Strategy Research, Strategy
+Extensibility); two primary execution modes (`PAPER`,
+`LIVE-MARKET-DATA + PAPER-EXECUTION`); real broker order placement
+restated as out of current implementation scope, explicitly disabled,
+requiring future separate approval — this safety boundary was not
+weakened. The README's own "Scope" section (stale since Checkpoint 13)
+was NOT rewritten wholesale (out of this checkpoint's scope, a separate
+cleanup risk) — one link was added pointing to the new authoritative
+document, honestly noting it supersedes the stale section.
 
 ## Objective
 
-Close the last deliberately-deferred product gap (Signal Evidence in
-Telegram/Discord messages) before the first real controlled LIVE PAPER
-validation; confirm the existing readiness checklist already satisfies
-this checkpoint's own list (no new readiness engine); properly research
-and either fix or honestly defer the PostgreSQL teardown warning; and
-write a precise, deterministic first-live-session validation procedure.
+Formally audit whether the platform can absorb a genuinely new strategy
+without touching core engines; prove it mechanically with a dedicated,
+non-production test strategy; and audit the backtesting/research
+architecture against a rigorous target pipeline, documenting real gaps
+honestly rather than building speculative capability.
 
 ## Baseline Verification
 
 | Gate | Result |
 |---|---|
-| pytest | 1519 passed |
+| pytest | 1527 passed |
 | vitest | 174 passed |
 | ruff format --check | 529 files already formatted |
 | ruff check | All checks passed |
@@ -29,366 +45,485 @@ write a precise, deterministic first-live-session validation procedure.
 | frontend tsc --noEmit | 0 errors |
 | frontend build | succeeded |
 
-## Telegram Evidence
+## Existing Strategy Architecture Audit
 
-Implemented (64.18 deliberately deferred this). A new `_render_evidence()`
-pure function in `communication/contracts/templates.py` renders a
-compact "Key Evidence:" section — only the strategy's own real,
-persisted evidence fields, never every raw value, never a fabricated
-line when evidence is absent. Spliced into the two per-signal templates
-(`VALIDATED_SIGNAL`, `VALIDATED_SIGNAL_EXECUTION_BLOCKED`) after the
-existing TradePlan fields, before the Signal/Execution status lines —
-matching the exact ordering this checkpoint's own example shows. The
-existing template fields (Strategy/Stock/Time/Timeframe/Direction/
-Spot/Entry/SL/Targets/Trailing SL) are completely unchanged.
+Read `strategy.py` (the `Strategy` Protocol), `registry.py`
+(`StrategyRegistry`), `contracts.py` (`ParameterDefinition`,
+`StrategySignal`, `validate_configuration`), and `evidence.py`
+(`build_signal_evidence`) in full. **Conclusion: no second strategy
+framework was needed or created.** Every element §4 of this checkpoint
+asks for already exists with the exact names already in use — see
+`docs/architecture/STRATEGY_EXTENSIBILITY_AND_RESEARCH_ARCHITECTURE.md`
+§1 for the full field-by-field mapping.
 
-## Discord Evidence
+## Strategy Contract
 
-Same mechanism, same test coverage — `render_message()` is the ONE
-channel-independent renderer both Telegram and Discord already call
-(Checkpoint 37); no `TelegramEvidenceFormatter`/`DiscordEvidenceFormatter`
-was created, per §3's explicit instruction. Proven directly by a new
-test (`test_telegram_and_discord_render_the_same_canonical_text`)
-asserting the two calls produce byte-identical text.
+Confirmed sufficient: identity/name/version (`strategy_id`/
+`display_name`/`specification_version`/`code_version`), parameter
+schema (`parameter_schema()`), validation (`validate_configuration()`),
+required market data (`required_features()`), evaluation (`evaluate()`),
+signal (`StrategySignal`), evidence (`StrategySignal.evidence`). No
+metadata dict beyond `display_name` exists — noted as a real, minor,
+non-blocking gap (nothing currently reads a richer metadata structure).
 
-## Risk-Rejected Signal Communication
+## Strategy Registry
 
-Proven with real, extended end-to-end tests (not new isolated units):
-the existing `test_scenario_j_risk_rejected_signal_is_persisted_
-queryable_and_communicated` (Checkpoint 64.16) now additionally asserts
-`"Key Evidence:"` appears in the actually-delivered Discord message, and
-that no delivered message ever says `"FILLED"` for a signal whose trade
-never executed — the message never implies an order was placed.
-`Signal → Evidence → Risk REJECTED → NO Paper Order → Telegram/Discord
-attempted` remains fully auditable: the signal row, the evidence row,
-and both channels' ledger rows all persist regardless of the rejection.
+Confirmed sufficient: `list()`/`get()`/`register()`/`activate()`/
+`deactivate()`/`get_active()`/`validate_configuration()`. Adding a
+strategy requires exactly one `registry.register(NewStrategy())` call
+in `build_default_registry()` — proven directly by constructing an
+independent, LOCAL registry for the proof-of-extensibility strategy
+without touching that function at all.
 
-## Communication Independence
+## Dynamic Parameter Schema
 
-Re-verified, not rebuilt: `communication` is architecturally forbidden
-from importing `trading_engine` at all (`.importlinter` Contract 4,
-bounded-context independence) — confirmed by `lint-imports` staying
-clean after this checkpoint's changes. The new `evidence_fields` field
-on `SignalCommunicationContext` is a plain `tuple[tuple[str, str], ...]`,
-never the `trading_engine`-owned `SignalEvidence` type; the CALLER
-(`application.services.paper_signal_execution`, which is allowed to
-depend on both bounded contexts) performs the conversion. This is a
-genuine architectural finding worth stating plainly: broker/channel
-independence and bounded-context independence are BOTH still intact
-after adding evidence to the message pipeline.
+Confirmed generic — `ParameterDefinition` already carries id/type/
+default/minimum/maximum/description(help_text); the frontend's
+`ParameterSchemaFields.tsx` renders purely from this list (re-verified
+by grep: zero `strategy_id === "..."` branches anywhere in it or in
+`StrategyConfigurationPage.tsx`). Conservative defaults reconfirmed
+UNCHANGED from Checkpoint 64.17 (EMA 12/26, SMA 30/0.75, ATR
+14/2.0/1.0/1.5/2.5/3.5/1.0) — re-verified passing:
+`test_strategy_schema_endpoint_exposes_the_conservative_baseline_
+defaults` and `test_changing_a_strategys_default_does_not_mutate_an_
+existing_configuration_record`, both unmodified this checkpoint.
 
-## Message Template Safety
+## Generic Signal Evidence
 
-New `test_no_message_ever_contains_a_credential_shaped_value` renders
-every per-signal template with a full context (evidence, TradePlan,
-order, fill) and asserts no rendered text contains "token", "webhook",
-"secret", or "bearer" (case-insensitive) — a real regression test, not
-an assumption. `test_execution_status_wording_distinguishes_every_real_
-outcome` proves NOT_EVALUATED/BLOCKED/ORDER_SUBMITTED/FILLED/REJECTED
-each render distinct text and none ever say "TRADED" (§5's explicit
-"no semantic ambiguity" — this was already true of the existing
-`ExecutionStatus` enum's own `.value` rendering, now directly tested).
+Confirmed generic — `build_signal_evidence()` dispatches by
+`strategy_id` through one dict; the frontend's "Why This Signal?" panel
+renders `evidence.fields` via a plain `.map()`, no per-strategy
+component. A concrete future `VWAP Reversal` strategy returning
+VWAP/Price/Distance/Reversal State/Volume Ratio fields would render on
+the EXISTING panel unchanged — a direct, mechanical consequence of the
+generic `(label, value)` shape.
 
-## Next-Market-Open Readiness
+## Test Strategy
 
-**Confirmed via direct cross-reference against the real test, not
-rebuilt**: the existing 10-item Pre-Session Readiness Workbench
-(Checkpoint 64.14) already lists exactly this checkpoint's own §8 items
-— Dhan Credential, Provider Connectivity, Token Validity, Watchdog,
-Market State, Universe, Timeframe, Strategy Selection, Paper Execution,
-Real Trading Safety — verified against
-`test_workbench_returns_all_ten_checklist_items_in_order`. No new
-readiness engine was created, per the checkpoint's own explicit
-instruction. Documented in the new
-`docs/architecture/FIRST_LIVE_PAPER_VALIDATION_PROCEDURE.md` §1 with
-the exact state vocabulary each item uses.
+New `TestMomentumStrategy` (`trading_engine/strategy_execution/
+strategies/test_momentum.py`) — explicitly `NON_PRODUCTION` in its own
+docstring and `display_name`, **never added to
+`build_default_registry()`** (mechanically verified by a dedicated
+test). Deterministic rule: BULLISH/BEARISH when close is more than a
+configurable `threshold_percent` above/below a short reference EMA,
+reusing the EXISTING generic `ema_<lookback>` feature family — zero new
+feature-computation code. `tests/unit/trading_engine/test_strategy_
+extensibility.py` (4 tests, all passing) proves it moves through: local
+registry → configuration → `StrategyExecutionCoordinator` (the SAME
+class backtesting reuses) → real signal → real persisted evidence (via
+one new `_DESCRIBERS` entry) → risk (`PaperTradingService`) →
+`PaperBroker` → real Telegram/Discord messages (including the "Key
+Evidence:" text) → a real `DjangoSignalRepository.list_signals()` query
+— with **zero** `if strategy_id == "test_momentum"` branches in any core
+engine.
 
-## First Live Paper Validation Procedure
+## Change-Surface / Extensibility Audit
 
-New `docs/architecture/FIRST_LIVE_PAPER_VALIDATION_PROCEDURE.md` — NOT
-executed this checkpoint (market closed, credential expired). Specifies:
-a small, deliberate first-session universe (3-5 large-cap NSE
-instruments, `SELECTED` mode — never `ALL_CONFIGURED`), `5m` timeframe,
-all three strategies at their Checkpoint 64.17 conservative baseline
-defaults, PAPER mode (the only mode this codebase has), the structural
-(non-configurable) real-trading guard, a one-session maximum runtime,
-and both an operator-STOP and kill-switch stop condition — matching
-§10's exact requirements.
+| Category | Files | Count |
+|---|---|---|
+| Strategy-specific (expected) | `test_momentum.py` | 1 |
+| Strategy-specific tests | `test_strategy_extensibility.py` | 1 |
+| Registration (expected, same shape any new strategy needs) | `evidence.py` (+1 dict entry, +1 formatter function) | 1 |
+| Generic infrastructure changes | none | 0 |
+| Unwanted core-engine changes | none | 0 |
 
-## First Session Success Criteria
+`signal_pipeline_runtime.py`, `research.backtesting.*`,
+`PaperTradingService`, `PaperBroker`, `templates.py`/`signal_
+communication.py`, `application.reporting.*` — all confirmed
+UNCHANGED by this checkpoint's `git diff --stat`. Full accounting in
+`STRATEGY_EXTENSIBILITY_AND_RESEARCH_ARCHITECTURE.md` §6.
 
-Documented in the same file, §5 — a table mapping every criterion
-(§11's list: Dhan CONNECTED, token VALID, market OPEN, scanner RUNNING,
-effective config matches requested, scanner progress advances, at least
-one complete scan cycle, no stale progress, signals-have-evidence, risk
-decisions persisted, paper orders/fills persisted, Telegram/Discord
-status visible, P&L/report generated, no real order API call,
-real_trading_state DISABLED) to the REAL, already-tested source that
-proves it — never a vague/unverifiable criterion. Explicitly states
-system health is separate from "a strategy produced a signal," per §11's
-own instruction.
+## Backtesting Architecture Audit
 
-## Validation Evidence Requirements
+Full pipeline mapped in `STRATEGY_EXTENSIBILITY_AND_RESEARCH_
+ARCHITECTURE.md` §7. Most stages EXIST and are authoritative (historical
+data, data quality, database-first retrieval, session construction,
+bars, strategy execution — the SAME `StrategyExecutionCoordinator` the
+live path uses, signal+evidence, execution simulator, costs,
+positions, P&L, a subset of performance analysis). **One real,
+previously-undocumented gap surfaced by this audit**: the backtest
+engine trades on strategy DIRECTION FLIPS, not `TradePlan` stop-loss/
+target simulation, and does not currently route signals through the
+shared `PaperTradingService` risk gate — the backtester has its own,
+simpler entry/exit/cost simulation. Disclosed honestly, not hidden or
+silently worked around.
 
-Documented in the same file, §6 — timestamps, configuration_version,
-universe, timeframe, strategy versions, worker state, scanner progress,
-signal IDs, evidence, risk decision, execution state, communication
-status, report ID/timestamp. Explicitly states credentials are NEVER
-captured, backed by the existing "never returns/logs a credential"
-guarantee re-verified every checkpoint since 64.12.
+## Database-First Backtesting
 
-## PostgreSQL Teardown Warning
+Re-confirmed unmodified and un-weakened — the same
+`test_scanner_reads_only_from_database_never_the_provider_once_
+complete` test (Checkpoint 63.x, re-audited 64.16) still passes,
+untouched by this checkpoint's changes.
 
-**Properly researched this checkpoint** (§13's own explicit instruction
-not to blindly add another hook). Read pytest-django's actual
-`fixtures.py` source: `teardown_databases()` (where the warning
-originates, in pytest-django's own exception handler) runs inside the
-session-scoped `django_db_setup` fixture's OWN finalizer — not in any
-pytest hook. This confirms 64.18's `pytest_sessionfinish` hook fired
-too late (fixture finalizers complete before session-finish hooks run).
+## Data Quality
 
-**Attempted fix #2** (correctly reasoned this time): a new
-`autouse=True, scope="session"` fixture,
-`_close_db_connections_before_teardown`, that explicitly DEPENDS ON
-`django_db_setup` — per pytest's own documented teardown ordering,
-a fixture's finalizer runs before the finalizer of any fixture it
-depends on, so this guarantees `connections.close_all()` runs before
-`django_db_setup` attempts `DROP DATABASE`.
+Confirmed existing coverage: `BarAggregationResult.missing_intervals`/
+`anomalous_observations`, `BarQualityGrade` (TRADING_GRADE_BAR vs
+SAMPLE_BAR), duplicate/out-of-order handling during aggregation,
+timezone/session/holiday handling centralized in `session_for_instant()`,
+per-strategy warm-up handling via `evaluate()` returning `None`. No
+missing data is ever fabricated anywhere in this path.
 
-**Result: verified via a full-suite run — the warning still appears,
-identically.** This is itself informative: it proves the lingering
-Postgres session is NOT this pytest process's own default Django
-connection (that one is now provably closed first). The true remaining
-session could not be identified without direct `pg_stat_activity`
-access on the Postgres server, which is outside what this checkpoint's
-tooling can safely inspect. **Deferred, per §13's own explicit
-permission** — safe to defer because this warning has never once caused
-a test failure, never affected test isolation, and never varied with
-which tests ran, across every checkpoint it has been observed
-(64.16-64.19). The fixture is left in place (harmless, and closes
-connections that could otherwise leak into a later process) with the
-full investigation documented directly in `tests/conftest.py`.
+## Look-Ahead Bias
+
+**Already exists, already mandatory, already passing — not rebuilt.**
+`tests/unit/research/test_backtesting_engine.py`'s own "No-look-ahead
+protection (Part 25, mandatory)" section: `test_future_bars_do_not_
+affect_earlier_signals` truncates the bar series and proves every
+earlier decision is identical regardless of later bars —the defining
+test of no-look-ahead bias, pre-existing this checkpoint.
+`test_entry_never_fills_at_the_signal_bars_own_price` proves entries
+fill at the NEXT bar's open. Both re-verified passing, unmodified.
+
+## Execution Simulation
+
+Confirmed the simulator does not assume "signal price = perfect fill"
+(entries/exits fill at the next bar's open, proven above) and reuses
+the ALREADY established `IndianCashEquityIntradayCostModel`
+(`verified_nse_cash_equity_intraday_cost_model()`) — no new Indian cost
+model was invented, per explicit instruction.
+
+## Intrabar Ambiguity
+
+**Honest, disclosed finding, not a fabricated policy**: read `engine.py`
+in full and found NO stop-loss/target exit code path exists in the
+current backtest engine at all (it trades on direction flips only,
+Checkpoint 27/28's original design) — TradePlan stops/targets are only
+simulated in the live PAPER path via `PaperBroker`, a structurally
+separate engine. The intrabar "both stop and target touched in the same
+candle" scenario therefore CANNOT currently occur in backtesting,
+because the mechanism that would need this policy does not exist yet.
+Documented as a real, scoped future requirement (the exact ambiguity
+policy this checkpoint's own §15 describes would need to be defined
+WHEN TradePlan-based backtest exits are built), never fabricated as if
+already resolved.
+
+## Performance Metrics
+
+Confirmed existing: Gross/Net P&L, Return %, Trade counts, Win Rate,
+Average Trade/Winner/Loser, Profit Factor, Max Drawdown (+percent
++duration), trade-level Sharpe/Sortino (beyond the directive's own
+list), and a real Equity/Drawdown Curve (`MarkToMarketPoint`, one point
+per bar). **Honest gaps**: Expectancy, Maximum Consecutive Losses, and
+Risk/Reward are not currently computed fields; Signals/Risk Approvals/
+Risk Rejections/Orders/Fills counts exist for the LIVE PAPER path
+(Daily Session Report) but not as `BacktestMetrics` fields, since the
+backtester doesn't route through the shared risk gate (see Backtesting
+Architecture Audit above). Not built this checkpoint — disclosed as
+scoped future additions.
+
+## Validation Splits
+
+Audited — `BacktestTrustLevel` (POC/RESEARCH_READY/VALIDATION_READY/
+PRODUCTION_RESEARCH_READY) exists as a label every result carries, but
+every result today is `POC` by construction; nothing computes or
+enforces Dev/Validation/Out-of-Sample partitioning yet. Documented as a
+real, buildable, NOT YET built extension — not implemented this
+checkpoint.
+
+## Walk-Forward
+
+Audited — does not exist. Correctly NOT implemented this checkpoint,
+per the directive's own explicit instruction not to build a walk-forward
+harness merely because it is desirable. Documented as the next research
+capability in `STRATEGY_EXTENSIBILITY_AND_RESEARCH_ARCHITECTURE.md` §13.
+
+## Robustness
+
+Audited — no dedicated robustness-test harness or report exists.
+`run_backtest()` already accepts varied bars/config/cost-model per call,
+so ad-hoc robustness checks are possible today, but no automated
+slippage-perturbation/delayed-entry/date-window/regime/parameter-
+perturbation suite exists. Documented, not built, per explicit
+instruction.
+
+## Regime Analysis
+
+Audited — no regime classifier or regime-segmented reporting exists.
+Deliberately NOT built speculatively this checkpoint, per the
+directive's own explicit instruction. Documented as a real gap.
+
+## Research Profiles
+
+Unchanged from Checkpoint 64.17's `docs/research/STRATEGY_DEFAULT_
+PROFILES.md`, which already documents the exact Aggressive/Balanced/
+Conservative EMA/SMA/ATR profiles this checkpoint's §21 repeats — not
+duplicated, referenced. No system default was changed (re-verified by
+the unmodified-defaults test cited above).
+
+## Strategy Approval Lifecycle
+
+Documented, not implemented (per the directive's own "design/document"
+instruction): `DRAFT → BACKTESTED → VALIDATED → PAPER_APPROVED →
+LIVE_PAPER_VERIFIED → LIVE_ELIGIBLE`. Explicitly stated: `LIVE_ELIGIBLE
+!= LIVE_ENABLED` — real trading remains a separate, structural,
+code-level constant that no lifecycle stage gates or implies.
+
+## Frontend Extensibility
+
+Re-verified, not rebuilt: the generic strategy configuration UI already
+renders any strategy purely from its metadata/schema/defaults (grep
+confirms zero per-strategy branches); Signal Evidence rendering is
+already generic (Checkpoint 64.18, re-confirmed); Reports are already
+strategy-agnostic (grep confirms zero `strategy_id ==` branches in
+`application.reporting.*`/`reports_views.py`). No frontend code was
+changed this checkpoint — frontend test suite unchanged at 174/174.
+
+## Communication Extensibility
+
+Re-verified, not rebuilt: `render_message()` accepts only the generic
+`SignalCommunicationContext` (Signal/TradePlan/RiskDecision/Evidence/
+ExecutionStatus fields), never strategy-specific arguments — proven
+directly by `TestMomentumStrategy`'s real delivered messages in this
+checkpoint's own extensibility test. Regarding 64.19's own disclosed
+finding (evidence has no independent cap for a hypothetical strategy
+with many fields): **no cap was added this checkpoint** — none of the
+four real strategies (three production + the test strategy) approach a
+verbosity problem (2-4 fields each), so adding a truncation/priority
+policy now would be solving a problem that does not yet exist, matching
+this checkpoint's own explicit "do not solve this by truncating
+blindly... only if the architecture genuinely needs it" instruction.
 
 ## Security
 
-Ran a targeted scan (§15) against exactly the surfaces named: Signal
-Evidence (new `test_no_message_ever_contains_a_credential_shaped_value`,
-plus the existing 64.18 evidence-serialization security test),
-Telegram/Discord payloads (the same new test, run across every
-per-signal template), Reports (existing, re-verified passing), readiness
-API (existing, re-verified passing), communication logs (existing
-ledger-repository tests, re-verified passing). No new leakage surface
-was introduced — evidence values are plain strings built only from
-`FeatureValue.value`/`signal.price`/`signal.direction`.
+No new response-serialization surface was introduced this checkpoint
+(the test strategy's evidence flows through the SAME `build_signal_
+evidence()`/`render_message()` paths already security-tested in
+Checkpoint 64.18/64.19). Re-verified passing: the existing
+credential-shaped-value regression tests, unmodified.
 
-## Frontend
+## Production Hygiene
 
-**No frontend code changes this checkpoint.** Audited first (§17): the
-existing Live Paper Operations Console already shows per-channel
-Telegram/Discord delivery counts (Checkpoint 64.16), the "Why This
-Signal?" evidence panel (Checkpoint 64.18), and the full 10-item
-readiness checklist (Checkpoint 64.15). The change this checkpoint made
-— evidence appearing inside the Telegram/Discord message TEXT — has no
-corresponding UI surface to update (the console never renders raw
-message bodies, only delivery status), so no UI change was needed or
-made. This is a deliberate, audited "nothing to do" finding, not an
-oversight — re-confirmed by the frontend test suite staying at exactly
-174/174, unchanged.
-
-## Testing
-
-**8 new backend tests, full suite 1527 passed** (was 1519):
-`tests/unit/communication/test_templates.py` (new file, 8 tests):
-evidence-present rendering, evidence-absent omission (no fabricated
-placeholder), risk-rejected evidence rendering, partial-evidence
-honesty (only real fields shown), execution-status wording distinctness
-across 5 real states, no-credential-shaped-value regression across 4
-templates, Telegram/Discord byte-identical rendering, and a missing-
-evidence matrix across risk/execution combinations. Plus 2 existing
-end-to-end tests (`test_active_loop_end_to_end.py`) extended in place
-(not new test count) with real delivered-message assertions for both
-the risk-approved and risk-rejected paths.
+Re-verified per §29's explicit instruction not to re-litigate the
+Postgres warning without new evidence: ran the full suite this
+checkpoint and confirmed the warning still appears, unchanged from
+64.19's documented, deferred state — no new fix attempted (64.19 already
+exhausted the two safe, properly-researched avenues; re-attempting
+without new information would be exactly the "waste the checkpoint on a
+cosmetic warning" this checkpoint explicitly warns against). Working
+tree confirmed clean after commit (see Git Status). All quality gates
+re-verified clean (see Baseline Verification).
 
 ## Market Closed Behavior
 
 Unchanged and re-verified: no live Dhan connectivity was attempted, no
-live worker was started. The existing Market State/Live Paper Start =
-BLOCKED behavior (Checkpoint 64.14 checklist item, Checkpoint 64.15 UI)
-is untouched by this checkpoint. Backtesting/Replay/Reports/Research
-remain available, unaffected.
+live worker was started, no live data fabricated. This checkpoint's
+work was entirely architecture audit, documentation, and one new
+NON_PRODUCTION test strategy — no code path in this checkpoint could
+have touched market-closed behavior, and none did.
 
 ## Real Live Validation
 
 **NOT ATTEMPTED**, per explicit directive — market closed, credential
-expired. Every new test in this checkpoint uses deterministic in-memory
-fixtures (`FakeProvider`/`_FailingTelegram`/`_SucceedingDiscord`, the
-same established pattern since Checkpoint 37/64.8), never a real
-network call.
+expired, unchanged since Checkpoint 64.11. The First Live Paper
+Validation Procedure (Checkpoint 64.19) was re-read and preserved
+unmodified — the initial universe was NOT enlarged, per this
+checkpoint's own explicit §28 instruction.
 
 ## Remaining Gaps
 
-- **PostgreSQL teardown warning**: unresolved after two properly-
-  researched attempts; deferred per explicit permission, root cause
-  fully documented for a future attempt with direct DB-server access.
-- **Evidence field verbosity in messages**: currently shows ALL of a
-  strategy's evidence fields (2-4 fields per strategy) — genuinely
-  "compact" for the three existing strategies, but not independently
-  capped/truncated for a hypothetical future strategy with many more
-  evidence fields. Not a problem for any strategy that exists today;
-  noted as a design assumption, not a bug.
+- Backtest engine does not route through the shared risk gate or
+  simulate TradePlan stop/target exits (a real, disclosed architectural
+  gap, not a defect in what exists today).
+- `BacktestMetrics` lacks Expectancy, Maximum Consecutive Losses,
+  Risk/Reward.
+- No validation-split enforcement, walk-forward harness, robustness
+  suite, or regime classifier exists — all four correctly left
+  undocumented-as-built and merely documented as future capability, per
+  explicit instruction not to build them this checkpoint.
+- No `unit` field on `ParameterDefinition` (units are embedded in
+  `help_text`/`label` by convention) — minor, non-blocking.
+- VWAP/RSI-based future strategies would need one new
+  `signal_intelligence.feature_engine` feature function each — a real,
+  narrowly-scoped, identified gap, not a platform redesign.
+- Postgres teardown warning remains deferred, unchanged from 64.19.
 
 ## Blockers
 
 None new. The market remains closed and the Dhan credential remains
 expired — live validation remains externally blocked, unchanged from
-every prior checkpoint since 64.11.
+every checkpoint since 64.11.
 
 ## Production Readiness
 
-The last deliberately-deferred communication gap is now closed: an
-operator reading a Telegram/Discord message can see the same compact,
-factual evidence the console already shows, for both executed and
-risk-rejected signals, with the execution-status wording kept
-unambiguous. The readiness checklist, session control, scanner
-observability, and reporting layers (64.14-64.18) are all confirmed
-still correct and were not touched. A precise, small-scope, low-risk
-procedure for the first real session now exists in writing. The only
-remaining blocker to executing it is external: a fresh Dhan credential
-and an open market session.
+The platform's strategy-extensibility claim is no longer aspirational —
+it is mechanically proven by a real, passing test suite exercising the
+entire pipeline with a genuinely new strategy and zero core-engine
+branching. The backtesting engine's real capabilities and real gaps are
+now both documented precisely, closing the risk of overclaiming research
+rigor that does not yet exist. Nothing in this checkpoint changed
+runtime behavior for any of the three production strategies or any
+existing operator-facing surface.
 
 ## Performance Ranking
 
 | Category | Previous | Current | Change | Evidence | Missing Capability |
 |---|---|---|---|---|---|
-| Architecture | 1 | 1 | none | Bounded-context independence re-verified intact after adding evidence to messages | — |
-| Market Data | 1 | 1 | none | Unchanged; market closed | — |
-| Dhan Integration | 2 | 2 | none | No live call attempted | Fresh credential + open market |
-| Credential Lifecycle | 1 | 1 | none | Unchanged | — |
-| Token Validation | 1 | 1 | none | Unchanged | — |
-| Live Feed | 2 | 2 | none | Not exercised | Live market session |
+| Architecture | 1 | 1 | none | Confirmed sufficient, not rebuilt | — |
+| Strategy Extensibility | 3 | 1 | improved | Mechanically proven via TEST_MOMENTUM, zero core-engine changes | — |
+| Strategy Registry | 1 | 1 | none | Confirmed sufficient | — |
+| Strategy Configuration | 1 | 1 | none | Confirmed generic, defaults reconfirmed unchanged | No `unit` field |
+| Strategy Engine | 1 | 1 | none | Confirmed shared by backtesting and live paper, no divergence | — |
+| Strategy Explainability | 1 | 1 | none | Confirmed generic for a hypothetical new strategy | — |
+| Signal Evidence | 1 | 1 | none | Confirmed generic; TEST_MOMENTUM proves a 4th strategy needs one registration line | — |
+| Market Data | 1 | 1 | none | Unchanged | — |
 | Historical Data | 1 | 1 | none | Unchanged | — |
-| Database-First Replay | 1 | 1 | none | Unchanged (64.18 complete) | — |
+| Database-First Replay | 1 | 1 | none | Re-confirmed unmodified | — |
 | Bar Engine | 1 | 1 | none | Unchanged | — |
-| Strategy Engine | 1 | 1 | none | No strategy calculation touched | — |
-| Strategy Explainability | 1 | 1 | none | Unchanged (64.18 complete); now also reaches messages | — |
-| Signal Evidence | 1 | 1 | none | Unchanged (64.18 complete); now also flows into communication | — |
-| TradePlan | 1 | 1 | none | Unchanged | — |
-| Signal Operations | 1 | 1 | none | Unchanged | — |
-| Risk | 1 | 1 | none | Unchanged | — |
+| Data Quality | 2 | 1 | improved | Full audit confirmed existing coverage is real and complete for what it claims | — |
+| Look-Ahead Safety | 2 | 1 | improved | Confirmed a mandatory, already-passing dedicated test exists | — |
+| TradePlan | 1 | 1 | none | Unchanged; confirmed NOT simulated in backtesting (disclosed) | Backtest TradePlan exit simulation |
+| Risk | 1 | 1 | none | Unchanged; confirmed NOT routed through in backtesting (disclosed) | Backtest risk-gate integration |
 | Paper Trading | 1 | 1 | none | Unchanged | — |
-| Communication | 2 | 1 | improved | Evidence now included; broker/channel/bounded-context independence all re-verified | — |
-| Telegram | 2 | 1 | improved | Key Evidence now included, real end-to-end proof | — |
-| Discord | 2 | 1 | improved | Same as Telegram, proven byte-identical to Telegram's rendering | — |
-| Watchdog | 1 | 1 | none | Unchanged | — |
-| Reconnect | 1 | 1 | none | Unchanged | — |
-| Scanner Progress | 1 | 1 | none | Unchanged (64.18 complete) | — |
-| Reporting | 1 | 1 | none | Unchanged (64.18 complete) | — |
-| Backtesting | 1 | 1 | none | Unchanged | — |
+| Communication | 1 | 1 | none | Re-confirmed generic via TEST_MOMENTUM's real messages | — |
+| Telegram | 1 | 1 | none | Unchanged; re-proven generic | — |
+| Discord | 1 | 1 | none | Unchanged; re-proven generic | — |
+| Scanner Progress | 1 | 1 | none | Unchanged | — |
+| Reporting | 1 | 1 | none | Re-confirmed strategy-agnostic | — |
+| Backtesting | 2 | 2 | none | Full audit performed; real gaps identified (risk gate, TradePlan exits), not closed this checkpoint | Risk-gate + TradePlan integration |
 | Replay | 1 | 1 | none | Unchanged | — |
-| Reproducibility | 1 | 1 | none | Unchanged (64.18 complete) | — |
-| EOD | 1 | 1 | none | Unchanged | — |
+| Reproducibility | 1 | 1 | none | Unchanged | — |
+| Execution Simulation | 2 | 2 | none | Confirmed no-perfect-fill discipline; intrabar policy honestly N/A today | TradePlan-based exit simulation |
+| Slippage / Costs | 1 | 1 | none | Confirmed reuse of the one established Indian cost model | — |
+| Walk-Forward | 4 | 4 | none | Audited, confirmed absent, correctly not built | Full walk-forward harness |
+| Robustness | 4 | 4 | none | Audited, confirmed absent, correctly not built | Robustness test suite |
+| Regime Analysis | 4 | 4 | none | Audited, confirmed absent, correctly not built | Regime classifier |
 | Runtime Control | 1 | 1 | none | Unchanged | — |
-| Pre-Session Readiness | 1 | 1 | none | Confirmed (not rebuilt) to already satisfy this checkpoint's own checklist | — |
 | Session Control | 1 | 1 | none | Unchanged | — |
 | Session Observability | 1 | 1 | none | Unchanged | — |
-| Operator UX | 1 | 1 | none | No UI change needed - audited and confirmed already complete for this checkpoint's scope | — |
+| Operator UX | 1 | 1 | none | Unchanged; no UI change needed | — |
 | Responsive UI | 2 | 2 | none | No UI change this checkpoint | — |
 | Accessibility | 2 | 2 | none | No UI change this checkpoint | — |
-| Performance | 1 | 1 | none | Unchanged (64.18's N+1 fix holds) | — |
+| Performance | 1 | 1 | none | Unchanged | — |
 | Scalability | 1 | 1 | none | Unchanged | — |
-| Auditability | 1 | 1 | none | Evidence-in-message adds one more auditable surface | — |
-| Security | 1 | 1 | none | New targeted regression test across evidence/messages, no leakage found | — |
-| Production Readiness | 1 | 1 | none | The last deferred gap closed; only the external credential/market blocker remains | — |
+| Auditability | 1 | 1 | none | Unchanged; extensibility proof adds no new audit surface | — |
+| Security | 1 | 1 | none | Re-verified, no new leakage surface | — |
+| Production Readiness | 1 | 1 | none | Extensibility claim now proven, not merely asserted | Backtest risk/TradePlan integration |
 | Active Paper Trading | 2 | 2 | none | No live session run this checkpoint | Open market + fresh credential |
 | Live Paper Readiness | 1 | 1 | none | Unchanged | — |
-| Live Trading Readiness | N/A | N/A | none | Structurally disabled by design | — |
-| **ENGINEERING MATURITY** | 1 | 1 | none | Small, well-scoped, fully-tested change; zero test weakening | — |
-| **ACTIVE PRODUCT MATURITY** | 1 | 1 | none | Communication now carries evidence; nothing else changed | — |
+| Live Trading Readiness | N/A | N/A | none | Structurally disabled by design, restated in PRODUCT_SCOPE.md | — |
+| **ENGINEERING MATURITY** | 1 | 1 | none | Rigorous audit-first discipline; zero test weakening | — |
+| **ACTIVE PRODUCT MATURITY** | 1 | 1 | none | No operator-facing change this checkpoint by design | — |
+| **STRATEGY EXTENSIBILITY MATURITY** | 3 | 1 | improved | The primary objective - mechanically proven, not merely claimed | — |
+| **BACKTESTING MATURITY** | 3 | 2 | improved | Full, honest audit closes the "unknown gaps" risk even though the gaps themselves remain open | Risk-gate + TradePlan integration, validation splits |
+| **RESEARCH MATURITY** | 4 | 3 | improved | Walk-forward/robustness/regime analysis now precisely documented as absent rather than unknown | Walk-forward, robustness, regime analysis |
 | **CLOSED-MARKET READINESS** | 1 | 1 | none | This checkpoint's exact purpose, delivered without touching live systems | — |
-| **NEXT-MARKET-OPEN READINESS** | 1 | 1 | none | A precise written procedure now exists; readiness checklist confirmed complete | Fresh credential, open market |
-| **END-TO-END PIPELINE MATURITY** | 1 | 1 | none | Unchanged core proof; communication now carries one more real field | — |
-| **OPERATOR OBSERVABILITY** | 1 | 1 | none | Unchanged from 64.18 (already closed) | — |
-| **SIGNAL AUDITABILITY** | 1 | 1 | none | Now extends into the delivered message text itself, proven by real end-to-end tests | — |
-| **COMMUNICATION MATURITY** | 2 | 1 | improved | The one deliberately-deferred gap (evidence in messages) is now closed with real, tested code | — |
-| **OVERALL CHECKPOINT SCORE** | — | 1 | — | The named primary objective (communication evidence) fully implemented and tested; readiness/procedure work is real documentation, not inflated; Postgres warning honestly deferred | Fresh Dhan credential + open market (external) |
+| **NEXT-MARKET-OPEN READINESS** | 1 | 1 | none | 64.19's procedure preserved unmodified, universe not enlarged | Fresh credential, open market |
+| **END-TO-END PIPELINE MATURITY** | 1 | 1 | none | Unchanged; now proven to generalize to a 4th, independently-added strategy | — |
+| **OVERALL CHECKPOINT SCORE** | — | 1 | — | The named primary objective (strategy extensibility) fully proven with real, passing tests; backtesting/research gaps honestly documented, not fabricated as complete | Backtest risk/TradePlan integration, walk-forward/robustness/regime capability |
 
 (1 = best/complete, higher numbers = more remaining work. Scores are not
-inflated for the documentation produced this checkpoint — every "1" here
-reflects either a real, tested code change or a direct, verified
-cross-reference against an existing, already-passing test, never a plan
-alone.)
+inflated for documentation alone — every "1" here reflects either a
+real, tested proof or a direct, verified cross-reference against
+existing, already-passing code; every "2+" in the backtesting/research
+categories reflects a real, disclosed gap that documentation alone does
+not close.)
 
 ## Final Product Gate
 
-**A. Communication**
+**A. Strategy Extensibility**
 
-Do Telegram and Discord communicate the same canonical signal, TradePlan,
-risk decision, and compact key evidence?
+Can a new strategy be added without modifying the core scanner,
+backtester, risk, PaperBroker, communications, reports?
 
-**YES.** Proven directly: `render_message()` is the one shared renderer
-both channels call, verified byte-identical by a dedicated test; the
-existing template fields are unchanged; evidence is now included
-compactly and only when real.
+**YES.** Proven mechanically: `TestMomentumStrategy` required exactly
+one new strategy module, one new test file, and one registration entry
+in `evidence.py` — zero changes to any of the six named core engines,
+confirmed by `git diff --stat` for this checkpoint.
 
-**B. Risk Rejection**
+**B. Test Strategy**
 
-Does a risk-rejected signal remain fully communicable and auditable?
+Did TEST_MOMENTUM prove the extensibility contract?
 
-**YES.** The signal, its evidence, and both channels' delivery attempts
-all persist regardless of rejection — proven by the extended
-`scenario_j` test, including a new assertion that the delivered message
-text itself never implies an order was placed.
+**YES.** 4 dedicated tests, all passing, covering registration
+isolation from production, coordinator execution, feature-dispatcher
+reuse, and the full signal→evidence→risk→paper→communication→report
+chain with real delivered messages.
 
-**C. First Live Paper Session**
+**C. Backtesting**
 
-With a fresh Dhan credential and an open market, is there now a precise,
-low-risk procedure for the first controlled LIVE PAPER session?
+Does the backtester use the same strategy/signal/evidence/TradePlan/risk
+semantics as the paper pipeline where appropriate?
 
-**YES.** `docs/architecture/FIRST_LIVE_PAPER_VALIDATION_PROCEDURE.md`
-specifies the exact universe, timeframe, strategies, success criteria,
-and evidence-capture requirements — not executed this checkpoint, by
-design, but ready to follow the moment the external blocker clears.
+**PARTIALLY.** Strategy/signal/evidence: YES, confirmed shared
+(`StrategyExecutionCoordinator`, no divergent implementation).
+TradePlan/risk: NO — the backtest engine has its own, simpler
+direction-flip execution model and does not route through the shared
+risk gate or simulate TradePlan exits. Disclosed honestly as a real
+architectural gap, not claimed as complete.
 
-**D. Production Blocker**
+**D. Research Integrity**
 
-Is the only major external blocker now the real Dhan credential + live
-market validation?
+Are look-ahead, execution assumptions, costs, validation splits, and
+reproducibility explicit and testable?
 
-**YES.** Every product-side gap named across 64.14-64.19 (readiness,
-session control, scanner progress, signal evidence, reporting,
-reproducibility, communication evidence) is now closed with real, tested
-code. What remains is external: a fresh credential and an open market.
+**PARTIALLY.** Look-ahead: YES, explicit and tested (a mandatory,
+pre-existing test). Execution assumptions/costs: YES, explicit and
+tested (next-bar-open fills, the established Indian cost model).
+Validation splits: NO — `BacktestTrustLevel` exists as a label but
+nothing computes/enforces which level a result earns. Reproducibility:
+YES for the live paper path (Checkpoint 64.18's audit-trail fix); not
+separately re-audited for backtesting this checkpoint (already covered
+by 64.16's replay-determinism proof).
 
-**E. Real Trading**
+**E. New Strategy UI**
+
+Can a new strategy expose its parameters and evidence without a new
+strategy-specific UI page?
+
+**YES.** Confirmed by direct grep audit: zero strategy-specific
+branches in the parameter-configuration UI or the evidence-rendering
+panel.
+
+**F. New Strategy Communications**
+
+Can a new strategy use Telegram/Discord without new channel-specific
+business logic?
+
+**YES.** Proven directly: `TestMomentumStrategy`'s real delivered
+messages (via the unmodified `render_message()`) include its own Key
+Evidence, with zero strategy-specific code in either channel adapter.
+
+**G. Live Paper**
+
+With a fresh Dhan credential and an open market, is the system ready to
+execute the documented first controlled LIVE PAPER validation?
+
+**YES.** Unchanged from 64.19 — the procedure was re-read and preserved
+exactly, including its deliberately small initial universe.
+
+**H. Real Trading**
 
 **NO.** Unchanged: `real_trading_state` remains the structural constant
 `"DISABLED"`; `PaperBroker` remains the only concrete broker
-implementation in the codebase; zero real orders were placed or
-attempted.
+implementation; restated explicitly in the new `PRODUCT_SCOPE.md`.
 
 ## Honest Final Conclusion
 
-This checkpoint closed the one deliberately-deferred gap from 64.18 —
-Telegram/Discord messages now include a compact, real "Key Evidence"
-section, proven end-to-end (not just at the pure-rendering level) for
-both the risk-approved and risk-rejected paths, with bounded-context
-independence and broker/channel independence both re-verified intact.
-The Pre-Session Readiness checklist was confirmed — by direct
-cross-reference against a real, existing, passing test — to already
-satisfy this checkpoint's own 10-item list; no second readiness engine
-was built, honoring the explicit instruction not to. A precise,
-deterministic first-live-session validation procedure now exists in
-writing, specifying a deliberately small universe and measurable,
-evidence-backed success criteria that correctly separate "the system is
-healthy" from "a strategy produced a signal." The PostgreSQL teardown
-warning received a second, properly-researched attempt this checkpoint
-(reading pytest-django's actual fixture-teardown ordering and fixing
-the dependency direction correctly) — it still did not resolve the
-warning, and that honest result is reported plainly rather than hidden
-or force-fixed, along with the reasoning for why deferring it further is
-safe. No live Dhan connectivity was attempted, and no live data was
-fabricated anywhere. Real trading remains structurally disabled
-everywhere.
+This checkpoint's primary objective — proving, not merely asserting,
+that the platform can absorb a new strategy without touching its core
+engines — was met with a real, mechanical proof: a genuinely new,
+clearly-marked non-production strategy moved through the entire
+pipeline (registry, configuration, the shared execution coordinator,
+signal, evidence, risk, paper execution, real Telegram/Discord
+messages, and a real report query) with zero core-engine branching,
+verified by 4 passing tests and a `git diff --stat` showing only the
+expected strategy-specific and one-line-registration files changed. The
+backtesting architecture audit was equally rigorous in the other
+direction: real capabilities (database-first retrieval, data quality,
+look-ahead protection, execution realism, cost modeling, core
+performance metrics) were confirmed via direct code/test
+cross-reference, while real gaps (no shared risk-gate/TradePlan
+integration in backtesting, no validation splits, no walk-forward, no
+robustness suite, no regime analysis, a few missing metrics) were
+disclosed honestly rather than built speculatively or claimed complete
+— exactly matching this checkpoint's own explicit instruction not to
+over-engineer or fabricate rigor. The project scope was formally
+restated in a new authoritative document without weakening the
+real-trading safety boundary in any way. No live Dhan connectivity was
+attempted, no live data was fabricated, and the first-live-session
+procedure's deliberately small universe was preserved unchanged. Real
+trading remains structurally disabled everywhere.
 
 ## Git Status
 
