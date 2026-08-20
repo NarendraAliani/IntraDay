@@ -406,6 +406,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/config/market-data/live-paper-session/start/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Checkpoint 64.13 §6/§8: the backend's OWN re-check - the
+         *     request body is intentionally ignored (accepts no access token or
+         *     other credential from the frontend, per §22's explicit
+         *     instruction); every input this endpoint acts on is read server-side
+         *     from already-configured, already-audited sources.
+         */
+        post: operations["api_v1_config_market_data_live_paper_session_start_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config/market-data/live-paper-session/stop/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Checkpoint 64.13 §11: idempotent stop - never affects historical/
+         *     research data (only flips `ScannerConfiguration.enabled`, the same
+         *     real, audited flag Checkpoint 64.4 already built).
+         */
+        post: operations["api_v1_config_market_data_live_paper_session_stop_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/config/market-data/quotes/": {
         parameters: {
             query?: never;
@@ -1862,6 +1906,14 @@ export interface components {
             safe_reason: string;
             remediation: string;
         };
+        LivePaperSessionResponse: {
+            accepted: boolean;
+            state: string;
+            message: string;
+            remediation: string | null;
+            configuration_version: number;
+            enabled: boolean;
+        };
         /**
          * @description Request body for `POST /api/v1/auth/login/`. `password` is
          *     `write_only` purely for schema documentation purposes - the view
@@ -2921,6 +2973,52 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LivePaperReadinessResponse"];
+                };
+            };
+        };
+    };
+    api_v1_config_market_data_live_paper_session_start_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LivePaperSessionResponse"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LivePaperSessionResponse"];
+                };
+            };
+        };
+    };
+    api_v1_config_market_data_live_paper_session_stop_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LivePaperSessionResponse"];
                 };
             };
         };

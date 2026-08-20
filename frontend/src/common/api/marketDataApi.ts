@@ -66,3 +66,16 @@ export type LivePaperReadinessResponse = components["schemas"]["LivePaperReadine
 export function getLivePaperReadiness(): Promise<LivePaperReadinessResponse> {
   return apiGet<LivePaperReadinessResponse>("/api/v1/config/market-data/live-paper-readiness/");
 }
+
+// Checkpoint 64.13: explicit, human-triggered START/STOP - the backend
+// independently re-checks readiness on every call, never trusts a
+// frontend-cached `can_start` value.
+export type LivePaperSessionResponse = components["schemas"]["LivePaperSessionResponse"];
+
+export function startLivePaperSession(): Promise<LivePaperSessionResponse> {
+  return apiPost<LivePaperSessionResponse>("/api/v1/config/market-data/live-paper-session/start/");
+}
+
+export function stopLivePaperSession(): Promise<LivePaperSessionResponse> {
+  return apiPost<LivePaperSessionResponse>("/api/v1/config/market-data/live-paper-session/stop/");
+}

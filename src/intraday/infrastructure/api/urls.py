@@ -17,6 +17,7 @@ from intraday.infrastructure.api import (
     historical_backtesting_views,
     kill_switch_views,
     live_paper_readiness_views,
+    live_paper_session_views,
     market_data_sync_views,
     market_data_views,
     paper_trading_views,
@@ -241,6 +242,18 @@ urlpatterns = [
         "market-data/live-paper-readiness/",
         live_paper_readiness_views.live_paper_readiness,
         name="live-paper-readiness",
+    ),
+    # --- Checkpoint 64.13: explicit, human-triggered START/STOP - the
+    # backend re-checks readiness itself, never trusts the frontend ----
+    path(
+        "market-data/live-paper-session/start/",
+        live_paper_session_views.start_live_paper_session_view,
+        name="live-paper-session-start",
+    ),
+    path(
+        "market-data/live-paper-session/stop/",
+        live_paper_session_views.stop_live_paper_session_view,
+        name="live-paper-session-stop",
     ),
     # --- Checkpoint 64.4: live scanner control plane (desired/effective) --
     path(

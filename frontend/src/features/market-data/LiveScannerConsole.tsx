@@ -32,6 +32,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { listWatchlists } from "../../common/api/backtestingApi";
 import { ApiNetworkError, ApiRequestError } from "../../common/api/client";
 import {
+  getLivePaperReadiness,
+  startLivePaperSession,
+  stopLivePaperSession,
+} from "../../common/api/marketDataApi";
+import type { LivePaperReadinessResponse } from "../../common/api/marketDataApi";
+import {
   getScannerConfiguration,
   updateScannerConfiguration,
 } from "../../common/api/scannerConfigApi";
@@ -112,6 +118,33 @@ export function LiveScannerConsole(): JSX.Element {
   const [selectedStrategyIds, setSelectedStrategyIds] = useState<Set<string>>(new Set());
 
   const [applyPhase, setApplyPhase] = useState<ApplyPhase>("idle");
+  // Checkpoint 64.13: the Pre-Session Readiness gate - re-fetched
+  // independently of the scanner-config polling above; START stays
+  // disabled unless the backend's own current readiness says
+  // `can_start`. The backend independently re-checks this on every
+  // start request too - this frontend check is a UX convenience, NEVER
+  // the actual enforcement (see startLivePaperSession()).
+  const [readiness, setReadiness] = useState<LivePaperReadinessResponse | null>(null);
+  const [sessionMessage, setSessionMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    function load(): void {
+      getLivePaperReadiness()
+        .then((result) => {
+          if (!cancelled) setReadiness(result);
+        })
+        .catch(() => {
+          /* readiness is advisory on this screen - WorkerStatusCard already surfaces errors */
+        });
+    }
+    load();
+    const interval = setInterval(load, 15000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
   const [applyError, setApplyError] = useState<string | null>(null);
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollDeadline = useRef<number>(0);
@@ -229,6 +262,55 @@ export function LiveScannerConsole(): JSX.Element {
       beginPollingForEffective(result.desired.configuration_version);
     } catch (error) {
       setApplyPhase("failed");
+      setApplyError(describeError(error));
+    }
+  }
+
+  // Checkpoint 64.13 §6/§7: explicit, human-triggered START - first
+  // saves the operator's current draft selections as the desired
+  // configuration (still disabled), THEN calls the real, backend-
+  // enforced start gate. The backend re-checks readiness itself on
+  // this call - a stale/cached frontend `can_start` is never trusted.
+  async function handleStart(): Promise<void> {
+    setApplyError(null);
+    setSessionMessage(null);
+    setApplyPhase("validating");
+    try {
+      const saved = await updateScannerConfiguration({
+        enabled: false,
+        timeframe,
+        universe_mode: universeMode,
+        selected_instrument_ids: universeMode === "SELECTED" ? selectedInstrumentIds : [],
+        selected_watchlist_name: universeMode === "WATCHLIST" ? selectedWatchlistName : "",
+        selected_strategy_ids: Array.from(selectedStrategyIds),
+      });
+      setConfig(saved);
+      setApplyPhase("saving");
+      const result = await startLivePaperSession();
+      setSessionMessage(result.message);
+      if (!result.accepted && !result.enabled) {
+        setApplyPhase("failed");
+        setApplyError(result.remediation ?? result.message);
+        return;
+      }
+      const refreshed = await getScannerConfiguration();
+      setConfig(refreshed);
+      beginPollingForEffective(refreshed.desired.configuration_version);
+    } catch (error) {
+      setApplyPhase("failed");
+      setApplyError(describeError(error));
+    }
+  }
+
+  async function handleStop(): Promise<void> {
+    setApplyError(null);
+    setSessionMessage(null);
+    try {
+      const result = await stopLivePaperSession();
+      setSessionMessage(result.message);
+      const refreshed = await getScannerConfiguration();
+      setConfig(refreshed);
+    } catch (error) {
       setApplyError(describeError(error));
     }
   }
@@ -398,27 +480,68 @@ export function LiveScannerConsole(): JSX.Element {
           </fieldset>
         </div>
 
+        {canOperate && readiness && (
+          <section aria-labelledby="live-scanner-readiness-heading" className="live-scanner__section">
+            <h3 id="live-scanner-readiness-heading">Live Paper Session Readiness</h3>
+            <span
+              role="status"
+              className={`badge ${readiness.can_start ? "badge--active" : "badge--danger"}`}
+            >
+              {readiness.can_start ? "● READY" : "● BLOCKED"}
+            </span>
+            <p className="signal-monitor__hint">
+              {readiness.can_start
+                ? "All mandatory checks passed. Review configuration before starting."
+                : readiness.safe_reason}
+            </p>
+            <span className="badge badge--historical">
+              Real Trading: {readiness.real_trading_state}
+            </span>
+          </section>
+        )}
+
         {canOperate && (
           <div className="live-scanner__actions">
-            <button
-              type="button"
-              className="market-data-monitor__refresh-button"
-              disabled={applyPhase === "validating" || applyPhase === "saving" || applyPhase === "applying"}
-              onClick={() => void handleApply(true)}
-            >
-              {config?.desired.enabled ? "Apply Configuration" : "START"}
-            </button>
+            {!config?.desired.enabled ? (
+              <button
+                type="button"
+                className="market-data-monitor__refresh-button"
+                disabled={
+                  applyPhase === "validating" ||
+                  applyPhase === "saving" ||
+                  applyPhase === "applying" ||
+                  !readiness?.can_start
+                }
+                onClick={() => void handleStart()}
+              >
+                START LIVE PAPER SESSION
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="market-data-monitor__refresh-button"
+                disabled={applyPhase === "validating" || applyPhase === "saving" || applyPhase === "applying"}
+                onClick={() => void handleApply(true)}
+              >
+                Apply Configuration
+              </button>
+            )}
             {config?.desired.enabled && (
               <button
                 type="button"
                 className="live-scanner__stop-button"
                 disabled={applyPhase === "validating" || applyPhase === "saving" || applyPhase === "applying"}
-                onClick={() => void handleApply(false)}
+                onClick={() => void handleStop()}
               >
-                STOP
+                STOP LIVE PAPER SESSION
               </button>
             )}
           </div>
+        )}
+        {sessionMessage && (
+          <p role="status" className="signal-monitor__hint">
+            {sessionMessage}
+          </p>
         )}
         <p className="signal-monitor__hint">
           STOP disables the signal pipeline for this scanner (bars keep being recorded, but no new

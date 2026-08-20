@@ -14,6 +14,8 @@ import type { components } from "@shared/generated_contracts/api-types";
 type WorkerRuntimeStatusResponse = components["schemas"]["WorkerRuntimeStatusResponse"];
 type ScannerConfigurationResponse = components["schemas"]["ScannerConfigurationResponse"];
 type StrategySummary = components["schemas"]["StrategySummary"];
+type LivePaperReadinessResponse = components["schemas"]["LivePaperReadinessResponse"];
+type LivePaperSessionResponse = components["schemas"]["LivePaperSessionResponse"];
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -74,20 +76,67 @@ const EMA_STRATEGY: StrategySummary = {
   is_active: true,
 };
 
+const READINESS_BLOCKED: LivePaperReadinessResponse = {
+  state: "CREDENTIAL_EXPIRED",
+  provider: "dhan",
+  credential_state: "EXPIRED",
+  credential_expiry: "2026-07-25T07:10:00Z",
+  provider_state: "NEVER_REPORTED",
+  watchdog_state: "NEVER_REPORTED",
+  market_state: "OPEN",
+  paper_execution_state: "ENABLED",
+  real_trading_state: "DISABLED",
+  can_start: false,
+  safe_reason: "Dhan access token has expired.",
+  remediation: "Renew the Dhan access token and revalidate configuration.",
+};
+
+const READINESS_READY: LivePaperReadinessResponse = {
+  ...READINESS_BLOCKED,
+  state: "READY_FOR_PAPER",
+  credential_state: "VALID",
+  provider_state: "HEALTHY",
+  watchdog_state: "HEALTHY",
+  can_start: true,
+  safe_reason: "All readiness checks passed.",
+};
+
+const SESSION_STARTED: LivePaperSessionResponse = {
+  accepted: true,
+  state: "STARTING",
+  message: "Live Paper Session start requested.",
+  remediation: null,
+  configuration_version: 2,
+  enabled: true,
+};
+
 function stubEndpoints(
   options: {
     config?: ScannerConfigurationResponse;
     workerStatus?: WorkerRuntimeStatusResponse;
     strategies?: StrategySummary[];
+    readiness?: LivePaperReadinessResponse;
+    startResponse?: LivePaperSessionResponse;
   } = {},
 ): ReturnType<typeof vi.fn> {
   const {
     config = STOPPED_CONFIG,
     workerStatus = WORKER_STATUS_UNCONFIGURED,
     strategies = [EMA_STRATEGY],
+    readiness = READINESS_BLOCKED,
+    startResponse = SESSION_STARTED,
   } = options;
   const fetchMock = vi.fn((input: RequestInfo | URL) => {
     const url = String(input);
+    if (url.includes("/live-paper-session/start/")) {
+      return Promise.resolve(jsonResponse(startResponse));
+    }
+    if (url.includes("/live-paper-session/stop/")) {
+      return Promise.resolve(
+        jsonResponse({ ...startResponse, accepted: true, state: "STOPPING", enabled: false }),
+      );
+    }
+    if (url.includes("/live-paper-readiness/")) return Promise.resolve(jsonResponse(readiness));
     if (url.includes("/worker-status/")) return Promise.resolve(jsonResponse(workerStatus));
     if (url.includes("/scanner-config/update/")) return Promise.resolve(jsonResponse(config));
     if (url.includes("/scanner-config/")) return Promise.resolve(jsonResponse(config));
@@ -141,20 +190,65 @@ describe("LiveScannerConsole", () => {
     expect(notProvided.length).toBeGreaterThanOrEqual(4);
   });
 
-  it("posts the real update API when an operator clicks START and reflects the response", async () => {
-    const fetchMock = stubEndpoints({});
+  it("Checkpoint 64.13: disables START LIVE PAPER SESSION while readiness is BLOCKED", async () => {
+    stubEndpoints({ readiness: READINESS_BLOCKED });
 
     renderWithAuth(<LiveScannerConsole />);
 
-    await waitFor(() => expect(screen.getByText("Desired Configuration")).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("button", { name: "START" }));
+    await waitFor(() => expect(screen.getByText("● BLOCKED")).toBeInTheDocument());
+    const startButton = screen.getByRole("button", { name: "START LIVE PAPER SESSION" });
+    expect(startButton).toBeDisabled();
+    expect(screen.getByText("Dhan access token has expired.")).toBeInTheDocument();
+  });
+
+  it("Checkpoint 64.13: enables START and calls the real gated start endpoint when readiness is READY", async () => {
+    const fetchMock = stubEndpoints({ readiness: READINESS_READY });
+
+    renderWithAuth(<LiveScannerConsole />);
+
+    await waitFor(() => expect(screen.getByText("● READY")).toBeInTheDocument());
+    const startButton = screen.getByRole("button", { name: "START LIVE PAPER SESSION" });
+    expect(startButton).not.toBeDisabled();
+
+    fireEvent.click(startButton);
 
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
-        expect.stringContaining("/scanner-config/update/"),
+        expect.stringContaining("/live-paper-session/start/"),
         expect.objectContaining({ method: "POST" }),
       ),
     );
+  });
+
+  it("Checkpoint 64.13: shows STOP LIVE PAPER SESSION and calls the real gated stop endpoint for a running session", async () => {
+    const runningConfig: ScannerConfigurationResponse = {
+      ...STOPPED_CONFIG,
+      desired: { ...STOPPED_CONFIG.desired, enabled: true },
+      status: "EFFECTIVE",
+    };
+    const fetchMock = stubEndpoints({ config: runningConfig, readiness: READINESS_READY });
+
+    renderWithAuth(<LiveScannerConsole />);
+
+    const stopButton = await waitFor(() =>
+      screen.getByRole("button", { name: "STOP LIVE PAPER SESSION" }),
+    );
+    fireEvent.click(stopButton);
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/live-paper-session/stop/"),
+        expect.objectContaining({ method: "POST" }),
+      ),
+    );
+  });
+
+  it("Checkpoint 64.13: real trading always reads DISABLED regardless of readiness state", async () => {
+    stubEndpoints({ readiness: READINESS_READY });
+
+    renderWithAuth(<LiveScannerConsole />);
+
+    await waitFor(() => expect(screen.getByText(/Real Trading: DISABLED/)).toBeInTheDocument());
   });
 
   it("disables configuration controls for a read-only (non-operator) user", async () => {
@@ -165,7 +259,7 @@ describe("LiveScannerConsole", () => {
     });
 
     await waitFor(() => expect(screen.getByText("Desired Configuration")).toBeInTheDocument());
-    expect(screen.queryByRole("button", { name: "START" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "START LIVE PAPER SESSION" })).not.toBeInTheDocument();
     expect(
       screen.getByText(/You have read-only access to this screen/),
     ).toBeInTheDocument();
