@@ -745,3 +745,33 @@ evidence and the SAMPLE_BAR gate's updated status (2 of 6 conditions
 now met; WebSocket ingestion remains blocked by the unchanged
 persistent-process infrastructure gap - Docker remains permanently
 deferred per this project's invariant rules).
+
+---
+
+## Checkpoint 64.12 Addendum: Token Lifecycle Research Classification
+
+Re-reviewed this document's own "Authentication Findings" section
+(above) against Checkpoint 64.12's explicit research questions, using
+ONLY what was already gathered from official Dhan documentation pages
+(no new fetch was performed this checkpoint - the existing findings
+above remain the authoritative source, re-classified here rather than
+re-researched from scratch):
+
+| Question | Finding | Classification |
+|---|---|---|
+| Does Dhan support token renewal? | Yes - a documented Renew Token API exists. | CONFIRMED (official docs, cited above) |
+| Is the access token automatically/silently renewable? | No - the Renew Token API only extends an ALREADY-ACTIVE token; an expired token is explicitly documented to return an error if renewal is attempted. | CONFIRMED (official docs, cited above) |
+| What credentials are required for a fresh token? | A separate Generate Token flow, requiring TOTP (time-based one-time password), can mint a fresh token without web-portal access. | CONFIRMED (official docs, cited above) |
+| What is the expected expiry behavior? | Access tokens are valid for 24 hours from issuance. | CONFIRMED (official docs, cited above) |
+| Does this application need a human-generated new token when EXPIRED? | Yes - per the above, an expired token cannot be renewed via the Renew Token API; only a human-driven Generate Token flow (TOTP) or web-portal re-authentication can produce a usable token once EXPIRED. | CONFIRMED (derived directly from the two facts above, not independently stated by Dhan in those exact words) |
+| Is there a safe way to detect expiry before making an API call? | Yes - the JWT's own `exp` claim can be decoded locally with no network call (`token_lifecycle.evaluate_dhan_token_lifecycle()`, Checkpoint 64 Part 1, reused unmodified this checkpoint). | CONFIRMED (this project's own implementation, verified by direct code reading and passing tests) |
+| Is there an official Dhan-recommended reconnect/backoff strategy for the WebSocket feed? | Not found in the pages fetched for this project's existing research (see "Authentication Findings" above - no such recommendation is quoted or cited). | UNCONFIRMED |
+| Are there official session restrictions (e.g. one connection per account) relevant to this project? | WebSocket connection limits are documented: 5 connections/user, 5,000 instruments/connection, 100 instruments/subscription message (cited above, High confidence). | CONFIRMED (official docs, cited above) |
+
+**Design conclusion (unchanged from the existing implementation,
+re-confirmed this checkpoint): automatic silent refresh is NOT
+implemented, and NOT implementable for an already-expired token per
+Dhan's own documented behavior.** The system is correctly designed
+around human renewal + local readiness validation
+(`live_paper_readiness.py`, Checkpoint 64.12) - no refresh mechanism
+was invented or silently introduced this checkpoint.

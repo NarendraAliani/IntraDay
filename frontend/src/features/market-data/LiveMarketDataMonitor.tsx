@@ -27,6 +27,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   getCurrentQuotes,
+  getLivePaperReadiness,
   getMarketDataHealth,
   getMarketSession,
   getRecentBars,
@@ -42,6 +43,7 @@ import { ErrorState } from "../../common/components/ErrorState";
 import { LoadingState } from "../../common/components/LoadingState";
 import type {
   BarResponse,
+  LivePaperReadinessResponse,
   MarketDataHealthResponse,
   QuoteResponse,
   SessionResponse,
@@ -320,6 +322,94 @@ export function WorkerStatusCard(): JSX.Element {
             <dd>{status.reconnect_count}</dd>
             <dt>Last Error</dt>
             <dd>{status.last_error_safe || "None"}</dd>
+          </dl>
+        </>
+      )}
+    </section>
+  );
+}
+
+const READINESS_POLL_MS = 15000;
+
+const READINESS_BADGE_CLASS: Record<string, string> = {
+  READY_FOR_PAPER: "badge--active",
+  NOT_CONFIGURED: "badge--historical",
+  CREDENTIAL_EXPIRED: "badge--danger",
+  CREDENTIAL_INVALID: "badge--danger",
+  PROVIDER_UNAVAILABLE: "badge--pending",
+  BLOCKED_BY_SAFETY: "badge--danger",
+};
+
+// Checkpoint 64.12: the ONE canonical "can we safely start a Live
+// Paper Session" surface - reads the real readiness gate, never
+// derives its own bool(token)-style check. `real_trading_state` is
+// always shown as DISABLED, since that field is a structural constant
+// on the backend, not a live-derived value.
+export function LivePaperReadinessCard(): JSX.Element {
+  const [status, setStatus] = useState<LivePaperReadinessResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function load(): Promise<void> {
+      try {
+        const result = await getLivePaperReadiness();
+        if (!cancelled) {
+          setStatus(result);
+          setError(null);
+        }
+      } catch (err) {
+        if (!cancelled) setError(describeError(err));
+      }
+    }
+
+    void load();
+    const interval = setInterval(() => void load(), READINESS_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
+
+  return (
+    <section className="market-data-monitor__card" aria-labelledby="live-paper-readiness-heading">
+      <h2 id="live-paper-readiness-heading">Live Paper Session Readiness</h2>
+      {error && (
+        <p role="alert" className="dialog__error">
+          {error}
+        </p>
+      )}
+      {!error && !status && <p className="strategy-config-page__help-text">Loading…</p>}
+      {!error && status && (
+        <>
+          <span
+            role="status"
+            className={`badge ${READINESS_BADGE_CLASS[status.state] ?? ""}`}
+          >
+            {status.can_start ? "● READY" : "● BLOCKED"}
+          </span>
+          <dl>
+            <dt>Dhan Credential</dt>
+            <dd>{status.credential_state}</dd>
+            <dt>Provider</dt>
+            <dd>{status.provider_state}</dd>
+            <dt>Market</dt>
+            <dd>{status.market_state}</dd>
+            <dt>Live Paper Session</dt>
+            <dd>{status.can_start ? "AVAILABLE" : "NOT AVAILABLE"}</dd>
+            <dt>Real Trading</dt>
+            <dd>
+              <span className="badge badge--historical">{status.real_trading_state}</span>
+            </dd>
+            <dt>Reason</dt>
+            <dd>{status.safe_reason}</dd>
+            {!status.can_start && (
+              <>
+                <dt>Action</dt>
+                <dd>{status.remediation}</dd>
+              </>
+            )}
           </dl>
         </>
       )}
@@ -1053,6 +1143,7 @@ export function LiveMarketDataMonitor(): JSX.Element {
                       </section>
 
                       <WorkerStatusCard />
+                      <LivePaperReadinessCard />
                     </div>
 
                     <section aria-labelledby="instruments-heading">

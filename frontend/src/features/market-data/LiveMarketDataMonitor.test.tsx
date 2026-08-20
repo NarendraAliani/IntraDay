@@ -138,11 +138,27 @@ const WORKER_STATUS_UNCONFIGURED = {
   is_configured: false,
 };
 
+const READINESS_BLOCKED = {
+  state: "CREDENTIAL_EXPIRED",
+  provider: "dhan",
+  credential_state: "EXPIRED",
+  credential_expiry: "2026-07-25T07:10:00Z",
+  provider_state: "NEVER_REPORTED",
+  watchdog_state: "NEVER_REPORTED",
+  market_state: "OPEN",
+  paper_execution_state: "ENABLED",
+  real_trading_state: "DISABLED",
+  can_start: false,
+  safe_reason: "Dhan access token has expired.",
+  remediation: "Renew the Dhan access token and revalidate configuration.",
+};
+
 function stubEndpoints(options: {
   session?: SessionResponse;
   health?: MarketDataHealthResponse;
   quotes?: QuoteResponse[];
   bars?: BarResponse[];
+  readiness?: typeof READINESS_BLOCKED;
   strategies?: StrategySummary[];
   signals?: SignalListResponse;
   workerStatus?: typeof WORKER_STATUS_UNCONFIGURED;
@@ -155,9 +171,11 @@ function stubEndpoints(options: {
     strategies = [EMA_STRATEGY],
     signals = EMPTY_SIGNALS,
     workerStatus = WORKER_STATUS_UNCONFIGURED,
+    readiness = READINESS_BLOCKED,
   } = options;
   const fetchMock = vi.fn((input: RequestInfo | URL) => {
     const url = String(input);
+    if (url.includes("/live-paper-readiness/")) return Promise.resolve(jsonResponse(readiness));
     if (url.includes("/worker-status/")) return Promise.resolve(jsonResponse(workerStatus));
     if (url.includes("/session/")) return Promise.resolve(jsonResponse(session));
     if (url.includes("/health/")) return Promise.resolve(jsonResponse(health));
@@ -275,6 +293,49 @@ describe("LiveMarketDataMonitor (Active Signal Monitor)", () => {
     expect(screen.getByText("Healthy")).toBeInTheDocument();
     expect(screen.getByText("RUNNING")).toBeInTheDocument();
     expect(screen.getByText("4")).toBeInTheDocument();
+  });
+
+  it("Checkpoint 64.12: shows BLOCKED with a real remediation when Dhan credential is expired", async () => {
+    stubEndpoints({ readiness: READINESS_BLOCKED });
+
+    renderWithAuth(<LiveMarketDataMonitor />);
+
+    await waitFor(() => expect(screen.getByText(/market data health/i)).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: /market data health/i }));
+
+    await waitFor(() =>
+      expect(screen.getByText("Live Paper Session Readiness")).toBeInTheDocument(),
+    );
+    expect(screen.getByText("● BLOCKED")).toBeInTheDocument();
+    expect(screen.getByText("NOT AVAILABLE")).toBeInTheDocument();
+    expect(screen.getByText("Dhan access token has expired.")).toBeInTheDocument();
+    expect(screen.getByText(/renew the dhan access token/i)).toBeInTheDocument();
+    // Real Trading must always read DISABLED, regardless of readiness state.
+    expect(screen.getByText("DISABLED")).toBeInTheDocument();
+  });
+
+  it("Checkpoint 64.12: shows READY when the gate reports can_start", async () => {
+    stubEndpoints({
+      readiness: {
+        ...READINESS_BLOCKED,
+        state: "READY_FOR_PAPER",
+        credential_state: "VALID",
+        provider_state: "HEALTHY",
+        watchdog_state: "HEALTHY",
+        can_start: true,
+        safe_reason: "All readiness checks passed.",
+        remediation: "Start the Live Paper Session explicitly.",
+      },
+    });
+
+    renderWithAuth(<LiveMarketDataMonitor />);
+
+    await waitFor(() => expect(screen.getByText(/market data health/i)).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: /market data health/i }));
+
+    await waitFor(() => expect(screen.getByText("● READY")).toBeInTheDocument());
+    expect(screen.getByText("AVAILABLE")).toBeInTheDocument();
+    expect(screen.getByText("DISABLED")).toBeInTheDocument(); // Real Trading still disabled
   });
 
   it("shows an honest 'never run' note when the worker has no reported status", async () => {

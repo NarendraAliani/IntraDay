@@ -58,3 +58,11 @@ export function refreshMarketData(): Promise<MarketDataHealthResponse> {
 export function getRecentBars(): Promise<BarResponse[]> {
   return apiGet<BarResponse[]>("/api/v1/config/market-data/bars/");
 }
+
+// Checkpoint 64.12: the canonical "can we safely start a Live Paper
+// Session" gate - never a second, competing readiness check.
+export type LivePaperReadinessResponse = components["schemas"]["LivePaperReadinessResponse"];
+
+export function getLivePaperReadiness(): Promise<LivePaperReadinessResponse> {
+  return apiGet<LivePaperReadinessResponse>("/api/v1/config/market-data/live-paper-readiness/");
+}

@@ -380,6 +380,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/config/market-data/live-paper-readiness/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Checkpoint 64.12: "can real trading be enabled?" is NEVER a
+         *     question this endpoint answers - `real_trading_state` is always
+         *     `"DISABLED"`, a structural constant (see
+         *     `live_paper_readiness.py`'s own docstring: `PaperBroker` is the
+         *     only concrete broker implementation anywhere in this codebase).
+         *     This endpoint answers only "is it safe to START a paper session,"
+         *     never "can we place a real order" - those are permanently
+         *     different questions in this project.
+         */
+        get: operations["api_v1_config_market_data_live_paper_readiness_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/config/market-data/quotes/": {
         parameters: {
             query?: never;
@@ -639,6 +665,72 @@ export interface paths {
             cookie?: never;
         };
         get: operations["api_v1_config_paper_trading_trades_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config/reports/communication/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Checkpoint 64.10 Report 4: wires the pre-existing (Checkpoint 37
+         *     Part 8), previously-unwired `build_communication_delivery_report()`
+         *     to a real endpoint for the first time - reused verbatim, never
+         *     rebuilt.
+         */
+        get: operations["api_v1_config_reports_communication_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config/reports/daily-session/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Checkpoint 64.10 Report 5 - "the MOST IMPORTANT report." A
+         *     "session" is identified by calendar date (disclosed limitation - no
+         *     dedicated Session persistence row exists, see this report's own
+         *     `ReportCatalogueEntry`). Defaults to today (server clock, UTC).
+         */
+        get: operations["api_v1_config_reports_daily_session_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config/reports/signals/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Checkpoint 64.10 Report 1: real aggregation over `SignalRecord`
+         *     - the SAME table the Signal Operations Center (Checkpoint 64.9)
+         *     reads, never a second query implementation. Filters mirror
+         *     `GET /signals/`'s own vocabulary exactly.
+         */
+        get: operations["api_v1_config_reports_signals_retrieve"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1495,6 +1587,20 @@ export interface components {
             /** Format: date-time */
             created_at: string;
         };
+        CommunicationReportResponse: {
+            total_attempts: number;
+            sent_count: number;
+            failed_count: number;
+            skipped_duplicate_count: number;
+            skipped_not_configured_count: number;
+            distinct_signals_communicated: number;
+            by_channel: {
+                [key: string]: number;
+            };
+            by_template: {
+                [key: string]: number;
+            };
+        };
         ConnectionStatusResponse: {
             provider: components["schemas"]["ProviderEnum"];
             status: components["schemas"]["ConnectionStatusResponseStatusEnum"];
@@ -1559,6 +1665,26 @@ export interface components {
             is_authenticated: boolean;
             username: string | null;
             capabilities: string[];
+        };
+        DailySessionReportResponse: {
+            /** Format: date */
+            session_date: string;
+            strategies: string[];
+            universe: string[];
+            timeframes: string[];
+            total_signals: number;
+            risk_accepted: number;
+            risk_rejected: number;
+            paper_orders_total: number;
+            paper_orders_filled: number;
+            paper_orders_rejected: number;
+            communication_total: number;
+            communication_sent: number;
+            communication_failed: number;
+            communication_skipped: number;
+            system_health: components["schemas"]["SystemHealthSummary"] | null;
+            /** Format: decimal */
+            realized_pnl_total: string | null;
         };
         /**
          * @description * `DHAN_SCRIP_MASTER` - DHAN_SCRIP_MASTER
@@ -1721,6 +1847,21 @@ export interface components {
          * @enum {string}
          */
         KillSwitchStatusResponseStatusEnum: "ACTIVE" | "HALTED";
+        LivePaperReadinessResponse: {
+            state: string;
+            provider: string;
+            credential_state: string;
+            /** Format: date-time */
+            credential_expiry: string | null;
+            provider_state: string;
+            watchdog_state: string;
+            market_state: string;
+            paper_execution_state: string;
+            real_trading_state: string;
+            can_start: boolean;
+            safe_reason: string;
+            remediation: string;
+        };
         /**
          * @description Request body for `POST /api/v1/auth/login/`. `password` is
          *     `write_only` purely for schema documentation purposes - the view
@@ -2090,6 +2231,23 @@ export interface components {
             page: number;
             page_size: number;
         };
+        SignalReportResponse: {
+            total_signals: number;
+            buy_count: number;
+            sell_count: number;
+            neutral_count: number;
+            risk_accepted: number;
+            risk_rejected: number;
+            by_strategy: {
+                [key: string]: number;
+            };
+            by_stock: {
+                [key: string]: number;
+            };
+            by_timeframe: {
+                [key: string]: number;
+            };
+        };
         SignalResponse: {
             signal_id: string;
             strategy_id: string;
@@ -2154,6 +2312,11 @@ export interface components {
             /** Format: date-time */
             created_at: string;
             is_active: boolean;
+        };
+        SystemHealthSummary: {
+            watchdog_state: string;
+            reconnect_count: number;
+            consecutive_failures: number;
         };
         /**
          * @description Checkpoint 50 Rule 10: the ONE composed readiness answer -
@@ -2743,6 +2906,25 @@ export interface operations {
             };
         };
     };
+    api_v1_config_market_data_live_paper_readiness_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LivePaperReadinessResponse"];
+                };
+            };
+        };
+    };
     api_v1_config_market_data_quotes_list: {
         parameters: {
             query?: never;
@@ -3064,6 +3246,73 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PaperTradeResponse"][];
+                };
+            };
+        };
+    };
+    api_v1_config_reports_communication_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CommunicationReportResponse"];
+                };
+            };
+        };
+    };
+    api_v1_config_reports_daily_session_retrieve: {
+        parameters: {
+            query?: {
+                date?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DailySessionReportResponse"];
+                };
+            };
+        };
+    };
+    api_v1_config_reports_signals_retrieve: {
+        parameters: {
+            query?: {
+                date_from?: string;
+                date_to?: string;
+                direction?: string;
+                instrument_id?: string;
+                risk_status?: string;
+                strategy_id?: string;
+                timeframe?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignalReportResponse"];
                 };
             };
         };

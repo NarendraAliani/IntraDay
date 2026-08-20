@@ -16,6 +16,7 @@ from intraday.infrastructure.api import (
     backtesting_views,
     historical_backtesting_views,
     kill_switch_views,
+    live_paper_readiness_views,
     market_data_sync_views,
     market_data_views,
     paper_trading_views,
@@ -233,6 +234,13 @@ urlpatterns = [
         "market-data/worker-status/",
         worker_runtime_status_views.worker_runtime_status,
         name="worker-runtime-status",
+    ),
+    # --- Checkpoint 64.12: canonical "can we safely start a Live Paper
+    # Session" gate - composes credential/watchdog/kill-switch state ---
+    path(
+        "market-data/live-paper-readiness/",
+        live_paper_readiness_views.live_paper_readiness,
+        name="live-paper-readiness",
     ),
     # --- Checkpoint 64.4: live scanner control plane (desired/effective) --
     path(
