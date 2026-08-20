@@ -121,6 +121,15 @@ function formatTradeValue(value: string | null | undefined): string {
   return `₹${value}`;
 }
 
+function formatDurationSeconds(seconds: number | null): string {
+  if (seconds === null) return "Not available";
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.round((seconds % 3600) / 60);
+  return `${hours}h ${minutes}m`;
+}
+
 function formatPnl(value: string | null): string {
   if (value === null) return "Not available";
   const asNumber = Number(value);
@@ -561,6 +570,8 @@ export function LivePaperOperationsConsole(): JSX.Element {
             <SummaryCard label="Paper Orders" value={report.paper_orders_total} />
             <SummaryCard label="Paper Fills" value={report.paper_orders_filled} />
             <SummaryCard label="Paper Orders Rejected" value={report.paper_orders_rejected} />
+            <SummaryCard label="Open Positions" value={report.open_positions} />
+            <SummaryCard label="Closed Positions" value={report.closed_positions} />
           </div>
         )}
       </section>
@@ -596,9 +607,33 @@ export function LivePaperOperationsConsole(): JSX.Element {
           never a real account balance or real money outcome.
         </p>
         {!reportError && report !== null && (
-          <p className="market-data-monitor__session-value">
-            PAPER P&amp;L: {formatPnl(report.realized_pnl_total)}
-          </p>
+          <>
+            <p className="market-data-monitor__session-value">
+              Realized PAPER P&amp;L: {formatPnl(report.realized_pnl_total)}
+            </p>
+            <p className="market-data-monitor__session-value">
+              Unrealized PAPER P&amp;L: {formatPnl(report.unrealized_pnl_total)}
+            </p>
+            <p className="signal-monitor__hint">
+              Unrealized P&amp;L is marked from the latest persisted bar close price for each open
+              position - never a live Dhan call from this report. Shows "Not available" whenever any
+              open position has no persisted mark price yet, rather than an incomplete total.
+            </p>
+          </>
+        )}
+      </section>
+
+      <section aria-labelledby="lpc-reproducibility-heading" className="live-scanner__section">
+        <h2 id="lpc-reproducibility-heading">Session Duration &amp; Reproducibility</h2>
+        {!reportError && report !== null && (
+          <dl>
+            <dt>Session Duration</dt>
+            <dd>{formatDurationSeconds(report.session_duration_seconds)}</dd>
+            <dt>Configuration Version</dt>
+            <dd>{report.configuration_version ?? "Not available"}</dd>
+            <dt>Session Date</dt>
+            <dd>{report.session_date}</dd>
+          </dl>
         )}
       </section>
     </div>

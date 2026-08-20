@@ -44,7 +44,7 @@ class SmaTrendFilterStrategy:
                     label="SMA Lookback",
                     parameter_type=ParameterType.INTEGER,
                     required=True,
-                    default=20,
+                    default=30,
                     minimum=1,
                     maximum=400,
                     help_text="Period of the trend-filter SMA.",
@@ -56,22 +56,23 @@ class SmaTrendFilterStrategy:
                     required=True,
                     # A REAL bug found from a live report: this field had
                     # `default=None`, so every user had to guess a value
-                    # with zero guidance (the reporting user's own guess,
-                    # 0.02%, is far too tight for NSE cash-equity intraday
-                    # noise and would fire on almost every bar). 0.2%
-                    # is a reasonable starting neutral band for this
-                    # asset class; the frontend now both pre-fills this
-                    # AND shows it as the field's placeholder hint - see
+                    # with zero guidance. Checkpoint 64.17 §13: 0.75% is
+                    # now the CONSERVATIVE BASELINE research starting
+                    # point for this asset class (a research starting
+                    # point, not a claim of optimal profitability - see
+                    # docs/research/STRATEGY_DEFAULT_PROFILES.md); the
+                    # frontend both pre-fills this AND shows it as the
+                    # field's placeholder hint - see
                     # `ParameterSchemaFields.tsx`. `default` is JSON-
                     # serialized verbatim by the API (`strategy_
                     # configuration_views.py`), so it must stay a plain
                     # float here, never a `Decimal` (same JSON-boundary
                     # class of bug as `coerce_configuration_values`).
-                    default=0.2,
+                    default=0.75,
                     minimum=0,
                     maximum=10,
                     help_text="Percent distance from SMA required before a direction is declared. "
-                    "Suggested starting value: 0.2%.",
+                    "Suggested starting value: 0.75%.",
                 ),
             ),
         )

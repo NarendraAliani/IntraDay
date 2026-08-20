@@ -251,6 +251,64 @@ describe("LiveScannerConsole", () => {
     await waitFor(() => expect(screen.getByText(/Real Trading: DISABLED/)).toBeInTheDocument());
   });
 
+  it("Checkpoint 64.17 §12: requires explicit confirmation before applying a configuration change to a RUNNING session", async () => {
+    const runningConfig: ScannerConfigurationResponse = {
+      ...STOPPED_CONFIG,
+      desired: { ...STOPPED_CONFIG.desired, enabled: true },
+      status: "EFFECTIVE",
+    };
+    const fetchMock = stubEndpoints({ config: runningConfig, readiness: READINESS_READY });
+
+    renderWithAuth(<LiveScannerConsole />);
+
+    const applyButton = await waitFor(() =>
+      screen.getByRole("button", { name: "Apply Configuration" }),
+    );
+    fireEvent.click(applyButton);
+
+    // The update endpoint must NOT be called yet - confirmation is required first.
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      expect.stringContaining("/scanner-config/update/"),
+      expect.anything(),
+    );
+    const dialog = await waitFor(() => screen.getByRole("dialog"));
+    expect(dialog).toHaveTextContent("RUNNING");
+
+    fireEvent.click(screen.getByRole("button", { name: "Apply now" }));
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/scanner-config/update/"),
+        expect.objectContaining({ method: "POST" }),
+      ),
+    );
+  });
+
+  it("Checkpoint 64.17 §12: cancelling the confirmation makes no request at all", async () => {
+    const runningConfig: ScannerConfigurationResponse = {
+      ...STOPPED_CONFIG,
+      desired: { ...STOPPED_CONFIG.desired, enabled: true },
+      status: "EFFECTIVE",
+    };
+    const fetchMock = stubEndpoints({ config: runningConfig, readiness: READINESS_READY });
+
+    renderWithAuth(<LiveScannerConsole />);
+
+    const applyButton = await waitFor(() =>
+      screen.getByRole("button", { name: "Apply Configuration" }),
+    );
+    fireEvent.click(applyButton);
+    await waitFor(() => screen.getByRole("dialog"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      expect.stringContaining("/scanner-config/update/"),
+      expect.anything(),
+    );
+  });
+
   it("disables configuration controls for a read-only (non-operator) user", async () => {
     stubEndpoints({});
 

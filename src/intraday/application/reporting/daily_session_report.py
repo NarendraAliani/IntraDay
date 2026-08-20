@@ -83,6 +83,28 @@ class DailySessionReport:
     """`None` when no real position data was supplied by the caller -
     never fabricated as `Decimal("0")`, which would be indistinguishable
     from "genuinely broke even.\""""
+    open_positions: int
+    closed_positions: int
+    unrealized_pnl_total: Decimal | None
+    """Checkpoint 64.17 §9: `None` whenever ANY open position's current
+    mark price is unavailable - never a partial sum silently treating a
+    missing price as zero. The caller supplies each open position's mark
+    price from the SAME authoritative source the paper broker/market-
+    data layer already persists (`AggregatedBarObservation`, never a
+    second, independent Dhan call from this reporting layer)."""
+    session_duration_seconds: float | None
+    """Checkpoint 64.17 §10: `None` when no real `session_started_at`
+    exists for this date - never derived from `WorkerRuntimeStatus.
+    updated_at` (that field is a "last write" timestamp, not a session
+    start)."""
+    configuration_version: int | None
+    """Checkpoint 64.17 §11: the `ScannerConfiguration.configuration_version`
+    active on the provider at report-generation time - `None` when no
+    scanner configuration has ever been saved. Disclosed limitation: no
+    per-date historical configuration-version index exists yet, so for a
+    PAST `session_date` this is the CURRENT version, not necessarily the
+    version that was actually active that day - the `AuditLogEntry` trail
+    remains the authoritative historical record until that gap is closed."""
 
 
 def build_daily_session_report(
@@ -94,6 +116,11 @@ def build_daily_session_report(
     system_health: SystemHealthSummary | None,
     realized_pnl_total: Decimal | None,
     generated_by: str,
+    open_positions: int = 0,
+    closed_positions: int = 0,
+    unrealized_pnl_total: Decimal | None = None,
+    session_duration_seconds: float | None = None,
+    configuration_version: int | None = None,
 ) -> DailySessionReport:
     """Pure aggregation over REAL, persisted rows for one calendar
     session - an empty input set produces an honest all-zero report
@@ -174,6 +201,11 @@ def build_daily_session_report(
         discord=discord_summary,
         system_health=system_health,
         realized_pnl_total=realized_pnl_total,
+        open_positions=open_positions,
+        closed_positions=closed_positions,
+        unrealized_pnl_total=unrealized_pnl_total,
+        session_duration_seconds=session_duration_seconds,
+        configuration_version=configuration_version,
     )
 
 

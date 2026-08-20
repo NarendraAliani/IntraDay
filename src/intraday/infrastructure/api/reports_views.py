@@ -20,8 +20,10 @@
 from __future__ import annotations
 
 import datetime as dt
+from decimal import Decimal
 
 from django.db.models import Sum
+from django.db.models.query import QuerySet
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import serializers
 from rest_framework.decorators import api_view, permission_classes
@@ -39,12 +41,17 @@ from intraday.application.reporting.daily_session_report import (
     build_daily_session_report,
 )
 from intraday.application.reporting.signal_report import SignalSummaryRow, build_signal_report
+from intraday.domain.shared_kernel.contracts import Side
 from intraday.infrastructure.persistence.models import (
+    AggregatedBarObservation,
     CommunicationLedgerRecord,
     PaperOrderRecord,
     PaperPositionRecord,
     SignalRecord,
     WorkerRuntimeStatus,
+)
+from intraday.infrastructure.persistence.scanner_configuration_repository import (
+    DjangoScannerConfigurationRepository,
 )
 
 
@@ -107,12 +114,67 @@ class DailySessionReportResponseSerializer(serializers.Serializer[dict[str, obje
     discord = ChannelCommunicationSummarySerializer()
     system_health = SystemHealthSummarySerializer(allow_null=True)
     realized_pnl_total = serializers.DecimalField(max_digits=18, decimal_places=4, allow_null=True)
+    open_positions = serializers.IntegerField()
+    closed_positions = serializers.IntegerField()
+    unrealized_pnl_total = serializers.DecimalField(
+        max_digits=18, decimal_places=4, allow_null=True
+    )
+    session_duration_seconds = serializers.FloatField(allow_null=True)
+    configuration_version = serializers.IntegerField(allow_null=True)
 
 
 def _parse_date(value: str | None) -> dt.date | None:
     if not value:
         return None
     return dt.date.fromisoformat(value)
+
+
+def _latest_close_price(instrument_id: str) -> Decimal | None:
+    """Checkpoint 64.17 §9: the ONE authoritative, already-persisted
+    mark-price source this reporting layer reads - `AggregatedBarObservation`
+    (Checkpoint 24A, the same table `market_data_views.recent_bars` reads)
+    - never a second, independent Dhan call from this reporting layer.
+    Returns `None` when no bar has ever been persisted for this
+    instrument, which the caller must treat as "unrealized P&L cannot be
+    safely calculated," never as a zero price."""
+    exchange, _, symbol = instrument_id.partition(":")
+    row = (
+        AggregatedBarObservation.objects.filter(instrument_symbol=symbol, exchange=exchange)
+        .order_by("-interval_start")
+        .first()
+    )
+    return row.close_price if row is not None else None
+
+
+def _unrealized_pnl_total(open_positions_qs: QuerySet[PaperPositionRecord]) -> Decimal | None:
+    """Checkpoint 64.17 §9: `None` (not a partial sum) the moment ANY
+    open position's mark price is unavailable - a fabricated partial
+    total would be indistinguishable from a genuinely complete one."""
+    total: Decimal | None = None
+    for position in open_positions_qs:
+        mark_price = _latest_close_price(position.instrument_id)
+        if mark_price is None:
+            return None
+        direction_sign = 1 if position.direction == Side.BUY.value else -1
+        position_pnl = (
+            (mark_price - position.average_entry_price) * position.quantity * direction_sign
+        )
+        total = position_pnl if total is None else total + position_pnl
+    return total
+
+
+def _session_duration_seconds(
+    *, started_at: dt.datetime | None, stopped_at: dt.datetime | None
+) -> float | None:
+    """Checkpoint 64.17 §10: `None` when no real `session_started_at`
+    exists yet (never derived from `WorkerRuntimeStatus.updated_at`).
+    An ACTIVE (not yet stopped) session's duration is measured against
+    `now()`, matching this report's own `data_identity` convention of
+    describing state "as of report generation time.\" """
+    if started_at is None:
+        return None
+    end = stopped_at or dt.datetime.now(tz=dt.UTC)
+    return (end - started_at).total_seconds()
 
 
 @extend_schema(
@@ -272,6 +334,18 @@ def daily_session_report(request: Request) -> Response:
     pnl_aggregate = positions_today.aggregate(total=Sum("realized_pnl"))
     realized_pnl_total = pnl_aggregate["total"]  # `None` when no positions opened this session
 
+    open_positions_qs = positions_today.filter(status="OPEN")
+    closed_positions_qs = positions_today.filter(status="CLOSED")
+    open_positions = open_positions_qs.count()
+    closed_positions = closed_positions_qs.count()
+    unrealized_pnl_total = _unrealized_pnl_total(open_positions_qs)
+
+    scanner_config = DjangoScannerConfigurationRepository().get("dhan")
+    session_duration_seconds = _session_duration_seconds(
+        started_at=scanner_config.session_started_at,
+        stopped_at=scanner_config.session_stopped_at,
+    )
+
     report = build_daily_session_report(
         session_date=session_date,
         signal_rows=signal_rows,
@@ -280,6 +354,11 @@ def daily_session_report(request: Request) -> Response:
         system_health=system_health,
         realized_pnl_total=realized_pnl_total,
         generated_by=request.user.get_username(),
+        open_positions=open_positions,
+        closed_positions=closed_positions,
+        unrealized_pnl_total=unrealized_pnl_total,
+        session_duration_seconds=session_duration_seconds,
+        configuration_version=scanner_config.configuration_version,
     )
     data = DailySessionReportResponseSerializer(
         {
@@ -307,6 +386,11 @@ def daily_session_report(request: Request) -> Response:
                 "failed": report.discord.failed,
                 "pending": report.discord.pending,
             },
+            "open_positions": report.open_positions,
+            "closed_positions": report.closed_positions,
+            "unrealized_pnl_total": report.unrealized_pnl_total,
+            "session_duration_seconds": report.session_duration_seconds,
+            "configuration_version": report.configuration_version,
             "system_health": (
                 {
                     "watchdog_state": report.system_health.watchdog_state,

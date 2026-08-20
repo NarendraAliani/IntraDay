@@ -195,3 +195,91 @@ def test_two_simultaneous_configuration_updates_serialize_with_no_lost_update() 
 
     final = DjangoScannerConfigurationRepository().get("dhan")
     assert final.configuration_version == versions[-1]
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_session_transition_start_sets_started_at_and_clears_stopped_at() -> None:
+    """Checkpoint 64.17 §10: a real, persisted session-boundary
+    timestamp - never derived from `requested_at` (bumped on every
+    ordinary configuration change too) or from `WorkerRuntimeStatus.
+    updated_at`."""
+    repository = DjangoScannerConfigurationRepository()
+
+    after = repository.save(
+        "dhan",
+        enabled=True,
+        timeframe="5m",
+        universe_mode="ALL_CONFIGURED",
+        selected_instrument_ids=[],
+        selected_watchlist_name="",
+        selected_strategy_ids=["ema_crossover"],
+        requested_by="operator",
+        requested_by_user_id=1,
+        request_id="req-start",
+        session_transition="START",
+    )
+
+    assert after.session_started_at is not None
+    assert after.session_stopped_at is None
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_session_transition_stop_sets_stopped_at_without_touching_started_at() -> None:
+    repository = DjangoScannerConfigurationRepository()
+    started = repository.save(
+        "dhan",
+        enabled=True,
+        timeframe="5m",
+        universe_mode="ALL_CONFIGURED",
+        selected_instrument_ids=[],
+        selected_watchlist_name="",
+        selected_strategy_ids=["ema_crossover"],
+        requested_by="operator",
+        requested_by_user_id=1,
+        request_id="req-start",
+        session_transition="START",
+    )
+
+    stopped = repository.save(
+        "dhan",
+        enabled=False,
+        timeframe="5m",
+        universe_mode="ALL_CONFIGURED",
+        selected_instrument_ids=[],
+        selected_watchlist_name="",
+        selected_strategy_ids=["ema_crossover"],
+        requested_by="operator",
+        requested_by_user_id=1,
+        request_id="req-stop",
+        session_transition="STOP",
+    )
+
+    assert stopped.session_started_at == started.session_started_at
+    assert stopped.session_stopped_at is not None
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_ordinary_configuration_updates_never_touch_session_timestamps() -> None:
+    """The generic "Apply Configuration" path (`session_transition=None`,
+    the default) must never set or clear these fields - only the
+    explicit start/stop calls in `live_paper_session.py` do."""
+    repository = DjangoScannerConfigurationRepository()
+
+    after = repository.save(
+        "dhan",
+        enabled=True,
+        timeframe="5m",
+        universe_mode="ALL_CONFIGURED",
+        selected_instrument_ids=[],
+        selected_watchlist_name="",
+        selected_strategy_ids=["ema_crossover"],
+        requested_by="operator",
+        requested_by_user_id=1,
+        request_id="req-ordinary",
+    )
+
+    assert after.session_started_at is None
+    assert after.session_stopped_at is None

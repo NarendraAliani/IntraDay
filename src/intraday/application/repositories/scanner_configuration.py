@@ -24,6 +24,8 @@ class ScannerConfigurationRecord:
     configuration_version: int
     requested_by: str
     requested_at: datetime | None
+    session_started_at: datetime | None = None
+    session_stopped_at: datetime | None = None
 
 
 class ScannerConfigurationRepository(Protocol):
@@ -43,6 +45,7 @@ class ScannerConfigurationRepository(Protocol):
         requested_by_user_id: int,
         request_id: str,
         action: str = "scanner_configuration.update",
+        session_transition: str | None = None,
     ) -> ScannerConfigurationRecord:
         """Persists a NEW desired configuration - always bumps
         `configuration_version` (the caller never sets it directly),
@@ -50,7 +53,13 @@ class ScannerConfigurationRepository(Protocol):
         change" convention. `action` (Checkpoint 64.14) lets a caller
         with a more specific meaning (e.g. an explicit session start/
         stop) record that in the audit trail's `action` field, rather
-        than the generic default every other caller keeps."""
+        than the generic default every other caller keeps. `session_
+        transition` (Checkpoint 64.17 §10) is `None` for every ordinary
+        configuration change (leaves `session_started_at`/`session_
+        stopped_at` untouched), `"START"` (sets `session_started_at`
+        to now, clears `session_stopped_at`) or `"STOP"` (sets `session_
+        stopped_at` to now) - only `live_paper_session.py` ever passes
+        a non-`None` value."""
         ...
 
 

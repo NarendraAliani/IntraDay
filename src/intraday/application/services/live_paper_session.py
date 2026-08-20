@@ -168,6 +168,7 @@ def start_live_paper_session(
         requested_by_user_id=requested_by_user_id,
         request_id=request_id,
         action="live_paper_session.start",
+        session_transition="START",
     )
     return LivePaperSessionResult(
         accepted=True,
@@ -216,6 +217,7 @@ def stop_live_paper_session(
         requested_by_user_id=requested_by_user_id,
         request_id=request_id,
         action="live_paper_session.stop",
+        session_transition="STOP",
     )
     return LivePaperSessionResult(
         accepted=True,

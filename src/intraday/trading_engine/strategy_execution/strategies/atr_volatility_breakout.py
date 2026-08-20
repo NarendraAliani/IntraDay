@@ -61,10 +61,16 @@ class AtrVolatilityBreakoutStrategy:
                     label="ATR Multiplier",
                     parameter_type=ParameterType.DECIMAL,
                     required=True,
-                    default=None,
+                    # Checkpoint 64.17 §13: was `None` (no guidance at
+                    # all) - 2.0 is now the CONSERVATIVE BASELINE
+                    # research starting point (a research starting point,
+                    # not a claim of optimal profitability - see
+                    # docs/research/STRATEGY_DEFAULT_PROFILES.md).
+                    default=2.0,
                     minimum=0,
                     maximum=10,
-                    help_text="Breakout threshold as a multiple of ATR.",
+                    help_text="Breakout threshold as a multiple of ATR. "
+                    "Suggested starting value: 2.0.",
                 ),
                 # Checkpoint 64.7: the TradePlan calculation's own
                 # configurable multipliers - every value `build_trade_plan()`
@@ -108,7 +114,10 @@ class AtrVolatilityBreakoutStrategy:
                     label="Target 3 (x ATR)",
                     parameter_type=ParameterType.DECIMAL,
                     required=True,
-                    default=4.0,
+                    # Checkpoint 64.17 §13: conservative baseline 3.5
+                    # (was 4.0) - a research starting point, not a claim
+                    # of optimal profitability.
+                    default=3.5,
                     minimum=Decimal("0.1"),
                     maximum=20,
                     help_text="Target 3 distance from entry, as a multiple of ATR.",

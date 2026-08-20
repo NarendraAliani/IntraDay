@@ -68,6 +68,39 @@ def test_strategy_schema_endpoint_returns_parameters() -> None:
 
 @requires_postgres
 @pytest.mark.django_db
+def test_strategy_schema_endpoint_exposes_the_conservative_baseline_defaults() -> None:
+    """Checkpoint 64.17 §13/§14: `ParameterDefinition.default` is the
+    ONE canonical source a new-configuration form pre-fills from - this
+    proves the API actually serializes the real, current conservative
+    baseline values (12/26 for EMA), never a duplicated/stale default
+    living anywhere else."""
+    client = _client_as_reader()
+
+    ema = client.get("/api/v1/config/strategy-engine/strategies/ema_crossover/schema/").json()
+    ema_defaults = {p["parameter_id"]: p["default"] for p in ema["parameters"]}
+    assert ema_defaults == {"fast_lookback": 12, "slow_lookback": 26}
+
+    sma = client.get("/api/v1/config/strategy-engine/strategies/sma_trend_filter/schema/").json()
+    sma_defaults = {p["parameter_id"]: p["default"] for p in sma["parameters"]}
+    assert sma_defaults == {"lookback": 30, "band_percent": 0.75}
+
+    atr = client.get(
+        "/api/v1/config/strategy-engine/strategies/atr_volatility_breakout/schema/"
+    ).json()
+    atr_defaults = {p["parameter_id"]: p["default"] for p in atr["parameters"]}
+    assert atr_defaults == {
+        "lookback": 14,
+        "atr_multiplier": 2.0,
+        "stop_loss_atr_multiplier": 1.0,
+        "target_1_atr_multiplier": 1.5,
+        "target_2_atr_multiplier": 2.5,
+        "target_3_atr_multiplier": 3.5,
+        "trailing_stop_atr_multiplier": 1.0,
+    }
+
+
+@requires_postgres
+@pytest.mark.django_db
 def test_strategy_schema_endpoint_unknown_strategy_returns_404() -> None:
     client = _client_as_reader()
     response = client.get("/api/v1/config/strategy-engine/strategies/nonexistent/schema/")

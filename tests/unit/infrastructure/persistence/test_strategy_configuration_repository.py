@@ -44,6 +44,41 @@ def test_save_and_get_round_trips_values() -> None:
 
 @requires_postgres
 @pytest.mark.django_db
+def test_changing_a_strategys_default_does_not_mutate_an_existing_configuration_record() -> None:
+    """Checkpoint 64.17 §15: `ParameterDefinition.default` is read ONLY
+    when a NEW configuration is created (the frontend/API pre-fills an
+    empty form with it) - it is never consulted again once a
+    `StrategyConfigurationRecord` is saved with its OWN explicit values.
+    Proves the mandatory invariant directly: a configuration saved
+    BEFORE the 12/26 conservative-baseline default change (Checkpoint
+    64.17) still round-trips its own old, pre-existing values (5/10)
+    exactly - `ema_crossover`'s current schema default (12/26) never
+    leaks into an already-persisted row."""
+    from intraday.trading_engine.strategy_execution.strategies.ema_crossover import (
+        EmaCrossoverStrategy,
+    )
+
+    repo = DjangoStrategyConfigurationRepository()
+    repo.save(
+        _snapshot(configuration_version="cfg-v1", values={"fast_lookback": 5, "slow_lookback": 10})
+    )
+
+    result = repo.get("ema_crossover", "spec-v1", "code-v1", "cfg-v1")
+
+    assert result is not None
+    assert result.parameter_values == {"fast_lookback": 5, "slow_lookback": 10}
+    # The CURRENT schema default is deliberately different (12/26,
+    # Checkpoint 64.17's conservative baseline) - this proves the two
+    # are genuinely independent, not merely coincidentally unequal.
+    current_defaults = {
+        p.parameter_id: p.default for p in EmaCrossoverStrategy().parameter_schema().parameters
+    }
+    assert current_defaults == {"fast_lookback": 12, "slow_lookback": 26}
+    assert result.parameter_values != current_defaults
+
+
+@requires_postgres
+@pytest.mark.django_db
 def test_get_missing_configuration_returns_none() -> None:
     repo = DjangoStrategyConfigurationRepository()
     assert repo.get("ema_crossover", "spec-v1", "code-v1", "nonexistent") is None

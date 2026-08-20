@@ -1167,6 +1167,17 @@ class ScannerConfiguration(models.Model):
     requested_by = models.CharField(max_length=150, blank=True, default="")
     requested_at = models.DateTimeField(auto_now=True)
 
+    # Checkpoint 64.17 §10: a REAL, persisted session-boundary timestamp
+    # pair - deliberately NOT derived from `requested_at` (bumped on
+    # every configuration change, not just START/STOP) or from
+    # `WorkerRuntimeStatus.updated_at` (a "last write" timestamp, not a
+    # session start). Set ONLY by `live_paper_session.py`'s explicit
+    # start/stop calls (via `save()`'s `session_transition` parameter,
+    # never by the generic "Apply Configuration" path) - both `None`
+    # until the first real START.
+    session_started_at = models.DateTimeField(null=True, blank=True)
+    session_stopped_at = models.DateTimeField(null=True, blank=True)
+
     class Meta:
         app_label = "persistence"
 

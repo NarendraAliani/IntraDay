@@ -1766,6 +1766,13 @@ export interface components {
             system_health: components["schemas"]["SystemHealthSummary"] | null;
             /** Format: decimal */
             realized_pnl_total: string | null;
+            open_positions: number;
+            closed_positions: number;
+            /** Format: decimal */
+            unrealized_pnl_total: string | null;
+            /** Format: double */
+            session_duration_seconds: number | null;
+            configuration_version: number | null;
         };
         /**
          * @description * `DHAN_SCRIP_MASTER` - DHAN_SCRIP_MASTER

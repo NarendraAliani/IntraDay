@@ -45,6 +45,7 @@ import type { ScannerConfigurationResponse } from "../../common/api/scannerConfi
 import { listStrategies } from "../../common/api/strategyApi";
 import type { StrategySummary } from "../../common/api/strategyApi";
 import { useAuth } from "../../common/auth/AuthContext";
+import { ConfirmDialog } from "../../common/components/ConfirmDialog";
 import { InstrumentPickerMulti } from "../../common/components/InstrumentPicker";
 import { TIMEFRAME_OPTIONS, WorkerStatusCard } from "./LiveMarketDataMonitor";
 
@@ -126,6 +127,16 @@ export function LiveScannerConsole(): JSX.Element {
   // the actual enforcement (see startLivePaperSession()).
   const [readiness, setReadiness] = useState<LivePaperReadinessResponse | null>(null);
   const [sessionMessage, setSessionMessage] = useState<string | null>(null);
+  // Checkpoint 64.17 §12: the evidence-based product decision (see
+  // taskReport.md "Session Configuration Decision") - Option B, controlled
+  // live reconfiguration, is kept (the underlying worker-reconciliation
+  // architecture already re-reads `desired` continuously by design,
+  // Checkpoint 64.4/64.5 - freezing it would be a breaking behavior
+  // change to an existing, shipped feature). What Option B still
+  // required and did NOT yet have is EXPLICIT confirmation before a
+  // live change takes effect while a session is RUNNING - added here,
+  // reusing the existing `ConfirmDialog` component, never a bespoke one.
+  const [showReconfigureConfirm, setShowReconfigureConfirm] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -521,7 +532,7 @@ export function LiveScannerConsole(): JSX.Element {
                 type="button"
                 className="market-data-monitor__refresh-button"
                 disabled={applyPhase === "validating" || applyPhase === "saving" || applyPhase === "applying"}
-                onClick={() => void handleApply(true)}
+                onClick={() => setShowReconfigureConfirm(true)}
               >
                 Apply Configuration
               </button>
@@ -644,6 +655,34 @@ export function LiveScannerConsole(): JSX.Element {
           nav item) - this console does not duplicate that table.
         </p>
       </section>
+
+      {showReconfigureConfirm && (
+        <ConfirmDialog
+          titleId="live-scanner-reconfigure-confirm-title"
+          title="Apply configuration to the RUNNING session?"
+          confirmLabel="Apply now"
+          status="idle"
+          onCancel={() => setShowReconfigureConfirm(false)}
+          onConfirm={() => {
+            setShowReconfigureConfirm(false);
+            void handleApply(true);
+          }}
+        >
+          <p>
+            This Live Paper Session is currently RUNNING. Applying this configuration change will
+            take effect on the worker&apos;s next reconciliation cycle - it does NOT stop the
+            session first.
+          </p>
+          <p>
+            <strong>Timeframe:</strong> {timeframe}
+            <br />
+            <strong>Universe:</strong> {universeMode}
+            <br />
+            <strong>Strategies:</strong>{" "}
+            {selectedStrategyIds.size > 0 ? Array.from(selectedStrategyIds).join(", ") : "None selected"}
+          </p>
+        </ConfirmDialog>
+      )}
     </div>
   );
 }

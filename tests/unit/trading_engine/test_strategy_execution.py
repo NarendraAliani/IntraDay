@@ -200,13 +200,38 @@ def test_validate_configuration_rejects_unknown_parameter() -> None:
 
 
 def test_validate_configuration_rejects_missing_required_without_default() -> None:
-    # SmaTrendFilterStrategy.band_percent used to be the no-default
-    # fixture here, but it now carries a suggested default (a real user
-    # asked for a placeholder/default value after having to guess one) -
-    # ATR's atr_multiplier is still required with no default.
-    schema = AtrVolatilityBreakoutStrategy().parameter_schema()
+    # Checkpoint 64.17 §13/§14: EVERY real strategy's parameters now
+    # carry a conservative baseline `default` (previously
+    # SmaTrendFilterStrategy.band_percent and AtrVolatilityBreakout
+    # Strategy.atr_multiplier were each, in turn, the "no default"
+    # fixture here - both were real bugs where an operator had zero
+    # guidance and had to guess a value). This test still proves the
+    # real `validate_configuration()` behavior (required + no default
+    # -> MissingRequiredParameterError) via a synthetic schema, so it
+    # never again silently stops testing this path just because every
+    # production strategy has since gained a sensible default.
+    from intraday.trading_engine.strategy_execution.contracts import (
+        ParameterDefinition,
+        StrategyParameterSchema,
+    )
+
+    schema = StrategyParameterSchema(
+        strategy_id="synthetic_no_default_fixture",
+        parameters=(
+            ParameterDefinition(
+                parameter_id="required_field",
+                label="Required Field",
+                parameter_type=ParameterType.INTEGER,
+                required=True,
+                default=None,
+                minimum=1,
+                maximum=100,
+                help_text="A required parameter with no default.",
+            ),
+        ),
+    )
     with pytest.raises(MissingRequiredParameterError):
-        validate_configuration(schema, {"lookback": 14}, known_field_ids=frozenset())
+        validate_configuration(schema, {}, known_field_ids=frozenset())
 
 
 def test_validate_configuration_rejects_out_of_range() -> None:

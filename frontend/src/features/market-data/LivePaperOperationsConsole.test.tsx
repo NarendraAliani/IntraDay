@@ -4,7 +4,7 @@
 // Operations Console - only `global.fetch` is mocked; the real
 // component and real generated contract types are exercised together,
 // matching LiveScannerConsole.test.tsx's own established pattern.
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { LivePaperOperationsConsole } from "./LivePaperOperationsConsole";
@@ -137,6 +137,11 @@ const EMPTY_REPORT: DailySessionReportResponse = {
   discord: { sent: 1, failed: 0, pending: 1 },
   system_health: null,
   realized_pnl_total: "125.50",
+  open_positions: 1,
+  closed_positions: 2,
+  unrealized_pnl_total: "42.75",
+  session_duration_seconds: 1800,
+  configuration_version: 3,
 };
 
 const SAMPLE_SIGNAL: SignalResponse = {
@@ -373,7 +378,53 @@ describe("LivePaperOperationsConsole", () => {
 
     renderWithAuth(<LivePaperOperationsConsole />);
 
-    await waitFor(() => expect(screen.getByText(/PAPER P&L: \+₹125\.50/)).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText(/Realized PAPER P&L: \+₹125\.50/)).toBeInTheDocument(),
+    );
+    expect(screen.getByText(/Unrealized PAPER P&L: \+₹42\.75/)).toBeInTheDocument();
+  });
+
+  it("shows open/closed position counts and session reproducibility metadata", async () => {
+    stubEndpoints({});
+
+    renderWithAuth(<LivePaperOperationsConsole />);
+
+    await waitFor(() => expect(screen.getByText("Open Positions").nextSibling).toHaveTextContent("1"));
+    expect(screen.getByText("Closed Positions").nextSibling).toHaveTextContent("2");
+    const reproducibility = screen
+      .getByText("Session Duration & Reproducibility")
+      .closest("section");
+    expect(reproducibility).not.toBeNull();
+    expect(within(reproducibility as HTMLElement).getByText("30m")).toBeInTheDocument();
+    expect(
+      within(reproducibility as HTMLElement).getByText("Configuration Version").nextSibling,
+    ).toHaveTextContent("3");
+  });
+
+  it("shows Not Available for unrealized P&L, session duration, and configuration version when the backend has none", async () => {
+    stubEndpoints({
+      report: {
+        ...EMPTY_REPORT,
+        unrealized_pnl_total: null,
+        session_duration_seconds: null,
+        configuration_version: null,
+      },
+    });
+
+    renderWithAuth(<LivePaperOperationsConsole />);
+
+    await waitFor(() =>
+      expect(screen.getByText(/Unrealized PAPER P&L: Not available/)).toBeInTheDocument(),
+    );
+    const reproducibility = screen
+      .getByText("Session Duration & Reproducibility")
+      .closest("section") as HTMLElement;
+    expect(within(reproducibility).getByText("Session Duration").nextSibling).toHaveTextContent(
+      "Not available",
+    );
+    expect(
+      within(reproducibility).getByText("Configuration Version").nextSibling,
+    ).toHaveTextContent("Not available");
   });
 
   it("shows Not available for Paper P&L when the backend has no realized total yet", async () => {

@@ -32,6 +32,8 @@ def _to_record(row: ScannerConfiguration) -> ScannerConfigurationRecord:
         configuration_version=row.configuration_version,
         requested_by=row.requested_by,
         requested_at=row.requested_at,
+        session_started_at=row.session_started_at,
+        session_stopped_at=row.session_stopped_at,
     )
 
 
@@ -71,6 +73,7 @@ class DjangoScannerConfigurationRepository:
         requested_by_user_id: int,
         request_id: str,
         action: str = _ACTION,
+        session_transition: str | None = None,
     ) -> ScannerConfigurationRecord:
         """Checkpoint 64.14 §10: `action` defaults to the ORIGINAL
         Checkpoint 64.4 label (`"scanner_configuration.update"`) - every
@@ -79,7 +82,11 @@ class DjangoScannerConfigurationRepository:
         reading both call sites before this change (neither passes
         `action`). Only `live_paper_session.py`'s explicit start/stop
         calls pass a distinguishing label - the smallest architecturally
-        correct extension, never a second audit table."""
+        correct extension, never a second audit table.
+
+        Checkpoint 64.17 §10: `session_transition` defaults to `None`
+        (every pre-existing caller is unaffected, verified the same
+        way) - only `live_paper_session.py` passes `"START"`/`"STOP"`."""
         new_values = {
             "enabled": enabled,
             "timeframe": timeframe,
@@ -98,6 +105,11 @@ class DjangoScannerConfigurationRepository:
                 setattr(row, field_name, value)
             row.configuration_version += 1
             row.requested_by = requested_by
+            if session_transition == "START":
+                row.session_started_at = dt.datetime.now(tz=dt.UTC)
+                row.session_stopped_at = None
+            elif session_transition == "STOP":
+                row.session_stopped_at = dt.datetime.now(tz=dt.UTC)
             row.save()
 
             AuditLogEntry.objects.create(

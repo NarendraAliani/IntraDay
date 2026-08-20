@@ -37,6 +37,19 @@ class EmaCrossoverStrategy:
     code_version = CODE_VERSION
 
     def parameter_schema(self) -> StrategyParameterSchema:
+        # Checkpoint 64.17 §13/§14: `default` below is the ONE canonical
+        # source of truth for a NEW configuration's starting values - the
+        # API (`strategy_configuration_views.py`), the generated
+        # TypeScript contract, and `ParameterSchemaFields.tsx` all read
+        # this field directly, never a duplicated default dictionary
+        # elsewhere. 12/26 is the CONSERVATIVE BASELINE research starting
+        # point (not a claim of optimal profitability - see
+        # docs/research/STRATEGY_DEFAULT_PROFILES.md). Changing this
+        # value affects only NEW `StrategyConfigurationRecord` rows
+        # created after this change - every existing, already-versioned
+        # configuration keeps its own stored values unchanged (proven by
+        # `test_changing_a_default_does_not_mutate_an_existing_
+        # configuration_record`).
         return StrategyParameterSchema(
             strategy_id=STRATEGY_ID,
             parameters=(
@@ -45,7 +58,7 @@ class EmaCrossoverStrategy:
                     label="Fast EMA Lookback",
                     parameter_type=ParameterType.INTEGER,
                     required=True,
-                    default=9,
+                    default=12,
                     minimum=1,
                     maximum=200,
                     help_text="Period of the fast (short) EMA.",
@@ -55,7 +68,7 @@ class EmaCrossoverStrategy:
                     label="Slow EMA Lookback",
                     parameter_type=ParameterType.INTEGER,
                     required=True,
-                    default=21,
+                    default=26,
                     minimum=2,
                     maximum=400,
                     help_text="Period of the slow (long) EMA. Must exceed fast_lookback.",
