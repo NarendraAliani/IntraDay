@@ -46,6 +46,7 @@ class ReportType(str, Enum):
     AUDIT_REPORT = "AUDIT_REPORT"
     SYSTEM_HEALTH_REPORT = "SYSTEM_HEALTH_REPORT"
     COMMUNICATION_DELIVERY_REPORT = "COMMUNICATION_DELIVERY_REPORT"
+    DAILY_SESSION_REPORT = "DAILY_SESSION_REPORT"
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,6 +201,28 @@ REPORT_CATALOGUE: tuple[ReportCatalogueEntry, ...] = (
         "delivery attempts, not placeholders",
         future_data_dependencies="none beyond what already exists",
         ui_surface="Reports Overview page (new, this checkpoint)",
+    ),
+    ReportCatalogueEntry(
+        report_type=ReportType.DAILY_SESSION_REPORT,
+        status=ReportStatus.AVAILABLE,
+        purpose="Checkpoint 64.10: 'what happened today?' - one summary "
+        "spanning signals (now backed by the real SignalRecord ledger, "
+        "Checkpoint 62.x/64.9's Signal Operations Center enrichment), risk "
+        "outcomes, paper orders/positions, and communication delivery, "
+        "without requiring the operator to inspect multiple screens.",
+        owner="infrastructure.persistence.signal_repository / "
+        "communication_ledger_repository / paper_ledger_repository (all "
+        "pre-existing) - this report only aggregates, never a new engine",
+        required_data="SignalRecord (Checkpoint 62.x), TradePlanRecord "
+        "(Checkpoint 64.7), CommunicationLedgerRecord (Checkpoint 37), "
+        "PaperOrderRecord/Position (Checkpoint 35/36) - all real, all "
+        "already persisted by the time this report runs",
+        future_data_dependencies="a persisted per-session boundary marker "
+        "(currently a session is identified by calendar date, via "
+        "signal_timestamp/created_at range, not a dedicated Session row) "
+        "would make multi-session-per-day scenarios unambiguous",
+        ui_surface="Reports Overview page (new, this checkpoint - backend "
+        "endpoint only, no dedicated frontend screen yet)",
     ),
 )
 

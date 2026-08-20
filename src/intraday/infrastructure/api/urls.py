@@ -19,6 +19,7 @@ from intraday.infrastructure.api import (
     market_data_sync_views,
     market_data_views,
     paper_trading_views,
+    reports_views,
     risk_views,
     scanner_configuration_views,
     settings_views,
@@ -43,6 +44,19 @@ urlpatterns = [
         "signals/<str:signal_id>/communication/",
         signal_views.signal_communication_history,
         name="signals-communication-history",
+    ),
+    # --- Checkpoint 64.10: real report API endpoints (first-ever wiring
+    # for any of application/reporting/*.py's builder functions) ------
+    path("reports/signals/", reports_views.signal_report, name="reports-signal"),
+    path(
+        "reports/communication/",
+        reports_views.communication_report,
+        name="reports-communication",
+    ),
+    path(
+        "reports/daily-session/",
+        reports_views.daily_session_report,
+        name="reports-daily-session",
     ),
     # --- Checkpoint 23: read-only live market data ------------------------
     path("market-data/session/", market_data_views.session_status, name="market-data-session"),
