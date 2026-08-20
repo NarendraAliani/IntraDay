@@ -162,6 +162,19 @@ class SignalCommunicationContext:
     trailing_stop_price: Decimal | None = None
     realized_pnl: Decimal | None = None
     extra_text: str | None = None  # for BROKER_DISCONNECTED/STALE/KILL_SWITCH free text
+    evidence_fields: tuple[tuple[str, str], ...] = ()
+    """Checkpoint 64.19 §2/§3: `(label, value)` pairs - the SAME generic
+    shape `trading_engine.strategy_execution.evidence.SignalEvidence.
+    fields` already carries (Checkpoint 64.18), deliberately NOT that
+    type itself - `communication` is a bounded context and Contract 4
+    (`.importlinter`) forbids it depending on `trading_engine` (bounded-
+    context independence). The CALLER (`application.services.
+    paper_signal_execution`, which is allowed to depend on both)
+    converts `SignalEvidence.fields` into this plain tuple-of-tuples
+    shape when building the context - never a duplicated evidence
+    formatter inside this module. Empty when no evidence was produced
+    (e.g. a directional-only strategy, or a strategy with no registered
+    describer) - never fabricated."""
 
 
 @dataclass(frozen=True, slots=True)

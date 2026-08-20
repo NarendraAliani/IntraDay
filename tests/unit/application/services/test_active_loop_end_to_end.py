@@ -550,6 +550,9 @@ def test_full_bars_to_report_chain_with_trade_plan_and_mixed_channel_delivery() 
     # before this assertion block even runs. ---
     assert telegram.attempts >= 1
     assert len(discord.sent) >= 1
+    # Checkpoint 64.19 §2: the ACTUAL delivered Discord message carries
+    # the real, persisted evidence - not just persisted separately.
+    assert any("Key Evidence:" in message and "ATR:" in message for message in discord.sent)
     telegram_rows = CommunicationLedgerRecord.objects.filter(
         signal_id=str(signal_id), channel="TELEGRAM"
     )
@@ -678,3 +681,9 @@ def test_scenario_j_risk_rejected_signal_is_persisted_queryable_and_communicated
     # VALIDATED_SIGNAL_EXECUTION_BLOCKED - proves the rejection reason
     # itself was communicated, not merely the original signal.
     assert discord_rows.count() == 2
+    # Checkpoint 64.19 §2/§4: evidence reaches BOTH delivered messages
+    # (VALIDATED_SIGNAL and the EXECUTION_BLOCKED follow-up) even
+    # though the trade never executed, and the message never implies an
+    # order was placed.
+    assert any("Key Evidence:" in message for message in discord.sent)
+    assert not any("FILLED" in message for message in discord.sent)

@@ -59,7 +59,10 @@ from intraday.trading_engine.strategy_execution.contracts import (
     TradePlan,
 )
 from intraday.trading_engine.strategy_execution.coordinator import StrategyExecutionCoordinator
-from intraday.trading_engine.strategy_execution.evidence import build_signal_evidence
+from intraday.trading_engine.strategy_execution.evidence import (
+    SignalEvidence,
+    build_signal_evidence,
+)
 
 
 class SignalRecorder(Protocol):
@@ -310,10 +313,14 @@ class PaperSignalExecutionService:
         # None/() below, exactly as before this checkpoint).
         if trade_plan is not None and self._trade_plan_recorder is not None:
             self._trade_plan_recorder.save(str(signal_id), trade_plan)
-        if self._evidence_recorder is not None:
-            evidence = build_signal_evidence(signal)
-            if evidence is not None:
-                self._evidence_recorder.save(str(signal_id), evidence)
+        # Checkpoint 64.19 §2/§3: computed unconditionally (a pure, cheap
+        # formatter over the signal's own already-computed evidence) so
+        # the outbound communication context carries it EVEN when no
+        # `evidence_recorder` is configured - persistence and
+        # communication are independent concerns, never coupled.
+        evidence = build_signal_evidence(signal)
+        if evidence is not None and self._evidence_recorder is not None:
+            self._evidence_recorder.save(str(signal_id), evidence)
         context = _build_context(
             instrument_id=instrument_id,
             strategy_id=strategy_id,
@@ -324,6 +331,7 @@ class PaperSignalExecutionService:
             signal_timestamp=signal.timestamp,
             timeframe=str(signal.timeframe),
             trade_plan=trade_plan,
+            evidence=evidence,
         )
         # SIGNAL TRUTH != EXECUTION TRUTH: this fires unconditionally,
         # before risk/broker involvement - a strategically audited
@@ -544,6 +552,7 @@ def _build_context(
     signal_timestamp: datetime,
     timeframe: str,
     trade_plan: TradePlan | None = None,
+    evidence: SignalEvidence | None = None,
 ) -> SignalCommunicationContext:
     exchange, _, symbol = str(instrument_id).partition(":")
     return SignalCommunicationContext(
@@ -572,6 +581,16 @@ def _build_context(
         confidence=None,
         signal_status=SignalStatus.VALIDATED,
         execution_status=ExecutionStatus.NOT_EVALUATED,
+        # Checkpoint 64.19 §2/§3: converts the strategy's real,
+        # already-persisted evidence into the plain (label, value)
+        # shape `SignalCommunicationContext` accepts - `communication`
+        # is a bounded context and may not import `trading_engine`
+        # directly (`.importlinter` Contract 4), so this conversion
+        # happens HERE, in `application`, which is allowed to depend on
+        # both. Empty when no evidence exists - never fabricated.
+        evidence_fields=(
+            tuple((f.label, f.value) for f in evidence.fields) if evidence is not None else ()
+        ),
     )
 
 

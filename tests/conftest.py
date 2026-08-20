@@ -40,41 +40,65 @@ def _clear_cache_between_tests() -> Iterator[None]:
     cache.clear()
 
 
-# Checkpoint 64.18 §1: investigated the recurring
-# `PytestWarning: Error when trying to teardown test databases: ...
-# database "test_intraday" is being accessed by other users` seen at the
-# end of every full-suite run. Root-caused as HARMLESS infrastructure
-# noise, not a test-isolation bug:
+# Checkpoint 64.18 §1 investigated the recurring `PytestWarning: Error
+# when trying to teardown test databases: ... database "test_intraday"
+# is being accessed by other users`, root-caused it as a harmless
+# lingering same-process connection (not a test-isolation leak - the
+# one real multi-connection risk in this suite,
+# `test_scanner_configuration_repository.py`'s `ThreadPoolExecutor`
+# test, already calls `connections.close_all()` correctly), and
+# attempted a fix via a `pytest_sessionfinish` hook. That fix did NOT
+# work - the warning still appeared in every full-suite run after it
+# was added.
 #
-#   - It always names the SAME single lingering session, regardless of
-#     which tests ran or in what order - inconsistent with a specific
-#     test leaking a connection (a real leak would vary with test
-#     selection/order).
-#   - It fires only ONCE, at the very end of the whole run, during
-#     Django's own final `DROP DATABASE` - never during any individual
-#     test's setup/teardown, and never causes a test failure.
-#   - The ONE place in this suite with a genuine multi-connection risk
-#     (`test_scanner_configuration_repository.py`'s `ThreadPoolExecutor`
-#     concurrency test) already explicitly calls
-#     `connections.close_all()` in a `finally` block - audited this
-#     checkpoint, confirmed correct.
-#   - The remaining session is this SAME pytest process's own long-lived
-#     default Django DB connection (opened lazily the first time any
-#     test touches the DB) - it is simply still open when pytest-django
-#     asks a SEPARATE admin connection to `DROP DATABASE test_intraday`
-#     at session end. Postgres correctly refuses to drop a database with
-#     any other live session attached, including the test process's own.
+# Checkpoint 64.19 §13 root-caused WHY: read pytest-django's own
+# `fixtures.py` source directly (`django_db_setup`, session-scoped) -
+# `teardown_databases()` (where this exact warning is raised, in
+# pytest-django's own `except Exception` handler around it) runs
+# inside that FIXTURE's finalizer (the code after its `yield`), not in
+# any pytest hook. Session-scoped fixture finalizers run during
+# pytest's internal session-teardown phase, which completes BEFORE
+# `pytest_sessionfinish` hooks are called - so the previous hook closed
+# connections strictly too late to matter, exactly as 64.18 already
+# suspected but had not yet confirmed against the actual source.
 #
-# Safe fix: explicitly close every Django DB connection in THIS process
-# before pytest-django's teardown runs, via `pytest_sessionfinish`
-# (fires after all tests but before pytest-django's own database
-# teardown, which is registered as an even later session-finish hook by
-# `pytest-django`'s plugin registration order). This never touches any
-# individual test's isolation or transaction behavior - only closes
-# connections after every test has already finished.
-def pytest_sessionfinish() -> None:
-    try:
-        from django.db import connections
-    except Exception:  # pragma: no cover - Django not configured yet
-        return
+# The correct fix, per pytest's own documented fixture-teardown
+# ordering: a finalizer only runs before another fixture's finalizer if
+# it belongs to a fixture that REQUESTED (depends on) that fixture -
+# dependents tear down before their dependencies. This fixture
+# explicitly depends on `django_db_setup` so pytest guarantees this
+# fixture's own teardown (closing every connection) runs BEFORE
+# `django_db_setup`'s teardown attempts `DROP DATABASE`. `autouse=True`
+# so every test session picks it up without any test file needing to
+# request it. This is the smallest safe fix: it changes no test's
+# isolation or transaction behavior, and closing already-finished
+# connections after the whole session's tests have run cannot affect
+# any test result.
+@pytest.fixture(scope="session", autouse=True)
+def _close_db_connections_before_teardown(django_db_setup: None) -> Iterator[None]:  # noqa: ARG001
+    yield
+    from django.db import connections
+
     connections.close_all()
+
+
+# Checkpoint 64.19 §13 RESULT: verified via a full-suite run AFTER
+# adding the fixture above - the warning STILL appears, identically.
+# This proves the revised hypothesis wrong too: the lingering session
+# is NOT this pytest process's own default Django connection (that one
+# is now provably closed, in the correct fixture-teardown order, before
+# `DROP DATABASE` is attempted). The true remaining session is
+# something else this investigation could not identify without direct
+# `pg_stat_activity` access on the Postgres server (outside what this
+# checkpoint's tooling can safely inspect) - candidates include a
+# separate tool/IDE holding a connection to `test_intraday` (e.g. a
+# database client left open), or a connection pool on this development
+# machine that is not part of the pytest process at all.
+#
+# Per this checkpoint's own explicit instruction ("if it cannot be
+# safely resolved without changing project test semantics, do not force
+# the fix"): DEFERRED. It is safe to defer because, across every
+# checkpoint this warning has been observed (64.16-64.19), it has never
+# once caused a test failure, never affected test isolation, and never
+# varied with which tests ran - it is cosmetic teardown noise from this
+# development environment, not a product or test-suite defect.

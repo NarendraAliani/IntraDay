@@ -35,6 +35,18 @@ def _header(ctx: SignalCommunicationContext) -> str:
     )
 
 
+def _render_evidence(ctx: SignalCommunicationContext) -> str:
+    """Checkpoint 64.19 §2/§3: a COMPACT "Key Evidence" section - not
+    every raw field, just the strategy's own already-persisted evidence
+    (`SignalEvidence.fields`, converted to `ctx.evidence_fields` by the
+    caller). Empty string (never a fabricated placeholder line) when no
+    evidence exists for this signal."""
+    if not ctx.evidence_fields:
+        return ""
+    lines = "\n".join(f"  {label}: {value}" for label, value in ctx.evidence_fields)
+    return f"\nKey Evidence:\n{lines}\n"
+
+
 def _render_validated_signal(ctx: SignalCommunicationContext) -> str:
     direction_word = "BUY" if ctx.direction is Side.BUY else "SELL"
     targets = "\n".join(f"Target {i + 1}: {_fmt_price(t)}" for i, t in enumerate(ctx.targets))
@@ -50,7 +62,8 @@ def _render_validated_signal(ctx: SignalCommunicationContext) -> str:
         f"Stop Loss: {_fmt_price(ctx.stop_loss)}\n\n"
         f"{targets}\n\n"
         f"Trailing SL: {'Enabled' if ctx.trailing_stop_enabled else 'Disabled'}"
-        f"{confidence_line}\n\n"
+        f"{confidence_line}\n"
+        f"{_render_evidence(ctx)}\n"
         f"Signal Status: {ctx.signal_status.value}\n"
         f"Execution Status: {ctx.execution_status.value}"
     )
@@ -61,7 +74,8 @@ def _render_execution_blocked(ctx: SignalCommunicationContext) -> str:
         "⚠️ VALIDATED SIGNAL / EXECUTION BLOCKED\n\n"
         f"{_header(ctx)}\n"
         f"Signal: {'BUY' if ctx.direction is Side.BUY else 'SELL'} "
-        f"@ {_fmt_price(ctx.entry_price)}\n\n"
+        f"@ {_fmt_price(ctx.entry_price)}\n"
+        f"{_render_evidence(ctx)}\n"
         f"Signal Status: {ctx.signal_status.value}\n"
         f"Execution Status: {ctx.execution_status.value}\n"
         f"Reason: {ctx.block_reason or 'Not specified'}"
