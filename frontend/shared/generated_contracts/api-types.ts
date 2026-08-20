@@ -450,6 +450,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/config/market-data/live-paper-workbench/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Checkpoint 64.14: the Pre-Session Readiness Workbench's single
+         *     data source - the aggregate `readiness` (authoritative, unchanged),
+         *     the 10-item `checklist` (explains it), `session_state` (the real
+         *     NOT_READY/READY/STARTING/RUNNING/STOPPING/STOPPED/FAILED value,
+         *     Checkpoint 64.13/64.14), and the `effective_session_configuration`
+         *     (desired vs effective, never blurred).
+         */
+        get: operations["api_v1_config_market_data_live_paper_workbench_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/config/market-data/quotes/": {
         parameters: {
             query?: never;
@@ -1766,6 +1790,25 @@ export interface components {
             webhook_url?: string;
             enabled?: boolean;
         };
+        /**
+         * @description Checkpoint 64.14 §5: DESIRED and EFFECTIVE are always two
+         *     distinct sub-objects here, never blurred into one - `drift` is
+         *     `true` exactly when the worker has not yet reconciled the desired
+         *     version (an honest, real comparison, never inferred).
+         */
+        EffectiveSessionConfiguration: {
+            desired_configuration_version: number;
+            desired_universe_mode: string;
+            desired_timeframe: string;
+            desired_strategy_ids: string[];
+            desired_requested_by: string;
+            effective_configuration_version: number;
+            effective_timeframe: string;
+            effective_strategy_ids: string[];
+            effective_stock_count: number;
+            effective_requested_stock_count: number;
+            drift: boolean;
+        };
         FieldDefinition: {
             field_id: string;
             display_name: string;
@@ -1913,6 +1956,14 @@ export interface components {
             remediation: string | null;
             configuration_version: number;
             enabled: boolean;
+        };
+        LivePaperWorkbenchResponse: {
+            readiness: components["schemas"]["LivePaperReadinessResponse"];
+            checklist: {
+                [key: string]: unknown;
+            }[];
+            session_state: string;
+            effective_session_configuration: components["schemas"]["EffectiveSessionConfiguration"];
         };
         /**
          * @description Request body for `POST /api/v1/auth/login/`. `password` is
@@ -3019,6 +3070,25 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LivePaperSessionResponse"];
+                };
+            };
+        };
+    };
+    api_v1_config_market_data_live_paper_workbench_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LivePaperWorkbenchResponse"];
                 };
             };
         };

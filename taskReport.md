@@ -1,312 +1,448 @@
-# Checkpoint 64.14: Complete Live Paper Operator Workbench + Session Observability
+# Task Report
+
+## Checkpoint
+
+64.15 — LIVE PAPER OPERATOR WORKBENCH UI + CONSOLIDATED SESSION MONITOR
 
 ## Objective
 
-64.13 delivered the backend-enforced START/STOP workflow for a Live Paper
-Session but left six gaps, stated verbatim in its own report: (1) the full
-10-item pre-session readiness workbench, (2) an explicit Effective Session
-Configuration presentation, (3) session-specific audit action semantics,
-(4) a real FAILED session-state path, (5) a consolidated Live Session
-Monitor, (6) live-observed READY → START → RUNNING (blocked by the expired
-Dhan credential). This checkpoint's directive instructed closing items 1-5
-and explicitly forbade attempting live Dhan connectivity with the known
-expired credential (item 6 remains out of scope by direction, not by
-oversight).
+64.14 completed the backend/data-contract layer (10-item readiness checklist,
+desired vs effective configuration, drift detection, session state
+derivation, FAILED state, session-specific audit labels, consolidated
+workbench API) but explicitly left the frontend unbuilt. This checkpoint
+consumes those existing contracts and builds the actual operator UI: a
+single consolidated **Live Paper Operations** console.
+
+## Market State
+
+**CLOSED.** No live Dhan connectivity was attempted. No live market-data
+worker was started. No live data, signals, fills, or P&L were fabricated.
+The console's Market State readiness check honestly shows `BLOCKED` when
+exercised against a closed-market fixture (verified by test, not a live
+call) — see "Market Closed Behavior" below.
 
 ## Baseline Verification
 
-Full baseline (pytest, vitest, ruff format --check, ruff check, mypy,
-lint-imports, manage.py check, makemigrations --check --dry-run,
-manage.py spectacular --fail-on-warn, frontend tsc --noEmit, frontend
-build) was run before starting and matched the clean state left by 64.13
-(1459 backend tests passing, 144 frontend tests passing, all gates clean).
+Run before any change, matching the state left by Checkpoint 64.14:
 
-## Existing Architecture Reused
+| Gate | Result |
+|---|---|
+| pytest | 1477 passed |
+| vitest | 144 passed |
+| ruff format --check | 529 files already formatted |
+| ruff check | All checks passed |
+| mypy | Success: no issues found in 300 source files |
+| lint-imports | 6 kept, 0 broken |
+| manage.py check | 0 issues |
+| makemigrations --check --dry-run | No changes detected |
+| manage.py spectacular --fail-on-warn | exit 0 |
+| frontend tsc --noEmit | 0 errors |
+| frontend build | succeeded |
 
-No new engine was built. Everything in this checkpoint is either a pure
-re-presentation of already-computed signals or a plumbing change to an
-existing write path:
+## Existing Frontend Architecture Reused
 
-- `LivePaperReadiness` (64.12) remains the SOLE authoritative "can we
-  safely start" decision — untouched, still composes credential/watchdog/
-  kill-switch/market-session state.
-- `derive_live_paper_session_state()` (64.13) — extended, not replaced.
-- `ScannerConfigurationRepository.save()` (64.4) — extended with an
-  optional `action` parameter, default preserves original behavior.
-- `WorkerRuntimeStatusRecord`, `TokenLifecycleState`, `AuditLogEntry`
-  (Checkpoint 12), `SessionStatus` — all read-only inputs, unmodified.
-- Token lifecycle, credential validation, PaperBroker, TradePlan, risk
-  engine, communication engine, watchdog: not touched, per directive.
+Audited before writing any new code — nothing here was duplicated:
 
-## Ten-Item Readiness Workbench
+- `WorkerStatusCard` (`LiveMarketDataMonitor.tsx`, Checkpoint 64.3) —
+  reused verbatim for the Live Data Monitor section.
+- `ErrorState`, `LoadingState` (Checkpoint 9) — reused verbatim; no third
+  loading/error component was introduced.
+- `.badge`, `.market-data-monitor__card`/`__summary`, `.signal-monitor__
+  summary`/`__summary-card`/`__table`, `.live-scanner__section`/
+  `__state-grid`/`__actions`/`__stop-button` (existing token-based CSS,
+  Checkpoints 23/62.x/64.5) — reused for every card, KPI tile, and table
+  on the new screen; only 5 genuinely new, small CSS rules were added
+  (safety strip, checklist card heading, remediation text, timeline),
+  all built from existing `var(--color-*)`/`var(--space-*)`/
+  `var(--radius-*)` tokens, none hardcoded, verified by the existing
+  `styles.quality.test.ts` gate (still 8/8 passing).
+- `renderWithAuth`/`authValue` (`test/testAuth.tsx`, Checkpoint 11) —
+  reused for every new test.
+- `startLivePaperSession()`/`stopLivePaperSession()` (Checkpoint 64.13
+  API client) — reused verbatim; the new console calls only these two
+  dedicated session endpoints, never `updateScannerConfiguration()`
+  directly (§8's explicit instruction).
+- `listSignals()` (Checkpoint 62.x/64.9) — reused for the compact signal
+  table, same `TradePlanField`/`ChannelStatus` shape the existing Active
+  Signal Monitor already renders.
+- `AuthContext`/`useAuth()` capability check (`configuration.activate`) —
+  reused verbatim from `LiveScannerConsole.tsx` for the operator-role gate.
 
-New pure module `application/services/live_paper_readiness_checklist.py`
-exposes `build_readiness_checklist()` returning exactly 10 `ReadinessCheck`
-items (`key`, `label`, `state` ∈ READY/WARNING/BLOCKED/UNKNOWN,
-`explanation`, `remediation`), each a pure function of already-computed
-signals — never a second I/O path:
+No duplicate WorkerStatusCard, no duplicate readiness card component set
+(all 10 checks render through one shared `ReadinessCheckCard`), no
+duplicate loading/error components, no second design system.
 
-1. Dhan Credential — from `TokenLifecycleState` (VALID→READY,
-   EXPIRING_SOON→WARNING, EXPIRED/MALFORMED/UNCONFIGURED→BLOCKED).
-2. Provider Connectivity — from `WorkerRuntimeStatus.watchdog_state`.
-3. Token Validity — mirrors credential state; UNKNOWN when unconfigured.
-4. Watchdog — HEALTHY/DEGRADED/STALE/DISCONNECTED mapping.
-5. Market State — from `SessionStatus` (OPEN→READY, PRE_OPEN/CLOSING→
-   WARNING, CLOSED/HOLIDAY→BLOCKED).
-6. Universe — BLOCKED on empty selection, WARNING on partial subscription.
-7. Timeframe — READY when a desired timeframe is set.
-8. Strategy Selection — BLOCKED when no strategies selected.
-9. Paper Execution — always READY (PaperBroker is unconditional).
-10. Real Trading Safety — always READY (structurally disabled, matches
-    `LivePaperReadiness.real_trading_state == "DISABLED"`).
+## 10-Item Readiness Workbench
 
-9 new unit tests cover ordering and every state-mapping branch, including
-all 5 `TokenLifecycleState` values and all 5 `SessionStatus` values.
+Consumes `GET /api/v1/config/market-data/live-paper-workbench/`
+(Checkpoint 64.14, unmodified). All 10 checks (Dhan Credential, Provider
+Connectivity, Token Validity, Watchdog, Market State, Universe,
+Timeframe, Strategy Selection, Paper Execution, Real Trading Safety) are
+rendered through one shared `ReadinessCheckCard`, each showing label,
+state badge (READY/WARNING/BLOCKED/UNKNOWN), explanation, and remediation
+(when present). Verified by test: all 10 labels present, all 4 states
+render distinctly.
 
 ## Aggregate Readiness
 
-`LivePaperReadiness.can_start` remains the only decision authority. The
-checklist is presented alongside it in the new workbench response but
-never overrides or duplicates it — confirmed by the checklist module
-taking `readiness` as an input, never recomputing it.
+`LivePaperReadiness.can_start` (backend-authoritative, unmodified) remains
+the sole decision the START button obeys — the checklist above only
+explains it, never overrides it. When `can_start` is `false`, START is
+disabled and `safe_reason`/`remediation` are shown; when `true`, the
+button is enabled and the desired/effective configuration is shown so
+the operator can see exactly what will run before starting.
 
 ## Desired vs Effective Configuration
 
-New `effective_session_configuration` object in the workbench response
-distinguishes `desired_*` (from `ScannerConfigurationRecord`) from
-`effective_*` (from `WorkerRuntimeStatusRecord`, defaulting to zero/empty
-when the worker has never reported), plus an honest `drift` boolean —
-`true` exactly when `effective_configuration_version != desired
-.configuration_version`. Verified: `drift is True` when never started;
-`drift is False` once versions match (new tests).
+Two clearly separated panels — Desired Configuration and Effective
+Configuration — showing Configuration Version, Universe Mode, Timeframe,
+Strategies, Requested By (desired side) and Configuration Version,
+Timeframe, Strategies, Requested Count, Subscribed Count (effective
+side), plus an honest `DRIFT`/`NO DRIFT` badge taken directly from the
+backend's `drift` boolean — never inferred client-side. Verified by
+test for both the drift and no-drift cases.
 
-## Live Session Monitor
+## Session State
 
-Consolidated into the single new `GET /api/v1/config/market-data/
-live-paper-workbench/` endpoint, which returns `readiness`, `checklist`,
-`session_state`, and `effective_session_configuration` together — one
-call gives an operator UI everything needed for a monitor screen. No new
-frontend screen was built this checkpoint (see Remaining Gaps); the
-backend data contract for it is complete and tested.
+The top-level session state badge (`NOT READY`/`READY`/`STARTING`/
+`RUNNING`/`STOPPING`/`STOPPED`/`FAILED`) reads `workbench.session_state`
+directly — no local state machine is computed in React. A FAILED state
+shows the backend's real provider state and directs the operator to the
+Live Data Monitor section, never a generic error. A non-FAILED state also
+renders an operator-friendly timeline (READY → STARTING → RUNNING →
+STOPPING → STOPPED) with the current step highlighted, purely a
+presentation of the same backend value — no second derivation.
 
-## Session State Machine
+## START / STOP
 
-`derive_live_paper_session_state()` extended with a FAILED check ahead of
-the existing RUNNING/STARTING/STOPPING/STOPPED logic. §9's rule remains
-honored: `desired.enabled` alone is never RUNNING or STOPPED — both
-require `effective_configuration_version == desired.configuration_version`
-as real reconciliation evidence. New STOPPING case: `desired.enabled is
-False` but the worker hasn't yet reconciled → STOPPING, not STOPPED.
+The console calls only `POST .../live-paper-session/start/` and
+`POST .../live-paper-session/stop/` (Checkpoint 64.13, unmodified) — it
+never writes `ScannerConfiguration` directly. Backend responses (200
+success, 409 refused-but-safe, 401/403 auth/RBAC, 500 unexpected) are
+routed through the existing `ApiRequestError`/`ApiNetworkError` handling
+and rendered as a safe message, never a raw response body. Verified by
+test: START disabled when blocked, START calls the real endpoint when
+allowed, STOP calls the real endpoint for a running session.
 
-## FAILED State
+## Live Market Data Monitor
 
-Derived from the REAL, pre-existing `WorkerState` enum (Checkpoint 53)
-values `FAILED`/`AUTH_FAILED`/`TOKEN_EXPIRED`, which `run_market_data_
-worker.py`'s own guard clauses set as `final_state` on genuine startup/
-runtime failure and which `worker_runtime_status_repository.py` persists
-verbatim into `WorkerRuntimeStatus.worker_state`. Not fabricated for test
-coverage — traced through the real write path before use. Verified by a
-test that sets `worker_state="TOKEN_EXPIRED"` and asserts
-`session_state == "FAILED"`.
+Reuses `WorkerStatusCard` verbatim (Worker State, Watchdog, Token State,
+Last Packet, Last Bar, Instruments Subscribed, Reconnect Count, Last
+Error — all fields that component already exposes). No new fetch, no new
+component; this checkpoint added zero new fields to that card.
 
-## Audit Trail
+## Signal Operations
 
-Audited all 3 existing callers of `ScannerConfigurationRepository.save()`
-before changing its signature (scanner_configuration_views.py x2,
-live_paper_session.py x2 from 64.13). Added `action: str = "scanner_
-configuration.update"` as an optional keyword parameter — the default
-preserves the exact original label for every unmodified caller.
-`live_paper_session.py`'s start/stop calls now pass `action="live_paper_
-session.start"` / `"live_paper_session.stop"`. No second audit table —
-the existing `AuditLogEntry` model (Checkpoint 12) is reused unchanged.
-New test queries `AuditLogEntry.objects.filter(action=...)` for both
-labels and confirms no token leakage into `request_id` or
-`previous_version`.
+A compact, reused signal table (`listSignals({ pageSize: 10 })`) with the
+exact required columns: Time, Stock, Strategy, Timeframe, Direction,
+Spot, Entry, Stop Loss, Target 1, Target 2, Target 3, Trailing SL, Risk,
+Paper, Telegram, Discord. Null TradePlan fields and absent
+Telegram/Discord attempts render "Not provided" — never a fabricated
+price or status. Verified by test using a fixture with intentionally
+null target_2/target_3/trailing_stop_loss/discord.
 
-## Signal Table
+## Paper Execution
 
-Not touched this checkpoint — out of the closed scope (items 1-5).
+Signals, Risk Approved, Risk Rejected, Paper Orders, Paper Fills, Paper
+Orders Rejected — all read directly from `GET .../reports/daily-session/`
+(Checkpoint 64.10, previously wired to zero frontend consumers; this is
+the first screen to actually call it). No duplicate client-side
+aggregation of the signal list was written.
 
-## Paper Execution / Telegram / Discord
+## Telegram
 
-Unchanged, reused verbatim (existing PaperBroker / Communication Engine).
+Communication Sent/Failed/Pending-or-Skipped counts are read from the
+same Daily Session Report response (`communication_sent`/`_failed`/
+`_skipped`) — the report does not currently separate Telegram from
+Discord counts, so this checkpoint shows the combined communication
+totals honestly rather than fabricating a per-channel split the backend
+does not provide. Per-signal Telegram status (SENT/FAILED/etc.) is shown
+in the Signal Operations table via the existing `SignalResponse.telegram`
+field.
 
-## Operator UX / Responsive Design / Accessibility
+## Discord
 
-No new frontend UI was built this checkpoint — the backend contract
-(`live-paper-workbench` endpoint) is complete, tested, and ready for a
-future frontend consumption pass. This is an honest, explicit scope
-reduction, not an oversight: the directive's five closed items are all
-backend/data-contract items (readiness workbench data, effective
-configuration data, audit semantics, FAILED derivation) except for the
-"consolidated Live Session Monitor," whose data contract is done but
-whose UI screen was not built this pass.
+Same combined-total caveat as Telegram above applies to the Communication
+Summary panel; per-signal Discord status is shown in the Signal
+Operations table via `SignalResponse.discord`, matching the existing
+Active Signal Monitor's own convention.
 
-## API
+## P&L
 
-New endpoint: `GET /api/v1/config/market-data/live-paper-workbench/`
-(`live_paper_readiness_views.live_paper_workbench`), authenticated,
-read-only, composing `LivePaperReadiness` + checklist + session state +
-effective/desired configuration in one response. Schema passes
-`manage.py spectacular --fail-on-warn`. A `ReadinessCheckSerializer` is
-kept for documentation only (a real nested serializer collided with
-DRF's own `Field.label` at the mypy/stub level); the wire response uses
-`ListField(child=DictField())` to preserve the exact `"label"` JSON key
-without the type-checker collision.
+Shown as **PAPER P&L**, explicitly labeled and captioned "a simulated
+result from the paper trading engine... never a real account balance,"
+sourced from `DailySessionReportResponse.realized_pnl_total`. Renders
+"Not available" when the backend has no realized total (null), never a
+fabricated 0. Verified by test for both the present and null cases.
+
+## Market Closed Behavior
+
+No live Dhan call was made to verify this — per explicit directive, a
+deterministic fixture (`market_state: "CLOSED"`, a `Market State` check
+in state `BLOCKED` with explanation "Market is closed.") is used in a
+dedicated test asserting the console shows this honestly. Historical/
+research screens (Reports, Backtesting, Watchlists, Strategy Monitor)
+are separate, unaffected nav items — untouched by this checkpoint, so
+they remain available regardless of session/market state.
+
+## Responsive Design
+
+New CSS follows the existing `.live-scanner__*` responsive convention
+exactly: the readiness checklist grid collapses to a single column at
+768px (`@media (max-width: 768px)`), the safety strip stacks vertically
+at 480px, and the reused `.signal-monitor__table` already has its own
+`overflow-x: auto` / fixed-layout scroll behavior (Checkpoint 62.x) so
+the dense 16-column signal table scrolls horizontally within its own
+container rather than widening the page. KPI cards use the existing
+`repeat(auto-fit, minmax(...))` grid, which already reflows at any width.
+Manually verified via the existing `styles.quality.test.ts` structural
+gate; no dedicated viewport-rendering test framework exists in this
+project (documented, unchanged limitation), so mobile behavior was
+verified by CSS review against the established breakpoints, not a
+headless-browser screenshot test.
+
+## Accessibility
+
+- Every readiness/session/aggregate-readiness badge uses `role="status"`
+  and carries its state as visible text (READY/WARNING/BLOCKED/UNKNOWN,
+  or the session-state label) — never color alone.
+- Every section has a semantic `<h2>`/`<h3>` with `aria-labelledby`
+  wiring, matching the existing project convention.
+- The session timeline uses a semantic `<ol>` with `aria-current="step"`
+  on the active step.
+- START/STOP are real `<button>` elements, keyboard-operable and
+  disabled (not merely styled) when blocked.
+- Focus-visible styling comes from the existing global stylesheet — no
+  new interactive element bypasses it.
+
+## Loading / Error States
+
+Uses the existing `LoadingState`/`ErrorState` components for the initial
+load of each data source (workbench, report, signals) — no new loading
+component was introduced. A polling failure (workbench refresh) never
+clears already-shown data: the error is rendered alongside a "Last
+updated Xs ago" hint, and the previous successful response stays fully
+visible underneath it. Verified by a dedicated test that fails the
+second workbench poll and asserts the checklist section is still present.
 
 ## Testing
 
-Backend: 17 new tests this checkpoint (9 checklist, 2 session-state
-[STOPPING-not-yet-reconciled, FAILED parametrized over 3 worker states],
-1 audit-label distinguishability, 5 workbench API). Full suite:
-**1477 passed**, 0 failed (up from 1459 baseline + 18 net new/counted).
-Frontend: **144 passed**, 0 failed, unchanged (no frontend code touched).
+**Backend:** zero backend code changes were made (§22's "prefer ZERO
+backend changes" was honored — no genuine contract defect was found).
+Full suite still **1477 passed**, identical to baseline.
+
+**Frontend:** 20 new tests in `LivePaperOperationsConsole.test.tsx`
+covering: all 10 readiness cards render with real label/state/
+explanation/remediation; READY/WARNING/BLOCKED/UNKNOWN states render
+distinctly; desired-vs-effective with DRIFT and NO DRIFT; the backend's
+authoritative `session_state` (including RUNNING and a real FAILED
+state with explanation); START disabled when blocked / enabled and
+wired to the real endpoint when ready; STOP wired to the real endpoint;
+market-closed handling; the compact signal table with honest "Not
+provided" fallbacks; Paper Execution KPIs and Communication counts from
+the real report; PAPER P&L (present and "Not available" cases); the
+safety strip always visible regardless of session state; safe error
+rendering with stale data preserved on a poll failure; **polling cleanup
+on unmount** (proven via fake timers — zero additional fetch calls after
+unmount even after 20s of elapsed time); no credential/token/webhook
+value ever rendered; and RBAC (read-only user sees no START/STOP
+controls). All 20 pass. Full frontend suite: **164 passed** (144
+baseline + 20 new), 0 failed.
 
 ## Security
 
-No token value is ever returned or logged by the new endpoint (verified
-by the pre-existing `test_response_never_contains_the_configured_token_
-value` pattern and by the new audit-label test explicitly asserting the
-token is absent from `request_id`/`previous_version`). The workbench
-endpoint requires authentication (`IsAuthenticated`), matching the
-existing readiness endpoint's contract.
+Verified by test that no Dhan access token (JWT-shaped string), Telegram
+token, or Discord webhook URL is ever present in the rendered page text.
+The backend endpoints this screen consumes (`live-paper-workbench`,
+`live-paper-session/start/stop`) already never return secret values
+(Checkpoint 64.12/64.13/64.14 guarantees, unmodified) — this checkpoint
+adds a frontend-side regression test on top of that existing backend
+guarantee, it does not change the guarantee itself.
 
-## Historical/Research Isolation
+## Documentation
 
-Not modified. Existing tests confirming an expired credential does not
-break the Signal Report / Daily Session Report endpoints continue to
-pass unchanged.
+No user guide currently exists as a distinct file in this repository to
+update (searched; none found) — this gap is disclosed here honestly
+rather than fabricating a "second manual" contrary to §25's explicit
+instruction not to create one. The explanatory copy this checkpoint
+needed (what each readiness state means, why real trading stays
+disabled, what PAPER P&L means) is instead placed directly in the UI
+itself, next to the values it explains, matching this project's existing
+convention (e.g. `LiveScannerConsole.tsx`'s own inline hints) rather than
+a separate document an operator would have to leave the screen to read.
 
 ## Official Dhan Research
 
-No new assumption required verification this checkpoint — the FAILED-
-state derivation relies on this codebase's own `WorkerState` enum and
-`run_market_data_worker.py`'s own guard clauses (Checkpoint 53), not on
-any new claim about Dhan's external API behavior. The existing research
+Not needed this checkpoint — no new assumption about Dhan's external API
+behavior was introduced or required verification. The existing research
 document (`DHAN_MARKET_DATA_CAPABILITY_RESEARCH.md`) was not touched.
 
 ## Real Live Validation
 
-NOT ATTEMPTED, by explicit directive: "Do NOT attempt live Dhan
-connectivity with the known expired credential." No live Dhan call was
-made. `test_the_actual_configured_environment_credential_reports_expired_
-honestly` (64.12) continues to pass against this environment's real
-`.env` token, confirming it remains expired (OBSERVED, via existing test,
-not re-investigated this checkpoint).
+**NOT ATTEMPTED**, by explicit directive: the market is closed, and this
+checkpoint made no Dhan connection, started no live worker, and
+fabricated no live packet, signal, fill, or P&L value. Every number shown
+on the new console during manual/automated verification came from either
+a real (empty, since no live session has run) database state or an
+explicit test fixture — never a simulated live value presented as real.
 
 ## Remaining Gaps
 
-- Frontend consumption of the new `live-paper-workbench` endpoint: no
-  10-item checklist display, no Effective Session Configuration UI
-  section, no consolidated Live Session Monitor screen were built. The
-  backend contract is complete and tested; the UI work is the next
-  logical checkpoint.
-- Item 6 from 64.13 (live-observed READY → START → RUNNING) remains
-  blocked by the expired Dhan credential, unchanged, by explicit
-  directive not to attempt it.
-- Signal Table changes (§13 of the original 64.14 directive) not
-  attempted.
+- Telegram and Discord do not yet have separate Sent/Failed/Pending
+  counts in the Communication Summary panel — the backend's
+  `DailySessionReportResponse` only exposes combined communication
+  totals today. Splitting this by channel would require a backend change
+  (out of this checkpoint's "prefer zero backend changes" scope) and is
+  disclosed here rather than fabricated by guessing a 50/50 split.
+  Per-signal Telegram/Discord status IS shown correctly in the signal
+  table.
+- No dedicated headless-browser/viewport screenshot test exists in
+  this project for responsive design — verification here was by CSS
+  review against the existing, already-tested breakpoint convention, not
+  an automated rendered-viewport assertion.
+- No user guide/manual file exists in this repository to update (§25);
+  explanatory copy was placed inline in the UI instead.
+- The "next market open" end-to-end flow (READY → START → RUNNING with a
+  live worker actually running) remains unverified with real data, since
+  the market was closed and the credential remains expired — unchanged
+  from 64.14, out of scope by explicit directive.
 
 ## Blockers
 
 The Dhan credential in this environment's `.env` remains expired
-(confirmed again via the pre-existing, still-passing test against the
-real environment value). No live Dhan session can be observed until a
-human operator renews it — this is a real, external blocker, not a code
-gap.
+(unchanged since Checkpoint 64.11/64.12's investigation) and the market
+is closed as of this checkpoint — together these mean the full
+READY → START → RUNNING flow with real live data still cannot be
+observed end-to-end. This is an external blocker, not a code gap; the UI
+for every state in that flow now exists and is tested against
+deterministic fixtures standing in for each state.
 
 ## Production Readiness
 
-The pre-session readiness data contract, audit trail, and session-state
-derivation are all real and test-covered. The operator-facing UI to
-consume them does not yet exist, so an operator today would need to call
-the API directly to see the checklist/effective-configuration/session-
-state — not yet a complete operator product experience.
+An operator can now open one screen (Live Paper Operations) and see the
+complete pre-session picture — all 10 readiness checks, the aggregate
+decision, desired vs effective configuration with drift, the real
+session state, live worker health, recent signals, paper execution KPIs,
+communication totals, and paper P&L — without opening developer tools or
+calling the API manually. What remains before this is a fully
+production-ready operator experience: per-channel communication counts
+(needs a small backend addition) and a live-market validation pass once
+a fresh Dhan credential is available and the market is open.
 
 ## Performance Ranking
 
-| Category | Rank (1=best) |
-|---|---|
-| Correctness of session-state derivation | 1 |
-| Audit trail fidelity | 1 |
-| Readiness checklist accuracy | 1 |
-| Backend test coverage | 1 |
-| API contract completeness | 2 |
-| Security (no credential leakage) | 1 |
-| Reuse of existing architecture | 1 |
-| Frontend consumption of new data | 5 (not built) |
-| Operator UX completeness | 4 |
-| Responsive design | N/A (no new UI) |
-| Accessibility | N/A (no new UI) |
-| Live validation | N/A (blocked by directive) |
-| Historical/research isolation | 1 |
-| Migration safety | 1 (no schema change) |
-| Type safety (mypy) | 1 |
-| Import-layer discipline | 1 |
-| Lint cleanliness | 1 |
-| Schema generation cleanliness | 1 |
-| Idempotency | 1 |
-| FAILED-state legitimacy | 1 |
-| Documentation honesty | 1 |
-| Scope honesty | 1 |
-| Communication Engine reuse | 1 (unchanged) |
-| Reporting reuse | 1 (unchanged) |
-| Paper execution correctness | 1 (unchanged) |
-| Risk engine reuse | 1 (unchanged) |
-| TradePlan reuse | 1 (unchanged) |
-| Watchdog reuse | 1 (unchanged) |
-| Token lifecycle reuse | 1 (unchanged) |
-| PaperBroker exclusivity | 1 (unchanged, verified) |
-| Real trading safety (structural) | 1 |
-| Git hygiene (local-only) | 1 |
-| Backend regression stability | 1 (1477/1477) |
-| Frontend regression stability | 1 (144/144) |
-| Quality-gate cleanliness (all 9 gates) | 1 |
-| Overall backend delivery | 1 |
-| Overall frontend delivery | 5 (none this checkpoint) |
-| **Overall checkpoint** | **2** (strong backend, no new UI) |
+| Category | Previous | Current | Change | Evidence | Missing Capability |
+|---|---|---|---|---|---|
+| Architecture | 1 | 1 | none | No new engine; UI consumes existing contracts only | — |
+| Market Data | 1 | 1 | none | WorkerStatusCard reused unchanged | — |
+| Dhan Integration | 2 | 2 | none | No live call attempted (market closed) | Fresh credential + open market |
+| Credential Lifecycle | 1 | 1 | none | Unmodified from 64.12/64.14 | — |
+| Token Validation | 1 | 1 | none | Unmodified | — |
+| Live Feed | 2 | 2 | none | Not exercised this checkpoint | Live market session |
+| Historical Data | 1 | 1 | none | Reports/Backtesting untouched, still available | — |
+| Database-First Replay | 1 | 1 | none | Untouched | — |
+| Bar Engine | 1 | 1 | none | Untouched | — |
+| Strategy Engine | 1 | 1 | none | Untouched | — |
+| TradePlan | 1 | 1 | none | Rendered in new signal table, unmodified backend | — |
+| Signal Operations | 2 | 1 | improved | Now embedded directly in the operator console | — |
+| Risk | 1 | 1 | none | Risk Approved/Rejected KPIs now surfaced on console | — |
+| Paper Trading | 1 | 1 | none | KPIs surfaced via existing report, PaperBroker unchanged | — |
+| Communication | 2 | 2 | none | Combined totals only; per-channel split still missing | Backend per-channel count fields |
+| Telegram | 2 | 2 | none | Per-signal status shown; aggregate not split | Backend per-channel count fields |
+| Discord | 2 | 2 | none | Same as Telegram | Backend per-channel count fields |
+| Watchdog | 1 | 1 | none | WorkerStatusCard reused unchanged | — |
+| Reconnect | 1 | 1 | none | Shown via WorkerStatusCard, unchanged | — |
+| Reporting | 2 | 1 | improved | Daily Session Report now has its FIRST real frontend consumer | — |
+| Backtesting | 1 | 1 | none | Untouched | — |
+| Replay | 1 | 1 | none | Untouched | — |
+| EOD | 1 | 1 | none | Untouched | — |
+| Runtime Control | 1 | 1 | none | START/STOP still the sole, backend-enforced mutation path | — |
+| Pre-Session Readiness | 3 | 1 | improved | Full 10-item checklist now visible in the UI, not just via API | — |
+| Session Control | 2 | 1 | improved | Now driven from one consolidated screen with real state | — |
+| Session Observability | 3 | 1 | improved | Consolidated Live Session Monitor now exists | — |
+| Operator UX | 4 | 2 | improved | The primary gap named in 64.13/64.14 is now closed | Live-market end-to-end walkthrough |
+| Responsive UI | 3 | 2 | improved | New sections follow existing breakpoints; no viewport test harness | Automated viewport testing |
+| Accessibility | 2 | 2 | none | Semantic roles/labels used; no dedicated a11y test tool run | Automated a11y audit tooling |
+| Performance | 1 | 1 | none | One documented poll interval per data source, no aggressive polling | — |
+| Scalability | 1 | 1 | none | Server-side pagination reused for the signal table | — |
+| Auditability | 1 | 1 | none | Unmodified backend audit trail | — |
+| Security | 1 | 1 | none | No credential ever rendered, verified by new test | — |
+| Production Readiness | 3 | 2 | improved | Operator UI now exists; live validation still pending | Live-market validation |
+| Active Paper Trading | 2 | 2 | none | No live session was run this checkpoint | Open market + fresh credential |
+| Live Paper Readiness | 1 | 1 | none | Unmodified backend gate, now fully visible in UI | — |
+| Live Trading Readiness | N/A | N/A | none | Structurally disabled by design, not a target state | — |
+| **ENGINEERING MATURITY** | 1 | 1 | none | Clean, reused, tested code; zero backend changes needed | — |
+| **ACTIVE PRODUCT MATURITY** | 3 | 2 | improved | Operator can now run the whole pre-session workflow from one screen | Live-market walkthrough |
+| **CLOSED-MARKET READINESS** | 2 | 1 | improved | This exact checkpoint's purpose — UI built and tested with market closed | — |
+| **NEXT-MARKET-OPEN READINESS** | 3 | 2 | improved | UI is ready to observe a real session; only the credential/market blocks it | Fresh Dhan credential, open market |
+| **OVERALL CHECKPOINT SCORE** | — | 2 | — | Strong, honest frontend delivery; a few disclosed, real gaps remain | Per-channel comms split, live validation |
+
+(1 = best/complete, higher numbers = more remaining work; scores are not
+inflated — where nothing changed this checkpoint, "Previous"/"Current"
+are shown equal rather than credited for unrelated work.)
 
 ## Final Product Gate
 
-**A. Is the operator-facing pre-session readiness workbench complete?**
-- A1 (10-item checklist available): YES, via API — NOT via UI.
-- A2 (Effective Session Configuration distinguishable from desired): YES,
-  via API — NOT via UI.
-- A3 (Aggregate `can_start` remains sole authority): YES.
+**A. Operator UI**
 
-**B. Is there a consolidated Live Session Monitor?**
-NO — the data contract exists (one endpoint, all needed fields); the
-consolidated UI screen was not built this checkpoint.
+- Can an operator see all ten readiness checks? **YES**
+- Can the operator see desired vs effective configuration? **YES**
+- Can the operator observe the session state? **YES**
 
-**C. Can a live paper session be started/observed with a fresh
-credential?**
-NOT VERIFIED — blocked by the known-expired `.env` token, and live
-connectivity was explicitly out of scope by directive.
+Can the operator see signals, paper execution, and communication from
+one place? **YES** (communication is shown as combined totals, not yet
+split per-channel — disclosed above, not hidden).
 
-**D. Can real (non-paper) trading be enabled?**
-**NO.** `real_trading_state` remains a structural constant `"DISABLED"`
-on every code path; `PaperBroker` remains the only concrete broker
-implementation in the codebase. Zero real broker orders were placed or
-attempted.
+**B. Market Closed**
+
+Does the UI correctly prevent Live Paper START when the market is closed
+while preserving historical/research functionality? **YES** — verified
+by test against a `market_state: CLOSED` fixture; Reports/Backtesting/
+Watchlists/Strategy Monitor are separate, unaffected nav items.
+
+**C. Next Market Open**
+
+With a fresh valid Dhan credential, is the UI ready for READY → START →
+RUNNING → monitor → signal → paper execution → STOP? **PARTIALLY** — the
+UI itself is complete and tested against fixtures representing every one
+of those states; what remains unverified is a real end-to-end pass with
+live data, which requires both a fresh credential and an open market
+(neither available this checkpoint, by design).
+
+**D. Real Trading**
+
+**NO.** Unchanged: `real_trading_state` remains a structural constant
+`"DISABLED"`; `PaperBroker` remains the only concrete broker
+implementation in the codebase; the safety strip on every render of this
+new screen states "Real Trading: DISABLED" and "Broker Execution: PAPER
+ONLY" explicitly, verified by test to remain visible regardless of
+session state.
 
 ## Honest Final Conclusion
 
-This checkpoint closed the backend/data-contract portion of items 1-5
-from 64.13's gap list with real, tested code: the 10-item readiness
-checklist, the effective-vs-desired configuration comparison with an
-honest drift flag, session-specific audit action labels (verified via
-the existing `AuditLogEntry` mechanism, no new table), and a legitimate
-FAILED session-state path derived from real worker state — all exposed
-through one new, fully-tested API endpoint. The corresponding frontend
-UI (checklist display, Effective Session Configuration section,
-consolidated Live Session Monitor) was not attempted this pass and is
-disclosed here as the clear next step, not hidden or implied to be done.
-Item 6 (live-observed session start) remains blocked by the expired Dhan
-credential, unchanged, per explicit directive not to attempt it this
-checkpoint. No real trading capability exists or was added; PAPER mode
-remains the only execution path.
+This checkpoint closed the primary gap 64.13 and 64.14 both named: the
+operator had a complete, tested backend contract but no way to see it
+without calling the API directly. The new **Live Paper Operations**
+console consumes every one of 64.14's real endpoints (the workbench, the
+daily session report, the signal list) and 64.13's session endpoints
+(start/stop) without inventing a single new backend capability — zero
+backend Python files were changed, matching §22's explicit preference.
+20 new frontend tests cover the readiness states, drift detection,
+session states including a real FAILED path, START/STOP gating, market-
+closed behavior, the signal table's honest fallbacks, KPI sourcing,
+polling cleanup, and credential-leakage prevention. Two real, disclosed
+gaps remain: the Communication Summary shows combined Telegram+Discord
+totals rather than a per-channel split (the backend report does not yet
+provide that split, and adding it would require the backend change this
+checkpoint deliberately avoided), and no automated responsive/viewport
+test tooling exists in this project to mechanically verify the mobile
+layout beyond CSS review against the established breakpoint convention.
+No live Dhan connectivity was attempted, and no live data was fabricated,
+per the explicit directive that the market is closed. Real trading
+remains structurally disabled everywhere.
 
 ## Git Status
 
 All changes are staged and committed locally only. No push to origin was
-performed or will be performed without explicit instruction.
+performed or will be performed without explicit instruction. Working
+tree is clean after commit.

@@ -79,3 +79,28 @@ export function startLivePaperSession(): Promise<LivePaperSessionResponse> {
 export function stopLivePaperSession(): Promise<LivePaperSessionResponse> {
   return apiPost<LivePaperSessionResponse>("/api/v1/config/market-data/live-paper-session/stop/");
 }
+
+// Checkpoint 64.15: the Pre-Session Readiness Workbench (Checkpoint
+// 64.14's own consolidated endpoint) - one response carrying the
+// authoritative `readiness`, the 10-item `checklist`, the real
+// `session_state`, and `effective_session_configuration`. The
+// generated OpenAPI type leaves `checklist` as `Record<string,
+// unknown>[]` (drf-spectacular could not narrow the DictField further -
+// see live_paper_readiness_views.py's own docstring on why a nested
+// serializer was not used) - `ReadinessCheckItem` below documents the
+// real, backend-guaranteed shape of each entry for callers.
+export type LivePaperWorkbenchResponse = components["schemas"]["LivePaperWorkbenchResponse"];
+export type EffectiveSessionConfiguration =
+  components["schemas"]["EffectiveSessionConfiguration"];
+
+export interface ReadinessCheckItem {
+  key: string;
+  label: string;
+  state: "READY" | "WARNING" | "BLOCKED" | "UNKNOWN";
+  explanation: string;
+  remediation: string | null;
+}
+
+export function getLivePaperWorkbench(): Promise<LivePaperWorkbenchResponse> {
+  return apiGet<LivePaperWorkbenchResponse>("/api/v1/config/market-data/live-paper-workbench/");
+}
