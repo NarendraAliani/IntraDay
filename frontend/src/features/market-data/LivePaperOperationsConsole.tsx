@@ -572,11 +572,20 @@ export function LivePaperOperationsConsole(): JSX.Element {
           - signal truth and execution truth remain independent (Checkpoint 37).
         </p>
         {!reportError && report !== null && (
-          <div className="signal-monitor__summary">
-            <SummaryCard label="Communication Sent" value={report.communication_sent} />
-            <SummaryCard label="Communication Failed" value={report.communication_failed} />
-            <SummaryCard label="Communication Pending/Skipped" value={report.communication_skipped} />
-          </div>
+          <>
+            <h3>Telegram</h3>
+            <div className="signal-monitor__summary">
+              <SummaryCard label="Telegram Sent" value={report.telegram.sent} />
+              <SummaryCard label="Telegram Failed" value={report.telegram.failed} />
+              <SummaryCard label="Telegram Pending" value={report.telegram.pending} />
+            </div>
+            <h3>Discord</h3>
+            <div className="signal-monitor__summary">
+              <SummaryCard label="Discord Sent" value={report.discord.sent} />
+              <SummaryCard label="Discord Failed" value={report.discord.failed} />
+              <SummaryCard label="Discord Pending" value={report.discord.pending} />
+            </div>
+          </>
         )}
       </section>
 

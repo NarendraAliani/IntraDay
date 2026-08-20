@@ -1634,6 +1634,17 @@ export interface components {
          * @enum {string}
          */
         BarResponseStatusEnum: "FORMING" | "CLOSED";
+        /**
+         * @description Checkpoint 64.16 §8: the per-channel counterpart to the existing
+         *     combined `communication_sent`/`_failed`/`_skipped` fields below -
+         *     added alongside them, never replacing them, so no existing consumer
+         *     of the combined totals breaks.
+         */
+        ChannelCommunicationSummary: {
+            sent: number;
+            failed: number;
+            pending: number;
+        };
         ChannelStatus: {
             status: string;
             /** Format: date-time */
@@ -1750,6 +1761,8 @@ export interface components {
             communication_sent: number;
             communication_failed: number;
             communication_skipped: number;
+            telegram: components["schemas"]["ChannelCommunicationSummary"];
+            discord: components["schemas"]["ChannelCommunicationSummary"];
             system_health: components["schemas"]["SystemHealthSummary"] | null;
             /** Format: decimal */
             realized_pnl_total: string | null;

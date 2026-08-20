@@ -581,6 +581,17 @@ def _coordinator(registry: StrategyRegistry) -> StrategyExecutionCoordinator:
     return StrategyExecutionCoordinator(registry, _fake_compute)
 
 
+def _activated_registry() -> StrategyRegistry:
+    """Checkpoint 64.16: a fresh registry with every strategy activated -
+    used by the determinism test to prove two INDEPENDENT registry/
+    coordinator instances (not the same object re-run) still produce
+    identical output for identical input."""
+    registry = build_default_registry()
+    for strategy in registry.list():
+        registry.activate(strategy.strategy_id)
+    return registry
+
+
 def _standard_configs() -> dict[str, StrategyConfigurationValues]:
     return {
         "ema_crossover": StrategyConfigurationValues(
@@ -607,6 +618,36 @@ def test_coordinator_scenario_a_all_strategies_succeed() -> None:
     result = coordinator.run(_rising_bars(20), _standard_configs())
     assert len(result.signals) == 3
     assert result.failures == ()
+
+
+def test_coordinator_is_deterministic_same_bars_same_config_same_signals() -> None:
+    """Checkpoint 64.16 §18: the primary closed-market validation
+    mechanism (replay) depends entirely on this being true - the SAME
+    bar series evaluated against the SAME configuration through the
+    SAME coordinator (backtesting and live paper both call this exact
+    class, never a divergent implementation - see `research.backtesting.
+    __init__`'s own re-export of `build_default_registry`) must produce
+    byte-identical signals every time, with no hidden clock/random/
+    ordering dependency."""
+    registry = build_default_registry()
+    for strategy in registry.list():
+        registry.activate(strategy.strategy_id)
+    bars = _rising_bars(20)
+    configs = _standard_configs()
+
+    first = _coordinator(_activated_registry()).run(bars, configs)
+    second = _coordinator(_activated_registry()).run(bars, configs)
+
+    assert len(first.signals) == len(second.signals) == 3
+    first_by_strategy = {s.strategy_id: s for s in first.signals}
+    second_by_strategy = {s.strategy_id: s for s in second.signals}
+    assert first_by_strategy.keys() == second_by_strategy.keys()
+    for strategy_id, signal in first_by_strategy.items():
+        other = second_by_strategy[strategy_id]
+        assert signal.direction == other.direction
+        assert signal.price == other.price
+        assert signal.timestamp == other.timestamp
+    assert list(first.trade_plans) == list(second.trade_plans)
 
 
 def test_coordinator_scenario_b_one_strategy_failure_is_isolated() -> None:

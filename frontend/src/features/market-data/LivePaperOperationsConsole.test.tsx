@@ -133,6 +133,8 @@ const EMPTY_REPORT: DailySessionReportResponse = {
   communication_sent: 2,
   communication_failed: 0,
   communication_skipped: 1,
+  telegram: { sent: 1, failed: 0, pending: 0 },
+  discord: { sent: 1, failed: 0, pending: 1 },
   system_health: null,
   realized_pnl_total: "125.50",
 };
@@ -354,14 +356,16 @@ describe("LivePaperOperationsConsole", () => {
     expect(screen.getByText("Paper Fills").nextSibling).toHaveTextContent("1");
   });
 
-  it("shows Telegram and Discord communication counts", async () => {
+  it("shows Telegram and Discord communication counts split per channel", async () => {
     stubEndpoints({});
 
     renderWithAuth(<LivePaperOperationsConsole />);
 
     await waitFor(() => expect(screen.getByText("Communication Summary")).toBeInTheDocument());
-    expect(screen.getByText("Communication Sent").nextSibling).toHaveTextContent("2");
-    expect(screen.getByText("Communication Failed").nextSibling).toHaveTextContent("0");
+    expect(screen.getByText("Telegram Sent").nextSibling).toHaveTextContent("1");
+    expect(screen.getByText("Telegram Failed").nextSibling).toHaveTextContent("0");
+    expect(screen.getByText("Discord Sent").nextSibling).toHaveTextContent("1");
+    expect(screen.getByText("Discord Pending").nextSibling).toHaveTextContent("1");
   });
 
   it("shows PAPER P&L clearly labeled, never mistakable for a real account balance", async () => {

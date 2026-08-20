@@ -77,6 +77,17 @@ class SystemHealthSummarySerializer(serializers.Serializer[dict[str, object]]):
     consecutive_failures = serializers.IntegerField()
 
 
+class ChannelCommunicationSummarySerializer(serializers.Serializer[dict[str, object]]):
+    """Checkpoint 64.16 §8: the per-channel counterpart to the existing
+    combined `communication_sent`/`_failed`/`_skipped` fields below -
+    added alongside them, never replacing them, so no existing consumer
+    of the combined totals breaks."""
+
+    sent = serializers.IntegerField()
+    failed = serializers.IntegerField()
+    pending = serializers.IntegerField()
+
+
 class DailySessionReportResponseSerializer(serializers.Serializer[dict[str, object]]):
     session_date = serializers.DateField()
     strategies = serializers.ListField(child=serializers.CharField())
@@ -92,6 +103,8 @@ class DailySessionReportResponseSerializer(serializers.Serializer[dict[str, obje
     communication_sent = serializers.IntegerField()
     communication_failed = serializers.IntegerField()
     communication_skipped = serializers.IntegerField()
+    telegram = ChannelCommunicationSummarySerializer()
+    discord = ChannelCommunicationSummarySerializer()
     system_health = SystemHealthSummarySerializer(allow_null=True)
     realized_pnl_total = serializers.DecimalField(max_digits=18, decimal_places=4, allow_null=True)
 
@@ -284,6 +297,16 @@ def daily_session_report(request: Request) -> Response:
             "communication_sent": report.communication_sent,
             "communication_failed": report.communication_failed,
             "communication_skipped": report.communication_skipped,
+            "telegram": {
+                "sent": report.telegram.sent,
+                "failed": report.telegram.failed,
+                "pending": report.telegram.pending,
+            },
+            "discord": {
+                "sent": report.discord.sent,
+                "failed": report.discord.failed,
+                "pending": report.discord.pending,
+            },
             "system_health": (
                 {
                     "watchdog_state": report.system_health.watchdog_state,

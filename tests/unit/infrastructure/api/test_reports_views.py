@@ -187,3 +187,66 @@ def test_daily_session_report_excludes_signals_from_other_dates() -> None:
 
     assert response.status_code == 200
     assert response.json()["total_signals"] == 0
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_daily_session_report_splits_communication_by_channel() -> None:
+    """Checkpoint 64.16 §8: the per-channel Telegram/Discord counts,
+    added alongside (never replacing) the existing combined
+    communication_sent/_failed/_skipped fields - derived from the same
+    real CommunicationLedgerRecord rows, never a fabricated split."""
+    _record_signal("sig-1", risk_status="APPROVED")
+    ledger = DjangoCommunicationLedgerRepository()
+    when = datetime(2026, 1, 5, 6, 0, tzinfo=UTC)
+    ledger.record_attempt(
+        DeliveryAttempt(
+            communication_id="comm-telegram",
+            signal_id=SignalId("sig-1"),
+            event_id="event-1",
+            channel=CommunicationChannel.TELEGRAM,
+            provider="telegram",
+            destination_masked="****abcd",
+            template_id=MessageTemplateId.VALIDATED_SIGNAL,
+            template_version="v1",
+            created_at=when,
+            attempted_at=when,
+            delivery_status=DeliveryStatus.SENT,
+            provider_message_id="msg-1",
+            error_code=None,
+            error_message=None,
+            retry_count=0,
+            correlation_id="corr-1",
+        )
+    )
+    ledger.record_attempt(
+        DeliveryAttempt(
+            communication_id="comm-discord",
+            signal_id=SignalId("sig-1"),
+            event_id="event-2",
+            channel=CommunicationChannel.DISCORD,
+            provider="discord",
+            destination_masked="****wxyz",
+            template_id=MessageTemplateId.VALIDATED_SIGNAL,
+            template_version="v1",
+            created_at=when,
+            attempted_at=when,
+            delivery_status=DeliveryStatus.FAILED,
+            provider_message_id=None,
+            error_code="PROVIDER_ERROR",
+            error_message="simulated failure",
+            retry_count=0,
+            correlation_id="corr-2",
+        )
+    )
+    client = _client()
+
+    response = client.get("/api/v1/config/reports/daily-session/?date=2026-01-05")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["telegram"] == {"sent": 1, "failed": 0, "pending": 0}
+    assert body["discord"] == {"sent": 0, "failed": 1, "pending": 0}
+    # The existing combined totals must still be correct too.
+    assert body["communication_sent"] == 1
+    assert body["communication_failed"] == 1

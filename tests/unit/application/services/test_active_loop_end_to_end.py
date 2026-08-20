@@ -556,3 +556,102 @@ def test_full_bars_to_report_chain_with_trade_plan_and_mixed_channel_delivery() 
     page = _R().list_signals(strategy_id="atr_volatility_breakout")
     assert page.total_count >= 1
     assert any(item.record.signal_id == str(signal_id) for item in page.items)
+
+
+# --------------------------------------------------------------------
+# Checkpoint 64.16 §6/§7: the RISK-REJECTED counterpart to the test
+# above - proves the exact product invariant this checkpoint names
+# explicitly: "a strategically audited signal must be communicated even
+# when the actual trade cannot execute." The existing scenario_a/
+# scenario_f tests above already prove risk rejection blocks the order
+# while communication still fires, but neither wires
+# `signal_recorder`/`DjangoSignalRepository` - so neither proves the
+# rejected signal is actually PERSISTED and independently QUERYABLE via
+# the same report path a real report/UI would use. This test closes
+# that gap with the SAME full production wiring as the happy-path test
+# immediately above (only the Telegram/Discord network boundary is
+# faked).
+# --------------------------------------------------------------------
+
+
+def test_scenario_j_risk_rejected_signal_is_persisted_queryable_and_communicated() -> None:
+    from intraday.infrastructure.persistence.signal_repository import DjangoSignalRepository
+
+    registry = build_default_registry()
+    registry.activate("ema_crossover")
+    coordinator = build_coordinator(registry)
+    broker = PaperBroker(
+        initial_capital=Decimal("1000000"), compute_cost=_no_cost, clock=lambda: BASE
+    )
+    trading_service = PaperTradingService(
+        broker=broker,
+        risk_limits=DEFAULT_LIMITS,
+        risk_configuration_version="v1",
+        max_concurrent_positions=5,
+        max_total_exposure=Decimal("500000"),
+        kill_switch_status_provider=lambda: TradingHaltStatus.ACTIVE,
+        clock=lambda: BASE,
+        ledger=DjangoPaperLedgerRepository(),
+    )
+    telegram = _FailingTelegram()
+    discord = _SucceedingDiscord()
+    communication = SignalCommunicationService(
+        router=NotificationRouter(
+            providers=(telegram, discord), ledger=DjangoCommunicationLedgerRepository()
+        )
+    )
+    service = PaperSignalExecutionService(
+        coordinator=coordinator,
+        paper_trading_service=trading_service,
+        quantity=Decimal("10"),
+        communication=communication,
+        signal_recorder=DjangoSignalRepository(),
+    )
+    bars = _uptrend_bars()
+    broker.record_price(RELIANCE, bars[-1].close, BASE)
+
+    result = service.evaluate_and_submit(
+        bars=bars,
+        instrument_id=RELIANCE,
+        strategy_id="ema_crossover",
+        configuration=_config(),
+        strategy_is_active=True,
+        market_session_is_open=True,
+        data_quality_is_stale=True,  # real risk-engine rejection reason, not kill switch
+        already_processed_signal_ids=frozenset(),
+        already_submitted_idempotency_keys=frozenset(),
+    )
+    signal_id = result.signal_id
+    assert signal_id is not None
+
+    # --- Risk genuinely rejected, no order reached the broker ---
+    assert result.order_result is not None
+    assert result.order_result.risk_decision.outcome.value == "REJECTED"
+    assert broker.get_orders() == ()
+    assert not PaperOrderRecord.objects.filter(signal_id=str(signal_id)).exists()
+
+    # --- The signal itself is still a real, persisted, observable row -
+    # this is the exact invariant this checkpoint requires: a rejected
+    # trade never erases the underlying signal. ---
+    signal_row = SignalRecord.objects.get(signal_id=str(signal_id))
+    assert signal_row.risk_status == "REJECTED"
+    assert signal_row.order_status == ""  # no broker report - never fabricated as "REJECTED order"
+
+    page = DjangoSignalRepository().list_signals(strategy_id="ema_crossover")
+    assert any(item.record.signal_id == str(signal_id) for item in page.items)
+
+    # --- Communication independence: BOTH channels still attempted,
+    # entirely independent of the risk rejection and of each other. ---
+    telegram_rows = CommunicationLedgerRecord.objects.filter(
+        signal_id=str(signal_id), channel="TELEGRAM"
+    )
+    discord_rows = CommunicationLedgerRecord.objects.filter(
+        signal_id=str(signal_id), channel="DISCORD"
+    )
+    assert telegram_rows.exists() and discord_rows.exists()
+    assert all(row.delivery_status == "FAILED" for row in telegram_rows)
+    assert all(row.delivery_status == "SENT" for row in discord_rows)
+    # Two messages per surviving channel: VALIDATED_SIGNAL then
+    # VALIDATED_SIGNAL_EXECUTION_BLOCKED - proves the rejection reason
+    # itself was communicated, not merely the original signal.
+    assert discord_rows.count() == 2

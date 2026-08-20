@@ -33,6 +33,22 @@ class PaperOrderSummaryRow:
 
 
 @dataclass(frozen=True, slots=True)
+class ChannelCommunicationSummary:
+    """Checkpoint 64.16 §8: per-channel counts, derived from the SAME
+    `communication_rows` this report already receives - never a second
+    communication-accounting path. `pending` is every row for this
+    channel that is neither a terminal SENT nor a terminal FAILED
+    outcome (SKIPPED_DUPLICATE/SKIPPED_NOT_CONFIGURED/RETRYING/PENDING,
+    whichever real `delivery_status` values exist) - computed as
+    `total - sent - failed` so it can never drift from the channel's
+    own row count even if a new non-terminal status is added later."""
+
+    sent: int
+    failed: int
+    pending: int
+
+
+@dataclass(frozen=True, slots=True)
 class SystemHealthSummary:
     """A snapshot of `WorkerRuntimeStatus` at report time - `None` when
     the worker has never run this session (honestly absent, not a
@@ -60,6 +76,8 @@ class DailySessionReport:
     communication_sent: int
     communication_failed: int
     communication_skipped: int
+    telegram: ChannelCommunicationSummary
+    discord: ChannelCommunicationSummary
     system_health: SystemHealthSummary | None
     realized_pnl_total: Decimal | None
     """`None` when no real position data was supplied by the caller -
@@ -98,6 +116,17 @@ def build_daily_session_report(
         for r in communication_rows
         if r.delivery_status in ("SKIPPED_DUPLICATE", "SKIPPED_NOT_CONFIGURED")
     )
+
+    def _channel_summary(channel: str) -> ChannelCommunicationSummary:
+        rows = [r for r in communication_rows if r.channel == channel]
+        sent = sum(1 for r in rows if r.delivery_status == "SENT")
+        failed = sum(1 for r in rows if r.delivery_status == "FAILED")
+        return ChannelCommunicationSummary(
+            sent=sent, failed=failed, pending=len(rows) - sent - failed
+        )
+
+    telegram_summary = _channel_summary("TELEGRAM")
+    discord_summary = _channel_summary("DISCORD")
 
     generated_at = datetime.now(tz=UTC)
     metadata = ReportMetadata(
@@ -141,12 +170,15 @@ def build_daily_session_report(
         communication_sent=comm_sent,
         communication_failed=comm_failed,
         communication_skipped=comm_skipped,
+        telegram=telegram_summary,
+        discord=discord_summary,
         system_health=system_health,
         realized_pnl_total=realized_pnl_total,
     )
 
 
 __all__ = [
+    "ChannelCommunicationSummary",
     "DailySessionReport",
     "PaperOrderSummaryRow",
     "SystemHealthSummary",
