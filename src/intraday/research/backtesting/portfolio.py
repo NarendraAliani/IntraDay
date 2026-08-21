@@ -61,6 +61,15 @@ from intraday.research.backtesting.execution import (
     signed_gross_pnl,
 )
 from intraday.research.backtesting.metrics import compute_metrics
+from intraday.research.backtesting.order_intent_adapter import (
+    build_backtest_entry_order_intent,
+)
+from intraday.research.backtesting.position_lifecycle import (
+    BacktestPositionLifecycleStatus,
+    close_backtest_position,
+    hold_backtest_position,
+    open_backtest_position,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -263,6 +272,18 @@ def run_portfolio_backtest(
         holding_bars = bars[position.entry_index : exit_index + 1]
         mfe, mae = mfe_mae(position.direction, position.entry_price, holding_bars)
         trade_counter += 1
+        # Checkpoint 64.33: the SAME `BacktestPosition` carried on
+        # `position.position_lifecycle` throughout this instrument's own
+        # position life, advanced to its terminal CLOSED state here -
+        # never a second, independently-constructed lifecycle object,
+        # exactly mirroring `engine.py`'s own `_close_trade()` pattern
+        # from 64.32. `None` only in the theoretical direct-construction
+        # case described on `OpenPosition.position_lifecycle`'s docstring.
+        closed_lifecycle = (
+            close_backtest_position(position.position_lifecycle)
+            if position.position_lifecycle is not None
+            else None
+        )
         trades.append(
             SimulatedTrade(
                 trade_id=f"{assignment.strategy_id}-{instrument_id}-{trade_counter}",
@@ -285,6 +306,15 @@ def run_portfolio_backtest(
                 mfe=mfe,
                 mae=mae,
                 cost_breakdown=breakdown,
+                # Checkpoint 64.33: carried verbatim from the
+                # `OpenPosition` this trade closes out - the SAME
+                # `OrderIntent` constructed at this instrument's own
+                # entry time, never a second construction.
+                order_intent=position.order_intent,
+                # Checkpoint 64.33: the terminal CLOSED lifecycle derived
+                # above from this same trade's own
+                # `position.position_lifecycle`.
+                position_lifecycle=closed_lifecycle,
             )
         )
         trade_intervals_by_instrument[instrument_id].append((position.entry_index, exit_index))
@@ -300,6 +330,30 @@ def run_portfolio_backtest(
             instrument_id = assignment.instrument_id
             bars = bars_by_instrument[instrument_id]
             signal = signals_by_instrument[instrument_id][i]
+
+            # Checkpoint 64.33: purely a REFLECTION of this instrument's
+            # own already-open position state - mirrors `engine.py`'s
+            # 64.32 HELD guard exactly, just evaluated per-instrument
+            # instead of for one global position. A position still open
+            # strictly past its own entry bar has, by definition,
+            # survived at least one full bar with no exit, so its own
+            # canonical lifecycle (never shared with any other
+            # instrument's lifecycle object) is advanced OPEN -> HELD
+            # here. O(1), runs only while still OPEN. No exit decision is
+            # made or influenced by this - the existing `should_exit`/
+            # `is_last_bar` logic below is entirely unchanged and still
+            # solely authoritative.
+            existing_position = open_positions.get(instrument_id)
+            if (
+                existing_position is not None
+                and existing_position.position_lifecycle is not None
+                and i > existing_position.entry_index
+                and existing_position.position_lifecycle.lifecycle_status
+                is BacktestPositionLifecycleStatus.OPEN
+            ):
+                existing_position.position_lifecycle = hold_backtest_position(
+                    existing_position.position_lifecycle
+                )
 
             if instrument_id not in open_positions:
                 if (
@@ -325,6 +379,22 @@ def run_portfolio_backtest(
                         rejected_entries += 1
                         continue
                     available_cash -= notional
+                    # Checkpoint 64.33: the REAL canonical `OrderIntent`
+                    # (the SAME `order_intent_adapter.
+                    # build_backtest_entry_order_intent()` used by
+                    # `run_backtest()` since 64.31 - never a
+                    # "portfolio_order_intent" or parallel construction),
+                    # built once here per accepted entry and reused
+                    # verbatim below on both `OpenPosition` and (via
+                    # `_close`) `SimulatedTrade`.
+                    entry_order = build_backtest_entry_order_intent(
+                        strategy_id=assignment.strategy_id,
+                        instrument_id=instrument_id,
+                        direction=signal.direction,
+                        quantity=quantity,
+                        entry_timestamp=entry_bar.timestamp,
+                        entry_index=i + 1,
+                    )
                     open_positions[instrument_id] = OpenPosition(
                         instrument_id=instrument_id,
                         direction=signal.direction,
@@ -332,6 +402,28 @@ def run_portfolio_backtest(
                         entry_timestamp=entry_bar.timestamp,
                         entry_price=filled_entry,
                         quantity=quantity,
+                        # Checkpoint 64.33: the SAME `OrderIntent`
+                        # constructed immediately above - never a second
+                        # construction.
+                        order_intent=entry_order,
+                        # Checkpoint 64.33: the real canonical position
+                        # lifecycle for THIS instrument's position - always
+                        # starts OPEN, per `open_backtest_position()`'s own
+                        # contract. `position_id` reuses the SAME
+                        # `entry_order.order_id` already constructed above
+                        # (never a second, independent ID) - and, because
+                        # 64.33 additionally qualified `order_id` with
+                        # `instrument_id` (see `order_intent_adapter.py`),
+                        # this `position_id` is guaranteed distinct across
+                        # every other instrument's own position, even
+                        # under "same strategy -> multiple instruments".
+                        position_lifecycle=open_backtest_position(
+                            position_id=entry_order.order_id,
+                            direction=signal.direction,
+                            quantity=quantity,
+                            entry_price=filled_entry,
+                            entry_timestamp=entry_bar.timestamp,
+                        ),
                     )
             else:
                 position = open_positions[instrument_id]

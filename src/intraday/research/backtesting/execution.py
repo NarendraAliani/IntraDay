@@ -14,6 +14,7 @@ from decimal import Decimal
 
 from intraday.domain.feature.contracts import FeatureValue
 from intraday.domain.market_data.contracts import Bar
+from intraday.domain.order.contracts import OrderIntent
 from intraday.research.backtesting import (
     Strategy,
     StrategyConfigurationValues,
@@ -21,6 +22,7 @@ from intraday.research.backtesting import (
     StrategySignal,
 )
 from intraday.research.backtesting.contracts import BacktestConfiguration, PositionSizingMode
+from intraday.research.backtesting.position_lifecycle import BacktestPosition
 
 FeatureSeriesComputer = Callable[[str, "tuple[Bar, ...]"], "tuple[FeatureValue, ...]"]
 
@@ -33,6 +35,33 @@ class OpenPosition:
     entry_timestamp: datetime
     entry_price: Decimal
     quantity: Decimal
+    order_intent: OrderIntent | None = None
+    """Checkpoint 64.31: the REAL canonical `domain.order.contracts.
+    OrderIntent` that represents this accepted entry - the SAME object
+    `engine.py` builds via `order_intent_adapter.
+    build_backtest_entry_order_intent()` for every accepted entry
+    (constructed once, at entry time, never rebuilt per bar), and the
+    SAME object fed to the risk gate when `BacktestConfiguration.
+    risk_limits` is configured (never a second, separately-constructed
+    OrderIntent). `None` only in the theoretical case a caller
+    constructs `OpenPosition` directly without going through
+    `run_backtest()`'s own entry branch (e.g. a future/alternate
+    engine) - `run_backtest()` itself always supplies a real value."""
+    position_lifecycle: BacktestPosition | None = None
+    """Checkpoint 64.32: the REAL canonical `position_lifecycle.
+    BacktestPosition` (Checkpoint 64.29's previously-unwired adapter,
+    consumed here without modification) representing this accepted
+    entry's OPEN/HELD/CLOSED lifecycle state. Constructed via
+    `position_lifecycle.open_backtest_position()` at the moment this
+    `OpenPosition` is created (always starts `OPEN`), then advanced to
+    `HELD` in place (reassigned, since `BacktestPosition` is frozen -
+    see that module's docstring) by `position_lifecycle.
+    hold_backtest_position()` once the engine's own bar loop has let it
+    survive past its entry bar with no exit - purely a REFLECTION of
+    the engine's own existing state, never an independent decision
+    about whether to hold or close. `None` only in the same theoretical
+    direct-construction case as `order_intent` above; `run_backtest()`
+    itself always supplies a real value."""
 
 
 def signed_gross_pnl(

@@ -15,10 +15,13 @@ from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
 
+from intraday.domain.order.contracts import OrderIntent
+from intraday.domain.risk.contracts import RiskLimits
 from intraday.domain.shared_kernel.contracts import InstrumentId, Timeframe, ensure_utc
 from intraday.research.backtesting import StrategyDirection
 from intraday.research.backtesting.cost_model import CostBreakdown
 from intraday.research.backtesting.errors import InvalidBacktestConfigurationError
+from intraday.research.backtesting.position_lifecycle import BacktestPosition
 
 TradeDirection = StrategyDirection
 
@@ -75,6 +78,26 @@ class BacktestConfiguration:
     silently ignored)."""
     brokerage_percent: Decimal = Decimal("0")
     slippage_percent: Decimal = Decimal("0")
+    risk_limits: RiskLimits | None = None
+    """Checkpoint 64.30: OPT-IN canonical risk gate for the entry
+    decision only (never exits, never sizing). `None` (the default)
+    means the entry decision behaves EXACTLY as every pre-64.30
+    checkpoint - `run_backtest()` never constructs an `OrderIntent`,
+    never calls `evaluate_order_risk()`, and every existing test's
+    numerical result is unaffected. When set, `run_backtest()`'s entry
+    branch builds a real `domain.order.contracts.OrderIntent` (via
+    `order_intent_adapter.build_backtest_entry_order_intent()`) and
+    evaluates it through the REAL, unmodified `domain.risk.policy.
+    evaluate_order_risk()` (via `risk_gate_adapter.
+    evaluate_backtest_entry_risk()`) before the position is opened - a
+    REJECTED decision means no position is opened at all (see
+    `ResultValidationSummary.risk_rejected_trades`/
+    `risk_rejection_reason_breakdown`). See
+    `docs/architecture/CANONICAL_TRADE_LIFECYCLE_AND_PNL_ARCHITECTURE.md`
+    ("CHECKPOINT 64.30 IMPLEMENTATION NOTES") for the full design and
+    documented gaps (e.g. `max_total_exposure` has no dedicated
+    backtest-configuration field yet, so it is honestly treated as
+    unconstrained rather than fabricated - see that section)."""
 
     def __post_init__(self) -> None:
         ensure_utc(self.start, field_name="BacktestConfiguration.start")
@@ -127,6 +150,54 @@ class SimulatedTrade:
     cost_breakdown: CostBreakdown = field(default_factory=CostBreakdown)
     """Checkpoint 29 Part 5: the itemized entry+exit cost breakdown
     whose `.total` equals `costs` above - never only gross/net."""
+    order_intent: OrderIntent | None = None
+    """Checkpoint 64.31: the REAL canonical `domain.order.contracts.
+    OrderIntent` that represents the accepted entry order for this
+    trade - constructed ONCE at entry time by `engine.py` (via
+    `order_intent_adapter.build_backtest_entry_order_intent()`), carried
+    through `execution.OpenPosition.order_intent` unchanged, and copied
+    here verbatim at trade-close time - never a second, separately
+    constructed `OrderIntent`. It is also the SAME object the risk gate
+    evaluates when `BacktestConfiguration.risk_limits` is configured
+    (see that field's own docstring). This is purely additive structural
+    metadata: it does not participate in any pricing, sizing, or exit
+    computation, and its presence does not change `entry_price`,
+    `exit_price`, `quantity`, `gross_pnl`, `net_pnl`, or `reason`
+    computed for this trade under any `BacktestConfiguration.risk_limits`
+    setting (including `None`). `None` only if `SimulatedTrade` is
+    constructed by a caller other than `engine.run_backtest()` (e.g.
+    `portfolio.py`'s own multi-instrument engine, which does not build
+    an `OrderIntent` for its entries as of this checkpoint - deliberately
+    out of scope, see docs/architecture/
+    CANONICAL_TRADE_LIFECYCLE_AND_PNL_ARCHITECTURE.md, "CHECKPOINT 64.31
+    IMPLEMENTATION NOTES")."""
+    position_lifecycle: BacktestPosition | None = None
+    """Checkpoint 64.32: the REAL canonical `position_lifecycle.
+    BacktestPosition` (Checkpoint 64.29's previously-unwired adapter)
+    in its final `CLOSED` state - produced by `position_lifecycle.
+    close_backtest_position()` at trade-close time from the SAME
+    `BacktestPosition` carried on `execution.OpenPosition.
+    position_lifecycle` throughout the position's life (never a
+    second, independently-constructed lifecycle object). Because
+    `BacktestPosition` is an immutable, frozen dataclass, the CLOSED
+    instance here is necessarily a NEW object from the OPEN/HELD
+    instance that preceded it (`close_backtest_position()` returns a
+    new instance by construction - see that module's own docstring) -
+    continuity is proven by field equality (`position_id`, `direction`,
+    `original_quantity`, `entry_price`, `entry_timestamp`) and by the
+    fact no second `BacktestPosition` is ever constructed independently
+    for this trade, not by `is` identity of the whole frozen snapshot.
+    `lifecycle_status` itself, being an `enum.Enum` member, IS the same
+    singleton object every time `BacktestPositionLifecycleStatus.CLOSED`
+    is referenced - `is` identity is meaningful and holds there. This
+    is purely additive structural metadata: it does not participate in
+    any pricing, sizing, or exit computation, and its presence does not
+    change any existing numerical field on this trade. `None` only if
+    `SimulatedTrade` is constructed by a caller other than `engine.
+    run_backtest()` (e.g. `portfolio.py`'s own multi-instrument engine -
+    deliberately out of scope this checkpoint, see docs/architecture/
+    CANONICAL_TRADE_LIFECYCLE_AND_PNL_ARCHITECTURE.md, "CHECKPOINT 64.32
+    IMPLEMENTATION NOTES")."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -282,6 +353,21 @@ class ResultValidationSummary:
     "TARGET_1", "EOD" for TradePlan-based trades; "signal_reversal",
     "end_of_data" for direction-flip trades) - counted from the actual
     simulated trades, never estimated."""
+    risk_rejected_trades: int = 0
+    """Checkpoint 64.30: entry signals that computed a POSITIVE quantity
+    (i.e. would otherwise have opened a position) but were rejected by
+    the canonical `evaluate_order_risk()` because `BacktestConfiguration.
+    risk_limits` was configured. Always `0` when `risk_limits` is `None`
+    (the entry branch never constructs an `OrderIntent` or calls the
+    risk policy at all in that case) - a distinct counter from
+    `rejected_trades` above (which counts a DIFFERENT cause: zero
+    quantity from insufficient capital, unrelated to risk limits)."""
+    risk_rejection_reason_breakdown: dict[str, int] = field(default_factory=dict)
+    """Checkpoint 64.30: count of risk-rejected entries per
+    `RiskRejectionReason.value` actually returned by `evaluate_order_
+    risk()` (e.g. "MAX_POSITION_SIZE_EXCEEDED") - counted from the real
+    `OrderRiskDecision`, never estimated. Empty when `risk_limits` is
+    `None`."""
 
 
 @dataclass(frozen=True, slots=True)

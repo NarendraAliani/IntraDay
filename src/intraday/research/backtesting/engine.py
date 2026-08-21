@@ -43,6 +43,7 @@ from decimal import Decimal
 
 from intraday.domain.feature.contracts import FeatureValue
 from intraday.domain.market_data.contracts import Bar
+from intraday.domain.risk.contracts import RiskDecisionOutcome
 from intraday.research.backtesting import (
     Strategy,
     StrategyConfigurationValues,
@@ -73,6 +74,17 @@ from intraday.research.backtesting.execution import (
     signed_gross_pnl,
 )
 from intraday.research.backtesting.metrics import compute_metrics
+from intraday.research.backtesting.order_intent_adapter import build_backtest_entry_order_intent
+from intraday.research.backtesting.position_lifecycle import (
+    BacktestPositionLifecycleStatus,
+    close_backtest_position,
+    hold_backtest_position,
+    open_backtest_position,
+)
+from intraday.research.backtesting.risk_gate_adapter import (
+    BacktestRiskGateInputs,
+    evaluate_backtest_entry_risk,
+)
 from intraday.research.backtesting.tradeplan_execution import (
     ExitReason,
     TradePlanExitResult,
@@ -81,6 +93,21 @@ from intraday.research.backtesting.tradeplan_execution import (
 )
 
 FeatureSeriesComputer = Callable[[str, "tuple[Bar, ...]"], "tuple[FeatureValue, ...]"]
+
+# Checkpoint 64.30: `RiskEvaluationContext.max_total_exposure` is a
+# MANDATORY field (no `None` = "unconfigured" option exists on that
+# dataclass, unlike `max_daily_trades`) but `BacktestConfiguration` has
+# no dedicated total-exposure-limit field of its own yet (out of this
+# checkpoint's strict scope - see `BacktestConfiguration.risk_limits`'s
+# own docstring). Rather than fabricate a numeric limit that was never
+# configured, this is honestly modeled as "no total-exposure
+# restriction exists in a backtest today" - the same "not blocked by a
+# control this engine does not model" discipline
+# `risk_gate_adapter.build_backtest_risk_context()` already uses for the
+# kill switch/market-session/strategy-active gates. A future checkpoint
+# that adds a real `BacktestConfiguration.max_total_exposure` field
+# would replace this constant with that field's value.
+_UNCONSTRAINED_TOTAL_EXPOSURE = Decimal("Infinity")
 
 
 def _deterministic_backtest_id(
@@ -170,6 +197,13 @@ def run_backtest(
     trade_counter = 0
     skipped_signals = 0
     rejected_trades = 0
+    # Checkpoint 64.30: distinct from `rejected_trades` above (which
+    # counts a zero-quantity/insufficient-capital rejection, unrelated
+    # to risk limits). Always stay 0 / empty when `backtest_config.
+    # risk_limits is None` - the entry branch below never touches these
+    # in that case.
+    risk_rejected_trades = 0
+    risk_rejection_reason_breakdown: dict[str, int] = {}
 
     def _close_trade(
         exit_index: int, exit_timestamp: datetime, exit_price: Decimal, reason: str
@@ -195,6 +229,17 @@ def run_backtest(
         holding_bars = bars[open_position.entry_index : exit_index + 1]
         mfe, mae = mfe_mae(open_position.direction, open_position.entry_price, holding_bars)
         trade_counter += 1
+        # Checkpoint 64.32: the SAME `BacktestPosition` carried on
+        # `open_position.position_lifecycle` throughout the position's
+        # life, advanced to its terminal CLOSED state here - never a
+        # second, independently-constructed lifecycle object. `None`
+        # only in the theoretical direct-construction case described on
+        # `OpenPosition.position_lifecycle`'s own docstring.
+        closed_lifecycle = (
+            close_backtest_position(open_position.position_lifecycle)
+            if open_position.position_lifecycle is not None
+            else None
+        )
         trades.append(
             SimulatedTrade(
                 trade_id=f"{backtest_config.strategy_id}-{trade_counter}",
@@ -217,6 +262,16 @@ def run_backtest(
                 mfe=mfe,
                 mae=mae,
                 cost_breakdown=breakdown,
+                # Checkpoint 64.31: carried verbatim from the
+                # `OpenPosition` this trade closes out - the SAME
+                # `OrderIntent` constructed at entry time (and, when a
+                # risk gate was configured, the SAME object evaluated by
+                # `evaluate_order_risk()`) - never a second construction.
+                order_intent=open_position.order_intent,
+                # Checkpoint 64.32: the terminal CLOSED lifecycle
+                # derived above from this same trade's own
+                # `open_position.position_lifecycle`.
+                position_lifecycle=closed_lifecycle,
             )
         )
         trade_intervals.append((open_position.entry_index, exit_index))
@@ -226,6 +281,29 @@ def run_backtest(
 
     for i, signal in enumerate(signals):
         is_last_bar = i == len(bars) - 1
+
+        # Checkpoint 64.32: purely a REFLECTION of the engine's own
+        # existing state - a position that is still open on any bar
+        # strictly after its own entry bar has, by definition, already
+        # survived at least one full bar with no exit, so its canonical
+        # lifecycle is advanced OPEN -> HELD here. This is O(1) and
+        # runs only when the status is still OPEN (never repeated once
+        # HELD - `hold_backtest_position()` is itself idempotent, but
+        # the `is` guard below additionally avoids doing the work at
+        # all on every subsequent bar). No exit decision is made or
+        # influenced by this - `should_exit_on_reversal`,
+        # `pending_tradeplan_exit`, and the EOD checks below are
+        # entirely unchanged and still solely authoritative.
+        if (
+            open_position is not None
+            and open_position.position_lifecycle is not None
+            and i > open_position.entry_index
+            and open_position.position_lifecycle.lifecycle_status
+            is BacktestPositionLifecycleStatus.OPEN
+        ):
+            open_position.position_lifecycle = hold_backtest_position(
+                open_position.position_lifecycle
+            )
 
         if open_position is None:
             if (
@@ -239,33 +317,122 @@ def run_backtest(
                 )
                 quantity = quantity_for_config(backtest_config, running_equity, filled_entry)
                 if quantity > 0:
-                    open_position = OpenPosition(
+                    # Checkpoint 64.31: the REAL canonical `OrderIntent`
+                    # is now constructed for EVERY accepted entry
+                    # attempt (quantity > 0), not only when a risk gate
+                    # is configured - it is the canonical representation
+                    # of "what order the strategy wanted to submit",
+                    # independent of whether a risk policy is consulted.
+                    # Built ONCE here (never per-bar, never rebuilt) and
+                    # reused verbatim below: as the SAME object fed to
+                    # the risk gate (when configured) AND as the SAME
+                    # object retained on `OpenPosition`/`SimulatedTrade`
+                    # for the accepted entry - never a second,
+                    # separately-constructed `OrderIntent`. Direction is
+                    # already guaranteed non-NEUTRAL here (this branch's
+                    # own `signal.direction != StrategyDirection.NEUTRAL`
+                    # guard above).
+                    entry_order = build_backtest_entry_order_intent(
+                        strategy_id=backtest_config.strategy_id,
                         instrument_id=backtest_config.instrument_id,
                         direction=signal.direction,
-                        entry_index=i + 1,
-                        entry_timestamp=entry_bar.timestamp,
-                        entry_price=filled_entry,
                         quantity=quantity,
+                        entry_timestamp=entry_bar.timestamp,
+                        entry_index=i + 1,
                     )
-                    plan = trade_plans[i]
-                    if plan is not None:
-                        # Checkpoint 64.22 §5/§6: TradePlan-managed
-                        # position - exit is precomputed here
-                        # (deterministic given entry_index + bars, no
-                        # look-ahead) and only ACTED ON once the loop
-                        # reaches that bar, exactly like every other
-                        # fill in this engine.
-                        is_tradeplan_position = True
-                        tradeplan_trade_count += 1
-                        pending_tradeplan_exit = simulate_tradeplan_exit(
-                            trade_plan=plan,
-                            direction=open_position.direction,
-                            entry_index=open_position.entry_index,
-                            bars=bars,
+                    # Checkpoint 64.30: OPT-IN risk gate. When
+                    # `risk_limits is None` (the default, and every
+                    # pre-64.30 test's configuration), this entire block
+                    # is skipped - `entry_risk_approved` stays `True`
+                    # and NOTHING below differs from pre-64.30 code:
+                    # same `OpenPosition`, same TradePlan precomputation,
+                    # same branch taken. `entry_order` above is still
+                    # constructed in this path (Checkpoint 64.31), but
+                    # `evaluate_order_risk()` itself is NOT called - see
+                    # `test_i_no_risk_evaluation_occurs_when_risk_limits_
+                    # is_none` in test_checkpoint_64_30_risk_gate_wiring.py,
+                    # still passing unmodified.
+                    entry_risk_approved = True
+                    if backtest_config.risk_limits is not None:
+                        risk_inputs = BacktestRiskGateInputs(
+                            risk_limits=backtest_config.risk_limits,
+                            risk_configuration_version=backtest_config.configuration_version,
+                            now=entry_bar.timestamp,
+                            # Cost-inclusive, matching `SimulatedTrade.
+                            # net_pnl`'s own convention - see
+                            # `risk_gate_adapter.py`'s header docstring.
+                            cumulative_closed_trade_net_pnl=(
+                                running_equity - backtest_config.initial_capital
+                            ),
+                            # Honest: this branch only runs when
+                            # `open_position is None` (no position open
+                            # right now, single-instrument/single-
+                            # position POC engine).
+                            current_open_positions_count=0,
+                            current_position_size_for_instrument=Decimal("0"),
+                            estimated_order_notional=filled_entry * quantity,
+                            max_concurrent_positions=backtest_config.max_concurrent_positions,
+                            max_total_exposure=_UNCONSTRAINED_TOTAL_EXPOSURE,
+                            current_total_exposure=Decimal("0"),
                         )
-                    else:
-                        is_tradeplan_position = False
-                        pending_tradeplan_exit = None
+                        risk_decision = evaluate_backtest_entry_risk(entry_order, risk_inputs)
+                        if risk_decision.outcome is RiskDecisionOutcome.REJECTED:
+                            entry_risk_approved = False
+                            risk_rejected_trades += 1
+                            reason = (
+                                risk_decision.reason_code.value
+                                if risk_decision.reason_code is not None
+                                else "UNKNOWN"
+                            )
+                            risk_rejection_reason_breakdown[reason] = (
+                                risk_rejection_reason_breakdown.get(reason, 0) + 1
+                            )
+                    if entry_risk_approved:
+                        open_position = OpenPosition(
+                            instrument_id=backtest_config.instrument_id,
+                            direction=signal.direction,
+                            entry_index=i + 1,
+                            entry_timestamp=entry_bar.timestamp,
+                            entry_price=filled_entry,
+                            quantity=quantity,
+                            # Checkpoint 64.31: the SAME `OrderIntent`
+                            # constructed above - the same object fed to
+                            # the risk gate when configured, never a
+                            # second construction.
+                            order_intent=entry_order,
+                            # Checkpoint 64.32: the real canonical
+                            # position lifecycle - always starts OPEN,
+                            # per `open_backtest_position()`'s own
+                            # contract. `position_id` reuses the SAME
+                            # `entry_order.order_id` already constructed
+                            # above (never a second, independent ID).
+                            position_lifecycle=open_backtest_position(
+                                position_id=entry_order.order_id,
+                                direction=signal.direction,
+                                quantity=quantity,
+                                entry_price=filled_entry,
+                                entry_timestamp=entry_bar.timestamp,
+                            ),
+                        )
+                        plan = trade_plans[i]
+                        if plan is not None:
+                            # Checkpoint 64.22 §5/§6: TradePlan-managed
+                            # position - exit is precomputed here
+                            # (deterministic given entry_index + bars, no
+                            # look-ahead) and only ACTED ON once the loop
+                            # reaches that bar, exactly like every other
+                            # fill in this engine.
+                            is_tradeplan_position = True
+                            tradeplan_trade_count += 1
+                            pending_tradeplan_exit = simulate_tradeplan_exit(
+                                trade_plan=plan,
+                                direction=open_position.direction,
+                                entry_index=open_position.entry_index,
+                                bars=bars,
+                            )
+                        else:
+                            is_tradeplan_position = False
+                            pending_tradeplan_exit = None
                 else:
                     rejected_trades += 1
         elif is_tradeplan_position:
@@ -335,6 +502,8 @@ def run_backtest(
         ),
         tradeplan_trades=tradeplan_trade_count,
         exit_reason_breakdown=exit_reason_breakdown,
+        risk_rejected_trades=risk_rejected_trades,
+        risk_rejection_reason_breakdown=risk_rejection_reason_breakdown,
     )
 
     cost_model_identity = CostModelIdentity(
