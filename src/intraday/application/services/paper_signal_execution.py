@@ -49,10 +49,10 @@ from intraday.communication.contracts.signal_communication import (
 from intraday.domain.market_data.contracts import Bar
 from intraday.domain.order.contracts import OrderIntent, OrderStatus, OrderType, TimeInForce
 from intraday.domain.position.contracts import PositionStatus
+from intraday.domain.position_exit.contracts import ExitPlan
 from intraday.domain.risk.contracts import RiskDecisionOutcome
 from intraday.domain.shared_kernel.contracts import InstrumentId, Side, SignalId
 from intraday.domain.signal.contracts import SignalStatus
-from intraday.trading_engine.position_management.contracts import ExitPlan
 from intraday.trading_engine.strategy_execution.contracts import (
     StrategyConfigurationValues,
     StrategyDirection,

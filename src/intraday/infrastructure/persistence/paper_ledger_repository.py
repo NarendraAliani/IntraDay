@@ -28,6 +28,11 @@ from intraday.domain.broker.contracts import BrokerOrderStatusReport, Funds
 from intraday.domain.order.contracts import OrderIntent, OrderStatus
 from intraday.domain.order.events import OrderEvent
 from intraday.domain.position.contracts import Position, PositionStatus
+from intraday.domain.position_exit.contracts import (
+    ExitPlan,
+    ManagedPosition,
+    PositionLifecycleStatus,
+)
 from intraday.domain.shared_kernel.contracts import (
     InstrumentId,
     OrderId,
@@ -41,11 +46,6 @@ from intraday.infrastructure.persistence.models import (
     PaperOrderRecord,
     PaperPositionRecord,
     PaperTradeRecord,
-)
-from intraday.trading_engine.position_management.contracts import (
-    ExitPlan,
-    ManagedPosition,
-    PositionLifecycleStatus,
 )
 
 

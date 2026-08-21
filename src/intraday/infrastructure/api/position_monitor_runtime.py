@@ -24,18 +24,18 @@ from decimal import Decimal
 from intraday.application.services.paper_trading import PaperTradingService
 from intraday.domain.order.contracts import OrderIntent, OrderType, TimeInForce
 from intraday.domain.position.contracts import PositionStatus
-from intraday.domain.shared_kernel.contracts import Side
-from intraday.infrastructure.api.paper_trading_runtime import get_paper_trading_service
-from intraday.infrastructure.persistence.paper_ledger_repository import (
-    DjangoPaperLedgerRepository,
-)
-from intraday.trading_engine.position_management.contracts import (
+from intraday.domain.position_exit.contracts import (
     ExitDecision,
     ExitReason,
     ManagedPosition,
     PositionLifecycleStatus,
 )
-from intraday.trading_engine.position_management.monitor import evaluate_position_exit
+from intraday.domain.position_exit.policy import evaluate_position_exit
+from intraday.domain.shared_kernel.contracts import Side
+from intraday.infrastructure.api.paper_trading_runtime import get_paper_trading_service
+from intraday.infrastructure.persistence.paper_ledger_repository import (
+    DjangoPaperLedgerRepository,
+)
 
 EMERGENCY_SQUARE_OFF_ACTOR = "system_emergency_square_off"
 

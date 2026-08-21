@@ -8,6 +8,19 @@
 # for `atr_volatility_breakout`, fed the identical synthetic bar
 # sequence. Compares VALUES (direction, price levels, reason codes,
 # lifecycle status), never DB IDs/timestamps.
+#
+# Checkpoint 64.24 UPDATE: `historical_execution.py` no longer
+# maintains a local "verified port" of `evaluate_order_risk()`/
+# `evaluate_position_exit()` - it imports the REAL functions directly
+# from `intraday.domain.risk.policy`/`intraday.domain.position_exit.
+# policy` (relocated there from `trading_engine`, since `domain` is the
+# one layer every part of this codebase, including `research`, may
+# import). This test's manual reference run below therefore now calls
+# the EXACT SAME function objects `run_stateful_backtest()` itself
+# calls - a stronger, not weaker, parity proof (agreement is no longer
+# "two implementations happen to agree," it is "the same function
+# produces the same result via two different orchestration call
+# sites").
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
@@ -18,6 +31,23 @@ from intraday.application.services.strategy_execution import compute_feature_ser
 from intraday.domain.market_data.contracts import Bar
 from intraday.domain.order.contracts import OrderIntent, OrderType, TimeInForce
 from intraday.domain.position.contracts import PositionStatus
+
+# `historical_execution.py`'s production code imports these same real
+# functions/types directly from `intraday.domain` (Checkpoint 64.24 -
+# `domain` is the one layer every part of this codebase, including
+# `research`, is permitted to import; see that module's own docstring).
+# This test file imports them too, to build an independent manual
+# reference the module's own `run_stateful_backtest()` output is
+# compared against.
+from intraday.domain.position_exit.contracts import (
+    ManagedPosition as RealManagedPosition,
+)
+from intraday.domain.position_exit.contracts import (
+    PositionLifecycleStatus as RealPositionLifecycleStatus,
+)
+from intraday.domain.position_exit.policy import (
+    evaluate_position_exit as real_evaluate_position_exit,
+)
 from intraday.domain.risk.contracts import RiskDecisionOutcome, RiskLimits
 from intraday.domain.shared_kernel.contracts import InstrumentId, Side, StrategyId, Timeframe
 from intraday.research.backtesting.execution import compute_signals
@@ -30,29 +60,6 @@ from intraday.research.backtesting.historical_execution import (
     run_stateful_backtest,
 )
 from intraday.research.backtesting.tradeplan_execution import compute_trade_plans
-
-# NOTE (architecture boundary): `research.backtesting`'s OWN production
-# code may never import `trading_engine.position_management`/
-# `trading_engine.risk_engine`/`application.services.paper_trading`
-# (`.importlinter` contracts 3/5) - `historical_execution.py` ports
-# that decision logic instead (see its own module docstring). This
-# TEST FILE is not part of that scanned production boundary
-# (`.importlinter`'s `root_package = intraday` governs `src/intraday`;
-# `tests/` is a separate top-level package, already exempt - see the
-# pre-existing `test_default_backtest_paper_parity.py`, which likewise
-# imports `application.services.strategy_execution` directly), so it
-# legitimately imports the REAL production risk/exit functions here to
-# build an INDEPENDENT reference the module's own ported functions are
-# compared against - the strongest parity proof available.
-from intraday.trading_engine.position_management.contracts import (
-    ManagedPosition as RealManagedPosition,
-)
-from intraday.trading_engine.position_management.contracts import (
-    PositionLifecycleStatus as RealPositionLifecycleStatus,
-)
-from intraday.trading_engine.position_management.monitor import (
-    evaluate_position_exit as real_evaluate_position_exit,
-)
 from intraday.trading_engine.strategy_execution.contracts import StrategyConfigurationValues
 from intraday.trading_engine.strategy_execution.registry import build_default_registry
 
@@ -238,12 +245,11 @@ def _manual_reference_run(
             if result.risk_decision.outcome is not RiskDecisionOutcome.APPROVED:
                 break
             position = next(p for p in simulator.get_positions() if p.status is PositionStatus.OPEN)
-            # The REAL `trading_engine.position_management.contracts.
-            # ExitPlan` (not the module's own ported one) - built here
-            # with the SAME bridging arithmetic
+            # The REAL `intraday.domain.position_exit.contracts.ExitPlan`
+            # - built here with the SAME bridging arithmetic
             # `build_exit_plan_from_trade_plan()` uses, so this
             # reference is independent of that helper too.
-            from intraday.trading_engine.position_management.contracts import (
+            from intraday.domain.position_exit.contracts import (
                 ExitPlan as RealExitPlan,
             )
 

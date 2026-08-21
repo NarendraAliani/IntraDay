@@ -32,9 +32,13 @@ from intraday.domain.order.contracts import OrderIntent
 from intraday.domain.order.idempotency import derive_correlation_id
 from intraday.domain.order.state_machine import is_terminal
 from intraday.domain.position.contracts import PositionStatus
-from intraday.domain.risk.contracts import RiskDecisionOutcome, RiskLimits, TradingHaltStatus
-from intraday.trading_engine.risk_engine.contracts import OrderRiskDecision
-from intraday.trading_engine.risk_engine.evaluator import (
+from intraday.domain.risk.contracts import (
+    OrderRiskDecision,
+    RiskDecisionOutcome,
+    RiskLimits,
+    TradingHaltStatus,
+)
+from intraday.domain.risk.policy import (
     RiskEvaluationContext,
     evaluate_order_risk,
 )

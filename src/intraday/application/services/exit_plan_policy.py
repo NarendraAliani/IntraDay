@@ -23,8 +23,8 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+from intraday.domain.position_exit.contracts import ExitPlan
 from intraday.domain.shared_kernel.contracts import Side
-from intraday.trading_engine.position_management.contracts import ExitPlan
 
 # PROJECT_POLICY - conservative defaults, not sourced from any
 # broker/exchange/regulatory requirement. Percentages are of entry
