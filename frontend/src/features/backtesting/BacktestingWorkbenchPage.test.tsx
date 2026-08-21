@@ -249,6 +249,71 @@ describe("BacktestingWorkbenchPage", () => {
     expect(screen.getByText("ema_crossover-1")).toBeInTheDocument();
   });
 
+  it("renders Checkpoint 64.22 TradePlan/risk KPIs and validation rows when present in the API response", async () => {
+    const resultWithTradePlanFields = {
+      ...BACKTEST_RESULT,
+      metrics: {
+        ...BACKTEST_RESULT.metrics,
+        expectancy: "15.50",
+        max_consecutive_losses: 2,
+        risk_reward_ratio: "1.75",
+      },
+      validation: {
+        ...BACKTEST_RESULT.validation,
+        tradeplan_trades: 1,
+        exit_reason_breakdown: { STOP_LOSS: 1 },
+      },
+    };
+    stubFetch({
+      "/strategy-engine/fields/": FIELDS,
+      "/strategy-engine/strategies/": STRATEGIES,
+      "/strategy-engine/strategies/ema_crossover/schema/": SCHEMA,
+      "/backtesting/run/": resultWithTradePlanFields,
+    });
+    renderWithAuth(<BacktestingWorkbenchPage />);
+    await waitFor(() => expect(screen.getByText("EMA Crossover")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Configure" }));
+    await waitFor(() => expect(screen.getByLabelText(/Fast EMA Lookback/)).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "Run Backtest" }));
+
+    await waitFor(() => expect(screen.getByText("Results")).toBeInTheDocument());
+    expect(screen.getByText("Expectancy")).toBeInTheDocument();
+    expect(screen.getByText("₹15.50")).toBeInTheDocument();
+    expect(screen.getByText("Max Consecutive Losses")).toBeInTheDocument();
+    expect(screen.getByText("Risk/Reward")).toBeInTheDocument();
+    expect(screen.getByText("1.75")).toBeInTheDocument();
+    expect(
+      screen.getByText("TradePlan-managed trades (SL/T1/T2/T3/Trailing/EOD)"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Exit reason breakdown")).toBeInTheDocument();
+    expect(screen.getByText("STOP_LOSS: 1")).toBeInTheDocument();
+  });
+
+  it("omits the Checkpoint 64.22 TradePlan/risk fields when absent from the API response (no fabrication)", async () => {
+    stubFetch({
+      "/strategy-engine/fields/": FIELDS,
+      "/strategy-engine/strategies/": STRATEGIES,
+      "/strategy-engine/strategies/ema_crossover/schema/": SCHEMA,
+      "/backtesting/run/": BACKTEST_RESULT,
+    });
+    renderWithAuth(<BacktestingWorkbenchPage />);
+    await waitFor(() => expect(screen.getByText("EMA Crossover")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Configure" }));
+    await waitFor(() => expect(screen.getByLabelText(/Fast EMA Lookback/)).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "Run Backtest" }));
+
+    await waitFor(() => expect(screen.getByText("Results")).toBeInTheDocument());
+    expect(screen.queryByText("Expectancy")).not.toBeInTheDocument();
+    expect(screen.queryByText("Max Consecutive Losses")).not.toBeInTheDocument();
+    expect(screen.queryByText("Risk/Reward")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("TradePlan-managed trades (SL/T1/T2/T3/Trailing/EOD)"),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Exit reason breakdown")).not.toBeInTheDocument();
+  });
+
   it("shows a failed state when the run request errors", async () => {
     stubFetch({
       "/strategy-engine/fields/": FIELDS,

@@ -503,6 +503,11 @@ interface ValidationSummaryRaw {
   skipped_signals: number;
   rejected_trades: number;
   data_gaps_note: string;
+  // Checkpoint 64.22 §9/§11: optional - absent on results produced by an
+  // older engine version; the panel renders these rows only when present
+  // (never fabricated).
+  tradeplan_trades?: number;
+  exit_reason_breakdown?: Record<string, number>;
 }
 
 /** Data-quality gate level (Part 14): FIXTURE/HISTORICAL is
@@ -645,6 +650,26 @@ function BacktestResultsPanel({ result }: { result: BacktestResult }): JSX.Eleme
           <span>Total Trades</span>
           <strong>{String(m.total_trades)}</strong>
         </div>
+        {m.expectancy !== undefined && (
+          <div className="backtest-results__kpi">
+            <span>Expectancy</span>
+            <strong>{m.expectancy === null ? "—" : formatMoney(String(m.expectancy))}</strong>
+          </div>
+        )}
+        {m.max_consecutive_losses !== undefined && (
+          <div className="backtest-results__kpi">
+            <span>Max Consecutive Losses</span>
+            <strong>{String(m.max_consecutive_losses)}</strong>
+          </div>
+        )}
+        {m.risk_reward_ratio !== undefined && (
+          <div className="backtest-results__kpi">
+            <span>Risk/Reward</span>
+            <strong>
+              {m.risk_reward_ratio === null ? "—" : Number(m.risk_reward_ratio).toFixed(2)}
+            </strong>
+          </div>
+        )}
       </div>
 
       <div className="backtest-results__charts">
@@ -716,6 +741,24 @@ function BacktestResultsPanel({ result }: { result: BacktestResult }): JSX.Eleme
               <td>Data gaps</td>
               <td>{validation.data_gaps_note}</td>
             </tr>
+            {validation.tradeplan_trades !== undefined && (
+              <tr>
+                <td>TradePlan-managed trades (SL/T1/T2/T3/Trailing/EOD)</td>
+                <td>{validation.tradeplan_trades}</td>
+              </tr>
+            )}
+            {validation.exit_reason_breakdown !== undefined && (
+              <tr>
+                <td>Exit reason breakdown</td>
+                <td>
+                  {Object.entries(validation.exit_reason_breakdown).length === 0
+                    ? "—"
+                    : Object.entries(validation.exit_reason_breakdown)
+                        .map(([reason, count]) => `${reason}: ${count}`)
+                        .join(", ")}
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>

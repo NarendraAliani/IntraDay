@@ -9,9 +9,21 @@
 # It calls the SAME `Strategy.evaluate()` the live diagnostic coordinator
 # (Checkpoint 26) calls, with the SAME `StrategyConfigurationValues`.
 #
-# EXECUTION MODEL (Checkpoint 27 Part 5, unchanged):
-#   - Entry and every direction-flip exit fill at the NEXT bar's OPEN.
-#   - End-of-series force-close at the FINAL bar's own CLOSE.
+# EXECUTION MODEL (Checkpoint 27 Part 5, unchanged for direction-flip
+# strategies; extended by Checkpoint 64.22 for TradePlan strategies):
+#   - Entry always fills at the NEXT bar's OPEN, for every strategy.
+#   - For a strategy with NO `build_trade_plan()` hook (`ema_crossover`,
+#     `sma_trend_filter`): unchanged direction-flip exits, also at the
+#     NEXT bar's OPEN.
+#   - For a strategy that DOES produce a `TradePlan` (currently only
+#     `atr_volatility_breakout`): the position is exited by the SAME
+#     conservative SL/T1/T2/T3/Trailing-Stop intrabar simulator
+#     `tradeplan_execution.simulate_tradeplan_exit()` already proves
+#     (Checkpoint 64.21), reusing it unmodified - never a second
+#     implementation. Signal reversals are NOT used to exit a
+#     TradePlan-managed position.
+#   - End-of-series force-close (both models) at the FINAL bar's own
+#     CLOSE - recorded as `ExitReason.EOD` for TradePlan positions.
 #   - Feature series are computed ONCE over the full bar history via the
 #     injected `compute_feature_series` (non-look-ahead-by-construction).
 #
@@ -61,6 +73,12 @@ from intraday.research.backtesting.execution import (
     signed_gross_pnl,
 )
 from intraday.research.backtesting.metrics import compute_metrics
+from intraday.research.backtesting.tradeplan_execution import (
+    ExitReason,
+    TradePlanExitResult,
+    compute_trade_plans,
+    simulate_tradeplan_exit,
+)
 
 FeatureSeriesComputer = Callable[[str, "tuple[Bar, ...]"], "tuple[FeatureValue, ...]"]
 
@@ -126,6 +144,14 @@ def run_backtest(
     signals, warmup_bars, signal_count = compute_signals(
         bars, strategy, strategy_config, compute_feature_series
     )
+    # Checkpoint 64.22 §5: parallel to `signals` - `None` for every bar
+    # unless the strategy itself produces a real TradePlan (currently
+    # only `atr_volatility_breakout`). Reuses `compute_trade_plans()`
+    # unmodified from Checkpoint 64.21 - never a second TradePlan
+    # construction path.
+    trade_plans = compute_trade_plans(
+        bars, strategy, strategy_config, compute_feature_series, signals
+    )
 
     trades: list[SimulatedTrade] = []
     # Parallel to `trades`: (entry_index, exit_index_inclusive) - used to
@@ -133,6 +159,14 @@ def run_backtest(
     # intervals from timestamps.
     trade_intervals: list[tuple[int, int]] = []
     open_position: OpenPosition | None = None
+    # Checkpoint 64.22 §5/§6: set only for a TradePlan-based open
+    # position - `None` while a direction-flip position (or no position)
+    # is open. Precomputed AT ENTRY TIME via `simulate_tradeplan_exit()`
+    # (deterministic given entry_index + bars, no look-ahead - matches
+    # `tradeplan_execution.py`'s own no-look-ahead proof), then acted on
+    # only once the loop actually reaches that bar index.
+    pending_tradeplan_exit: TradePlanExitResult | None = None
+    tradeplan_trade_count = 0
     trade_counter = 0
     skipped_signals = 0
     rejected_trades = 0
@@ -188,6 +222,7 @@ def run_backtest(
         trade_intervals.append((open_position.entry_index, exit_index))
 
     running_equity = backtest_config.initial_capital
+    is_tradeplan_position = False
 
     for i, signal in enumerate(signals):
         is_last_bar = i == len(bars) - 1
@@ -212,8 +247,55 @@ def run_backtest(
                         entry_price=filled_entry,
                         quantity=quantity,
                     )
+                    plan = trade_plans[i]
+                    if plan is not None:
+                        # Checkpoint 64.22 §5/§6: TradePlan-managed
+                        # position - exit is precomputed here
+                        # (deterministic given entry_index + bars, no
+                        # look-ahead) and only ACTED ON once the loop
+                        # reaches that bar, exactly like every other
+                        # fill in this engine.
+                        is_tradeplan_position = True
+                        tradeplan_trade_count += 1
+                        pending_tradeplan_exit = simulate_tradeplan_exit(
+                            trade_plan=plan,
+                            direction=open_position.direction,
+                            entry_index=open_position.entry_index,
+                            bars=bars,
+                        )
+                    else:
+                        is_tradeplan_position = False
+                        pending_tradeplan_exit = None
                 else:
                     rejected_trades += 1
+        elif is_tradeplan_position:
+            # Checkpoint 64.22 §5/§6: TradePlan-managed exits ONLY - the
+            # SL/T1/T2/T3/Trailing simulation from `tradeplan_execution.
+            # py` governs the exit, never a signal-reversal flip (the
+            # strategy's own TradePlan already encodes its exit
+            # discipline, matching the live coordinator's own
+            # risk-managed-exit semantics).
+            if pending_tradeplan_exit is not None and i == pending_tradeplan_exit.exit_index:
+                _close_trade(
+                    i,
+                    bars[i].timestamp,
+                    pending_tradeplan_exit.exit_price,
+                    pending_tradeplan_exit.exit_reason.value,
+                )
+                running_equity += trades[-1].net_pnl
+                open_position = None
+                pending_tradeplan_exit = None
+                is_tradeplan_position = False
+            elif is_last_bar:
+                # Checkpoint 64.22 §6: never touched any level before the
+                # series ended - same EOD force-close policy as the
+                # direction-flip model (final bar's own close), recorded
+                # honestly as `ExitReason.EOD`.
+                _close_trade(i, bars[i].timestamp, bars[i].close, ExitReason.EOD.value)
+                running_equity += trades[-1].net_pnl
+                open_position = None
+                pending_tradeplan_exit = None
+                is_tradeplan_position = False
         else:
             if signal is not None and signal.direction == open_position.direction:
                 skipped_signals += 1
@@ -237,6 +319,9 @@ def run_backtest(
         backtest_config.initial_capital, bars, trades, trade_intervals
     )
     metrics = compute_metrics(backtest_config.initial_capital, trades, mtm_curve)
+    exit_reason_breakdown: dict[str, int] = {}
+    for trade in trades:
+        exit_reason_breakdown[trade.reason] = exit_reason_breakdown.get(trade.reason, 0) + 1
     validation = ResultValidationSummary(
         bar_count=len(bars),
         signal_count=signal_count,
@@ -248,6 +333,8 @@ def run_backtest(
             "Gap detection requires an explicit session-calendar cross-check, "
             "not performed by this engine - not computed, not assumed zero."
         ),
+        tradeplan_trades=tradeplan_trade_count,
+        exit_reason_breakdown=exit_reason_breakdown,
     )
 
     cost_model_identity = CostModelIdentity(

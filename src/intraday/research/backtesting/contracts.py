@@ -269,6 +269,19 @@ class ResultValidationSummary:
     """Gap detection requires an explicit session calendar cross-check,
     not performed by this engine - honestly stated as not computed,
     never fabricated as 0 with false confidence."""
+    tradeplan_trades: int = 0
+    """Checkpoint 64.22 §9: trades opened for a strategy that produced a
+    real `TradePlan` (via `build_trade_plan()`) and were therefore closed
+    by the SL/T1/T2/T3/Trailing/EOD simulator in
+    `tradeplan_execution.py`, rather than the direction-flip model. `0`
+    for strategies with no `build_trade_plan` hook (e.g. `ema_crossover`,
+    `sma_trend_filter`) - never fabricated for them."""
+    exit_reason_breakdown: dict[str, int] = field(default_factory=dict)
+    """Checkpoint 64.22 §9: count of CLOSED trades per `reason` string
+    actually recorded on `SimulatedTrade.reason` (e.g. "STOP_LOSS",
+    "TARGET_1", "EOD" for TradePlan-based trades; "signal_reversal",
+    "end_of_data" for direction-flip trades) - counted from the actual
+    simulated trades, never estimated."""
 
 
 @dataclass(frozen=True, slots=True)
