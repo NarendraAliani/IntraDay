@@ -748,7 +748,19 @@ class Command(BaseCommand):
                     transport, security_id_to_symbol=security_id_to_symbol, on_quote=sink.on_quote
                 )
                 if result.final_state is WorkerState.RECONNECTING:
-                    health_tracker.mark_reconnecting(reason="connection_lost")
+                    # Checkpoint 64.23: `last_close_code` (from a real
+                    # `ConnectionClosedError`, contains no credential -
+                    # see `websocket_transport.py`'s `close_code`
+                    # docstring) turns an undifferentiated
+                    # "connection_lost" into an actionable diagnostic,
+                    # e.g. "connection_lost:close_code=1006" (abnormal
+                    # close, no close frame received - the exact
+                    # signature this checkpoint's own live Dhan
+                    # connection attempt produced).
+                    reason = "connection_lost"
+                    if result.last_close_code is not None:
+                        reason = f"connection_lost:close_code={result.last_close_code}"
+                    health_tracker.mark_reconnecting(reason=reason)
                 elif result.final_state in (
                     WorkerState.FAILED,
                     WorkerState.AUTH_FAILED,

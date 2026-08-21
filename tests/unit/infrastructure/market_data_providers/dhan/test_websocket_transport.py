@@ -117,3 +117,53 @@ def test_malformed_uri_is_rejected_before_any_connection_attempt() -> None:
 
     with pytest.raises(DhanWebSocketTransportError):
         asyncio.run(scenario())
+
+
+def test_a_connect_failure_never_leaks_the_token_or_client_id() -> None:
+    """Checkpoint 64.23: a real Dhan URI embeds the live access token
+    and client ID directly in its query string. This connection never
+    succeeds (nothing listens on port 1), so `connect()` raises -
+    `DhanWebSocketTransportError`'s message MUST redact those values,
+    since this message flows into `WorkerHealthTracker.last_error_safe`,
+    a field this project persists and serves over its readiness API."""
+
+    async def scenario() -> None:
+        transport = DhanWebSocketTransport(
+            uri="ws://127.0.0.1:1?version=2&token=super-secret-token&clientId=1000012345&authType=2"
+        )
+        await transport.connect()
+
+    with pytest.raises(DhanWebSocketTransportError) as excinfo:
+        asyncio.run(scenario())
+
+    message = str(excinfo.value)
+    assert "super-secret-token" not in message
+    assert "1000012345" not in message
+    assert "token=<redacted>" in message
+    assert "clientId=<redacted>" in message
+
+
+def test_close_code_is_none_before_any_connection() -> None:
+    transport = DhanWebSocketTransport(uri="ws://127.0.0.1:9")
+    assert transport.close_code is None
+    assert transport.close_reason is None
+
+
+def test_close_code_reflects_the_real_close_after_a_clean_disconnect() -> None:
+    async def scenario() -> int | None:
+        server = FakeDhanWebSocketServer(scripted_packets=())
+        await server.start()
+        try:
+            transport = DhanWebSocketTransport(uri=server.uri)
+            await transport.connect()
+            try:
+                async for _ in transport.receive_packets():
+                    pass
+            finally:
+                pass
+            return transport.close_code
+        finally:
+            await server.stop()
+
+    code = asyncio.run(scenario())
+    assert code == 1000  # a clean, normal close

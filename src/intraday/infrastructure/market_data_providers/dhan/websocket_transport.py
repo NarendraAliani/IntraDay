@@ -33,18 +33,37 @@
 # or tested against, only the local fake server.
 from __future__ import annotations
 
+import re
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
 import websockets
 from websockets.asyncio.client import ClientConnection, connect
 
+_SENSITIVE_QUERY_PARAMS = re.compile(r"(token|clientId)=[^&\s]+", re.IGNORECASE)
+
+
+def _redact_uri(uri: str) -> str:
+    """Checkpoint 64.23: Dhan's own documented connection URI embeds the
+    live access token and client ID directly in the query string
+    (`wss://api-feed.dhan.co?version=2&token=...&clientId=...&authType=2`).
+    Any error message built from `uri` MUST NOT include those values
+    verbatim - this project's standing rule is that no log/output may
+    ever expose a credential, and `DhanWebSocketTransportError` messages
+    flow into `WorkerHealthTracker.last_error_safe`, a field that is
+    persisted and served by the readiness/status API. Redacting here,
+    at the one place the URI is turned into a message, means every
+    caller downstream is safe by construction - never a second redaction
+    site to keep in sync."""
+    return _SENSITIVE_QUERY_PARAMS.sub(r"\1=<redacted>", uri)
+
 
 class DhanWebSocketTransportError(Exception):
     """Raised when CONNECT itself fails (handshake refused, connection
     refused, DNS failure, etc.) - a caller-visible, typed failure,
     never a bare library exception leaking through this module's own
-    boundary."""
+    boundary. The message is always built from a REDACTED uri (see
+    `_redact_uri()`) - never the raw `uri` passed to `connect()`."""
 
 
 @dataclass(slots=True)
@@ -77,7 +96,9 @@ class DhanWebSocketTransport:
             # updated every time the library adds a new failure
             # subtype; `OSError` separately covers transport-level
             # failures (connection refused, DNS failure).
-            raise DhanWebSocketTransportError(f"failed to connect to {self.uri}: {exc!r}") from exc
+            raise DhanWebSocketTransportError(
+                f"failed to connect to {_redact_uri(self.uri)}: {exc!r}"
+            ) from exc
 
     async def send_json_text(self, payload: str) -> None:
         """Sends a text frame - Dhan's own subscription/disconnect
@@ -118,3 +139,27 @@ class DhanWebSocketTransport:
         if self._connection is not None:
             await self._connection.close()
             self._connection = None
+
+    @property
+    def close_code(self) -> int | None:
+        """Checkpoint 64.23: the RFC 6455 close code the peer sent (or
+        `1006` when the connection dropped with NO close frame at all -
+        the `websockets` library's own convention), or `None` before any
+        connection has closed. Contains no credential - safe to log/
+        persist directly, unlike `uri`. Reading this AFTER catching a
+        `ConnectionClosedError` from `receive_packets()` is how a caller
+        turns "the connection died" into an actionable diagnostic
+        (`ABNORMAL_CLOSE:code=1006` vs, say, `code=1000` clean close)
+        instead of a bare, undifferentiated reconnect."""
+        if self._connection is None:
+            return None
+        return self._connection.close_code
+
+    @property
+    def close_reason(self) -> str | None:
+        """The peer's own close reason text, or `None`/empty when (as
+        with a `1006` abnormal close) no close frame carrying a reason
+        was ever received."""
+        if self._connection is None:
+            return None
+        return self._connection.close_reason

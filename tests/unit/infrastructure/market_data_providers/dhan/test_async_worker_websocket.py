@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import asyncio
 import struct
+from collections.abc import AsyncIterator
+
+from websockets.exceptions import ConnectionClosedError
 
 from intraday.domain.market_data.contracts import Quote
 from intraday.infrastructure.market_data_providers.dhan.async_worker import (
@@ -113,3 +116,40 @@ def test_worker_over_websocket_handles_a_disconnect_packet() -> None:
 
     assert result.final_state is WorkerState.RECONNECTING
     assert result.quotes_processed == 1
+
+
+class _AbnormalCloseTransport:
+    """Checkpoint 64.23: a minimal fake matching `DhanWebSocketTransport`'s
+    duck-typed surface (`receive_packets()` + `close_code`), reproducing
+    exactly what this checkpoint's real live Dhan connection attempt
+    observed - the WebSocket raises `ConnectionClosedError` with NO
+    close frame (RFC 6455 code `1006`, abnormal closure) and zero
+    packets are ever received. `FakeDhanWebSocketServer` has no built-in
+    way to simulate this abrupt a close, so this fake stands in at the
+    `run_worker_against_websocket()` boundary instead."""
+
+    close_code = 1006
+
+    async def receive_packets(self) -> AsyncIterator[bytes]:
+        raise ConnectionClosedError(None, None, None)
+        yield b""  # pragma: no cover - unreachable, makes this an async generator
+
+
+def test_worker_over_websocket_captures_the_close_code_on_an_abnormal_close() -> None:
+    """Reproduces Checkpoint 64.23's real live-feed diagnosis: connect
+    and subscribe succeed, then the connection drops abnormally with
+    zero packets. `last_close_code` must carry the real `1006` so the
+    reconnect reason persisted to `WorkerHealthTracker.last_error_safe`
+    is actionable instead of a bare "connection_lost"."""
+
+    async def scenario() -> AsyncWorkerRunResult:
+        return await run_worker_against_websocket(
+            _AbnormalCloseTransport(),  # type: ignore[arg-type]
+            security_id_to_symbol=_SECURITY_MAP,
+        )
+
+    result = asyncio.run(scenario())
+
+    assert result.final_state is WorkerState.RECONNECTING
+    assert result.quotes_processed == 0
+    assert result.last_close_code == 1006

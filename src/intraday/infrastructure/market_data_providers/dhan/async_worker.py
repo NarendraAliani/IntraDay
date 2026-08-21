@@ -70,6 +70,17 @@ class AsyncWorkerRunResult:
     decode_failures: int = 0
     rejected_packets: int = 0
     reconnect_relevant_disconnects: int = 0
+    last_close_code: int | None = None
+    """Checkpoint 64.23: the RFC 6455 close code observed when the
+    WebSocket path (`run_worker_against_websocket()` only - the raw-TCP
+    path has no WebSocket close frame) ended via a `ConnectionClosedError`
+    - `None` for a clean end-of-stream or when running against the raw
+    TCP transport. Read from `DhanWebSocketTransport.close_code`, which
+    contains no credential - safe to persist/log directly. This is the
+    ONE piece of diagnostic detail this project's actual live connection
+    attempt (Checkpoint 64.23) was missing: `reason="connection_lost"`
+    alone could not distinguish a normal reconnect-worthy drop from a
+    `1006` abnormal closure with zero data ever received."""
 
 
 async def run_worker_against_stream(
@@ -219,6 +230,7 @@ async def run_worker_against_websocket(
         # connection problem the worker's own state machine must know
         # about, never silently swallowed.
         result.reconnect_relevant_disconnects += 1
+        result.last_close_code = transport.close_code
         transition(WorkerEvent.CONNECTION_LOST)
 
     result.final_state = state
