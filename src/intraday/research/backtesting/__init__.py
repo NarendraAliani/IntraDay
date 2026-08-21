@@ -26,6 +26,7 @@ from intraday.trading_engine.strategy_execution import (
     StrategyDirection,
     StrategyRegistry,
     StrategySignal,
+    TradePlan,
     build_default_registry,
     coerce_configuration_values,
 )
@@ -36,6 +37,7 @@ __all__ = [
     "StrategyDirection",
     "StrategyRegistry",
     "StrategySignal",
+    "TradePlan",
     "build_default_registry",
     "coerce_configuration_values",
 ]

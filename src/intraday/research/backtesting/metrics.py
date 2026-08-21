@@ -29,6 +29,22 @@ def max_drawdown_duration_bars(points: tuple[MarkToMarketPoint, ...]) -> int:
     return longest
 
 
+def max_consecutive_losses(trades: list[SimulatedTrade] | tuple[SimulatedTrade, ...]) -> int:
+    """Checkpoint 64.21 §11: longest streak of consecutive LOSING
+    trades, in the order `trades` is already supplied (chronological -
+    the same order `engine.py`/`portfolio.py` already build it in,
+    never re-sorted here). `0` when there are no losing trades."""
+    longest = 0
+    current = 0
+    for trade in trades:
+        if trade.net_pnl < 0:
+            current += 1
+            longest = max(longest, current)
+        else:
+            current = 0
+    return longest
+
+
 def compute_metrics(
     initial_capital: Decimal,
     trades: list[SimulatedTrade] | tuple[SimulatedTrade, ...],
@@ -83,6 +99,21 @@ def compute_metrics(
         else Decimal("0")
     )
 
+    # Checkpoint 64.21 §11: Expectancy, Max Consecutive Losses, Risk/Reward -
+    # each `None`/`0` under the SAME "insufficient data" conditions the
+    # existing average_winner/average_loser fields already use, never a
+    # fabricated substitute.
+    expectancy: Decimal | None = None
+    risk_reward: Decimal | None = None
+    if average_winner is not None and average_loser is not None:
+        win_rate_fraction = Decimal(len(winners)) / total if total else Decimal("0")
+        expectancy = (win_rate_fraction * average_winner) + (
+            (1 - win_rate_fraction) * average_loser
+        )
+        if average_loser != 0:
+            risk_reward = average_winner / abs(average_loser)
+    consecutive_losses = max_consecutive_losses(trades)
+
     return BacktestMetrics(
         total_trades=total,
         winning_trades=len(winners),
@@ -102,4 +133,7 @@ def compute_metrics(
         sortino_ratio_trade_level=sortino,
         final_capital=final_capital,
         return_percent=return_percent,
+        expectancy=expectancy,
+        max_consecutive_losses=consecutive_losses,
+        risk_reward_ratio=risk_reward,
     )

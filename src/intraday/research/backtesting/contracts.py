@@ -211,6 +211,23 @@ class BacktestMetrics:
     sortino_ratio_trade_level: Decimal | None
     final_capital: Decimal
     return_percent: Decimal
+    expectancy: Decimal | None = None
+    """Checkpoint 64.21 §11: `(win_rate/100 * average_winner) +
+    ((1 - win_rate/100) * average_loser)` — the average net_pnl per
+    trade this system's own win-rate/win-size/loss-size would predict.
+    `None` under the SAME condition `average_winner`/`average_loser`
+    are `None` (no winners or no losers at all) — never computed from a
+    partial/fabricated substitute."""
+    max_consecutive_losses: int = 0
+    """Checkpoint 64.21 §11: the longest streak of consecutive LOSING
+    trades, in TRADE order (not bar order) — `0` when there are no
+    losing trades at all, matching `max_drawdown_duration_bars`'s own
+    "0 means never happened" convention."""
+    risk_reward_ratio: Decimal | None = None
+    """Checkpoint 64.21 §11: `average_winner / abs(average_loser)` —
+    `None` under the same conditions `average_winner`/`average_loser`
+    are `None`, or when `average_loser` is exactly `0` (undefined,
+    never reported as infinity)."""
 
 
 class BacktestTrustLevel(str, Enum):
