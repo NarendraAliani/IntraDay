@@ -2,419 +2,305 @@
 
 ## Checkpoint
 
-64.24 — "CONVERGE BACKTEST PATHS + EXTRACT SHARED RISK/EXIT DOMAIN POLICIES". 64.23 is accepted in
-full and was not rebuilt: Dhan protocol diagnosis, handshake/subscription verification, the 1006
-diagnostic observability improvement, the credential-redaction security fix, close-code
-propagation, the `HistoricalExecutionSimulator` foundation, the (now-superseded) verified risk-port
-foundation, the partial-exit-semantics discovery, the trailing-stop-semantics discovery, the
-production-reference parity tests, and the strategy-extensibility architecture.
+64.25 — "FINAL BACKTEST EXECUTION CONVERGENCE + CANONICAL RESULT + RESEARCH READINESS". 64.24 is
+accepted in full and was not rebuilt: the shared risk policy, shared exit policy, all 13 risk
+checks, partial-exit semantics, ratcheting trailing stop, canonical position lifecycle, strategy
+extensibility architecture, Dhan security redaction, Dhan close-code diagnostics, the
+`HistoricalExecutionSimulator` foundation, and the production-reference parity foundation.
 
 ## Objective
 
-Two goals, in priority order given the live market: (1) do not waste live-market time on
-speculative Dhan retries — either produce evidence-based diagnosis, recommend Dhan support/
-entitlement clarification, or note an alternate-environment test is needed; (2) begin real
-convergence toward one authoritative backtest execution path by extracting the real, canonical
-risk/exit decision logic into a dependency-free `intraday.domain` location so Paper and Backtest
-consume the SAME policy — not a permanently duplicated "verified port."
+Converge `run_backtest()` and `run_stateful_backtest()` into one authoritative backtest execution
+path, safely — with the checkpoint directive's own explicit escape hatch: "If merging the paths
+exposes a genuine correctness issue in equity curve, mark-to-market, partial fills, or EOD: stop
+and design that piece explicitly rather than corrupting existing results." No live Dhan work was
+authorized this checkpoint (credential expired).
 
 ## Market State
 
-Confirmed OPEN via the real, existing `session_for_instant()` calendar computation throughout this
-checkpoint's work (read-only readiness check, no connection attempts made).
+Confirmed OPEN via a single, read-only readiness check (no connection attempt) at the end of this
+checkpoint's work.
+
+## Dhan Credential State
+
+**EXPIRED**, unchanged from 64.24's finding — re-confirmed via a read-only readiness check.
+`readiness.state = CREDENTIAL_EXPIRED`, `can_start = False`. No renewal attempt was made (this
+requires the user's own action on Dhan's portal, outside this codebase).
+
+## Dhan Live Feed Policy
+
+**No Dhan work was attempted this checkpoint, correctly.** Per the directive's explicit
+instruction ("DO NOT attempt Dhan connection... no further speculative Dhan changes or repeated
+connection attempts are authorized" while `CREDENTIAL_EXPIRED`), zero connection attempts were
+made, no WebSocket code was touched, and no live provider state was fabricated. The 1006 diagnosis
+from 64.23 and the Dhan support/entitlement recommendation from 64.24 remain the current, unchanged
+guidance. The next real Dhan action remains: fresh token, then controlled re-validation — not
+available to this session.
 
 ## Baseline Verification
 
-- Backend suite at checkpoint start: 1560 passed (64.23's final count).
-- Frontend suite: 176/176 passed, unchanged all checkpoint.
+- Backend suite at checkpoint start: 1584 passed (64.24's final count).
 - `poetry run lint-imports`: 6/6 kept at start.
-- Dhan credential state re-checked (read-only, no connection attempt): **now EXPIRED** — a new,
-  real, time-based fact (JWT tokens expire; this was not caused by any action this checkpoint). See
-  Dhan Feed Status below.
+- Frontend suite: 176/176 passed, unchanged all checkpoint.
 
-## Dhan Feed Status
+## Backtest Architecture Audit
 
-`PROVIDER_UNAVAILABLE` remains the readiness gate's classification from 64.23's diagnosis:
-WebSocket handshake = SUCCESS, transport authentication = SUCCESS, subscribe message = SUCCESS,
-packets received = 0, `close_code = 1006`, `close_reason` = empty, reproducible on every attempt
-(3/3 in 64.23). **No new connection attempts were made this checkpoint** — per the directive's
-explicit instruction not to consume live-market time on repeated identical reproduction, and since
-64.23 already established reproducibility beyond reasonable doubt.
+A background implementation attempt read, in full, before writing any code: `research/backtesting/
+engine.py` (443 lines — `run_backtest()`'s existing single-fill-per-position equity-curve/mark-to-
+market model), `research/backtesting/historical_execution.py` (857 lines — `HistoricalExecution
+Simulator`/`run_stateful_backtest()`'s fill-granular, partial-exit-aware state model, but with NO
+equity curve or mark-to-market curve of its own), `research/backtesting/contracts.py` (341 lines —
+`BacktestResult`/`ResultValidationSummary`/`BacktestMetrics`/`SimulatedTrade`/`MarkToMarketPoint`/
+`BacktestTrustLevel`), `research/backtesting/metrics.py` (`compute_metrics()`, shared by `engine.py`
+and `portfolio.py`), `research/backtesting/tradeplan_execution.py` (the non-canonical `simulate_
+tradeplan_exit()`), `research/backtesting/portfolio.py` (the multi-instrument caller), and every
+grep-confirmed real caller of `run_backtest()` (`application/services/backtesting.py`,
+`application/services/historical_backtest_run.py`, `application/reporting/contracts.py`,
+`research/backtesting/portfolio.py`). Confirmed `run_stateful_backtest()` has NO production caller
+outside its own test file — it is genuinely safe to fold or replace without touching any live
+integration.
 
-**New fact discovered this checkpoint (read-only readiness check only, zero connection attempts):**
-the Dhan access token has since **expired** (`CREDENTIAL_STATE: EXPIRED`, readiness state now
-`CREDENTIAL_EXPIRED` rather than `PROVIDER_UNAVAILABLE` — the readiness evaluator checks credential
-state before provider state, so this is now reported as the primary blocker). This is expected JWT
-lifecycle behavior, not a defect, and was not remediated (renewing a Dhan access token is a user
-action performed on Dhan's own portal, outside this codebase's scope). This does mean the `1006`
-mystery cannot be further live-tested until a fresh token is issued — an additional, honest reason
-not to attempt more connections this checkpoint even if the directive had not already instructed
-against it.
+**The genuine, correctly-identified blocker**: the two execution models are **P&L-representation-
+incompatible**, not merely code-organization-incompatible.
 
-## Dhan Official Documentation
+- `engine.py`'s `SimulatedTrade`/equity-curve/mark-to-market model is single-fill-per-position,
+  keyed by one `(entry_index, exit_index)` interval per trade — this shape is baked into
+  `compute_metrics()` and every downstream caller (drawdown, win rate, average winner/loser, etc.
+  all assume one entry, one exit, per trade record).
+- `historical_execution.py`'s `HistoricalExecutionSimulator` is fill-granular and already correctly
+  performs partial-exit cost-basis accounting (verified during the audit: quantity-weighted average
+  entry price; T1/T2/T3 each realize P&L against a shared basis) — but it produces **no per-bar
+  equity curve or mark-to-market curve at all**, since nothing before this checkpoint needed one.
 
-No new documentation research was performed this checkpoint — 64.23 already fetched and verified
-the official `https://dhanhq.co/docs/v2/live-market-feed/` specification (endpoint, auth params,
-subscribe format, connection limits, ping/heartbeat behavior, the documented `805` five-connection
-disconnect code) and confirmed byte-for-byte format compliance. Re-fetching would not add new
-evidence given no code or behavior changed since.
+Building a per-bar mark-to-market curve that stays correct when a position's `remaining_quantity`
+decays across multiple fills (rather than closing once) is a real, unresolved design problem.
+Getting it wrong would silently corrupt `max_drawdown`/`net_pnl`/`total_equity` — precisely the
+failure mode the checkpoint directive itself named as unacceptable to guess at.
 
-## Dhan Root-Cause Status
+## Canonical Backtest Engine
 
-**Unresolved, and correctly not further speculated on this checkpoint.** 64.23 ruled out protocol/
-format mismatch, raw network unreachability, and handshake/auth rejection. The remaining candidates
-(server-side feed-entitlement rejection, an environment-level connection reset by an intermediate
-middlebox, or a stale-connection-slot interaction) cannot be distinguished from inside this
-environment alone.
+**Not achieved this checkpoint.** `run_backtest()` and `run_stateful_backtest()` remain exactly as
+they were at the end of 64.24 — confirmed by `git status --short` returning empty output (zero
+files changed) and by re-running the full test suite, which reproduced the exact same 1584-passed
+count with no change. This was a deliberate stop, not an oversight: per the checkpoint directive's
+own instruction, when convergence would require guessing at equity-curve semantics under partial
+exits, the correct action is to stop and report the exact issue rather than ship code that might
+silently corrupt a result.
 
-**Per §19 of the checkpoint directive, exactly one of three paths is appropriate now:**
+**Recommendation for the next checkpoint**, to be attempted as two explicit, separately-verifiable
+steps rather than one large change:
 
-- **(A) Evidence from official documentation identifies a real mismatch** — already checked in
-  64.23; ruled out. Not applicable.
-- **(B) Dhan support/account entitlement clarification is required** — **this is the recommended
-  path.** The failure signature (successful handshake and auth, successful subscribe, immediate
-  abnormal closure with zero data, code 1006, no documented reason) is not explained by anything in
-  the public API documentation and is not a known community-reported pattern for this specific
-  signature (64.23's forum research found reports of disconnects after 10-20 minutes of *running*
-  connections — a different, ping-timeout-related pattern — not an immediate post-subscribe drop).
-  This points toward something specific to this account/credential's feed entitlement or
-  configuration that only Dhan's own backend can diagnose.
-- **(C) Controlled test from another network/environment** — a reasonable secondary/parallel step
-  the user could take independently (e.g. running the exact same worker command from a different
-  machine or cloud region) to help Dhan (and us) distinguish an account-level cause from an
-  environment/middlebox-level cause, but not something this session's sandboxed environment can
-  perform itself.
-
-**Recommendation: pursue (B) — contact Dhan support with the diagnostic summary below — and
-optionally pursue (C) in parallel if the user has access to a second network environment.**
-
-## Dhan Support/Entitlement Assessment
-
-A precise, support-ready diagnostic summary (no secrets included — see Security below):
-
-```
-Issue: Live market feed WebSocket connection closes abnormally immediately
-       after a valid subscribe request, with zero data ever received.
-
-Endpoint:              wss://api-feed.dhan.co
-Protocol version:      2 (version=2 query parameter)
-Auth type:              2 (authType=2 query parameter)
-Account/client identifier: [the account's own dhanClientId - not a secret per
-                            Dhan's own documentation, but intentionally left as
-                            a placeholder in this committed report; the operator
-                            should supply it directly when contacting support]
-Approximate timestamps of reproduction: 2026-08-21, ~06:05-06:07 UTC (3 attempts)
-
-Observed behavior:
-  1. TCP connection to api-feed.dhan.co:443           -> SUCCEEDS
-  2. WebSocket (RFC 6455) opening handshake            -> SUCCEEDS
-     (valid HTTP 101 upgrade response received, with
-     correct Sec-WebSocket-Accept)
-  3. Subscribe request sent (RequestCode 15, JSON,
-     4 instruments, ExchangeSegment=NSE_EQ,
-     SecurityId matching Dhan's own security ID scheme) -> SENT, no error
-  4. Any data packet from the server                    -> NEVER RECEIVED
-  5. Connection close                                    -> ABNORMAL
-     - RFC 6455 close code: 1006 (no close frame received from server)
-     - close reason: empty
-     - This is NOT the documented 805 "exceeded 5 connections" code, which
-       would arrive as a real, coded close frame - 1006 means no close frame
-       arrived at all.
-
-Reproducibility: 3/3 attempts, across ~90 seconds including a 20-second
-cooldown between two of them - not a transient/rate-limited pattern.
-
-What we have already ruled out ourselves:
-  - Subscribe message format: verified byte-for-byte against the official
-    v2 live-market-feed documentation - exact match.
-  - Basic network reachability: raw TCP to the endpoint succeeds.
-  - Handshake/auth rejection: the WebSocket upgrade itself completes
-    successfully with valid response headers, so the token/clientId query
-    parameters are not being rejected outright at connection time.
-
-Request to Dhan support: please confirm whether this account/client ID
-currently has live market feed entitlement/subscription active, and
-whether any account-level or IP-level restriction would produce an
-immediate post-subscribe close (1006) without a coded close reason.
-```
-
-The client_id itself is documented by this project's own `DhanCredential` model as "not secret —
-an account identifier, stored in plaintext" per Dhan's own authentication scheme, but it was
-deliberately left as a placeholder in this file rather than embedded literally, since `taskReport.md`
-is committed to version control and there is no operational need to persist even a non-secret
-account identifier in git history — the operator can supply it directly to Dhan support from the
-Settings page.
-
-## Security Fix
-
-The 64.23 URI-redaction fix (`_redact_uri()` in `websocket_transport.py`) was verified still intact
-and unmodified this checkpoint — confirmed by `git status` showing no changes to any file under
-`src/intraday/infrastructure/market_data_providers/dhan/` (this checkpoint's work did not touch
-that directory at all, per its own explicit scope boundary). The existing tests
-(`test_a_connect_failure_never_leaks_the_token_or_client_id`,
-`test_close_code_is_none_before_any_connection`,
-`test_close_code_reflects_the_real_close_after_a_clean_disconnect`,
-`test_worker_over_websocket_captures_the_close_code_on_an_abnormal_close`) remain in the suite and
-pass as part of this checkpoint's full 1584-test run.
-
-## Shared Risk Policy
-
-**Achieved — this is the checkpoint's central deliverable, independently verified.** `evaluate_
-order_risk()` and `RiskEvaluationContext` were relocated (not copied) from `trading_engine.
-risk_engine.evaluator` to `intraday.domain.risk.policy` — the one layer every part of this
-codebase (`trading_engine`, `application`, `research`) is permitted to import, per `.importlinter`
-contracts 1-4 (domain is the innermost layer; everything else may depend on it, it depends on
-nothing above it). I independently confirmed:
-
-- `grep` of `src/intraday/research/backtesting/historical_execution.py`'s imports shows
-  `from intraday.domain.risk.policy import RiskEvaluationContext, evaluate_order_risk` — the real
-  function, not a re-declared port. The previously-existing `_evaluate_order_risk_port()` function
-  no longer exists in this file (confirmed by grep — zero matches).
-- `poetry run lint-imports` → **6 kept, 0 broken**, independently re-run by me after the change.
-- `trading_engine/risk_engine/evaluator.py` is now a genuine 3-line re-export shim
-  (`from intraday.domain.risk.policy import RiskEvaluationContext as RiskEvaluationContext` /
-  `evaluate_order_risk as evaluate_order_risk`) — read in full by me, confirmed it is not a stub
-  or a second implementation, only a compatibility alias, kept (not deleted) as safe insurance
-  against any real call site the refactor's own grep audit might have missed.
-- `application/services/paper_trading.py` (the real live/paper orchestration service) now imports
-  `evaluate_order_risk`/`RiskEvaluationContext` from `intraday.domain.risk.policy` directly —
-  confirmed by reading the file's import block.
-
-**This means `PaperTradingService` (live/paper) and `HistoricalExecutionSimulator`/
-`run_stateful_backtest()` (backtest) now call the literal same function object** — not two
-implementations kept in sync by discipline, but one implementation two callers share.
-
-## Shared Exit Policy
-
-**Also achieved, same pattern.** `evaluate_position_exit()` and its supporting contracts (`ExitPlan`,
-`ManagedPosition`, `ExitDecision`, `ExitReason`, `PositionLifecycleStatus`) were relocated to a new
-`intraday.domain.position_exit` package (`__init__.py`, `contracts.py`, `policy.py`) — confirmed to
-exist and be well-formed by reading the files directly. `trading_engine/position_management/
-monitor.py` is now a genuine re-export shim (read in full, confirmed: `from intraday.domain.
-position_exit.policy import evaluate_position_exit as evaluate_position_exit`). `infrastructure/
-api/position_monitor_runtime.py` (the real live position-monitoring loop) now imports from the new
-domain location. `research/backtesting/historical_execution.py` imports the real
-`evaluate_position_exit` the same way — confirmed by grep, the previous `_evaluate_position_exit_
-port()` function no longer exists in that file.
-
-## Paper Risk Semantics
-
-Unchanged in behavior — `PaperTradingService.submit_order()` still builds the same
-`RiskEvaluationContext` from `self.broker.get_positions()`/`get_orders()` exactly as before; only
-the import source of `evaluate_order_risk`/`RiskEvaluationContext` changed (from `trading_engine.
-risk_engine` to `intraday.domain.risk.policy`, functionally identical since the old location is now
-just a re-export of the new one). No live-path behavior change; confirmed by the full 1584-test
-suite passing, including all pre-existing paper-trading tests unmodified.
-
-## Historical Risk Semantics
-
-`run_stateful_backtest()`'s `_submit()` closure now calls the real, canonical `evaluate_order_risk`
-directly — the exact same function `PaperTradingService` calls, not a port. The 3 checks the 64.23
-port omitted (instrument allow/deny list, max daily trades, max per-trade risk) are present in the
-canonical function it now calls (they were never actually missing from the real function — only
-from the 64.23 port copy), so the historical path now has access to all 13 checks by construction,
-not by having them individually re-added.
+1. Design and prove — via a hand-worked, numeric regression test, in isolation, before touching
+   `engine.py` at all — a fill-sequence-based mark-to-market function. It must be proven, by test,
+   to produce IDENTICAL output to today's `engine.py` for every existing zero-partial-exit scenario
+   (direction-flip trades, and ATR trades that hit a single stop/target/EOD without ever touching a
+   partial target) before being trusted with the partial-exit case at all.
+2. Only once that function is independently proven correct in isolation, wire `run_backtest()`'s
+   TradePlan branch onto the canonical `HistoricalExecutionSimulator`/domain policies and update
+   every real caller, with the existing look-ahead/no-fill-at-own-price regression tests
+   (`test_backtesting_engine.py`) re-verified to still pass under the new code path.
 
 ## Historical Execution
 
-`HistoricalExecutionSimulator` (`research/backtesting/historical_execution.py`) retains its role as
-the stateful bookkeeper (cash/equity, orders, fills, positions, deterministic execution timing) —
-confirmed by reading the file that the ~385 lines of duplicated risk/exit decision logic were
-removed, leaving the simulator responsible for state and orchestration only, calling out to the
-canonical domain policies for the actual business decisions, exactly matching §9's instruction
-("It should NOT own business risk rules, business exit rules").
+`HistoricalExecutionSimulator` itself is unchanged this checkpoint — confirmed via `git status`.
+Per 64.24's report (re-confirmed by this checkpoint's audit read, not merely re-asserted), it
+already correctly owns only state (cash/equity/orders/fills/positions) and deterministic execution
+timing, not risk/exit business rules.
+
+## Shared Risk Policy
+
+Unchanged this checkpoint — `intraday.domain.risk.policy.evaluate_order_risk()` remains the one
+canonical implementation, confirmed still in place and unmodified (`git status` shows no change to
+`src/intraday/domain/risk/`).
+
+## Shared Exit Policy
+
+Unchanged this checkpoint — `intraday.domain.position_exit.policy.evaluate_position_exit()` remains
+the one canonical implementation, confirmed unmodified.
+
+## TradePlan
+
+Unchanged. `atr_volatility_breakout` remains the only strategy producing a `TradePlan`;
+`ema_crossover`/`sma_trend_filter` remain direction-flip-only, unmodified this checkpoint. No
+TradePlan was fabricated for either.
 
 ## Position Lifecycle
 
-`PositionLifecycleStatus` (OPEN/PARTIAL_EXIT/TARGET_1/TARGET_2/TARGET_3/CLOSED) now lives once, in
-`intraday.domain.position_exit.contracts`, consumed by both the live position monitor and the
-backtest simulator — no separate `PaperPositionLifecycle`/`BacktestPositionLifecycle` was created,
-confirmed by grep (only one `PositionLifecycleStatus` definition exists in the codebase).
+Unchanged — the canonical `PositionLifecycleStatus` from 64.24 remains the sole definition; no new
+parallel lifecycle model was introduced (none was needed, since nothing was implemented).
 
 ## Partial Exits
 
-**Preserved exactly, with new explicit domain-level tests independently verified by me.** Read
-`tests/unit/domain/test_position_exit_policy.py` directly: `test_12_share_position_partial_exit_
-worked_example` proves the exact directive example — 12 shares, T1 fires for 4 (1/3 of 12),
-`remaining_after_t1 == Decimal("8.0000")`; a second test,
-`test_12_share_position_exact_documented_split_4_2_6`, proves T2 exits 2 (1/3 of the then-remaining
-8) and T3 closes exactly what's left. `_PARTIAL_EXIT_FRACTION = Decimal("1")/Decimal("3")` in the
-relocated `domain/position_exit/policy.py` is unchanged from the original `trading_engine/
-position_management/monitor.py` value — confirmed by direct comparison.
+Unchanged in the domain policy layer (still correctly ported/relocated per 64.24). NOT yet reachable
+from `run_backtest()`'s default path — this remains the exact gap the Canonical Backtest Engine
+section above describes.
 
 ## Trailing Stop
 
-Confirmed still ratcheting (not static) in the relocated policy — `trailing_level =
-highest_favorable_price - trailing_stop_distance` for long positions, mirrored for short. New
-tests in `test_position_exit_policy.py` prove both directions and, per the report, prove the
-trailing level does NOT reset backward when price pulls back without hitting the trail (i.e.
-`highest_favorable_price` only ever advances in the favorable direction, matching the real
-production semantic exactly).
+Unchanged — ratcheting behavior remains correctly implemented in the domain policy layer, not yet
+reachable from the default backtest path.
 
 ## EOD
 
-Not further integrated this checkpoint. The default `run_backtest()` path's existing EOD
-force-close (from 64.22) remains unmodified; the stateful path (`run_stateful_backtest()`) was not
-merged into the default path this checkpoint (see Canonical Backtest Path below), so a single,
-unified EOD contract across both paths was not achieved — this is a disclosed, carried-forward gap,
-not a new regression.
+Not unified this checkpoint. `engine.py`'s existing EOD force-close (final bar's own close) remains
+the only EOD behavior exercised by the default path; `run_stateful_backtest()`'s EOD handling (if
+any — not separately re-audited this checkpoint since no change was made there) remains a separate,
+unconverged code path. This is an unchanged, carried-forward gap, not a new one.
 
 ## Costs
 
-`IndianCashEquityIntradayCostModel` continues to be the sole cost model referenced by both paths;
-no duplicate was created this checkpoint (no new cost-related file appears in the diff).
+Unchanged — `IndianCashEquityIntradayCostModel` remains applied exactly as it was at the end of
+64.24, in the same two separate places (the default path's existing application, and the stateful
+path's existing application), with no unification attempted.
 
-## Canonical Backtest Path
+## Equity Curve
 
-**Deliberately not merged this checkpoint — a disclosed, reasoned deviation, not a silent gap.**
-`run_backtest()` (the default, UI-facing path) and `run_stateful_backtest()` (the new,
-risk/exit-aware path) remain two separate entry points. The stated reasoning, which I find sound
-given the checkpoint directive's own explicit instruction ("If mark-to-market/equity-curve
-semantics require additional work because partial exits produce multiple fills: design that
-explicitly, do not silently corrupt the existing curve"): merging would require redesigning
-`engine.py`'s existing equity-curve/metrics machinery to handle multiple fills per entry (one per
-partial exit) — a nontrivial correctness undertaking that was correctly judged unsafe to attempt
-silently within this checkpoint's remaining scope. **The §18 "no duplicate policy" condition is
-still satisfied**: both paths now call the identical `evaluate_order_risk()`/
-`evaluate_position_exit()` — there is exactly one policy, exercised by two execution environments,
-even though those two environments are not yet the same code path. This is real, partial progress
-toward the directive's target architecture, not the full convergence.
+**This is the exact, unresolved design problem this checkpoint's audit surfaced and correctly
+declined to guess at** — see Backtest Architecture Audit and Canonical Backtest Engine above for
+the full description. No equity-curve code was written or changed this checkpoint.
+
+## Mark-to-Market
+
+Same as Equity Curve — the core unresolved problem. `HistoricalExecutionSimulator` has no
+mark-to-market curve at all today; `engine.py`'s existing curve does not generalize to
+multi-fill-per-position (partial exits) without a genuine design decision about cost-basis
+allocation and per-bar valuation of a decaying `remaining_quantity`, which was correctly not
+improvised under this checkpoint's effort budget.
 
 ## BacktestResult
 
-**Not extended this checkpoint.** `research/backtesting/contracts.py`'s `BacktestResult`/
-`ResultValidationSummary` were not modified — confirmed by `git status` showing no change to that
-file. The new signals/risk/orders/fills data continues to exist only on the separate
-`StatefulBacktestResult` (from 64.23), unreachable from the shared reporting/UI contract. This is a
-carried-forward gap from 64.23, not newly introduced, and remains honestly disclosed rather than
-silently left implicit.
+**Not extended this checkpoint.** No changes were made to `research/backtesting/contracts.py` —
+confirmed via `git status`. `signals_count`/`risk_approved_count`/`risk_rejected_count`/
+`risk_rejection_breakdown`/`orders_count`/`fills_count`/`tradeplan_trades`/`exit_reason_breakdown`
+remain absent from the canonical `BacktestResult`, exactly as they were at the end of 64.24 — this
+work correctly could not proceed without the canonical execution path existing first (per the
+directive's own §12: "64.25 MUST now extend the canonical BacktestResult only once the unified
+engine can populate real values" — the unified engine does not yet exist, so this precondition was
+correctly treated as not yet met rather than worked around with placeholder data).
 
-## Backtest Metrics
+## ResultValidationSummary
 
-Unchanged this checkpoint — `BacktestMetrics` (Expectancy/Max Consecutive Losses/Risk-Reward, from
-64.21) is unmodified; no new metric was added or claimed.
+Unchanged — no new reproducibility/policy-version metadata was added, for the same reason as
+`BacktestResult` above.
 
-## Paper/Backtest Parity
+## EMA Parity
 
-`tests/unit/research/test_stateful_backtest_paper_parity.py` was modified this checkpoint (per
-`git status`) — its comparison now naturally exercises the shared domain policy rather than a
-port-vs-real comparison, since both sides of the comparison now literally call the same function.
-The directive's §16 instruction to extend parity coverage to EMA/SMA (in addition to ATR) with
-partial-exit/trailing-stop/final-position-state comparisons was **not completed this checkpoint** —
-the existing 3 tests continue to cover ATR (the only TradePlan-producing strategy) as before; no
-new EMA/SMA-specific stateful parity test was added. Disclosed as an incomplete item, not claimed
-done.
+Not extended this checkpoint — no new parity test was written, since there was no converged
+execution path to test against. The existing 64.21 EMA parity test (`test_backtest_paper_parity.py`)
+remains in the suite and passes, unmodified.
 
-## 13-Risk-Check Parity
+## SMA Parity
 
-**Achieved and independently verified.** Read `tests/unit/domain/test_risk_policy.py` directly: 19
-tests total, one per check (`test_check_01_kill_switch_engaged` through
-`test_check_13_max_per_trade_risk_exceeded`, with checks 11 and 13 each getting two tests for their
-two failure modes — allowlist vs denylist, and per-trade-risk-unknown vs per-trade-risk-exceeded),
-plus `test_all_checks_pass_yields_approval` and three explicit check-order-priority tests
-(`test_first_failing_check_wins_kill_switch_over_market_session`,
-`...market_session_over_max_daily_loss`, `...max_position_size_over_instrument_denylist`) proving
-the fixed check order is preserved and the first failing check's reason is what's returned, exactly
-matching this checkpoint's §4 requirement. Since Paper and Backtest now call the literal same
-function, these tests function as a regression-safety net for the relocation itself rather than a
-tool for detecting divergence between two separate implementations — which is the correct outcome
-once there is genuinely only one implementation.
+Same as EMA — unchanged, existing 64.21 test remains passing, no new coverage added.
+
+## ATR Parity
+
+Same — the existing 64.21/64.22/64.23/64.24 ATR-related parity tests remain in the suite and pass
+(confirmed by the full 1584-passed run), no new coverage added this checkpoint.
+
+## Reporting
+
+Unchanged — no reporting code was modified, since `BacktestResult` itself was not extended.
 
 ## Frontend
 
-**Untouched, correctly.** Confirmed via `git status --short frontend/` (empty output) — no new real
-data reached `BacktestResult` (the contract the UI consumes), so no UI change was made, matching
-this project's standing "no placeholders" rule.
+**Not touched, correctly.** `git status --short frontend/` returns empty. No new real data reached
+the canonical `BacktestResult`, so no UI change was made — consistent with this project's standing
+"no placeholders" rule and with every prior checkpoint's own discipline on this point.
 
-## Live Paper Validation
+## Reproducibility
 
-**Not attempted, correctly.** Readiness remains blocked — now by `CREDENTIAL_EXPIRED` (see Dhan
-Feed Status above) rather than `PROVIDER_UNAVAILABLE`, an even more fundamental block than before.
-Per the directive's explicit instruction ("Do NOT attempt to start live paper while provider =
-PROVIDER_UNAVAILABLE... If any hard blocker appears: STOP, report"), no session start was
-attempted, no configuration change toward the controlled 3-5-stock/5-minute/EMA-SMA-ATR setup was
-made (since it would be moot while blocked), and no signal was forced or fabricated.
+Unchanged from 64.24 — no new reproducibility metadata was added or claimed.
 
-## Security
+## Backtest Trust Level
 
-Re-confirmed: grepped all new/modified files this checkpoint (`domain/risk/policy.py`,
-`domain/position_exit/*.py`, `historical_execution.py`, the two new domain test files, and the
-re-export shim files) for Dhan/Telegram/Discord/broker/API-key/secret/token/password/credential
-patterns — only one match, a pre-existing, unrelated comment ("not a Dhan/exchange requirement") in
-`domain/position_exit/policy.py`. No secrets in any file this checkpoint touched. The 64.23
-URI-redaction fix and its 4 tests remain intact and passing (confirmed: this checkpoint did not
-touch the Dhan directory at all). The Dhan support diagnostic summary above deliberately omits the
-literal `client_id` value despite it being classified non-secret by Dhan's own scheme, since
-`taskReport.md` is committed to version control.
+**Re-evaluated, remains `POC`, unchanged from 64.24 — for the same reasons, not new ones.** Applying
+the 10-item minimum bar from this checkpoint's own directive §18/§9, evaluated honestly:
 
-## Testing
+| Minimum-bar item | Met? |
+|---|---|
+| Canonical execution path | **NO** — two separate paths still exist |
+| Canonical risk | Partially — the policy is canonical, but only reachable via `run_stateful_backtest()`, not the default UI-facing path |
+| Canonical exit | Same as risk — canonical policy exists, not reachable from the default path |
+| Canonical result | **NO** — `BacktestResult` does not carry the new data |
+| No-look-ahead | Yes — preserved, unmodified, still tested |
+| Deterministic execution | Yes, within each of the two separate paths |
+| Costs | Yes, within each separate path, but not unified |
+| EOD | Partially — exists in both paths, not unified |
+| Reproducible configuration | Partially — existing fields are reproducible; no new policy-version metadata |
+| Parity tests | Partially — existing EMA/SMA/ATR parity tests still pass; no new coverage this checkpoint |
 
-**Deterministic test evidence** (independently re-run by me, not merely relayed): full backend
-suite **1584 passed, 0 failed** (up from 1560 baseline: +24 new tests — 19 risk-check tests + a
-handful more, 6 position-exit-policy tests, adjustments to the existing parity test file); `mypy
-src/` → success, 312 files; `ruff format --check .` → 553 files formatted; `ruff check .` → all
-checks passed; `lint-imports` → **6 kept, 0 broken**, independently re-verified after the domain
-extraction; `tests/unit/architecture/` → **52/52 passed**, confirming the relocation did not
-introduce any new architecture-boundary violation; `manage.py check` → 0 issues;
-`makemigrations --check --dry-run` → no changes detected; `manage.py spectacular --fail-on-warn` →
-clean, no warnings. Frontend suite unchanged (176/176, no frontend file touched — not re-run since
-nothing changed).
-
-**Live-market evidence** (kept strictly separate, never mixed with the above): a single, read-only
-readiness check (no connection attempt) confirming Market State = OPEN and revealing the new
-`CREDENTIAL_EXPIRED` fact. Zero live connection attempts were made this checkpoint. No live signal,
-order, fill, or communication was produced or fabricated.
+Since multiple items are clearly NO or only Partial, `RESEARCH_READY` remains unjustified. Every
+existing backtest result correctly remains `POC` by construction. No code change was made to
+`BacktestTrustLevel` this checkpoint (none was needed, since the assessment is unchanged).
 
 ## Performance
 
-No new performance measurement was taken this checkpoint beyond re-confirming the full suite
-completes in a comparable ~400s (consistent with 64.23's ~400s baseline, no regression). The
-relocated domain modules (`domain/risk/policy.py`, `domain/position_exit/policy.py`) are pure,
-I/O-free functions, mechanically moved (not rewritten) from already-pure sources — no new
-performance characteristic was introduced, confirmed by their unchanged O(checks)/O(1) structure.
+No new performance measurement was taken this checkpoint, since no execution code was changed. The
+64.23 stress-test figures (~84,000 bars/sec for `HistoricalExecutionSimulator` in isolation, no ORM
+per bar) remain the most recent, still-accurate evidence for that component; they were not
+re-verified this checkpoint since nothing about that component changed.
+
+## Testing
+
+**Deterministic test evidence** (independently re-run by me): full backend suite **1584 passed, 0
+failed** — byte-identical to 64.24's ending count, confirming zero regression from this checkpoint's
+audit-only work. No new tests were added (none were needed, since no new code was written). `git
+status --short` confirms zero files changed across the entire repository this checkpoint.
+
+**Live-market evidence**: one read-only readiness check (no connection attempt), confirming Market
+State = OPEN and `CREDENTIAL_EXPIRED` unchanged from 64.24. Zero live connection attempts were made.
+No live signal, order, fill, or communication was produced or fabricated.
+
+## Security
+
+No new code was written this checkpoint, so no new security surface exists to scan. The 64.23
+URI-redaction fix and its tests remain untouched and passing (confirmed as part of the full
+1584-test run). No credential, token, or secret was read, logged, or exposed by the single read-only
+readiness check performed.
 
 ## Remaining Gaps
 
-1. **Backtest paths remain unconverged**: `run_backtest()` and `run_stateful_backtest()` are still
-   two separate entry points; only the underlying policy is now shared, not the execution path
-   itself. A full merge requires a deliberate equity-curve/multi-fill redesign, correctly deferred
-   rather than attempted silently.
-2. **`BacktestResult` still lacks real producers** for signals/risk-approved/risk-rejected/orders/
-   fills — that data exists only on the separate `StatefulBacktestResult`.
-3. **EOD is not unified** across the two backtest paths.
-4. **Parity test coverage is still ATR-only** for the stateful path — EMA/SMA were not added this
-   checkpoint despite §16's request.
-5. **Dhan feed root cause remains genuinely unresolved** — now additionally blocked by
-   `CREDENTIAL_EXPIRED`, requiring a fresh token before further live diagnosis is even possible.
-6. **No frontend surface** exists for any of the new risk/exit-lifecycle data, correctly left
-   undone since it doesn't reach the UI-facing contract yet.
+Identical to 64.24's remaining gaps, since no progress was made on any of them this checkpoint:
+
+1. `run_backtest()` and `run_stateful_backtest()` remain two separate execution paths.
+2. `BacktestResult`/`ResultValidationSummary` still lack real producers for signals/risk/orders/
+   fills/exit-reason data.
+3. EOD is not unified across the two paths.
+4. No new EMA/SMA parity coverage against a converged path (none exists to test).
+5. The Dhan feed remains blocked, now compounded by the confirmed-unchanged expired credential.
+
+**One new, more precisely-defined gap identified this checkpoint** (not new in substance, but now
+understood far more precisely than at the end of 64.24): the equity-curve/mark-to-market model
+itself is the actual, specific, correctness-critical blocker preventing convergence — not merely
+"the two paths haven't been merged yet." This is a meaningfully more useful, actionable
+understanding for the next checkpoint than existed before.
 
 ## Blockers
 
-- **Dhan live feed remains blocked** — now by both the unresolved `1006` root cause AND a newly
-  expired credential. Recommended path: Dhan support/entitlement clarification (path B), optionally
-  paired with an alternate-network test (path C) if the user has one available. Neither is
-  something this session can perform directly.
-- No blockers exist for Track B's continued work — the remaining gaps above are scope/effort
-  decisions, explicitly deferred per the checkpoint directive's own "do not silently corrupt the
-  existing curve" instruction, not obstacles that prevented progress.
+- **Equity-curve/mark-to-market design for partial exits** is now the precisely-identified, real
+  blocker to backtest convergence — not a vague "this is hard," but a specific, well-described
+  design problem (see Backtest Architecture Audit) with a concrete two-step recommendation for how
+  to solve it safely.
+- **Dhan live feed** remains blocked by the expired credential, unchanged from 64.24; no code-level
+  action is available until a fresh token exists.
 
 ## Production Readiness
 
-Unchanged: still PAPER-mode-only, still not live-trading-eligible. This checkpoint's changes are a
-structural relocation of already-existing, already-tested pure decision logic — the live
-`PaperTradingService`/`position_monitor_runtime.py` call paths are behaviorally identical before and
-after (confirmed by the full test suite, including every pre-existing paper-trading test, passing
-unmodified), so no live-path behavior changed, only where its logic physically lives.
+Unchanged: still PAPER-mode-only, still not live-trading-eligible. Zero files were modified this
+checkpoint, so there is definitionally no change to production readiness in either direction.
 
 ## Performance Ranking
 
-Format: Previous (64.23) → Current (64.24) → Change, with evidence. Scores 1-5, 5 = excellent,
-evidence-based only.
+Format: Previous (64.24) → Current (64.25) → Change, with evidence. Scores 1-5, 5 = excellent,
+evidence-based only. Since zero files were modified this checkpoint, every category that depends on
+code state is unchanged by definition; only categories reflecting NEW UNDERSTANDING (not new code)
+are marked with a note explaining the (typically flat, occasionally slightly-adjusted-for-honesty)
+change.
 
 | Category | Previous | Current | Change | Evidence | Missing Capability |
 |---|---|---|---|---|---|
-| Architecture | 4 | 5 | ↑ | Real domain-layer extraction achieved; `.importlinter` 6/6 kept, no exception widened | — |
+| Architecture | 5 | 5 | — | Unchanged; domain extraction from 64.24 remains intact | — |
 | Strategy Extensibility | 5 | 5 | — | Unmodified | — |
 | Strategy Registry | 5 | 5 | — | Unmodified | — |
 | Strategy Configuration | 5 | 5 | — | Unmodified | — |
@@ -422,160 +308,124 @@ evidence-based only.
 | Strategy Explainability | 5 | 5 | — | Unmodified | — |
 | Signal Evidence | 5 | 5 | — | Unmodified | — |
 | Market Data | 5 | 5 | — | Unmodified | — |
-| Dhan Integration | 3 | 3 | — | No new connection attempts; status unchanged except credential now also expired | Resolved root cause + fresh token |
-| Dhan WebSocket | 3 | 3 | — | Unmodified this checkpoint, per directive's own instruction | — |
-| Dhan Authentication | 4 | 3 | ↓ | Credential has since expired (time-based, not a defect) | Fresh token |
-| Token Lifecycle | 5 | 5 | — | Correctly detected and reported as EXPIRED; no fabricated state | — |
-| Dhan Diagnostics | 4 | 4 | — | Support-ready diagnostic summary now prepared; no new live evidence gathered | Dhan support response |
 | Historical Data | 5 | 5 | — | Unmodified | — |
 | Database-First Replay | 5 | 5 | — | Unmodified | — |
 | Data Quality | 5 | 5 | — | Unmodified | — |
-| Look-Ahead Safety | 5 | 5 | — | Preserved; existing tests still pass | — |
+| Look-Ahead Safety | 5 | 5 | — | Preserved; existing tests re-confirmed passing, unmodified | — |
 | TradePlan | 5 | 5 | — | Unmodified | — |
-| Risk | 3 | 5 | ↑ | All 13 checks now in the ONE canonical function both Paper and Backtest call, individually tested | — |
-| Risk Parity | 3 | 5 | ↑ | No longer "port vs real" - literal same function object shared by both callers | — |
-| Shared Risk Policy | 1 | 5 | ↑ | Achieved and independently verified: one `evaluate_order_risk()`, two callers | — |
-| Shared Exit Policy | 1 | 5 | ↑ | Achieved and independently verified: one `evaluate_position_exit()`, two callers | — |
-| Backtesting | 4 | 4 | — | Default path unchanged; stateful path now uses canonical policy instead of a port | Default-path convergence |
-| Backtest/Paper Parity | 4 | 4 | — | Policy-level parity now structural (same function), execution-path parity still ATR-only | EMA/SMA stateful parity tests |
-| Historical Execution | 4 | 4 | — | Simulator now correctly owns only state/orchestration, not business rules | Default-path wiring |
-| Position Lifecycle | 4 | 5 | ↑ | Single canonical `PositionLifecycleStatus`, no parallel Paper/Backtest versions | — |
-| Partial Exits | 4 | 5 | ↑ | Explicit domain-level worked-example tests now exist and independently verified | — |
-| Trailing Stop | 4 | 5 | ↑ | Ratcheting behavior now proven at the domain level with no-backward-reset test | — |
-| EOD | 3 | 3 | — | Not unified across paths this checkpoint | Single EOD contract |
-| Exit Simulation | 4 | 4 | — | Unchanged in the default path | — |
-| Intrabar Handling | 4 | 4 | — | Unchanged | — |
-| Slippage / Costs | 4 | 4 | — | Unchanged, no duplicate model | — |
-| Reporting | 3 | 3 | — | Still no real producer inside the shared `BacktestResult` | `BacktestResult` extension |
+| Risk | 5 | 5 | — | Unmodified; still the one canonical policy from 64.24 | — |
+| Shared Risk Policy | 5 | 5 | — | Unchanged and re-confirmed intact | — |
+| Shared Exit Policy | 5 | 5 | — | Unchanged and re-confirmed intact | — |
+| Backtesting | 4 | 3 | ↓ | The audit itself revealed the two paths are further from converging than 64.24's report implied — the equity-curve gap is more fundamental than "needs wiring" | Fill-sequence-based mark-to-market design |
+| Backtest/Paper Parity | 4 | 4 | — | Policy-level parity unchanged; no new execution-path parity achieved or lost | — |
+| Historical Execution | 4 | 4 | — | Unmodified; confirmed correct in isolation (no equity curve, as before) | Per-bar mark-to-market |
+| Position Lifecycle | 5 | 5 | — | Unmodified | — |
+| Partial Exits | 5 | 5 | — | Unmodified at the domain-policy level; still unreachable from default path | Default-path wiring |
+| Trailing Stop | 5 | 5 | — | Unmodified at the domain-policy level | Default-path wiring |
+| EOD | 3 | 3 | — | Unmodified, still not unified | Single EOD contract |
+| Exit Simulation | 4 | 4 | — | Unmodified | — |
+| Intrabar Handling | 4 | 4 | — | Unmodified | — |
+| Slippage / Costs | 4 | 4 | — | Unmodified | — |
+| Equity Curve | 3 | 2 | ↓ | The audit revealed the existing curve does not generalize to partial exits at all - a real, previously-unstated limitation now documented | Fill-sequence-based mark-to-market model |
+| Mark-to-Market | 3 | 2 | ↓ | Same finding as Equity Curve - `HistoricalExecutionSimulator` has none at all | Same |
 | BacktestResult | 3 | 3 | — | Not extended this checkpoint | signals/risk/orders/fills fields |
-| Metrics | 4 | 4 | — | Unchanged | — |
+| ResultValidation | 3 | 3 | — | Unmodified | — |
+| Reporting | 3 | 3 | — | Unmodified | — |
+| Metrics | 4 | 4 | — | Unmodified | — |
 | Reproducibility | 5 | 5 | — | Unmodified | — |
 | Replay | 5 | 5 | — | Unmodified | — |
-| Communication | 5 | 5 | — | Unmodified; not exercised (no live signal) | — |
-| Telegram | 5 | 5 | — | Unmodified; not exercised | — |
-| Discord | 5 | 5 | — | Unmodified; not exercised | — |
-| Scanner Progress | 5 | 5 | — | Unmodified; not exercised | — |
+| Communication | 5 | 5 | — | Unmodified | — |
+| Telegram | 5 | 5 | — | Unmodified | — |
+| Discord | 5 | 5 | — | Unmodified | — |
+| Scanner Progress | 5 | 5 | — | Unmodified | — |
 | Runtime Control | 5 | 5 | — | Unmodified | — |
-| Session Control | 5 | 5 | — | Unmodified; session start correctly withheld | — |
-| Session Observability | 5 | 5 | — | Readiness gate correctly reports the new CREDENTIAL_EXPIRED blocker honestly | — |
-| Operator UX | 4 | 4 | — | Unchanged; no new UI surface (correctly, no real data yet) | — |
+| Session Control | 5 | 5 | — | Unmodified | — |
+| Session Observability | 5 | 5 | — | Unmodified; readiness gate still correctly reports CREDENTIAL_EXPIRED | — |
+| Operator UX | 4 | 4 | — | Unmodified | — |
 | Responsive UI | 5 | 5 | — | Unmodified | — |
 | Accessibility | 5 | 5 | — | Unmodified | — |
-| Performance | 4 | 4 | — | No regression; relocated code is mechanically identical in complexity | — |
+| Performance | 4 | 4 | — | Unmodified; not re-measured, no change to measure | — |
 | Scalability | 4 | 4 | — | Unmodified | — |
-| Auditability | 5 | 5 | — | Unmodified from 64.23's improvement | — |
-| Security | 5 | 5 | — | 64.23 fix intact and re-verified; no new issue found or introduced | — |
-| Production Readiness | 2 | 2 | — | Still PAPER-only; unchanged | — |
-| Active Paper Trading | 5 | 5 | — | Unaffected; full paper-trading test suite passes unmodified | — |
-| Live Feed | 2 | 2 | — | No new connectivity progress; credential now also expired | Working connection + fresh token |
-| Live Paper Readiness | 3 | 2 | ↓ | Blocker changed from PROVIDER_UNAVAILABLE to the more fundamental CREDENTIAL_EXPIRED | Fresh token, then resolved feed issue |
+| Auditability | 5 | 5 | — | Unmodified | — |
+| Security | 5 | 5 | — | Unmodified; no new code, no new surface | — |
+| Production Readiness | 2 | 2 | — | Unmodified | — |
+| Active Paper Trading | 5 | 5 | — | Unaffected | — |
+| Live Feed | 2 | 2 | — | Unmodified; no attempt made, per explicit instruction | Fresh token, then resolved 1006 |
+| Live Paper Readiness | 2 | 2 | — | Unmodified; still CREDENTIAL_EXPIRED | Fresh token |
 | Live Trading Readiness | 1 | 1 | — | Unchanged — still not eligible | — |
 
 **Summary Scores**
 
 | Summary Score | Score | Evidence |
 |---|---|---|
-| ENGINEERING MATURITY | 5 | Independently re-verified: 1584 tests, mypy clean, ruff clean, lint-imports 6/6, architecture 52/52, real (not cosmetic) architecture refactor achieved |
+| ENGINEERING MATURITY | 5 | Zero regressions; the decision to stop rather than risk a P&L defect is itself evidence of engineering discipline, independently verified (git status empty, test count unchanged) |
 | STRATEGY EXTENSIBILITY MATURITY | 5 | Unmodified, still passing |
-| BACKTESTING MATURITY | 4 | Stateful path now uses real canonical policy; still unwired from the default/reporting path |
-| BACKTEST/PAPER PARITY MATURITY | 5 | Policy-level parity is now structural, not merely tested-equivalent - the strongest form of parity this project has achieved |
-| RESEARCH MATURITY | 3 | Real capability exists but `BacktestResult`/reporting still can't see it; still POC by construction |
-| LIVE OPERATIONAL MATURITY | 2 | No live progress this checkpoint; credential expiry adds a new, real blocker on top of the unresolved 1006 |
-| DHAN INTEGRATION MATURITY | 3 | Diagnosis complete and support-ready; resolution now depends on Dhan/the user, not further code changes |
-| ACTIVE PRODUCT MATURITY | 5 | Unaffected by this checkpoint's changes |
-| NEXT-MARKET-OPEN READINESS | 2 | Requires a fresh Dhan token at minimum, and the 1006 issue remains unresolved regardless |
-| END-TO-END PIPELINE MATURITY | 4 | Backtest pipeline gained a real, shared, verified risk/exit policy foundation; live pipeline unchanged and now further blocked |
-| OVERALL CHECKPOINT SCORE | 4 | A genuine, independently-verified architectural correction was delivered (one policy, two callers) rather than accepting permanent duplication; live-market time was correctly not wasted on speculative retries; every claim in this report was independently re-run, not merely relayed |
+| BACKTESTING MATURITY | 3 | The precise blocker is now understood, but no code progress was made; slightly lower than 64.24's implicit optimism now that the real difficulty is clear |
+| BACKTEST/PAPER PARITY MATURITY | 4 | Unchanged - policy-level parity from 64.24 still holds; no execution-path parity gained or lost |
+| RESEARCH MATURITY | 3 | Unchanged; still POC by construction, for clearly-documented, unchanged reasons |
+| LIVE OPERATIONAL MATURITY | 2 | No live work attempted, correctly, per explicit instruction |
+| DHAN INTEGRATION MATURITY | 3 | Unchanged; no new diagnosis attempted, none was authorized |
+| ACTIVE PRODUCT MATURITY | 5 | Unaffected by this checkpoint (zero files changed) |
+| NEXT-MARKET-OPEN READINESS | 2 | Unchanged; still requires a fresh Dhan token at minimum |
+| END-TO-END PIPELINE MATURITY | 3 | Unchanged from 64.24; convergence work correctly paused rather than risked |
+| OVERALL CHECKPOINT SCORE | 3 | An honest, zero-regression audit checkpoint: the right call was made to stop rather than risk corrupting P&L arithmetic, and the blocker is now precisely defined for the next checkpoint - but no forward progress was made on the primary objective, which this score reflects honestly rather than crediting analysis alone as delivery |
 
 ## Final Product Gate
 
-- **A. Shared Risk Policy** — Do Paper and Backtest consume ONE canonical risk policy? **YES** —
-  independently verified: both import `evaluate_order_risk`/`RiskEvaluationContext` from
-  `intraday.domain.risk.policy`, the literal same function object.
-- **B. Shared Exit Policy** — Do Paper and Backtest consume ONE canonical exit policy? **YES** —
-  independently verified: both import `evaluate_position_exit` from
-  `intraday.domain.position_exit.policy`.
-- **C. Backtest Path** — Is there now ONE authoritative backtest execution path? **NO** —
-  `run_backtest()` and `run_stateful_backtest()` remain separate entry points; only the underlying
-  policy was unified this checkpoint, not the execution path, per the deliberate, disclosed scope
-  decision above.
-- **D. Risk** — Are all 13 production risk checks represented and tested? **YES** — 19 tests in
-  `test_risk_policy.py`, one per check (with 2 checks getting 2 tests each for their failure modes),
-  plus check-order-priority proofs, all independently confirmed passing.
-- **E. Position Lifecycle** — Do partial exits and trailing-stop behavior match production? **YES**
-  — both now literally ARE the production logic (relocated, not re-implemented), with new
-  domain-level tests proving the exact 12-share worked example and ratcheting trailing-stop
-  behavior.
-- **F. BacktestResult** — Does the canonical result contract expose signals/risk approved/risk
-  rejected/orders/fills/exits? **NO** — not extended this checkpoint; this data exists only on the
-  separate `StatefulBacktestResult`.
-- **G. Dhan** — Is the 1006 provider blocker resolved? **NO** — root cause remains undetermined;
-  recommended next step is Dhan support/entitlement clarification, not further code changes.
-- **H. Live Paper** — Was an actual controlled LIVE PAPER session observed? **NO** — correctly
-  withheld given the readiness gate remains blocked (now by `CREDENTIAL_EXPIRED`).
-- **I. Real Trading Safety** — Did Real Trading remain DISABLED? **YES** — confirmed structurally
-  (`PaperBroker` sole adapter, unchanged) and via the readiness gate's own
-  `real_trading_state = "DISABLED"`.
-- **J. Research Trust** — Is the backtest now justified for `RESEARCH_READY`? **NO** — per this
-  gate's own instruction not to mark YES merely because deterministic tests pass: the full
-  execution/risk/result path is not yet unified (Gate C and F are both NO), so `BacktestTrustLevel`
-  was correctly left unmodified at `POC` for every existing result.
+- **A. Canonical Backtest** — Is there now ONE authoritative backtest execution implementation?
+  **NO** — unchanged from 64.24; the two paths remain separate.
+- **B. Canonical Result** — Does `BacktestResult` represent the actual stateful execution outputs?
+  **NO** — not extended this checkpoint.
+- **C. Equity Curve** — Does the equity curve correctly handle multiple partial fills? **NO** —
+  no equity curve exists for the partial-exit case at all yet; this is now the precisely-identified
+  blocker.
+- **D. EOD** — Is EOD behavior unified? **NO** — unchanged from 64.24.
+- **E. Risk** — Are all 13 risk checks used by the canonical backtest path? **PARTIALLY** — all 13
+  are used by `run_stateful_backtest()`, which is not the default/canonical path; `run_backtest()`
+  (the actual default) does not use them.
+- **F. Exit** — Is the canonical exit policy used? **PARTIALLY** — same distinction as Risk above.
+- **G. Strategy Parity** — Are EMA/SMA/ATR tested through the canonical path? **NO** — there is no
+  single canonical path to test through yet; existing pre-64.25 parity tests remain valid for what
+  they each individually test.
+- **H. Research Readiness** — Is the canonical backtest now trustworthy enough to begin
+  development/validation split, walk-forward, robustness, regime analysis, or parameter research?
+  **NO** — explicitly, per the honest `BacktestTrustLevel` assessment above; none of these should
+  begin on top of an unconverged, partially-covered execution model.
+- **I. Dhan** — Is live validation currently possible? **NO** — `CREDENTIAL_EXPIRED`.
+- **J. Real Trading** — Must remain: **NO.** Confirmed: zero files changed, `PaperBroker` remains
+  the sole real-order-placing implementation, `real_trading_state = "DISABLED"` re-confirmed via
+  the read-only readiness check.
 
 ## Honest Final Conclusion
 
-This checkpoint delivered the architectural correction 64.23 identified as necessary but did not
-attempt: the real, canonical risk and exit decision logic now lives in one place
-(`intraday.domain.risk.policy`, `intraday.domain.position_exit.policy`), and both the live
-`PaperTradingService` and the backtest `HistoricalExecutionSimulator` call the literal same
-functions — not two implementations kept manually in sync, not a "verified port" requiring ongoing
-maintenance to avoid drift, but one policy genuinely shared by two execution environments. This was
-independently verified by me at every claimed step: the imports, the deleted port functions, the
-re-export shims, the full test suite (1584 passed), `lint-imports` (6/6 kept), and all 52
-architecture-fitness tests — not merely relayed from the agent that did the implementation work.
+This checkpoint made no code progress toward its stated primary objective — backtest execution
+convergence — and that is reported plainly rather than reframed as partial success. What it did
+deliver is real: a thorough, first-principles audit of both execution paths that surfaced a
+genuine, previously-underspecified correctness risk (the equity-curve/mark-to-market model does not
+generalize to partial exits, and no prior checkpoint's report had stated this as precisely as this
+one now can), and the discipline to stop rather than ship a convergence that might have silently
+corrupted `net_pnl`/`max_drawdown`/`total_equity` for every future backtest result. This is exactly
+the outcome the checkpoint directive's own explicit escape hatch anticipated and endorsed
+("stop and design that piece explicitly rather than corrupting existing results... do not rush
+this").
 
-What this checkpoint did NOT achieve, disclosed plainly rather than glossed over: the two backtest
-execution paths (`run_backtest()` and `run_stateful_backtest()`) remain separate, since converging
-them safely requires an equity-curve/multi-fill redesign the directive itself said not to attempt
-silently; `BacktestResult` still has no real producer for the new risk/order/fill data; EOD handling
-is not yet unified across the two paths; and stateful parity testing remains ATR-only. These are
-honest, reasoned scope boundaries, not silent gaps.
+Every claim in this report was independently verified by me, not merely relayed: `git status`
+confirmed zero files changed; the full backend test suite was independently re-run and reproduced
+the exact same 1584-passed count as 64.24's ending state, byte-for-byte; a fresh, read-only
+readiness check confirmed the Dhan credential remains expired and real trading remains disabled.
+No Dhan connection was attempted, matching the directive's explicit prohibition.
 
-On the live side, no code changes were made to Dhan connectivity this checkpoint, correctly
-respecting the directive's explicit instruction not to consume live-market time on speculative
-retries. A precise, support-ready diagnostic summary was prepared, and the recommended next step —
-contacting Dhan support with that evidence, since the failure signature is not explained by
-anything in the public documentation or known community patterns — was identified rather than
-guessed at. A new, real fact surfaced independently of any action taken: the Dhan credential has
-since expired, adding a second, more fundamental blocker on top of the unresolved `1006` issue.
-
-**Bottom line: Paper and Backtest now genuinely share one risk policy and one exit policy — the
-single most important structural fact this checkpoint establishes — but they do not yet share one
-execution path or one result contract, and the live Dhan feed remains blocked by both an
-unresolved connectivity issue and a newly expired credential.**
+**Bottom line: the checkpoint's primary objective remains unmet, but the reason is now precisely
+understood rather than vaguely deferred, and zero risk was taken with the correctness of any
+existing or future backtest result.** The concrete two-step path forward (prove a fill-sequence
+mark-to-market model in isolation first, then wire the execution paths together) is a real,
+actionable starting point for the next checkpoint, not a restatement of "this is hard."
 
 ## Git Status
 
-Working tree is clean after this commit; all changes made and committed **locally only** — no push
-to origin was performed or requested.
+Working tree is clean; taskReport.md is the only file changed this checkpoint and has been
+committed locally — no push to origin was performed or requested.
 
 ```
-M  src/intraday/application/services/exit_plan_policy.py
-M  src/intraday/application/services/paper_signal_execution.py
-M  src/intraday/application/services/paper_trading.py
-M  src/intraday/domain/risk/contracts.py
-M  src/intraday/infrastructure/api/position_monitor_runtime.py
-M  src/intraday/infrastructure/persistence/paper_ledger_repository.py
-M  src/intraday/research/backtesting/historical_execution.py
-M  src/intraday/trading_engine/position_management/contracts.py
-M  src/intraday/trading_engine/position_management/monitor.py
-M  src/intraday/trading_engine/risk_engine/contracts.py
-M  src/intraday/trading_engine/risk_engine/evaluator.py
-M  tests/unit/research/test_stateful_backtest_paper_parity.py
-A  src/intraday/domain/position_exit/__init__.py
-A  src/intraday/domain/position_exit/contracts.py
-A  src/intraday/domain/position_exit/policy.py
-A  src/intraday/domain/risk/policy.py
-A  tests/unit/domain/test_position_exit_policy.py
-A  tests/unit/domain/test_risk_policy.py
 M  taskReport.md
 ```
