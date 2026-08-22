@@ -23,6 +23,7 @@ from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Protocol
 
+from intraday.domain.shared_kernel.slippage import apply_flat_percentage_slippage
 from intraday.research.backtesting import StrategyDirection
 
 # Checkpoint 29 Part 7: the ONE place rounding policy is defined. Every
@@ -163,9 +164,10 @@ class FlatPercentageCostModel:
     def slippage_adjusted_price(
         self, direction: StrategyDirection, price: Decimal, *, entering: bool
     ) -> Decimal:
-        factor = self.slippage_percent / Decimal("100")
         is_buy = (direction == StrategyDirection.BULLISH) == entering
-        return price * (1 + factor) if is_buy else price * (1 - factor)
+        return apply_flat_percentage_slippage(
+            is_buy=is_buy, price=price, slippage_percent=self.slippage_percent
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -259,9 +261,10 @@ class IndianCashEquityIntradayCostModel:
     ) -> Decimal:
         """Slippage remains a SEPARATE, explicit model (Part 8) - never
         silently folded into the verified statutory schedule above."""
-        factor = self.slippage_percent / Decimal("100")
         is_buy = (direction == StrategyDirection.BULLISH) == entering
-        return price * (1 + factor) if is_buy else price * (1 - factor)
+        return apply_flat_percentage_slippage(
+            is_buy=is_buy, price=price, slippage_percent=self.slippage_percent
+        )
 
 
 def verified_nse_cash_equity_intraday_cost_model(

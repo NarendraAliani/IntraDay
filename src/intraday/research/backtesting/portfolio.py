@@ -25,11 +25,12 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 
 from intraday.domain.market_data.contracts import Bar
+from intraday.domain.risk.contracts import RiskDecisionOutcome, RiskLimits
 from intraday.domain.shared_kernel.contracts import InstrumentId, Timeframe
 from intraday.research.backtesting import (
     Strategy,
@@ -70,6 +71,17 @@ from intraday.research.backtesting.position_lifecycle import (
     hold_backtest_position,
     open_backtest_position,
 )
+from intraday.research.backtesting.risk_gate_adapter import (
+    BacktestRiskGateInputs,
+    evaluate_backtest_entry_risk,
+)
+
+# Checkpoint 64.34: same honest "no configured cap" sentinel `engine.py`
+# uses for `max_total_exposure` (Checkpoint 64.30) - `RiskEvaluationContext`
+# requires A value, and neither engine tracks a configured total-exposure
+# limit today, so `Decimal("Infinity")` means "never reject on this
+# dimension," not a fabricated number.
+_UNCONSTRAINED_TOTAL_EXPOSURE = Decimal("Infinity")
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,6 +110,17 @@ class PortfolioBacktestConfiguration:
     max_concurrent_positions: int
     brokerage_percent: Decimal = Decimal("0")
     slippage_percent: Decimal = Decimal("0")
+    risk_limits: RiskLimits | None = None
+    """Checkpoint 64.34: OPT-IN canonical risk gate, mirroring
+    `BacktestConfiguration.risk_limits` (Checkpoint 64.30) exactly - same
+    type, same default. `None` (the default, and every pre-64.34 caller's
+    configuration) means the risk gate is never invoked and this
+    checkpoint's entire block is skipped: numerically byte-identical to
+    64.33 behavior. When set, the SAME canonical `evaluate_order_risk()`
+    (via `risk_gate_adapter.evaluate_backtest_entry_risk()`) that
+    `run_backtest()` already uses evaluates every accepted-so-far entry
+    candidate, for every instrument - never a portfolio-specific risk
+    policy or a second `RiskLimits`-shaped type."""
 
     def __post_init__(self) -> None:
         if not self.assignments:
@@ -139,11 +162,30 @@ class PortfolioBacktestResult:
     per_instrument_trade_counts: dict[str, int]
     rejected_entries: int
     """Entries rejected by either the max_concurrent_positions cap or
-    insufficient available cash (Part 8's own invariant)."""
+    insufficient available cash (Part 8's own invariant) - UNCHANGED by
+    Checkpoint 64.34: a canonical-risk-gate rejection is counted
+    separately below, never folded into this pre-existing counter, so
+    every pre-64.34 caller reading this field sees byte-identical
+    numbers when `risk_limits` stays `None`."""
     data_quality: DataQualityDisclosure
     cost_model_identity: CostModelIdentity
     generated_at: datetime
     trust_level: BacktestTrustLevel = BacktestTrustLevel.POC
+    risk_rejected_entries: int = 0
+    """Checkpoint 64.34: entry candidates that passed BOTH the
+    `max_concurrent_positions` cap AND the capital/notional check above
+    (i.e. would otherwise have opened a position) but were rejected by
+    the canonical `evaluate_order_risk()` because `PortfolioBacktest
+    Configuration.risk_limits` was configured. Always `0` when
+    `risk_limits` is `None` - mirrors `BacktestResult.risk_rejected_
+    trades` (Checkpoint 64.30) exactly, just named for portfolio
+    "entries" rather than single-instrument "trades"."""
+    risk_rejection_reason_breakdown: dict[str, int] = field(default_factory=dict)
+    """Checkpoint 64.34: count of risk-rejected entries per
+    `RiskRejectionReason.value`, across every instrument - counted from
+    the real `OrderRiskDecision`, never estimated. Empty when
+    `risk_limits` is `None`. Mirrors `BacktestResult.risk_rejection_
+    reason_breakdown` (Checkpoint 64.30)."""
 
 
 def _deterministic_portfolio_id(
@@ -243,6 +285,21 @@ def run_portfolio_backtest(
     trades: list[SimulatedTrade] = []
     trade_counter = 0
     rejected_entries = 0
+    # Checkpoint 64.34: distinct from `rejected_entries` above (unrelated
+    # pre-existing cause: max_concurrent_positions cap or insufficient
+    # cash). Always stay 0/empty when `config.risk_limits is None` - the
+    # entry branch below never touches these in that case, mirroring
+    # `engine.py`'s `risk_rejected_trades`/`risk_rejection_reason_
+    # breakdown` (Checkpoint 64.30) exactly.
+    risk_rejected_entries = 0
+    risk_rejection_reason_breakdown: dict[str, int] = {}
+    # Checkpoint 64.34: running total of `SimulatedTrade.net_pnl` for
+    # every trade CLOSED so far across ALL instruments - the portfolio-
+    # level equivalent of `engine.py`'s `running_equity -
+    # initial_capital`. Updated only in `_close()`, alongside
+    # `available_cash`, so it is always the honest sum of realized P&L at
+    # the moment any entry decision is evaluated.
+    cumulative_realized_net_pnl = Decimal("0")
 
     def _close(
         instrument_id: InstrumentId,
@@ -252,7 +309,7 @@ def run_portfolio_backtest(
         exit_price: Decimal,
         reason: str,
     ) -> None:
-        nonlocal available_cash, trade_counter
+        nonlocal available_cash, trade_counter, cumulative_realized_net_pnl
         position = open_positions[instrument_id]
         quantity = position.quantity
         filled_exit = costs.slippage_adjusted_price(position.direction, exit_price, entering=False)
@@ -322,6 +379,7 @@ def run_portfolio_backtest(
         # apply realized net P&L - cash was reduced by entry_notional at
         # entry, so this restores it plus/minus the trade's own outcome.
         available_cash += entry_notional + net_pnl
+        cumulative_realized_net_pnl += net_pnl
         del open_positions[instrument_id]
 
     for i in range(n_bars):
@@ -378,7 +436,6 @@ def run_portfolio_backtest(
                     if quantity <= 0 or notional > available_cash:
                         rejected_entries += 1
                         continue
-                    available_cash -= notional
                     # Checkpoint 64.33: the REAL canonical `OrderIntent`
                     # (the SAME `order_intent_adapter.
                     # build_backtest_entry_order_intent()` used by
@@ -386,7 +443,12 @@ def run_portfolio_backtest(
                     # "portfolio_order_intent" or parallel construction),
                     # built once here per accepted entry and reused
                     # verbatim below on both `OpenPosition` and (via
-                    # `_close`) `SimulatedTrade`.
+                    # `_close`) `SimulatedTrade`. Checkpoint 64.34: also
+                    # the SAME `OrderIntent` object fed to the risk gate
+                    # below when `config.risk_limits` is configured -
+                    # `entry_order` is constructed exactly once here,
+                    # before the cash is committed, so a risk rejection
+                    # never needs to "undo" a capital deduction.
                     entry_order = build_backtest_entry_order_intent(
                         strategy_id=assignment.strategy_id,
                         instrument_id=instrument_id,
@@ -395,6 +457,75 @@ def run_portfolio_backtest(
                         entry_timestamp=entry_bar.timestamp,
                         entry_index=i + 1,
                     )
+                    # Checkpoint 64.34: OPT-IN canonical risk gate,
+                    # evaluated AFTER the pre-existing portfolio-level
+                    # constraints above (max_concurrent_positions cap,
+                    # capital/notional check) have already passed - those
+                    # remain portfolio execution constraints, not part of
+                    # the canonical risk policy, and their ordering/
+                    # semantics are entirely unchanged from 64.33. When
+                    # `config.risk_limits is None` (the default, and every
+                    # pre-64.34 caller's configuration), this whole block
+                    # is skipped: `entry_risk_approved` stays `True` and
+                    # nothing below differs from 64.33 - same
+                    # `OpenPosition`, same cash deduction, same branch
+                    # taken. Mirrors `engine.py`'s 64.30 wiring exactly,
+                    # with two portfolio-specific, honestly-computed
+                    # inputs `engine.py`'s single-position engine could
+                    # only ever hardcode to 0: `current_open_positions_
+                    # count` (this instrument's own entry does not yet
+                    # count) and `current_total_exposure` (the real sum of
+                    # every OTHER instrument's currently open notional).
+                    entry_risk_approved = True
+                    if config.risk_limits is not None:
+                        current_total_exposure = sum(
+                            (p.entry_price * p.quantity for p in open_positions.values()),
+                            start=Decimal("0"),
+                        )
+                        risk_inputs = BacktestRiskGateInputs(
+                            risk_limits=config.risk_limits,
+                            risk_configuration_version=assignment.configuration_version,
+                            now=entry_bar.timestamp,
+                            # Cost-inclusive, matching `SimulatedTrade.
+                            # net_pnl`'s own convention - see
+                            # `risk_gate_adapter.py`'s header docstring.
+                            # Portfolio-level: summed across ALL
+                            # instruments' closed trades, the honest
+                            # multi-instrument equivalent of `engine.py`'s
+                            # single-instrument `running_equity -
+                            # initial_capital`.
+                            cumulative_closed_trade_net_pnl=cumulative_realized_net_pnl,
+                            # Honest and genuinely multi-instrument-aware:
+                            # how many OTHER instruments already have an
+                            # open position right now (this instrument's
+                            # own entry, evaluated here, is not yet
+                            # counted - it is not open until approved).
+                            current_open_positions_count=len(open_positions),
+                            current_position_size_for_instrument=Decimal("0"),
+                            estimated_order_notional=notional,
+                            max_concurrent_positions=config.max_concurrent_positions,
+                            max_total_exposure=_UNCONSTRAINED_TOTAL_EXPOSURE,
+                            current_total_exposure=current_total_exposure,
+                        )
+                        risk_decision = evaluate_backtest_entry_risk(entry_order, risk_inputs)
+                        if risk_decision.outcome is RiskDecisionOutcome.REJECTED:
+                            entry_risk_approved = False
+                            risk_rejected_entries += 1
+                            reason = (
+                                risk_decision.reason_code.value
+                                if risk_decision.reason_code is not None
+                                else "UNKNOWN"
+                            )
+                            risk_rejection_reason_breakdown[reason] = (
+                                risk_rejection_reason_breakdown.get(reason, 0) + 1
+                            )
+                    if not entry_risk_approved:
+                        continue
+                    # Capital is committed only for an entry that has
+                    # passed BOTH the pre-existing portfolio constraints
+                    # AND (when configured) the canonical risk gate -
+                    # never deducted for a risk-rejected candidate.
+                    available_cash -= notional
                     open_positions[instrument_id] = OpenPosition(
                         instrument_id=instrument_id,
                         direction=signal.direction,
@@ -483,6 +614,8 @@ def run_portfolio_backtest(
         ),
         generated_at=generated_at,
         trust_level=BacktestTrustLevel.POC,
+        risk_rejected_entries=risk_rejected_entries,
+        risk_rejection_reason_breakdown=risk_rejection_reason_breakdown,
     )
 
 

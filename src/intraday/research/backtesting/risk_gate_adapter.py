@@ -46,6 +46,23 @@
 # on this point; this adapter does not resolve that conflict, it only
 # reports honestly which side of it the backtest engine's own existing
 # figure happens to fall on.
+#
+# CHECKPOINT 64.37 ADDENDUM (no code below this comment changed): the
+# above finding — `cumulative_closed_trade_net_pnl` is ALREADY the
+# cost-inclusive figure — means this adapter's existing
+# `current_daily_realized_pnl=inputs.cumulative_closed_trade_net_pnl`
+# mapping (see `build_backtest_risk_context` below) IS, by construction,
+# the same `realized_net_pnl` semantic quantity 64.37's
+# `domain.trade.net_pnl.compute_realized_net_pnl()` defines
+# (`gross_pnl - transaction_cost`, since `SimulatedTrade.net_pnl` is
+# already exactly `gross_pnl - trade_costs` — `engine.py::_close_trade`).
+# Paper Trading's producer (`application/services/paper_trading.py`'s
+# order-submission method) was changed this checkpoint to feed the SAME
+# semantic quantity (`Position.realized_net_pnl`, populated by `PaperBroker`)
+# instead of the cost-exclusive `Position.realized_pnl` it used before -
+# closing the 64.36-proven divergence. No field in THIS file changed
+# meaning or formula; only Paper Trading's producer was corrected to
+# match what Backtest already, honestly computed.
 from __future__ import annotations
 
 from dataclasses import dataclass

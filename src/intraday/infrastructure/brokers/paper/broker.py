@@ -35,6 +35,7 @@ from intraday.domain.broker.contracts import (
     BrokerOrderStatusReport,
     Funds,
 )
+from intraday.domain.execution.contracts import Fill, FillSource
 from intraday.domain.order.contracts import OrderIntent, OrderStatus, OrderType
 from intraday.domain.order.events import OrderEvent, OrderEventType
 from intraday.domain.order.idempotency import (
@@ -43,6 +44,7 @@ from intraday.domain.order.idempotency import (
 )
 from intraday.domain.order.state_machine import validate_transition
 from intraday.domain.position.contracts import Position, PositionStatus
+from intraday.domain.position.mark_to_market import mark_position, position_market_value
 from intraday.domain.shared_kernel.contracts import (
     InstrumentId,
     OrderId,
@@ -50,7 +52,9 @@ from intraday.domain.shared_kernel.contracts import (
     Side,
     TradeId,
 )
+from intraday.domain.shared_kernel.slippage import apply_flat_percentage_slippage
 from intraday.domain.trade.contracts import Trade
+from intraday.domain.trade.net_pnl import compute_realized_net_pnl
 
 
 class UnknownOrderError(KeyError):
@@ -97,8 +101,12 @@ class PaperBroker:
       - LIMIT orders remain PENDING until a subsequent `record_price()`
         call observes a price at or better than the limit price (BUY:
         price <= limit; SELL: price >= limit), then fill at the LIMIT
-        price (never a better price is fabricated, and never worse -
-        matches standard limit-order semantics).
+        price adjusted for slippage, CLAMPED so the fill is never worse
+        than the stated limit price (Checkpoint 64.40 Finding F2 fix:
+        `_attempt_fill`'s `limit_boundary` parameter - BUY clamps via
+        `min(slipped_price, limit_price)`, SELL via
+        `max(slipped_price, limit_price)` - matches standard
+        limit-order semantics even under nonzero `slippage_percent`).
       - STOP_LOSS / STOP_LOSS_MARKET orders remain PENDING until a
         subsequent `record_price()` call crosses the trigger price
         (BUY: price >= trigger; SELL: price <= trigger); once
@@ -110,14 +118,31 @@ class PaperBroker:
       - Partial fills: a configurable `partial_fill_ratio` (default
         `Decimal("1")`, i.e. always a full fill) lets a caller
         deliberately model partial fills for testing/realism without
-        this broker silently always filling 100%.
+        this broker silently always filling 100%. For a MARKET order
+        left PARTIALLY_FILLED, `partial_fill_ratio` is applied ONCE, at
+        initial submission - the remaining quantity then completes IN
+        FULL on the next valid `record_price()` observation
+        (Checkpoint 64.40 Finding F1 fix: `_maybe_fill_resting_order`'s
+        `OrderType.MARKET` branch + `_attempt_fill`'s
+        `force_full_remaining` parameter). LIMIT/STOP orders retain
+        their pre-existing behavior: `partial_fill_ratio` applies on
+        EVERY resting-order fill attempt, so a partially-filled LIMIT
+        order can require several crossings to fully fill - unchanged
+        by this checkpoint.
       - Slippage: a configurable flat `slippage_percent` is applied to
-        every fill price (BUY: price paid is worse by the slippage
-        percentage; SELL: price received is worse) - the SAME kind of
+        every fill price via the ONE shared
+        `domain.shared_kernel.slippage.apply_flat_percentage_slippage()`
+        function (Checkpoint 64.40 - previously an inlined, separate
+        implementation from Backtest's own
+        `CostModel.slippage_adjusted_price()`, now the same call on both
+        sides) (BUY: price paid is worse by the slippage percentage;
+        SELL: price received is worse) - the SAME kind of
         flat-percentage MODEL ASSUMPTION already established and
         disclosed for backtesting (`research.backtesting`'s own
         documented "MODEL ASSUMPTION, not verified" language) reused
-        here, not reinvented.
+        here, not reinvented. For LIMIT/STOP_LOSS orders, the
+        slippage-adjusted price is then clamped to never be worse than
+        the order's own stated `limit_price` (Finding F2 fix, above).
       - Costs: an injected `compute_cost` callable
         (`(is_buy: bool, notional: Decimal) -> Decimal`) - never a
         second, competing cost formula. The caller (Checkpoint 34's
@@ -160,6 +185,24 @@ class PaperBroker:
         self._latest_prices: dict[InstrumentId, Decimal] = {}
         self._available_balance = initial_capital
         self._utilized_margin = Decimal("0")
+        # Checkpoint 64.37: ADDITIVE cost-attribution bookkeeping only —
+        # accumulates the entry-side transaction cost (from the SAME
+        # `compute_cost` callable already charged to `_available_balance`
+        # in `_attempt_fill`) still attributable to the currently OPEN
+        # quantity of each position, so `realized_net_pnl` can be computed
+        # on close without ever double-charging cash (Rule 11: this is a
+        # P&L ATTRIBUTION, not a second cash mutation) and without
+        # changing `realized_pnl`'s existing gross formula. Never exposed
+        # outside this class.
+        self._position_entry_cost: dict[InstrumentId, Decimal] = {}
+        # Checkpoint 64.42: ADDITIVE canonical-Fill observability only —
+        # one `Fill` appended per ACTUAL execution event (never per
+        # OrderIntent), in execution order, mirroring the exact same
+        # in-memory-list pattern already used for `self._trades` above.
+        # Never read by any existing position/order/accounting logic in
+        # this class — a pure observation seam for the future producer-
+        # integration checkpoint and for tests.
+        self._fills: list[Fill] = []
 
     # --- BrokerGateway Protocol surface -----------------------------------
 
@@ -262,6 +305,16 @@ class PaperBroker:
     def get_trades(self) -> tuple[Trade, ...]:
         return tuple(self._trades)
 
+    def get_fills(self) -> tuple[Fill, ...]:
+        """Checkpoint 64.42: every canonical `Fill` this `PaperBroker`
+        instance has actually produced, in the exact order they occurred
+        (append-only list, never re-sorted). Not part of `BrokerGateway`
+        (mirrors `get_order_events()` above) - additive observability
+        only, never consumed by this class's own position/order/
+        accounting logic, which continues to use its pre-existing
+        `_PaperOrder`/`Position`/`Trade` structures exactly as before."""
+        return tuple(self._fills)
+
     def get_positions(self) -> tuple[Position, ...]:
         return tuple(self._positions.values())
 
@@ -273,6 +326,42 @@ class PaperBroker:
         )
 
     # --- Paper-specific surface (not part of BrokerGateway) --------------
+
+    def get_total_unrealized_pnl(self) -> Decimal:
+        """Checkpoint 64.38: sum of `Position.unrealized_pnl` across every
+        OPEN position currently tracked. Positions never yet marked via
+        `record_price()` contribute `Decimal("0")` (their honest,
+        unmarked value — see `mark_to_market.py` module docstring), never
+        a fabricated figure. CLOSED positions never contribute (their
+        `unrealized_pnl` is fixed at `Decimal("0")` at close)."""
+        return sum(
+            (p.unrealized_pnl for p in self._positions.values() if p.status is PositionStatus.OPEN),
+            Decimal("0"),
+        )
+
+    def get_open_positions_market_value(self) -> Decimal:
+        """Checkpoint 64.38: signed sum of `position_market_value()` over
+        every OPEN position - a short position's market value is
+        NEGATIVE (see `mark_to_market.py`'s SIGN CONVENTION), so this is
+        the correct additive term for `get_equity()` below, not a naive
+        absolute-value sum."""
+        return sum(
+            (
+                position_market_value(p)
+                for p in self._positions.values()
+                if p.status is PositionStatus.OPEN
+            ),
+            Decimal("0"),
+        )
+
+    def get_equity(self) -> Decimal:
+        """Checkpoint 64.38: `available_cash + market_value_of_open_positions`
+        - the account's current mark-to-market equity. Deliberately a thin
+        derivation over `get_funds()` and `get_open_positions_market_value()`
+        rather than a third, independently-tracked running total, so this
+        can never drift out of sync with either of those two authoritative
+        sources."""
+        return self._available_balance + self.get_open_positions_market_value()
 
     def get_latest_price(self, instrument_id: InstrumentId) -> Decimal | None:
         """Checkpoint 35 Part 4: the last price `record_price()` observed
@@ -300,6 +389,17 @@ class PaperBroker:
             if record.status not in (OrderStatus.PENDING, OrderStatus.PARTIALLY_FILLED):
                 continue
             self._maybe_fill_resting_order(record, price)
+        # Checkpoint 64.38: mark the position on THIS instrument (if any,
+        # and if still OPEN) against the freshly observed price. Deliberately
+        # placed AFTER resting-order fills above, so a fill that just closed
+        # or resized this position on this same price tick is marked using
+        # its post-fill state, not a stale pre-fill snapshot. `mark_position`
+        # is a no-op for a CLOSED position and never touches any other
+        # instrument's position (isolation preserved) or `realized_pnl`/
+        # `realized_net_pnl` (read-only w.r.t. those fields).
+        existing_position = self._positions.get(instrument_id)
+        if existing_position is not None and existing_position.status is PositionStatus.OPEN:
+            self._positions[instrument_id] = mark_position(existing_position, price)
 
     def force_expire_end_of_session(self) -> None:
         """Part 9's "end-of-data handling" - every still-PENDING/
@@ -349,7 +449,11 @@ class PaperBroker:
             assert intent.limit_price is not None
             crosses = price <= intent.limit_price if is_buy else price >= intent.limit_price
             if crosses:
-                self._attempt_fill(record, intent.limit_price)
+                # Checkpoint 64.40 Finding F2 fix: the LIMIT price is a
+                # BOUNDARY the fill must never cross past, even after
+                # slippage - see `_attempt_fill`'s `limit_boundary`
+                # parameter for the enforcement itself.
+                self._attempt_fill(record, intent.limit_price, limit_boundary=intent.limit_price)
             return
 
         if intent.order_type in (OrderType.STOP_LOSS, OrderType.STOP_LOSS_MARKET):
@@ -358,27 +462,77 @@ class PaperBroker:
             if not triggered:
                 return
             if intent.order_type is OrderType.STOP_LOSS_MARKET:
+                # Genuinely a MARKET fill once triggered - no stated
+                # limit boundary exists for this order type, so slippage
+                # is applied without any clamp, matching pre-existing
+                # (already-audited, unchanged) behavior.
                 self._attempt_fill(record, price)
             else:
                 assert intent.limit_price is not None
                 fillable = price <= intent.limit_price if is_buy else price >= intent.limit_price
                 if fillable:
-                    self._attempt_fill(record, intent.limit_price)
+                    # Same F2 reasoning as plain LIMIT above: STOP_LOSS's
+                    # own `limit_price` is a stated boundary the fill
+                    # must never violate, even after slippage.
+                    self._attempt_fill(
+                        record, intent.limit_price, limit_boundary=intent.limit_price
+                    )
             return
 
-    def _attempt_fill(self, record: _PaperOrder, price: Decimal) -> None:
+        if intent.order_type is OrderType.MARKET:
+            # Checkpoint 64.40 Finding F1 fix: a MARKET order that was
+            # only PARTIALLY_FILLED on its initial `submit_order()`
+            # attempt (via `partial_fill_ratio < 1`) previously had NO
+            # code path to complete its remaining quantity - it stayed
+            # PARTIALLY_FILLED forever. The chosen intended semantics
+            # (documented in the 64.40 architecture-doc append and
+            # `taskReport.md`): the remaining quantity completes in FULL
+            # on the next valid `record_price()` observation - the
+            # liquidity constraint modeled by `partial_fill_ratio` is
+            # applied once, at initial submission, not repeatedly on
+            # every subsequent tick (which would otherwise geometrically
+            # shrink the remainder toward, but never reaching, zero).
+            if record.status is OrderStatus.PARTIALLY_FILLED:
+                self._attempt_fill(record, price, force_full_remaining=True)
+            return
+
+    def _attempt_fill(
+        self,
+        record: _PaperOrder,
+        price: Decimal,
+        *,
+        limit_boundary: Decimal | None = None,
+        force_full_remaining: bool = False,
+    ) -> None:
+        """`limit_boundary`: Checkpoint 64.40 Finding F2 fix - when set
+        (LIMIT and STOP_LOSS's limit leg), the post-slippage fill price
+        is clamped so it can never be WORSE than the stated boundary,
+        preserving this class's own documented "never worse [than
+        limit]" guarantee (`__doc__` above) that slippage was previously
+        able to violate. `force_full_remaining`: Checkpoint 64.40
+        Finding F1 fix - when set (a MARKET order completing a prior
+        partial fill on a later `record_price()` observation), the
+        ENTIRE remaining quantity fills, bypassing `partial_fill_ratio`
+        (which was already applied once, at initial submission)."""
         intent = record.intent
         is_buy = intent.side is Side.BUY
         slipped_price = _round(
-            price * (Decimal("1") + self._slippage_percent / Decimal("100"))
-            if is_buy
-            else price * (Decimal("1") - self._slippage_percent / Decimal("100"))
+            apply_flat_percentage_slippage(
+                is_buy=is_buy, price=price, slippage_percent=self._slippage_percent
+            )
         )
+        if limit_boundary is not None:
+            slipped_price = (
+                min(slipped_price, limit_boundary) if is_buy else max(slipped_price, limit_boundary)
+            )
 
         remaining = intent.quantity - record.filled_quantity
-        fill_quantity = _round(remaining * self._partial_fill_ratio)
-        if fill_quantity <= 0 or fill_quantity > remaining:
+        if force_full_remaining:
             fill_quantity = remaining
+        else:
+            fill_quantity = _round(remaining * self._partial_fill_ratio)
+            if fill_quantity <= 0 or fill_quantity > remaining:
+                fill_quantity = remaining
 
         notional = slipped_price * fill_quantity
         cost = self._compute_cost(is_buy, notional)
@@ -402,10 +556,60 @@ class PaperBroker:
         )
         self._transition(record, target_state, event_type)
 
-        self._apply_to_position(intent, fill_quantity, slipped_price)
+        self._apply_to_position(intent, fill_quantity, slipped_price, cost)
+
+        # Checkpoint 64.42: construct exactly ONE canonical `Fill` for
+        # THIS actual execution event — additive, never a replacement for
+        # the `_PaperOrder`/`Position`/`Trade` mutations above, and built
+        # strictly from values this method already computed (never
+        # recomputed independently, per the checkpoint directive):
+        #   - `quantity`/`price` are the exact same `fill_quantity`/
+        #     `slipped_price` just passed to `_apply_to_position()` above
+        #     (proof: same local variables, same call).
+        #   - `transaction_cost` is the exact same `cost` already charged
+        #     to `_available_balance` above — this fill's own cost only,
+        #     never a re-derived or order-level total.
+        #   - `slippage_applied` is the actual signed adjustment this
+        #     execution path applied to reach `slipped_price` starting
+        #     from the reference `price` this method was invoked with
+        #     (the observed market/limit/trigger price BEFORE slippage
+        #     and before any F2 limit-boundary clamp) — i.e. exactly
+        #     `final_price - reference_price`, matching the directive's
+        #     own worked example (raw=100, slipped=99.9 ->
+        #     slippage_applied=-0.1). This already reflects the F2 clamp
+        #     too, since `slipped_price` is post-clamp — no separate,
+        #     possibly-inconsistent recomputation is performed.
+        #   - `status_at_fill` is the exact `target_state` just used for
+        #     `self._transition()` above (FILLED or PARTIALLY_FILLED,
+        #     never a third value).
+        #   - `timestamp` is a fresh call to the SAME `self._clock()`
+        #     this class already uses everywhere else for its own
+        #     "actual execution time" fields (`OrderEvent.timestamp_utc`,
+        #     `Position.opened_at`, `Trade.closed_at`) — never
+        #     `intent.created_at` (order-creation time, a different,
+        #     already-existing field).
+        self._fills.append(
+            Fill(
+                fill_id=str(uuid.uuid4()),
+                order_id=intent.order_id,
+                instrument_id=intent.instrument_id,
+                side=intent.side,
+                quantity=fill_quantity,
+                price=slipped_price,
+                timestamp=self._clock(),
+                transaction_cost=cost,
+                slippage_applied=slipped_price - price,
+                status_at_fill=target_state,
+                source=FillSource.PAPER,
+            )
+        )
 
     def _apply_to_position(
-        self, intent: OrderIntent, fill_quantity: Decimal, fill_price: Decimal
+        self,
+        intent: OrderIntent,
+        fill_quantity: Decimal,
+        fill_price: Decimal,
+        fill_cost: Decimal,
     ) -> None:
         existing = self._positions.get(intent.instrument_id)
         now = self._clock()
@@ -421,7 +625,14 @@ class PaperBroker:
                 unrealized_pnl=Decimal("0"),
                 opened_at=now,
                 status=PositionStatus.OPEN,
+                realized_net_pnl=Decimal("0"),
             )
+            # Checkpoint 64.37: this fill's own transaction cost (already
+            # charged to `_available_balance` above, in `_attempt_fill` —
+            # NOT charged again here) is the entry-side cost attributable
+            # to this now-open quantity, tracked for later attribution
+            # when the position closes.
+            self._position_entry_cost[intent.instrument_id] = fill_cost
             return
 
         if existing.direction == intent.side:
@@ -440,6 +651,10 @@ class PaperBroker:
                 unrealized_pnl=existing.unrealized_pnl,
                 opened_at=existing.opened_at,
                 status=PositionStatus.OPEN,
+                realized_net_pnl=existing.realized_net_pnl,
+            )
+            self._position_entry_cost[intent.instrument_id] = (
+                self._position_entry_cost.get(intent.instrument_id, Decimal("0")) + fill_cost
             )
             return
 
@@ -448,6 +663,29 @@ class PaperBroker:
         direction_sign = Decimal("1") if existing.direction is Side.BUY else Decimal("-1")
         realized = direction_sign * (fill_price - existing.average_entry_price) * closing_quantity
         new_realized = existing.realized_pnl + realized
+
+        # Checkpoint 64.37: attribute cost to THIS closing trade only —
+        # the proportional share of the still-unattributed entry cost for
+        # the quantity actually being closed, plus the proportional share
+        # of THIS exit fill's own cost (proportional to
+        # closing_quantity/fill_quantity, so a fill that both closes and
+        # would-otherwise-reverse is not over/under-attributed). Costs
+        # are read here, never re-charged to `_available_balance` (that
+        # charge already happened once, in `_attempt_fill`) - counted
+        # exactly once.
+        accumulated_entry_cost = self._position_entry_cost.get(intent.instrument_id, Decimal("0"))
+        attributable_entry_cost = (
+            accumulated_entry_cost * closing_quantity / existing.quantity
+            if existing.quantity > 0
+            else Decimal("0")
+        )
+        attributable_exit_cost = (
+            fill_cost * closing_quantity / fill_quantity if fill_quantity > 0 else Decimal("0")
+        )
+        trade_transaction_cost = attributable_entry_cost + attributable_exit_cost
+        trade_realized_net_pnl = compute_realized_net_pnl(realized, trade_transaction_cost)
+        existing_position_net = existing.realized_net_pnl or Decimal("0")
+        new_realized_net_pnl = existing_position_net + trade_realized_net_pnl
 
         self._trades.append(
             Trade(
@@ -463,6 +701,7 @@ class PaperBroker:
                 opened_at=existing.opened_at,
                 closed_at=now,
                 position_id=existing.position_id,
+                realized_net_pnl=trade_realized_net_pnl,
             )
         )
 
@@ -479,7 +718,9 @@ class PaperBroker:
                 opened_at=existing.opened_at,
                 status=PositionStatus.CLOSED,
                 closed_at=now,
+                realized_net_pnl=new_realized_net_pnl,
             )
+            self._position_entry_cost.pop(intent.instrument_id, None)
         else:
             self._positions[intent.instrument_id] = Position(
                 position_id=existing.position_id,
@@ -491,6 +732,10 @@ class PaperBroker:
                 unrealized_pnl=existing.unrealized_pnl,
                 opened_at=existing.opened_at,
                 status=PositionStatus.OPEN,
+                realized_net_pnl=new_realized_net_pnl,
+            )
+            self._position_entry_cost[intent.instrument_id] = (
+                accumulated_entry_cost - attributable_entry_cost
             )
 
     def _report(self, record: _PaperOrder) -> BrokerOrderStatusReport:

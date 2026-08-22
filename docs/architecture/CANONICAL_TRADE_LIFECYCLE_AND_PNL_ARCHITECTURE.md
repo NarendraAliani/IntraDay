@@ -1219,3 +1219,1554 @@ never collapsed into the single-instrument model.
   field); collapsing multi-instrument state into the single-instrument `run_backtest()` model (each
   instrument still gets its own independent `OpenPosition`/`OrderIntent`/`BacktestPosition`); live
   trading. All remain named, either correctly out of scope or a real future seam, not oversights.
+
+## CHECKPOINT 64.34 IMPLEMENTATION NOTES
+
+Closes the one remaining gap 64.33 explicitly named: `portfolio.py`'s multi-instrument entry
+decision now consults the same canonical Risk Gate (`risk_gate_adapter.evaluate_backtest_entry_risk()`,
+calling the real, unmodified `domain.risk.policy.evaluate_order_risk()`) that `run_backtest()` has
+used since 64.30 — never a `PortfolioRiskGate`/`PortfolioRiskPolicy`/`PortfolioRiskDecision`/
+`PortfolioRiskLimits` parallel vocabulary.
+
+- **New OPT-IN field:** `PortfolioBacktestConfiguration.risk_limits: RiskLimits | None = None`,
+  mirroring `BacktestConfiguration.risk_limits` exactly. `None` (the default, and every pre-64.34
+  caller's configuration) skips the entire risk-gate block — numerically byte-identical to 64.33.
+
+- **Ordering, deliberately preserved:** the risk gate is evaluated AFTER `portfolio.py`'s two
+  pre-existing portfolio-level constraints (the `max_concurrent_positions` cap and the capital/
+  notional check), which remain entirely unchanged in both logic and position in the control flow —
+  these are portfolio execution constraints, not canonical risk-policy dimensions, and are never
+  folded into the Risk Gate. The canonical `OrderIntent` is constructed once (as in 64.33), then fed
+  to the risk gate; `available_cash` is deducted only AFTER the gate approves, so a risk rejection
+  never needs to "undo" a capital commitment — the SAME `entry_order` object is both the risk-gate
+  input and (on approval) the object retained on `OpenPosition`/`SimulatedTrade`, never a second
+  construction.
+
+- **Multi-instrument-honest risk inputs — the material design point:** unlike `engine.py`'s
+  single-position engine (which could only ever hardcode `current_open_positions_count=0` and
+  `current_total_exposure=Decimal("0")`, since its risk-gate branch runs only when no position is
+  open at all), `portfolio.py` genuinely tracks multiple simultaneously open positions, so this
+  checkpoint supplies REAL, honestly-computed values: `current_open_positions_count=len(open_positions)`
+  (every OTHER currently-open instrument, since this instrument's own entry is not yet open) and
+  `current_total_exposure=sum(p.entry_price * p.quantity for p in open_positions.values())` (the real
+  notional of every other open position). `cumulative_closed_trade_net_pnl` is a new running
+  `cumulative_realized_net_pnl` accumulator, updated in `_close()` alongside `available_cash` — the
+  portfolio-level equivalent of `engine.py`'s `running_equity - initial_capital`. `max_total_exposure`
+  uses the same honest `Decimal("Infinity")` "no configured cap" sentinel `engine.py` already uses
+  (no portfolio-level total-exposure limit is tracked by either engine today).
+
+- **`max_concurrent_positions` interaction, explicitly reasoned about:** the canonical risk policy
+  (`evaluate_order_risk()`) ALSO has its own `MAX_CONCURRENT_POSITIONS_EXCEEDED` check
+  (`current_open_positions_count >= max_concurrent_positions`). Because `portfolio.py`'s own
+  pre-existing cap check runs FIRST and unconditionally rejects once `len(open_positions) >=
+  config.max_concurrent_positions`, the risk gate's own equivalent check is structurally unreachable
+  in this wiring — by the time the gate is consulted, `current_open_positions_count` is always
+  strictly less than `max_concurrent_positions`. This is intentional, not an oversight: it means
+  `max_concurrent_positions` behavior is provably unchanged from 64.33 (Test M), and the two
+  "sources of max_concurrent_positions enforcement" agree with each other rather than conflict.
+
+- **Rejection counting kept separate:** a NEW `PortfolioBacktestResult.risk_rejected_entries`/
+  `risk_rejection_reason_breakdown` pair (mirroring `BacktestResult.risk_rejected_trades`/
+  `risk_rejection_reason_breakdown` from 64.30) counts ONLY canonical-risk-gate rejections. The
+  pre-existing `rejected_entries` counter (cap/capital causes) is completely unchanged in meaning and
+  numeric value when `risk_limits=None`.
+
+- **Rejection semantics:** a risk-rejected candidate produces no `OpenPosition`, no lifecycle OPEN
+  state (`open_backtest_position()` is never called), no `SimulatedTrade`, and no capital deduction —
+  proven by Tests E/F/G (`test_efg_risk_rejected_entry_produces_no_accepted_state`).
+
+- **Multi-instrument independence:** each instrument's entry decision is a fully independent call to
+  `evaluate_backtest_entry_risk()` with its own freshly-constructed `BacktestRiskGateInputs` — no
+  mutable risk-decision object is shared across instruments. Proven by Tests I/J
+  (`test_ij_rejection_of_one_instrument_does_not_corrupt_another`,
+  `test_j_independent_instruments_can_have_different_outcomes`).
+
+- **Files modified this checkpoint:** `src/intraday/research/backtesting/portfolio.py` (+138/-5,
+  additive — no existing line's logic was changed, only new fields/blocks inserted; the
+  `entry_order`/`OpenPosition` construction lines were reordered relative to the `available_cash -=
+  notional` line so cash is committed only after risk approval, which is the one place existing code
+  was reflowed rather than purely appended to).
+  `tests/unit/research/test_checkpoint_64_34_portfolio_risk_gate.py` — new, 18 tests.
+  `risk_gate_adapter.py`, `order_intent_adapter.py`, `position_lifecycle.py`,
+  `domain/risk/contracts.py`, `domain/risk/policy.py`, `domain/order/contracts.py` — all confirmed
+  UNMODIFIED (`git diff --stat` returns no output for every one of them).
+
+- **Performance:** benchmarked on a 20-instrument, 2,000-bar-per-instrument workload (deterministic
+  oscillating fixture, 7,980 trades). `risk_limits=None` (disabled path): ~0.81-0.83s — consistent
+  with 64.33's own reported ~0.816s post-64.33 baseline, confirming no regression on the disabled
+  path (the entire risk-gate block is skipped, as designed). `risk_limits=<permissive>` (gate
+  genuinely evaluated for every accepted candidate): ~0.96s — an honest, disclosed additional ~18-19%
+  over the already-64.33-elevated baseline, the real cost of one additional `RiskEvaluationContext`
+  construction + `evaluate_order_risk()` call + a `sum()` over open positions per accepted-candidate
+  evaluation, opt-in only.
+
+- **Compatibility:** `risk_limits=None` remains the default and preserves 64.33's exact numerical
+  behavior (Test N), proven both by the dedicated regression tests and by the unchanged
+  `test_portfolio_backtesting.py`/`test_checkpoint_64_33_portfolio_convergence.py` suites (28/28,
+  46/46 unaffected).
+
+- **Not attempted, correctly, per this checkpoint's own scope:** Fill/ExecutionReport/BrokerOrder/
+  PartialFill/SlippageModel; partial exits; exit-policy changes; P&L formula changes;
+  `mark_to_market.py`/`PaperBroker` changes; a portfolio-specific risk vocabulary; live trading;
+  reordering or reweighing the pre-existing portfolio-level constraints relative to each other.
+
+## CHECKPOINT 64.35 IMPLEMENTATION NOTES
+
+**Objective:** determine whether the canonical Risk Gate/RiskDecision/OrderIntent used by
+Backtest (`engine.py`, `portfolio.py`, wired 64.30-64.34) can be safely converged with Paper
+Trading (`PaperTradingService`, `PaperBroker`) — without touching Fill/Execution modeling,
+without redesigning `PaperBroker`, without changing P&L formulas.
+
+**Finding: convergence already existed, in full, before this checkpoint.** This was a
+discovery-first checkpoint and the discovery is the deliverable — no source under `src/` was
+modified. Prior checkpoints (34, 64.24, 64.29-64.34) had already produced exactly the
+"Strategy Signal → Canonical OrderIntent → Canonical Risk Gate → RiskDecision → (Backtest /
+Paper Trading)" shape the checkpoint brief described as desired, arrived at from two directions
+independently converging on the same objects, not by this checkpoint forcing them together:
+
+- **Paper Trading's risk architecture** (`src/intraday/application/services/paper_trading.py`,
+  `PaperTradingService.submit_order()`, lines 86-157): builds a real
+  `intraday.domain.risk.policy.RiskEvaluationContext` (imported directly, line 41-44) from live
+  `PaperBroker` state (`get_positions()`/`get_orders()`), then calls the real, unmodified
+  `evaluate_order_risk(order, context)` (line 151) — never a Paper-Trading-specific
+  reimplementation. The order it evaluates is a real
+  `intraday.domain.order.contracts.OrderIntent` (imported line 31), constructed by the caller
+  (`application/services/paper_signal_execution.py`, `PaperSignalExecutionService.
+  evaluate_and_submit()`, lines 346-357) directly from the canonical `OrderIntent` dataclass —
+  no `PaperOrderIntent` type exists. The risk decision returned is a real
+  `intraday.domain.risk.contracts.OrderRiskDecision` (imported via `domain.risk.contracts`,
+  `risk_gate_adapter.py`/`policy.py` both import it under that exact name), carried unmodified
+  in `PaperOrderSubmissionResult.risk_decision` (lines 50-61) all the way to the caller — never
+  discarded, transformed, or recreated as a second type.
+- **Backtest's risk architecture** (`src/intraday/research/backtesting/risk_gate_adapter.py`,
+  wired into `engine.py` since 64.30 and `portfolio.py` since 64.34): `evaluate_backtest_entry_risk()`
+  (lines 139-147) builds the SAME `RiskEvaluationContext` dataclass and calls the SAME
+  `evaluate_order_risk()` function — confirmed by `risk_gate_adapter.py`'s own header docstring
+  (line 96: "the exact same dataclass `PaperTradingService`'s own order-submission method
+  builds"), a discipline this checkpoint mechanically verifies rather than merely trusts (see
+  Tests A/B below). `order_intent_adapter.build_backtest_entry_order_intent()` constructs the
+  SAME canonical `OrderIntent` type — no `BacktestOrderIntent` exists.
+- **`trading_engine/risk_engine/evaluator.py` is a re-export shim, not a second implementation**
+  (Checkpoint 64.24): it imports `RiskEvaluationContext`/`evaluate_order_risk` FROM
+  `intraday.domain.risk.policy` and re-exports them under the same names, for backward
+  compatibility only. There is exactly one function body for `evaluate_order_risk()` in the
+  entire repository (`domain/risk/policy.py`, lines 121-279).
+
+**Mechanical proof, not just narrative:** `tests/unit/research/test_checkpoint_64_35_risk_decision_convergence.py`
+asserts `risk_gate_adapter.evaluate_order_risk is domain_risk_policy.evaluate_order_risk` and
+`paper_trading_module.evaluate_order_risk is domain_risk_policy.evaluate_order_risk` (identical
+function objects, `is`, not merely equal-behaving copies) and `type(backtest_decision) is
+type(paper_result.risk_decision) is OrderRiskDecision`.
+
+**Risk Gate ownership — Model B, confirmed, not chosen by preference:** Strategy → canonical
+`OrderIntent` → canonical Risk Gate (`evaluate_order_risk`) → `PaperTradingService` →
+`PaperBroker`. `PaperTradingService.submit_order()` is the ONE non-bypassable chokepoint
+(mechanically proven since Checkpoint 34 Part 19,
+`test_risk_evaluation_runs_before_broker_submission_in_service_source`); `PaperBroker` itself
+never imports `domain.risk` at all (verified this checkpoint, `test_k_paper_broker_module_never_imports_the_risk_policy`)
+and has no `RiskDecision`/`RiskLimits`/`evaluate_order_risk` symbol anywhere in its source
+(`test_l_paper_broker_has_no_risk_decision_or_risk_limits_symbol`). For Backtest, ownership is
+`engine.py`'s/`portfolio.py`'s own entry branch, calling the adapter — the same function, a
+different but equally unambiguous single call site per engine.
+
+**Duplicate risk evaluation: absent, confirmed by structural test, not merely by reading.**
+`PaperTradingService.submit_order()` calls `evaluate_order_risk(` exactly once
+(`test_k_paper_trading_service_calls_evaluate_order_risk_exactly_once`, counting `"= evaluate_order_risk("`
+occurrences in the actual method source via `inspect.getsource`). `PaperBroker._attempt_fill()`'s
+own balance-sufficiency check (`broker.py` lines 386-393, "if required > self._available_balance:
+REJECTED") is a LEGITIMATE, DISTINCT broker/execution-safety concern (can this specific fill be
+funded right now, given slippage/cost) — not a second risk-POLICY evaluation, has no `RiskLimits`
+concept, and is structurally proven to never import or reference the risk-policy module at all.
+This is the mandatory-stop condition #11 ("PaperBroker has legitimate broker/execution safety
+checks that must remain independent of strategy risk policy") — confirmed present, correctly left
+untouched, not a defect.
+
+**OrderIntent convergence: already complete.** Both paths consume `domain.order.contracts.OrderIntent`
+directly; no adapter is needed on the Paper Trading side because Paper Trading was built against
+the canonical type from Checkpoint 34 onward — Backtest was the side that needed
+`order_intent_adapter.py` (64.29) to converge TOWARD it, not vice versa.
+
+**No duplicate risk/order vocabulary exists anywhere in the repository** — confirmed by a
+repo-wide grep for `PaperOrderIntent`/`PaperRiskDecision`/`BacktestRiskDecision`/
+`LiveRiskDecision`/`PortfolioRiskDecision` (zero matches,
+`test_no_duplicate_risk_or_order_intent_vocabulary_exists_in_the_repository`).
+
+**Convergence decision:** REUSE, not build. Per the checkpoint's own instruction ("If YES: reuse
+it"), `domain.risk.contracts.OrderRiskDecision` and `domain.order.contracts.OrderIntent` are
+already the correct canonical objects for both Backtest and Paper Trading; no `PaperRiskDecision`,
+no adapter layer, no new abstraction was created. This is not a "nothing happened" checkpoint —
+it is a checkpoint whose entire deliverable is the mechanical proof (17 new tests) that a
+convergence risk earlier checkpoints could plausibly have left incomplete was, in fact, already
+sound, closing the explicitly-named 64.34 gap ("Backtest and Paper Trading RiskDecision
+convergence") by verification rather than by new code.
+
+**Remaining execution boundary (explicitly out of scope, unchanged):** Backtest fills at
+"next bar's open" inside `engine.py`'s own loop; `PaperBroker` fills via its own
+MARKET/LIMIT/STOP simulation with configurable slippage/partial-fill/cost (`broker.py`'s own
+documented execution model, lines 89-136). These remain two independently-modeled, disclosed,
+UNRECONCILED execution engines — this checkpoint's own scope (Rule 17, "No Execution
+Convergence") explicitly forbids touching this, and nothing here changes it. `SimulatedTrade.
+net_pnl` (cost-inclusive) and `PaperBroker.Position.realized_pnl` (cost-exclusive) remain the
+same disclosed, UNRESOLVED accounting-convention conflict `risk_gate_adapter.py`'s own header
+docstring (lines 42-48) already named in 64.29 — P&L reconciliation is not, and was never
+claimed to be, in this checkpoint's scope.
+
+**Files modified by this checkpoint:** none under `src/`.
+`tests/unit/research/test_checkpoint_64_35_risk_decision_convergence.py` (new, 17 tests, all
+passing). This file (architecture doc, append only). `taskReport.md` (overwritten per mandatory
+checkpoint structure).
+
+**Protected files status:** `domain/risk/policy.py`, `domain/risk/contracts.py`,
+`domain/order/contracts.py`, `risk_gate_adapter.py`, `position_lifecycle.py`,
+`mark_to_market.py`, `PaperBroker` (`infrastructure/brokers/paper/broker.py`), Dhan integration,
+frontend — all confirmed UNTOUCHED (`git diff --stat` shows no hunks for any of them from this
+checkpoint's work; the only pre-existing uncommitted diffs, `portfolio.py` and this doc's prior
+sections, are 64.34's own carried-forward, unmodified-by-64.35 changes).
+
+---
+
+## CHECKPOINT 64.36 ACCOUNTING CONVENTION NOTES
+
+**Objective:** discovery-first reconciliation of P&L accounting convention between Backtest
+(`research.backtesting`) and Paper Trading (`application.services.paper_trading` /
+`infrastructure.brokers.paper.broker.PaperBroker`). Not an execution-convergence checkpoint -
+Fill/ExecutionReport/BrokerOrder/PartialFill/SlippageModel unification remains explicitly
+deferred, per this checkpoint's own Rule 9.
+
+**Backtest accounting (source-verified, `engine.py::_close_trade`,
+`contracts.py::SimulatedTrade`):**
+- `gross_pnl = signed_gross_pnl(direction, entry_price, filled_exit_price, quantity)` -
+  `(exit - entry) x quantity` for a long, sign-flipped for a short. `filled_exit_price` already
+  includes slippage (`cost_model.py::slippage_adjusted_price`, applied to price BEFORE
+  `gross_pnl` is computed) - slippage is a price-level effect, never a separate cost line item
+  (`CostBreakdown.total`'s own docstring: "deliberately EXCLUDES slippage ... to avoid
+  double-counting").
+- `costs = cost_breakdown(entry_leg).combine(cost_breakdown(exit_leg)).total` - the REAL,
+  itemized round-trip statutory/broker cost (brokerage, STT, exchange charges, SEBI charges,
+  GST, stamp duty), computed via the injected `CostModel` (either the MODEL-ASSUMPTION
+  `FlatPercentageCostModel` or the VERIFIED `IndianCashEquityIntradayCostModel`).
+- `net_pnl = gross_pnl - costs` - COST-INCLUSIVE.
+- `running_equity += trade.net_pnl` (per-trade, across the whole backtest) - the Backtest
+  engine's own running-equity ledger is therefore also cost-inclusive.
+- Risk-gate input: `BacktestRiskGateInputs.cumulative_closed_trade_net_pnl = running_equity -
+  initial_capital` (`engine.py`, entry branch) - COST-INCLUSIVE, because it is built entirely
+  from `net_pnl` values. `risk_gate_adapter.py`'s own header docstring (lines 30-48) already
+  discloses this explicitly, since 64.29.
+- Unrealized P&L (`mark_to_market.py`, untouched, unread by this checkpoint beyond its own
+  docstring): mark-to-market values an open position at the bar's own close price, EXCLUDING
+  exit costs (only realized on actual close) - a documented simplification.
+
+**Paper Trading accounting (source-verified, `broker.py::_attempt_fill`/`_apply_to_position`,
+`paper_trading.py::submit_order`):**
+- `slipped_price = price x (1 +/- slippage_percent/100)` - same structural convention as
+  Backtest: slippage is folded into the fill price BEFORE any P&L figure is computed. This one
+  dimension is ALREADY convergent between the two engines (mechanically proven,
+  `test_e`/`test_f`, Checkpoint 64.36 test module).
+- `cost = compute_cost(is_buy, notional)` - the SAME real, verified
+  `IndianCashEquityIntradayCostModel` is available to be injected
+  (`paper_trading_runtime.py::_compute_cost` already does this for the production singleton
+  broker) - but this cost is subtracted ONLY from `_available_balance`
+  (`self._available_balance -= notional + cost` on a buy fill; `+= notional - cost` on a sell
+  fill) inside `_attempt_fill`. It NEVER reaches `Position.realized_pnl`.
+- `Position.realized_pnl` (`_apply_to_position`, opposite-side/closing fill):
+  `realized = direction_sign x (fill_price - average_entry_price) x closing_quantity` -
+  GROSS P&L on the slippage-adjusted fill price, COST-EXCLUSIVE. `new_realized =
+  existing.realized_pnl + realized` - cumulative, still cost-exclusive at every step.
+  `Trade.realized_pnl` (the per-round-trip record appended to `self._trades`) carries the exact
+  same `realized` value - also cost-exclusive.
+- Risk-gate input: `paper_trading.py::submit_order`, `daily_realized_pnl = sum(p.realized_pnl
+  for p in positions)` - COST-EXCLUSIVE, because it sums a field that was never cost-adjusted.
+- `Position`/`Trade` are the CANONICAL `domain.position.contracts.Position` /
+  `domain.trade.contracts.Trade` types (imported directly by `broker.py`, not a
+  `PaperPosition`/`PaperTrade` duplicate) - but those canonical contracts' own docstrings
+  EXPLICITLY decline to define P&L semantics ("no P&L calculation is implemented here" -
+  `domain/position/contracts.py` line 8; "no trade-calculation logic is implemented here" -
+  `domain/trade/contracts.py` line 11). The cost-exclusive convention is PaperBroker's own
+  populating choice, not something the canonical contract mandates or forbids.
+
+**Exact accounting mismatch - worked numeric example (all figures computed by running the
+REAL `cost_model.py`/`broker.py` code this checkpoint, not hand-estimated; see
+`tests/unit/research/test_checkpoint_64_36_pnl_accounting_convergence.py`, `test_a` through
+`test_j`):**
+
+One long round trip, entry 1000, exit 990 (a loss), quantity 100 shares, zero slippage on
+both engines (isolates the cost-treatment difference), the REAL verified NSE cash-equity
+intraday cost schedule (`verified_nse_cash_equity_intraday_cost_model()`):
+
+- Gross P&L (both engines compute the identical figure): `(990 - 1000) x 100 = -1000`.
+- Real round-trip cost (`CostBreakdown.total`, actually computed): `82.39`
+  (brokerage 40.00 + exchange charges 6.11 + SEBI charges 0.20 + GST 8.33 + STT 24.75 +
+  stamp duty 3.00).
+- **Backtest** `net_pnl = -1000 - 82.39 = -1082.39`. `cumulative_closed_trade_net_pnl` after
+  this one trade: `-1082.39`.
+- **Paper Trading** `Position.realized_pnl = -1000` exactly (the `82.39` cost WAS charged -
+  proven by `_available_balance` dropping by `1000 + 82.39 = 1082.39` - but never subtracted
+  from `realized_pnl`). `daily_realized_pnl` (sum over positions) after this one trade: `-1000`.
+- **The mismatch is exactly the round-trip cost: `-1000 - (-1082.39) = 82.39`.** Not an
+  estimate - the exact real-cost figure, every time, for any trade, because Paper Trading's
+  `realized_pnl` is definitionally `gross_pnl` and Backtest's `net_pnl` is definitionally
+  `gross_pnl - costs`.
+
+**Risk Gate divergence - mechanically proven (`test_i`,
+`test_i_identical_daily_loss_produces_divergent_risk_decisions`):** with
+`RiskLimits.max_intraday_loss = 1050` (strictly between `1000` and `1082.39`), and the ONE
+closed trade above already reflected in each engine's own accounting state, a subsequent,
+otherwise-identical order is evaluated by the SAME function object,
+`domain.risk.policy.evaluate_order_risk()`:
+- Backtest side (`evaluate_backtest_entry_risk`, `cumulative_closed_trade_net_pnl = -1082.39`):
+  `-1082.39 <= -1050` is `True` -> **REJECTED** (`MAX_DAILY_LOSS_EXCEEDED`).
+- Paper Trading side (`PaperTradingService.submit_order`, real `PaperBroker` state,
+  `daily_realized_pnl = -1000`): `-1000 <= -1050` is `False` -> **APPROVED**.
+
+This is not a hypothetical: both branches run real production code end-to-end (a real
+`PaperBroker` fills a real BUY then real SELL through `submit_order()`/`_attempt_fill()`/
+`_apply_to_position()`; a real `evaluate_backtest_entry_risk()` call). The SAME economic
+trade, the SAME `RiskLimits`, the SAME cost schedule - two different Risk Gate outcomes,
+caused entirely by the accounting-convention mismatch, not by any legitimate difference in
+risk policy or execution modeling.
+
+**Canonical accounting decision:** NO pre-existing canonical accounting convention governs
+cost-inclusion for `Position.realized_pnl`/`Trade.realized_pnl`. `domain.position.contracts`
+and `domain.trade.contracts` supply the shared STRUCTURE (both engines already use, or could
+use, the same `Position`/`Trade` shape for canonical objects) but explicitly do not define
+P&L semantics - that was deliberately left to "a later checkpoint" by their own Checkpoint 5
+docstrings, and no later checkpoint before this one made that decision either. Per this
+checkpoint's own Rule 6/8/10 ("if no canonical convention exists: STOP BEFORE IMPLEMENTING";
+"do NOT change formulas without proof the smallest safe implementation is objectively
+proven"): **implementation is deferred, not performed.** Migrating `PaperBroker.
+_apply_to_position()` to subtract cost from `realized_pnl` (the seemingly obvious fix) is a
+real, non-trivial behavior change to a PROTECTED file (Rule 15) that would alter every
+existing Paper Trading balance/P&L reading historically produced by this engine, and would
+require deciding how partial exits, blended-price re-entries, and multi-leg positions should
+each attribute cost - none of which this checkpoint's scope permits deciding unilaterally.
+Migrating Backtest's `net_pnl` to become cost-exclusive would silently change every existing
+backtest's historical P&L, forbidden by Rule 8 ("Backtest behavior can be preserved ... without
+silently changing historical strategy results").
+
+**Minimum domain-level contract a future checkpoint would need (documented, not built):** a
+canonical, explicit accounting decision (not necessarily a new dataclass - could be a
+documented convention on the existing `Trade`/`Position` contracts) stating unambiguously:
+(1) `realized_pnl`/`net_pnl` semantics are cost-inclusive by convention across the WHOLE
+platform; (2) a separate, always-available `gross_pnl` field/computation exists wherever a
+cost-exclusive figure is also needed (e.g. execution-quality analysis); (3) `PaperBroker`
+gains an explicit second field (or a computed property) so the migration is ADDITIVE, not a
+silent redefinition of `realized_pnl`'s existing meaning - avoiding a breaking change to
+every existing Paper Trading consumer of `Position.realized_pnl`. This checkpoint deliberately
+does not build that field, in keeping with its own "STOP, document, do not force a migration"
+directive.
+
+**Risk Gate implications (documented, unresolved):** because
+`RiskEvaluationContext.current_daily_realized_pnl` is fed a cost-inclusive figure from one
+engine and a cost-exclusive figure from the other, `MAX_DAILY_LOSS_EXCEEDED` enforcement is
+NOT numerically comparable across engines for the same underlying economics - proven above,
+not merely asserted. This means a strategy validated in Backtest as "safely inside its daily
+loss limit" could, on the same day's real economics, be evaluated as MORE room remaining in
+Paper Trading (because Paper Trading's own daily figure understates the true cost-adjusted
+loss) - a materially relevant gap for a future Live-Paper readiness review, though today
+Paper Trading only ever sees its OWN accounting (this divergence matters when comparing
+Backtest RESULTS against Paper Trading RESULTS for the same strategy, not within a single,
+self-consistent live paper-trading session).
+
+**Migration requirement if any:** none performed this checkpoint. A future checkpoint could
+safely migrate ONLY if it (a) adds cost-inclusive net P&L as an ADDITIVE field to
+`Position`/`Trade` (or a wrapping value object) rather than redefining `realized_pnl`'s
+existing meaning, (b) updates `paper_trading.py::submit_order`'s
+`current_daily_realized_pnl` to consume the new cost-inclusive field explicitly, with its own
+dedicated test proving the Risk Gate now agrees with Backtest for the worked example above,
+and (c) leaves `PaperBroker`'s existing `realized_pnl` numerically unchanged for any consumer
+that already depends on the gross figure (e.g. UI P&L displays, if any exist) unless those are
+also explicitly migrated in the same checkpoint.
+
+**Remaining execution boundary:** unchanged from 64.35 - Backtest's "next bar open" fill model
+and `PaperBroker`'s own slippage/partial-fill/cost fill model remain two independently-modeled,
+UNRECONCILED execution engines. Not touched this checkpoint (Rule 9).
+
+**Files modified by this checkpoint:** none under `src/`.
+`tests/unit/research/test_checkpoint_64_36_pnl_accounting_convergence.py` (new, 14 tests, all
+passing, all exercising real production code). This file (architecture doc, append only).
+`taskReport.md` (overwritten per mandatory checkpoint structure).
+
+**Protected files status:** `domain/risk/policy.py`, `domain/risk/contracts.py`,
+`domain/order/contracts.py`, `risk_gate_adapter.py`, `position_lifecycle.py`,
+`mark_to_market.py`, `PaperBroker` (`infrastructure/brokers/paper/broker.py`), Dhan
+integration, frontend - all confirmed UNTOUCHED this checkpoint (`git diff --stat` shows no
+hunks for any of them beyond the pre-existing, carried-forward `portfolio.py` diff, which is
+64.34's own and remains byte-identical to its state at the start of this checkpoint).
+
+## CHECKPOINT 64.37 — ADDITIVE NET P&L RISK CONTRACT
+
+64.36 is accepted in full: it mechanically proved that Backtest's `SimulatedTrade.net_pnl`
+(cost-inclusive) and Paper Trading's `Position.realized_pnl`/`Trade.realized_pnl`
+(cost-exclusive) feed `RiskEvaluationContext.current_daily_realized_pnl` with two different
+financial meanings, and that this could flip `evaluate_order_risk()`'s decision for
+economically identical trades. This checkpoint implements the SMALLEST SAFE ADDITIVE fix.
+
+### Old `realized_pnl` meaning (UNCHANGED)
+
+`Position.realized_pnl` / `Trade.realized_pnl` remain exactly what they were: the GROSS,
+cost-EXCLUSIVE price-movement P&L of a closed trade/round-trip
+(`direction_sign * (fill_price - average_entry_price) * closing_quantity`,
+`infrastructure/brokers/paper/broker.py::_apply_to_position`). `SimulatedTrade.net_pnl`
+(`research/backtesting/contracts.py`/`engine.py`) remains exactly `gross_pnl - trade_costs`,
+formula untouched. Neither field's formula, name, or existing callers changed.
+
+### New `realized_net_pnl` contract
+
+One new pure function: `domain/trade/net_pnl.py::compute_realized_net_pnl(gross_price_pnl,
+transaction_cost) -> Decimal`, returning `gross_price_pnl - transaction_cost`. Deliberately a
+single free function, not a class/service/engine — mirrors this project's existing small
+domain-utility modules (`domain/order/idempotency.py`, `domain/order/state_machine.py`), per
+the checkpoint directive's explicit instruction not to invent
+AccountingEngine/AccountingLedger/NetPnlService/PnlManager vocabulary.
+
+Two new, purely ADDITIVE dataclass fields, both `Decimal | None = None` (default `None` for
+full backward compatibility — every pre-64.37 construction site is unaffected):
+- `domain/position/contracts.py::Position.realized_net_pnl`
+- `domain/trade/contracts.py::Trade.realized_net_pnl`
+
+Chosen location: additive fields on the existing canonical `Position`/`Trade` contracts
+(Rule 6's own suggested option), rather than a separate accounting projection/ledger type,
+because both Backtest's `SimulatedTrade` and Paper's `Position`/`Trade` already carry P&L
+fields at exactly this granularity — no new type, no new vocabulary, no new architecture layer
+was needed; the smallest change that fits the existing shape.
+
+### Backtest producer
+
+No code changed in `engine.py`/`contracts.py`. `SimulatedTrade.net_pnl` is ALREADY, by
+construction, equal to `compute_realized_net_pnl(gross_pnl, trade_costs)` — an equivalence,
+not a new computation (`tests/unit/research/test_checkpoint_64_37_net_pnl_risk_contract.py::
+test_b`). `research/backtesting/risk_gate_adapter.py` gained a documentation-only addendum
+comment (no code line changed — verified: every added line in `git diff` is a `#` comment or
+blank) explaining this equivalence; `evaluate_backtest_entry_risk`'s existing
+`current_daily_realized_pnl=inputs.cumulative_closed_trade_net_pnl` mapping needed no change.
+
+### Paper Trading producer
+
+`infrastructure/brokers/paper/broker.py::PaperBroker` gained:
+- A private `_position_entry_cost: dict[InstrumentId, Decimal]` bookkeeping dict (never exposed
+  outside the class) that accumulates the entry-side transaction cost (the SAME `compute_cost`
+  callable already charged, exactly once, to `_available_balance` in `_attempt_fill`) still
+  attributable to a position's currently open quantity.
+- `_attempt_fill` now passes its already-computed `cost` into `_apply_to_position` (no second
+  cost computation — costs counted exactly once).
+- On a closing fill, `_apply_to_position` computes `attributable_entry_cost` (the accumulated
+  entry cost, prorated by `closing_quantity / existing.quantity`) and `attributable_exit_cost`
+  (this fill's own cost, prorated by `closing_quantity / fill_quantity`), sums them into
+  `trade_transaction_cost`, and calls `compute_realized_net_pnl(realized, trade_transaction_cost)`
+  to populate the new `Trade.realized_net_pnl` and the new, cumulative
+  `Position.realized_net_pnl`. `Position.realized_pnl`/`Trade.realized_pnl` formulas are
+  completely untouched.
+
+`application/services/paper_trading.py::PaperTradingService.submit_order` (the ONE behavior
+change this checkpoint makes to a control-flow-bearing file) now sums
+`p.realized_net_pnl or Decimal("0")` across positions instead of `p.realized_pnl`, to populate
+`RiskEvaluationContext.current_daily_realized_pnl` — the same field, now fed the same semantic
+quantity Backtest already provided.
+
+### Risk Gate consumer
+
+`domain/risk/policy.py::evaluate_order_risk()` — UNCHANGED. It consumes
+`RiskEvaluationContext.current_daily_realized_pnl` exactly as before; only the VALUE fed into
+that existing field by Paper Trading's producer changed, per Rule 7's explicit preference for
+adapting producers over changing the consumed contract/type.
+
+### Backward compatibility
+
+`Position.realized_pnl`, `Trade.realized_pnl`, `SimulatedTrade.net_pnl` are all numerically
+identical to pre-64.37 behavior — proven by
+`test_checkpoint_64_37_net_pnl_risk_contract.py::test_d`/`test_d2`/`test_e`, and by the full
+64.29-64.36 test-suite re-run (see `taskReport.md`, Regression Comparison). `Position`/`Trade`
+gained one new field each, defaulted to `None`, so every existing construction site
+(`historical_execution.py`, `paper_ledger_repository.py`, prior test fixtures) compiles and
+behaves identically without modification.
+
+### Central worked example (re-verified this checkpoint)
+
+Entry 1000, exit 990, qty 100, zero slippage, real NSE cost model: gross P&L = -1000, real
+round-trip cost = 82.39, `realized_net_pnl` = -1082.39 on BOTH engines
+(`test_f_same_economic_trade_same_realized_net_pnl_both_engines`), while Paper
+`Position.realized_pnl` remains exactly -1000 (`test_d`).
+
+### Risk decision: before vs. after 64.37
+
+Before (64.36's own proof, `max_intraday_loss=1050`): Backtest `evaluate_backtest_entry_risk`
+→ REJECTED (`cumulative_closed_trade_net_pnl=-1082.39`); Paper
+`PaperTradingService.submit_order` → APPROVED (`daily_realized_pnl=-1000`, cost-exclusive).
+After 64.37 (re-run through the SAME real entry points): both REJECTED
+(`test_checkpoint_64_37_net_pnl_risk_contract.py::test_g`), and the ORIGINAL 64.36
+characterization test (`test_checkpoint_64_36_pnl_accounting_convergence.py::test_i`, updated
+in place, not deleted, to assert the now-correct convergent outcome) confirms the same
+convergence through its own independent fixture.
+
+### Remaining accounting gaps (unchanged, explicitly out of scope this checkpoint)
+
+`Position.unrealized_pnl` for Paper Trading remains `Decimal("0")` always (64.36's own noted
+gap; `mark_to_market.py` untouched, per Rule 14). Fill/Execution model convergence remains
+unreconciled (Rule 15/9). Partial exits remain deferred. Calendar-day scoping of
+`current_daily_realized_pnl`/`realized_net_pnl` remains "since session/run start," not
+midnight-scoped (Rule 13, unchanged from 64.36).
+
+### Execution boundary
+
+Unchanged from 64.35/64.36 — Backtest's "next bar open" fill model and `PaperBroker`'s own
+slippage/partial-fill/cost fill model remain two independently-modeled, UNRECONCILED execution
+engines. Not touched this checkpoint.
+
+## CHECKPOINT 64.38 — PAPER MARK-TO-MARKET / UNREALIZED P&L
+
+64.37 closed the REALIZED P&L divergence between Backtest and Paper. It explicitly left one
+named gap untouched (previous section, "Remaining accounting gaps"): `Position.unrealized_pnl`
+for Paper Trading was `Decimal("0")` at every construction/update site — an OPEN position's
+financial state was never actually observable. This checkpoint closes that gap with a small,
+additive, pure domain module plus its wiring into the existing Paper execution path.
+
+### New module
+
+`domain/position/mark_to_market.py` (pure, zero dependencies beyond
+`domain/position/contracts.py` and `domain/shared_kernel/contracts.py`):
+- `compute_unrealized_pnl(*, direction, average_entry_price, remaining_quantity, mark_price)` —
+  `direction_sign * remaining_quantity * (mark_price - average_entry_price)`, `direction_sign`
+  = +1 BUY / -1 SELL, identical to `research/backtesting/mark_to_market.py`'s own already-proven
+  sign convention (reused, not reinvented). Raises `ValueError` on non-positive `mark_price` or
+  negative `remaining_quantity`.
+- `compute_market_value(*, direction, remaining_quantity, mark_price)` —
+  `direction_sign * remaining_quantity * mark_price`. A short position's market value is carried
+  NEGATIVE (a liability), matching the backtest module's convention.
+- `mark_position(position, mark_price) -> Position` — returns a NEW `Position` (the contract is
+  `frozen=True`) with `unrealized_pnl` recomputed. A CLOSED position is returned UNCHANGED
+  (early return, no-op) — a closed position's remaining exposure is zero by construction.
+- `position_market_value(position) -> Decimal` — derives market value from the position's own
+  already-marked `unrealized_pnl`: `direction_sign * quantity * average_entry_price +
+  unrealized_pnl`. For a never-marked position (`unrealized_pnl == 0`), this correctly reduces
+  to book value, never a fabricated "no mark = zero value" answer.
+
+`remaining_quantity` is always `Position.quantity`, which already means "current open quantity,
+already reduced by any prior partial exit" in this codebase's existing convention
+(`PaperBroker._apply_to_position`) — so a partially-closed position's unrealized P&L is
+automatically correct with no separate "original quantity" bookkeeping.
+
+### Mark price source (real, not invented)
+
+The ONLY price source is `PaperBroker.record_price(instrument_id, price, timestamp)` — the
+SAME existing "caller supplies observed price" entry point established in Checkpoint 34/35 and
+already used to drive resting LIMIT/STOP fills. No new price feed, no polling, no Dhan import.
+The caller (application/runtime layer — see `infrastructure/api/position_monitor_runtime.py`,
+which already calls `record_price()` in the real Paper Trading runtime loop) is responsible for
+feeding real observed market data in, exactly as before.
+
+### Wiring (the one behavioral change)
+
+`PaperBroker.record_price()` (`infrastructure/brokers/paper/broker.py`) now, AFTER driving any
+resting-order fills for that instrument at that price (so a fill that just closed or resized the
+position on this same price tick is marked using its post-fill state, not a stale pre-fill
+snapshot): if an OPEN position exists for `instrument_id`, replaces it with
+`mark_position(existing_position, price)`. `PaperBroker` deliberately does NOT poll market data
+itself — it only reacts to a price the caller already pushed in, avoiding a
+broker → market-data → broker circularity. Positions for OTHER instruments are untouched
+(dict keyed by `InstrumentId`, isolation is structural, not merely tested).
+
+### New account-level surface on `PaperBroker`
+
+- `get_total_unrealized_pnl()` — sum of `unrealized_pnl` across OPEN positions.
+- `get_open_positions_market_value()` — signed sum of `position_market_value()` across OPEN
+  positions (a short position's contribution is negative, per the sign convention above).
+- `get_equity()` — `available_cash (from get_funds()) + get_open_positions_market_value()`.
+  Deliberately a thin derivation over the two already-authoritative sources
+  (`get_funds()`, `get_positions()`), never a third, independently-tracked running total, so it
+  cannot drift out of sync with either.
+
+`total_pnl` (cumulative_realized_net_pnl + total_unrealized_pnl) is a CALLER-SIDE composition,
+not a new field on any contract — this checkpoint does not add a `total_pnl` property anywhere,
+deliberately, because the two addends use DIFFERENT cost conventions (see below) and summing
+them silently, inside a single accessor, would hide that asymmetry from the caller.
+
+### Missing/never-marked price handling
+
+A position that has never been marked (no `record_price()` call yet for its instrument since it
+was opened) carries `unrealized_pnl == Decimal("0")`. This is NOT redesigned by this checkpoint
+— it is `PaperBroker._apply_to_position`'s existing pre-64.38 behavior at position-open time,
+documented here precisely rather than replaced: `Decimal("0")` here means "honestly unmarked,"
+not "no P&L." `position_market_value()` on such a position correctly reduces to book value
+(`quantity * average_entry_price`, signed), never a fabricated zero valuation. There is no
+separate "stale" concept distinct from "never marked" — `mark_position`/`record_price` carry no
+freshness/timestamp parameter; the only two states are "never marked" and "marked against the
+most recently observed price." A future checkpoint that needs true staleness detection
+(e.g. "no price for N minutes during live hours") would need to add that as a new, explicit
+capability — not something silently inferred from the current design.
+
+### Cost treatment (cost-EXCLUSIVE, by design)
+
+Neither `compute_unrealized_pnl` nor `compute_market_value` deducts any transaction cost.
+`unrealized_pnl` is PURE PRICE P&L on the remaining open quantity — mirroring
+`research/backtesting/mark_to_market.py`'s own already-documented "unrealized valuation excludes
+exit costs" choice. This is DELIBERATE and asymmetric with `Position.realized_net_pnl` (64.37),
+which IS cost-inclusive for CLOSED trades. The two are never summed by any function in this
+checkpoint as if they used the same cost convention — a caller composing `total_pnl` must do so
+knowingly, aware that the unrealized component omits the (not-yet-incurred) exit cost.
+
+### Relationship to the Risk Gate — unaffected, verified
+
+`RiskEvaluationContext.current_daily_realized_pnl` (consumed by
+`domain/risk/policy.py::evaluate_order_risk()`, unchanged since 64.37) is fed by
+`PaperTradingService.submit_order` summing `p.realized_net_pnl or Decimal("0")` across
+positions — `realized_net_pnl` only. `mark_position`/`record_price`'s new marking behavior never
+writes to `realized_pnl` or `realized_net_pnl` (it constructs a new `Position` via
+`dataclasses.replace(position, unrealized_pnl=...)`, carrying every other field through
+unchanged) and `PaperTradingService.submit_order`'s risk-context construction was NOT modified
+by this checkpoint. `unrealized_pnl` therefore cannot reach the Risk Gate through any path this
+checkpoint added. Verified directly: 64.37's Risk Gate contract test suite
+(`test_checkpoint_64_37_net_pnl_risk_contract.py`) re-run fresh this checkpoint, 22/22 passing,
+byte-identical assertions, no changes to that file.
+
+### Backward compatibility
+
+`Position.realized_pnl`/`Trade.realized_pnl`/`Position.realized_net_pnl`/
+`Trade.realized_net_pnl` formulas are completely untouched — `mark_position` only ever touches
+`unrealized_pnl`. `research/backtesting/engine.py`, `contracts.py`, and `portfolio.py` are not
+edited by this checkpoint (verified via `git diff --stat` on `engine.py`/`contracts.py`
+returning empty; `portfolio.py` carries a pre-existing UNCOMMITTED diff from an earlier
+checkpoint (64.33) that predates this session and was not touched here).
+
+### Remaining gaps (explicitly out of scope, unchanged from 64.37's own listing)
+
+Fill/Execution model convergence between Backtest's "next bar open" model and `PaperBroker`'s
+slippage/partial-fill/cost model remains unreconciled. Partial-exit EXECUTION (an engine that
+actually issues partial-exit orders against a strategy's exit rules) remains deferred — this
+checkpoint's `mark_position` correctly HANDLES an already-partially-reduced `Position.quantity`
+if one exists, but does not create one. Calendar-day scoping of P&L figures remains
+"since session/run start." `BacktestTrustLevel.POC` is unchanged by this checkpoint (not
+touched, not re-evaluated) — Research Readiness is NOT upgraded by mark-to-market's existence.
+
+---
+
+## CHECKPOINT 64.39 — EXECUTION / FILL CONVERGENCE AUDIT
+
+Audit-and-design-only, per its own directive: no production formula changed. All claims below
+are cited to source line ranges read this checkpoint (`git status --short` at end of session
+shows this doc, `taskReport.md`, and one new test file as the only 64.39 changes — every other
+listed modification is carried forward, untouched, from 64.34-64.38).
+
+### 1. Execution flow maps
+
+**Backtest** (`research/backtesting/engine.py`, single-instrument path):
+
+```
+Strategy.evaluate() [execution.py:131, compute_signals()]
+  -> StrategySignal (BULLISH/BEARISH/NEUTRAL)
+  -> [if strategy has build_trade_plan] tradeplan_execution.compute_trade_plans() [tradeplan_execution.py:74]
+  -> engine.py entry branch (i-th bar's signal read, entry ALWAYS deferred to i+1)
+       entry_bar = bars[i+1]                                             engine.py:314
+       filled_entry = costs.slippage_adjusted_price(..., entering=True)  engine.py:315-317
+       quantity = quantity_for_config(...)                               engine.py:318
+  -> [if backtest_config.risk_limits set] evaluate_backtest_entry_risk() engine.py:356-389
+       REJECTED -> risk_rejected_trades += 1, no position opened
+  -> [if quantity <= 0] rejected_trades += 1, no position opened          engine.py:436-437
+  -> OpenPosition created (execution.py OpenPosition dataclass), position_lifecycle.open_backtest_position()
+  -> [TradePlan strategies] tradeplan_execution.simulate_tradeplan_exit() precomputed at entry time
+       engine.py:427-432, walked bar-by-bar; when loop reaches exit_index, _close_trade() called  engine.py:445-451
+  -> [direction-flip strategies] reversal detected -> exit_bar = bars[i+1], _close_trade(i+1, exit_bar.open, "signal_reversal")  engine.py:474-476
+  -> [EOD, either model] _close_trade(i, bars[i].timestamp, bars[i].close, EOD/"end_of_data")  engine.py:461,480
+  -> _close_trade(): gross_pnl via signed_gross_pnl(), costs.cost_breakdown() combined entry+exit, net_pnl = gross_pnl - trade_costs  engine.py:214-228
+  -> SimulatedTrade recorded directly (dataclass literal, no Fill/Order intermediate object)
+  -> _build_mark_to_market_curve(): one point per bar, mark price = bar's own close, unrealized via signed_gross_pnl() for entry_index <= i < exit_index  engine.py:564-612
+```
+
+Producer/input/output/timing per stage: Strategy produces StrategySignal from Bar+FeatureValues
+at bar i (timing: same bar as signal, but ACTED ON at bar i+1 — no state mutation at signal
+time). Entry stage produces `OpenPosition` at bar i+1's open (state mutation: position map
+gains an entry; quantity source `quantity_for_config`; cost source `costs.cost_breakdown`
+combined at exit; slippage via `costs.slippage_adjusted_price`; no discrete "order state" object
+exists — the transition from "signal" to "position" is a single synchronous function call with
+no intermediate PENDING/ACKNOWLEDGED representation).
+
+**Paper** (`infrastructure/brokers/paper/broker.py` + `application/services/paper_trading.py`):
+
+```
+Strategy (via live coordinator, outside this audit's file list this session)
+  -> OrderIntent (domain/order/contracts.py, canonical, order_type/limit_price/trigger_price)
+  -> [risk gate, application layer — not re-read this checkpoint, per 64.34/64.35 audits already on file]
+  -> PaperTradingService (application/services/paper_trading.py) submits to PaperBroker
+  -> PaperBroker.submit_order(): CREATED -> SUBMITTED -> TRANSIT -> ACKNOWLEDGED -> PENDING  broker.py:195-200
+       [MARKET] price = self._latest_prices.get(instrument_id); None -> REJECTED (NoReferencePriceError semantics)  broker.py:202-210
+       [MARKET, price found] _attempt_fill(record, price) synchronously                       broker.py:211
+       [LIMIT/STOP] stays PENDING, no optimistic fill                                          broker.py:212-213
+  -> record_price() [caller feeds observed market data, application layer responsibility]      broker.py:333-361
+       drives _maybe_fill_resting_order() for every PENDING/PARTIALLY_FILLED order on that instrument  broker.py:345-350
+       [LIMIT] crosses -> _attempt_fill(record, intent.limit_price)                            broker.py:407-411
+       [STOP_LOSS_MARKET] triggered -> _attempt_fill(record, price)                            broker.py:419-420
+       [STOP_LOSS] triggered AND crosses own limit -> _attempt_fill(record, intent.limit_price) broker.py:421-425
+       NOTE: no branch exists for OrderType.MARKET in _maybe_fill_resting_order — see Finding F1 below
+  -> _attempt_fill(): slippage applied to the `price` ARGUMENT (whatever stage passed in)       broker.py:428-435
+       fill_quantity = round(remaining * partial_fill_ratio), clamped to remaining if <=0 or >remaining  broker.py:437-440
+       cost = self._compute_cost(is_buy, notional) [injected closure]                           broker.py:443
+       BUY: reject if required > available_balance; else charge balance                        broker.py:445-450
+       record.filled_quantity += fill_quantity; average_fill_price = slipped_price              broker.py:454-455
+       PARTIALLY_FILLED or FILLED transition                                                    broker.py:456-462
+       _apply_to_position(): new/blend/close Position, realized_pnl, realized_net_pnl (64.37)    broker.py:464-598
+  -> record_price() ALSO marks the resulting position via mark_position() (64.38), AFTER driving resting fills  broker.py:351-361
+```
+
+### 2. Backtest execution model semantics (cited)
+
+- Entry: ALWAYS next bar's open, both models (`engine.py:314-317`).
+- Exit (direction-flip strategies, e.g. `ema_crossover`, `sma_trend_filter` — no `build_trade_plan`
+  hook): next bar's open on signal reversal (`engine.py:474-476`).
+- Exit (TradePlan strategies, currently only `atr_volatility_breakout`): intrabar SL/T1/T2/T3/
+  trailing simulated by `tradeplan_execution.simulate_tradeplan_exit()`, evaluated strictly AFTER
+  the entry bar (`tradeplan_execution.py:145`, `entry_index + 1`), stop-loss-first-if-ambiguous,
+  lowest-numbered-target-first-if-ambiguous (`tradeplan_execution.py:123-137` docstring, "v1"
+  policy). Signal reversals are NOT used to exit TradePlan positions (confirmed: `engine.py`'s
+  reversal branch at line ~474 is only reached in the direction-flip code path, not the
+  TradePlan path per the engine's own branching — see `engine.py:427-451` vs `:474-480`).
+- EOD force-close: both models, at the FINAL bar's own CLOSE (`engine.py:461` TradePlan path
+  `ExitReason.EOD`; `engine.py:480` direction-flip path `"end_of_data"`).
+- Slippage: `costs.slippage_adjusted_price()` (`cost_model.py:134-142`, `:163-168` flat-percentage
+  impl, `:257-264` verified-schedule impl — SAME formula in both, only `slippage_percent` config
+  differs) applied to both entry (`engine.py:315-317`) and exit (`engine.py:214-216`).
+- Costs: `costs.cost_breakdown(is_buy=..., notional=...)` combined for entry+exit via
+  `CostBreakdown.combine()` (`cost_model.py:88-103`), `net_pnl = gross_pnl - trade_costs`
+  (`engine.py:228`).
+- Quantity: `quantity_for_config()` (`execution.py:93-98`, delegating to `quantity_for()`
+  `execution.py:75-90` — `FIXED_QUANTITY` mode truncates to integer; percentage-of-capital mode
+  divides notional by entry price, truncates `ROUND_DOWN`). Zero quantity -> `rejected_trades +=
+  1`, no trade (`engine.py:436-437`). No partial fills, no partial exits — all-or-nothing.
+- Risk gate: opt-in via `backtest_config.risk_limits` (`engine.py:356-389`); REJECTED increments
+  `risk_rejected_trades`, skips position open — no partial rejection/partial sizing.
+- Order lifecycle: NO discrete Order/OrderIntent state machine is walked inside `engine.py`'s bar
+  loop for the entry/exit decision itself — `OpenPosition.order_intent` (`execution.py:38-49`)
+  stores the canonical `OrderIntent` built once at entry (via `order_intent_adapter`, referenced
+  in `execution.py`'s own docstring) purely for RISK-GATE input, never advanced through
+  `OrderStatus` transitions the way `PaperBroker` advances its own orders.
+- Position lifecycle: `position_lifecycle.py`'s 3-state `BacktestPositionLifecycleStatus`
+  (OPEN -> HELD -> CLOSED, `position_lifecycle.py:52-67`) — deliberately narrower than
+  `domain.position_exit.contracts.PositionLifecycleStatus`'s 8-member vocabulary (module
+  docstring, `position_lifecycle.py:10-32`), because the engine is full-close-only and has no
+  PARTIAL_EXIT/TARGET_n/TRAILING/STOPPED intermediate states to represent honestly.
+- `trust_level=BacktestTrustLevel.POC` hardcoded at `engine.py:527` — grepped fresh this
+  checkpoint, confirmed still present, unchanged.
+- No `Fill`/`Order`/partial-fill contract of any kind appears in `engine.py` — trades are
+  recorded directly as `SimulatedTrade` dataclass entries.
+
+### 3. Paper execution model semantics (cited)
+
+- MARKET orders fill immediately against the latest `record_price()` value (`broker.py:202-211`);
+  no recorded price -> `NoReferencePriceError` surfaces as REJECTED, never fabricated
+  (`broker.py:203-210`).
+- LIMIT orders stay PENDING until `record_price()` crosses the limit (BUY: price<=limit, SELL:
+  price>=limit, `broker.py:407-411`); the price PASSED to `_attempt_fill` is `intent.limit_price`
+  itself, not the observed crossing price.
+- STOP_LOSS/STOP_LOSS_MARKET stay PENDING until triggered (`broker.py:414-426`): BUY triggers if
+  price>=trigger, SELL if price<=trigger; STOP_LOSS_MARKET fills immediately at the OBSERVED
+  crossing price (`broker.py:419-420`, confirmed by
+  `TestPaperStopLossMarketTriggersAndFillsImmediatelyAtTriggerPrice` — SELL stop triggered at
+  95.00 but the actual crossing tick was 93.00, and the order filled at 93.00, not 95.00); the
+  limit-variant STOP_LOSS only fills if that same price also crosses its own `limit_price`, else
+  stays PENDING, triggered (`broker.py:421-425`).
+- Slippage: flat `slippage_percent`, applied inside `_attempt_fill` to whatever `price` argument
+  it is given (`broker.py:428-435`) — for a MARKET order this is the latest observed price; for a
+  crossed LIMIT order this is `intent.limit_price` (not the observed crossing price); for a
+  triggered STOP_LOSS_MARKET this is the observed crossing price; for a triggered/crossed
+  STOP_LOSS (limit variant) this is `intent.limit_price`.
+- Quantity/fill quantity/partial fills: `partial_fill_ratio` (default `Decimal("1")`, always full,
+  `broker.py:146`) — `fill_quantity = round(remaining * partial_fill_ratio)`, clamped to
+  `remaining` if `<=0` or `>remaining` (`broker.py:437-440`).
+- Order state transitions: via `domain/order/state_machine.py::validate_transition()`, called
+  inside `_transition()` (`broker.py:380-401`) before every mutation — every transition this
+  broker performs is checked against `ALLOWED_TRANSITIONS` (`state_machine.py:36-80`); an invalid
+  transition raises `InvalidOrderTransitionError` rather than silently succeeding.
+- Rejected order / insufficient funds: a BUY fill attempt whose `notional + cost` exceeds
+  `_available_balance` transitions the order to REJECTED and performs NO balance mutation and NO
+  position update (`broker.py:445-450`) — this is a REJECTION DISCOVERED MID-FILL-ATTEMPT, not a
+  pre-submission balance check; a SELL fill is never rejected for insufficient funds (a closing/
+  short-opening sale always credits the balance, `broker.py:451-452`).
+- Position updates: `_apply_to_position()` (`broker.py:466-598`) — new position, same-direction
+  blended-average-price add, or opposite-direction partial/full close with cost attribution
+  proportional to `closing_quantity` (`broker.py:526-547`, 64.37's contribution, formula:
+  `attributable_entry_cost = accumulated_entry_cost * closing_quantity / existing.quantity`,
+  `attributable_exit_cost = fill_cost * closing_quantity / fill_quantity`).
+- `record_price()` also marks the open position via `mark_position()` AFTER driving resting
+  fills (`broker.py:351-361`, 64.38's contribution).
+- End-of-data: `force_expire_end_of_session()` explicitly EXPIRES every still-PENDING/
+  PARTIALLY_FILLED order (`broker.py:363-370`) — no forced position close analogous to Backtest's
+  EOD close-at-final-bar's-close exists in `PaperBroker` itself (a forced flatten would be an
+  application-layer/`position_monitor_runtime.py` concern, not audited in full this checkpoint).
+
+### 4. FINDING F1 — MARKET orders have no resting-fill completion path for a partial remainder
+
+`_maybe_fill_resting_order()` (`broker.py:403-426`) branches only on `OrderType.LIMIT` and
+`OrderType.STOP_LOSS`/`STOP_LOSS_MARKET` — there is no `OrderType.MARKET` branch. A MARKET
+order's only fill attempt happens synchronously inside `submit_order()` (`broker.py:211`). If
+`partial_fill_ratio < 1` leaves a MARKET order PARTIALLY_FILLED, NO subsequent `record_price()`
+call will ever drive a further fill attempt for it — the order remains PARTIALLY_FILLED
+indefinitely unless some caller outside `PaperBroker` explicitly re-attempts it (no such call
+site was found in `broker.py` itself). Locked down by
+`TestPaperMarketOrderFillsAtLatestObservedPrice` and
+`TestPaperPartialFillRatioProducesPartiallyFilledStateAndRemainingQuantity` in
+`tests/unit/research/test_checkpoint_64_39_execution_fill_audit.py`. Not fixed this checkpoint
+(audit-only) — flagged as a real behavioral gap, not a documentation nit, since a partial fill
+via `partial_fill_ratio` is a genuine, reachable configuration.
+
+### 5. FINDING F2 — LIMIT-order slippage is applied ON TOP of the stated limit price
+
+The class docstring (`broker.py:101-103`) states a LIMIT fill "fill at the LIMIT price (never a
+better price is fabricated, and never worse — matches standard limit-order semantics)." Reading
+`_attempt_fill()` (`broker.py:428-435`) shows slippage is applied to WHATEVER `price` argument
+the caller passes — and `_maybe_fill_resting_order()` passes `intent.limit_price` itself as that
+argument for a crossed LIMIT order (`broker.py:411`). Consequently, with any nonzero
+`slippage_percent` configured, a BUY LIMIT order's actual `average_fill_price` is
+`limit_price * (1 + slippage%)` — WORSE than the stated limit, directly contradicting the
+docstring's "never worse" claim. Mechanically proven by
+`TestPaperLimitOrderSlippageAppliedOnTopOfLimitPrice::test_buy_limit_fill_price_exceeds_stated_limit_when_slippage_configured`
+(limit 100.00, 1% slippage -> fills at 101.00). This is a genuine DOCSTRING/BEHAVIOR mismatch,
+not merely a modeling choice — flagged, not fixed, this checkpoint. (Note: in production use with
+`slippage_percent=Decimal("0")` — the class default — this mismatch is inert; it only manifests
+when a caller configures nonzero paper-trading slippage.)
+
+### 6. Price semantics table
+
+| Event | Backtest price | Paper price | Same? | Why different | Unifiable? |
+|---|---|---|---|---|---|
+| Entry (market-style) | next bar's OPEN, slippage-adjusted (`engine.py:314-317`) | latest `record_price()` observation, slippage-adjusted (`broker.py:202-211`,`:428-435`) | No | Backtest has no "live tick" concept — only discrete bars; "next bar open" IS its analogue of "next observed price" | Only if Backtest fed sub-bar ticks (out of scope) |
+| Stop-loss (TradePlan) | the trade plan's own `stop_loss` level (`tradeplan_execution.py:153-157`), never the triggering bar's actual low/high | the crossing OBSERVED price for STOP_LOSS_MARKET (`broker.py:419-420`), or the order's own `limit_price` for STOP_LOSS (`broker.py:421-425`) | No | Backtest assumes the exact stop level is achieved (conservative-but-optimistic on price, pessimistic on sequencing); Paper reflects whatever discrete price tick actually crossed | Not directly — different information availability (bar OHLC vs discrete ticks) |
+| Target (TradePlan) | the trade plan's own target level (`tradeplan_execution.py:172-177`) | N/A (Paper has no TradePlan target-exit engine wired in `broker.py` itself) | N/A | TradePlan target-exit is a Backtest-only capability today (per this audit) | Deferred to a future TradePlan-in-Paper checkpoint |
+| EOD | final bar's own CLOSE (`engine.py:461,480`) | no automatic EOD close inside `PaperBroker` (only pending-order expiry, `broker.py:363-370`) | No | Application/`position_monitor_runtime.py` layer concern for Paper, not audited to a line citation this checkpoint | Not evaluated this checkpoint |
+| MARKET order | next bar OPEN (there is no separate "market order" concept — every Backtest entry/reversal IS a market-style fill) | latest observed price (`broker.py:202-211`) | Conceptually yes | Same "next available price, no look-ahead" principle, different granularity | Already conceptually unified; granularity differs by design |
+| LIMIT order | not modeled at all in `engine.py` | `intent.limit_price` (`broker.py:411`) | N/A | Backtest has no LIMIT order type | N/A |
+| STOP order | TradePlan SL/trailing (see above) | `trigger_price`-crossing logic (`broker.py:414-426`) | Partially | Different data granularity (bar-range touch vs tick-cross) | Not without unifying data granularity |
+| Reversal exit | next bar OPEN (`engine.py:474-476`) | N/A — Paper has no "signal reversal" concept inside `broker.py` (that is a strategy/coordinator-layer decision, outside this file) | N/A | Different architectural layer owns the decision | N/A |
+| Partial exit | Not supported (Backtest is full-close-only, `position_lifecycle.py` module docstring) | Structurally possible via a smaller-quantity opposite-side order into `_apply_to_position`'s partial-close branch (`broker.py:520-547`) but requires the STRATEGY/coordinator to issue such an order — `PaperBroker` itself does not decide to partially exit | No | Backtest structurally cannot; Paper CAN if the caller constructs the right order, but no such caller was found wired in this audit's file list | Prerequisite: Backtest engine would need a partial-exit-capable position model first |
+
+### 7. Slippage comparison
+
+Both engines use the IDENTICAL flat-percentage slippage FORMULA shape: `price * (1 ±
+slippage_percent/100)`, worse-for-the-trader in both directions
+(`cost_model.py:163-168`/`:257-264` for Backtest via `slippage_adjusted_price()`; `broker.py:428-
+435` for Paper, inlined rather than delegated to `CostModel.slippage_adjusted_price()`). The
+64.36-era claim that "slippage is folded into the fill price, never summed into cost" holds in
+BOTH engines as re-verified this checkpoint: Backtest's `CostBreakdown.total` property explicitly
+excludes slippage by its own docstring (`cost_model.py:74-77`); Paper's `_attempt_fill` computes
+`slipped_price` BEFORE computing `notional`/`cost`, and `cost` (`self._compute_cost(...)`) is a
+separate injected closure never touching slippage (`broker.py:428-443`). Difference: Paper's
+slippage is INLINED (own multiplication, `broker.py:431-435`) rather than delegated to the SAME
+`CostModel.slippage_adjusted_price()` Protocol method Backtest uses — two independent
+implementations of the same formula shape, not one shared function call. This is a real (if
+currently harmless, since the formulas are literally identical) duplication risk: a future change
+to Backtest's slippage formula would NOT automatically propagate to Paper. Order-type dependence:
+Backtest's slippage is direction-only (`entering: bool` flag, no order-type concept exists);
+Paper's slippage is applied uniformly to whatever price argument `_attempt_fill` receives
+regardless of order type — see Finding F2 for why this is NOT the same as "the stated limit
+price" for LIMIT orders.
+
+### 8. Transaction costs
+
+Re-verified this checkpoint against current source: 64.37's `realized_net_pnl = gross - 
+attributable costs` still holds exactly as implemented — Backtest: `engine.py:228`
+`net_pnl = gross_pnl - trade_costs`; Paper: `broker.py:545`
+`trade_realized_net_pnl = compute_realized_net_pnl(realized, trade_transaction_cost)` calling the
+SAME `domain.trade.net_pnl.compute_realized_net_pnl()` function (`net_pnl.py:62-74`). 64.38's
+claim that `unrealized_pnl` is cost-EXCLUSIVE also re-verified: `mark_to_market.py:73-93`
+`compute_unrealized_pnl()` performs pure price arithmetic with no cost term, matching
+`engine.py`'s `_build_mark_to_market_curve()` use of `signed_gross_pnl()` (`execution.py:67-72`,
+also cost-exclusive). Cost flow (both engines): notional -> `CostModel.cost_breakdown(is_buy,
+notional)` -> per-leg `CostBreakdown` -> combined (Backtest: `CostBreakdown.combine()` at
+entry+exit; Paper: cost attributed proportionally across entry/exit legs in
+`_apply_to_position()`) -> subtracted from gross price P&L via `compute_realized_net_pnl()`
+(Paper, explicit) or inline subtraction (Backtest, `engine.py:228`, same formula, not yet routed
+through the shared function — a MUST-SHARE candidate, see §13). No formula was changed.
+
+### 9. Partial fills — explicit statement
+
+**Paper supports fill_quantity < order_quantity** via `partial_fill_ratio` (`broker.py:146`,
+`:437-462`), producing `OrderStatus.PARTIALLY_FILLED` and a resting order with nonzero remaining
+quantity for LIMIT/STOP order types (subject to Finding F1's MARKET-order caveat).
+**Backtest does NOT support partial fills at all** — `quantity_for_config()` computes one
+quantity once at entry time (`engine.py:318`), and either that whole quantity fills or the trade
+is rejected outright (`engine.py:436-437`) — there is no intermediate state.
+
+### 10. Partial fills vs partial exits — conceptual distinction
+
+- **Partial FILL**: an order for quantity 100 is only partially executed against available
+  liquidity/configured ratio — e.g. `fill_quantity = 40` against `order.quantity = 100`, leaving
+  `remaining_quantity = 60` still resting on the SAME order (Paper: `broker.py:437-462`).
+- **Partial EXIT**: an already-fully-filled OPEN position of quantity 100 is reduced by an
+  intentional, smaller, OPPOSITE-side order for quantity 40 (e.g. taking partial profit at
+  Target 1) — a strategy/risk decision about how much of an existing position to close, not a
+  liquidity/fill-ratio artifact. In `PaperBroker`, this is mechanically the SAME code path as any
+  opposite-direction fill smaller than `existing.quantity` (`broker.py:520-547`,
+  `closing_quantity = min(existing.quantity, fill_quantity)`), so a partial exit is representable
+  TODAY in Paper's position model IF a caller issues the right order — but no strategy/coordinator
+  call site issuing such a deliberate partial-exit order was found wired into `PaperBroker` in
+  this audit's file list (this checkpoint did not re-read every trading_engine coordinator file,
+  so absence-of-evidence here is not proof of absence — flagged as unverified rather than
+  asserted false). Backtest has NEITHER capability — full-close-only by construction
+  (`position_lifecycle.py` module docstring).
+
+### 11. Order lifecycle comparison
+
+| State/concept | Backtest | Paper | Canonical source |
+|---|---|---|---|
+| Discrete OrderStatus enum walked in engine loop | No — entry/exit are synchronous function calls, no state object advanced | Yes — every `_transition()` call validated against `state_machine.ALLOWED_TRANSITIONS` | `domain/order/contracts.py::OrderStatus`, `domain/order/state_machine.py` |
+| CREATED/SUBMITTED/TRANSIT/ACKNOWLEDGED/PENDING | N/A | All four traversed synchronously on `submit_order()` (`broker.py:197-200`) | Paper only |
+| PARTIALLY_FILLED | N/A (no partial-fill concept) | Real, reachable (`broker.py:456-462`) | Paper only |
+| FILLED | Implicit — a `SimulatedTrade` simply exists; no explicit FILLED status object | Real (`broker.py:456-462`) | Paper canonical; Backtest has no equivalent object |
+| REJECTED | `rejected_trades`/`risk_rejected_trades` COUNTERS incremented (`engine.py:381,437`), no per-trade OrderStatus object | Real, per-order (`broker.py:205-210`,`:448`) | Different representations — Backtest is aggregate-counter, Paper is per-order-object |
+| CANCELLED/EXPIRED | N/A | Real (`broker.py:217-223`,`:363-370`) | Paper only |
+| Canonical vs duplicated | Backtest never imports `domain.order.state_machine` for the entry/exit decision itself (only builds an `OrderIntent` value for risk-gate input, per `execution.py:38-49`'s docstring) | Uses the canonical domain state machine directly | No duplication of the STATE MACHINE itself — Backtest simply does not use one for this purpose. This is an ASYMMETRY, not a duplicated/competing implementation. |
+
+### 12. Candidate Fill contract
+
+No existing standalone domain `Fill` dataclass/contract was found (grepped repo-wide for
+`class Fill`, `FillEvent`, `fill_price`, `filled_quantity`, `average_fill_price`,
+`executed_quantity` this checkpoint — 18 files matched some term, none define a first-class
+`Fill` domain object; `domain/order/events.py::OrderEvent` carries `filled_quantity`/
+`remaining_quantity`/`price` as FIELDS OF AN ORDER EVENT, not as its own Fill entity, and
+`domain/trade/contracts.py::Trade` represents a CLOSED round-trip, not a single fill). A future
+minimal canonical `Fill` contract, if introduced, should carry (rationale in parens):
+
+- `fill_id: str` — own identity, distinct from `order_id` (an order may have >1 fill).
+- `order_id: OrderId` — traceable to its originating order (mirrors `Trade.order_ids`'s own
+  linkage pattern, `domain/trade/contracts.py`).
+- `instrument_id: InstrumentId` — required for any cross-instrument aggregation.
+- `side: Side` — BUY/SELL, reused from `domain/shared_kernel/contracts.py` (never a new enum).
+- `quantity: Decimal` — the fill's own quantity (NOT the order's total quantity — see §10's
+  partial-fill/partial-exit distinction; this field answers "how much filled just now").
+- `price: Decimal` — the ACTUAL price this fill executed at, post-slippage (both engines already
+  compute this value today — Backtest's `filled_entry`/exit price, Paper's `slipped_price`).
+- `timestamp: datetime` — when the fill occurred (UTC, per `ensure_utc()` convention already used
+  throughout `domain/*/contracts.py`).
+- `transaction_cost: Decimal` — the itemized-or-total cost attributable to THIS fill (both
+  engines already compute a per-leg `CostBreakdown`/`fill_cost` today — reuse `CostBreakdown`
+  itself rather than a scalar, to preserve `cost_model.py`'s existing itemization discipline).
+- `slippage_applied: Decimal | None` — the price delta actually realized vs the pre-slippage
+  reference price, kept SEPARATE from `transaction_cost` (mirrors `CostBreakdown.total`'s own
+  explicit "excludes slippage" design, `cost_model.py:74-77` — never re-merge the two).
+- `status_at_fill: OrderStatus` — FILLED or PARTIALLY_FILLED (the two states a fill can produce),
+  so a consumer knows whether more fills may follow this order.
+- `source: Literal["BACKTEST","PAPER","LIVE"]` (or similar) — explicit provenance metadata,
+  never inferred from context, so a downstream accounting consumer can apply engine-specific
+  caveats (e.g. Backtest fills never have genuine liquidity constraints) without guessing.
+
+This is a DESIGN CANDIDATE ONLY — not implemented, not wired, no existing dataclass replaced.
+
+### 13. Execution event ownership (current, per engine)
+
+| Decision | Backtest owner | Paper owner |
+|---|---|---|
+| Can this order execute at all | `engine.py`'s own bar-loop branching + optional risk gate (`engine.py:356-389`) | `PaperBroker._transition`/`_attempt_fill` (balance check, `broker.py:445-450`) + risk gate (application layer, not re-read this checkpoint) |
+| Fill price | `engine.py` (via `costs.slippage_adjusted_price()`) | `PaperBroker._attempt_fill` (own inlined slippage formula) |
+| Fill quantity | `execution.py::quantity_for_config()` | `PaperBroker._attempt_fill` (`partial_fill_ratio` logic) |
+| Position update | `engine.py`'s own `OpenPosition`/`_close_trade()` | `PaperBroker._apply_to_position()` |
+| Transaction cost | `engine.py` calling injected `CostModel` | `PaperBroker` calling injected `compute_cost` closure |
+| Realized/unrealized accounting | `engine.py`'s `SimulatedTrade`/`_build_mark_to_market_curve()` | `domain.trade.net_pnl`/`domain.position.mark_to_market` (shared pure functions, 64.37/64.38) |
+
+Misalignment: Backtest's fill-price/quantity/cost decisions are all made INLINE inside `engine.py`
+itself (no separate "broker" object); Paper's are made inside a dedicated `PaperBroker` object
+that the application layer calls into. This is an architectural asymmetry (one engine IS its own
+broker; the other HAS a broker), not merely a naming difference — any future convergence has to
+either give Backtest a broker-shaped seam or accept the two will never share a single execution
+object, only shared PURE FUNCTIONS (cost model, net_pnl, mark_to_market) called from each side.
+
+### 14. MUST-SHARE table
+
+| Concept | Backtest | Paper | Must share? | Why |
+|---|---|---|---|---|
+| OrderIntent | Built via `order_intent_adapter` for risk-gate input (`execution.py:38-49`) | Canonical, built by the application/coordinator layer | YES | Already the same `domain.order.contracts.OrderIntent` type on both sides — must stay one type. |
+| RiskDecision | `evaluate_backtest_entry_risk()` (`engine.py:356-389`) | Application-layer risk gate (64.34/64.35 already established convergence) | YES (already converged per 64.34/64.35 — not re-verified line-by-line this checkpoint) | A risk-approved trade must mean the same thing in both engines. |
+| OrderState | None (no discrete state object) | `domain.order.contracts.OrderStatus` + `state_machine.py` | Partially — the VOCABULARY should be shareable even if Backtest never walks the transitions; Backtest CAN keep no-op-ing through it conceptually | Prevents two competing status vocabularies from ever existing. |
+| Fill | Neither has one (see §12) | Neither has one | YES if one is ever introduced | Exactly one canonical Fill shape prevents a future third "own way" model. |
+| Fill price | `filled_entry`/exit price, slippage-adjusted | `slipped_price` | YES (semantically) | Both mean "price after slippage" — should be the SAME formula call, not two inlined ones (see §7). |
+| Fill quantity | `quantity_for_config()` result, all-or-nothing | `fill_quantity`, possibly partial | Semantics MUST match where they overlap (full-fill case); partial-fill capability MAY differ (§9/§15 below) | |
+| Slippage | `CostModel.slippage_adjusted_price()` | Inlined duplicate formula | YES — should call the SAME function, not two copies (Finding, §7) | Formula duplication risk. |
+| Transaction cost | `CostModel.cost_breakdown()` | `compute_cost` injected closure (expected, per docstring, to wrap the same `CostModel`) | YES | Already intended to share the same verified schedule — injection point exists, verify call sites in a future checkpoint. |
+| Position update | `OpenPosition`/`_close_trade()` | `_apply_to_position()` | Semantics MUST match (blended average price, proportional cost attribution) — ALREADY converged per 64.37/64.38 pure-function reuse (`net_pnl.py`, `mark_to_market.py`) | |
+| Accounting event (realized_net_pnl/unrealized_pnl) | `SimulatedTrade.net_pnl`, `_build_mark_to_market_curve()` | `Position.realized_net_pnl`, `Position.unrealized_pnl` | YES — already share `compute_realized_net_pnl`/`compute_unrealized_pnl` pure functions | Converged 64.37/64.38; this checkpoint changes nothing here. |
+| Position lifecycle | `BacktestPositionLifecycleStatus` (3-state) | `PositionStatus`/`PositionLifecycleStatus` (broader) | MAY legitimately differ — Backtest's 3-state vocabulary is an honest reflection of its full-close-only reality (§2's own citation), not an arbitrary alternate design | |
+| Exit reason | `ExitReason` enum (`tradeplan_execution.py:78-88`) plus string literals `"signal_reversal"`/`"end_of_data"` (`engine.py:476,480`) | No equivalent enum found in `broker.py` (exit reason is implicit in which order type/side closed the position) | Should converge eventually — Backtest's typed `ExitReason` enum vs Paper's implicit/untyped reason is an inconsistency worth resolving in a future checkpoint, not this one | |
+
+### 15. MAY-DIFFER list (explicit, measurable, documented)
+
+- **Historical next-bar-open vs live observed-price execution**: Backtest deterministically knows
+  the entire bar series in advance (constrained to never look ahead by construction, `engine.py`'s
+  own next-bar discipline); Paper genuinely only knows prices as `record_price()` delivers them.
+  Measurable: Backtest's fill price is always exactly `bars[i+1].open` (or a TradePlan level);
+  Paper's is whatever the LAST recorded tick was. Documented here and in the entry/exit citations
+  above.
+- **Latency**: Paper's `_clock()` is injected and can model real elapsed time between submission
+  and fill events (`broker.py`'s `OrderEvent.timestamp_utc`/`received_at_utc` split); Backtest has
+  no concept of elapsed wall-clock time between signal and fill — only bar-index granularity.
+- **Data availability**: Backtest requires the full bar series up front; Paper operates
+  incrementally, tick-by-tick, and can legitimately have gaps (no `record_price()` call for a
+  period) that Backtest cannot have (every bar in the series is, by construction, present).
+- **Slippage realization**: both use the SAME flat-percentage MODEL ASSUMPTION formula (§7), but
+  a future upgrade to a liquidity-based/order-book-based slippage model for Paper (reflecting
+  actual observed spread) would legitimately differ from Backtest's necessarily-simplified
+  bar-only assumption — acceptable ONLY if, as now, both sides' formulas are explicitly labeled
+  MODEL ASSUMPTIONS (`cost_model.py:147-151`'s own docstring already does this).
+- **Liquidity**: Backtest has no liquidity constraint at all (any computed quantity always fully
+  fills or is rejected for being zero); Paper's `partial_fill_ratio` can model a liquidity
+  constraint, however crude. Acceptable because it is an explicit, documented, off-by-default
+  (`Decimal("1")`) configuration, not a silent behavioral drift.
+- **Partial-fill probability**: Backtest never partially fills (§9); Paper can, via configuration.
+  Acceptable ONLY because it is: (a) off by default, (b) explicitly documented in the class
+  docstring, (c) mechanically tested (this checkpoint's new characterization tests).
+
+Differences NOT on this list (i.e., NOT currently acceptable, flagged as findings instead):
+Finding F1 (MARKET-order partial-fill stranding) and Finding F2 (LIMIT-order slippage exceeding
+the stated limit) are NOT documented, explicit, intentional differences — they are undocumented
+behavior/docstring mismatches, which is why they are recorded as Findings rather than as
+MAY-DIFFER entries.
+
+### 16. Parity test design (future, not implemented this checkpoint)
+
+A future parity test would need to hold OrderIntent + RiskDecision + execution PARAMETERS
+(quantity, direction, cost model, slippage percent) constant while allowing the PRICE SOURCE
+MECHANICS to differ, then assert the resulting Fill's derived quantities agree wherever they
+are supposed to:
+
+1. Construct one canonical `OrderIntent` (same `quantity`, `side`, `order_type=MARKET`).
+2. Feed Backtest a single-bar series whose `open == X` for the fill bar, and feed Paper a
+   `record_price()` call with the SAME value `X` at fill time.
+3. Configure BOTH engines with the IDENTICAL `slippage_percent` and the SAME
+   `IndianCashEquityIntradayCostModel` instance (or equal-parameter instances).
+4. Assert: `abs(backtest_filled_price - paper_average_fill_price) == 0` (both apply the identical
+   slippage formula to the identical reference price — this WOULD catch Finding F2-style drift if
+   ever a LIMIT-order case were included, since the reference price fed to slippage differs).
+5. Assert: `backtest_trade_costs == paper_fill_cost` for equal notional and `is_buy` (both call
+   into the same verified `CostModel`).
+6. Assert: `backtest_quantity == paper_filled_quantity` ONLY for the full-fill case (never assert
+   equality when `partial_fill_ratio < 1` is configured on the Paper side — that is a legitimate,
+   documented MAY-DIFFER case per §15).
+7. Explicitly do NOT assert equality of "which bar/tick supplied the price" — only the FINAL
+   fill's derived price/cost/quantity, since price-source mechanics are allowed to differ (§15).
+
+Acceptance criteria for such a test to be considered PASSING/MEANINGFUL: it must fail loudly if
+Finding F1 or F2 is ever silently reintroduced after being fixed, and it must never assert
+equality on Backtest's zero-partial-fill-capability vs Paper's partial-fill capability as if they
+were bugs.
+
+### 17. Execution/cost/P&L relationship trace
+
+`OrderIntent` (risk-approved request) -> `Fill` (candidate future contract, §12; today: Backtest's
+inline `filled_entry`/exit values, Paper's `slipped_price`/`fill_quantity`/`fill_cost`) ->
+`Position` update (Backtest: `OpenPosition` mutation + `_close_trade()`; Paper:
+`_apply_to_position()`) -> `realized_net_pnl` (via `domain.trade.net_pnl.compute_realized_net_pnl`,
+shared, 64.37) + `unrealized_pnl` (via `domain.position.mark_to_market.compute_unrealized_pnl`,
+shared, 64.38) -> equity (Backtest: `running_equity` threaded through the bar loop; Paper:
+`PaperBroker.get_equity()` = `available_balance + get_open_positions_market_value()`,
+`broker.py:316-323`). The eventual accounting event (a future formal "AccountingEvent" domain
+object, if one is ever introduced) should be generated at the SAME point both engines already
+compute `realized_net_pnl`/`unrealized_pnl` today — i.e. as a THIN WRAPPER over the existing 64.37/
+64.38 pure functions, never a third, independently-computed figure. No accounting duplication
+exists today to correct; this section is forward-looking design guidance only.
+
+### 18. Performance observations (measured this checkpoint, not optimized)
+
+`poetry run pytest -q` (full suite, 1801 tests after this checkpoint's 5 additions) completed in
+**398.99s** measured test-runner time (`6m42.215s` wall via the `time` wrapper, most of the
+difference being process startup/collection overhead measured by `time` but not by pytest's own
+internal timer) on this machine, this session — comparable to 64.38's own ~413s baseline (no
+regression, no improvement claimed; normal run-to-run variance). No per-bar/per-fill
+microbenchmark was constructed this checkpoint (out of scope per the directive's "do NOT
+optimize" instruction and "measure only if practical" — a dedicated benchmark harness was judged
+not practical to build safely within an audit-only checkpoint without risking accidentally
+becoming a mini-implementation effort). No Dhan/live network was touched, per the market-closed
+constraint.
+
+### 19. Future implementation sequence (design guidance only, NOT started)
+
+1. Route Paper's inlined slippage formula (`broker.py:428-435`) through the SAME
+   `CostModel.slippage_adjusted_price()` Protocol method Backtest already uses, eliminating the
+   formula-duplication risk noted in §7 (fixes nothing behaviorally today since the formulas are
+   identical, but removes the drift risk).
+2. Fix Finding F2 (decide, explicitly, whether LIMIT-order slippage should apply on top of the
+   limit price or not — currently undocumented-as-intended behavior) and Finding F1 (give MARKET
+   orders a resting-fill completion path, or explicitly document that MARKET orders never
+   partially-then-later-complete).
+3. Introduce the candidate `Fill` contract (§12) as a genuinely new, additive domain object —
+   populate it from BOTH engines' existing computations without changing either engine's existing
+   fields.
+4. Only once (1)-(3) are stable: consider whether Backtest's inline entry/exit logic could be
+   refactored to consume the SAME `Fill`-producing seam Paper's `PaperBroker` already has, without
+   changing any existing numerical backtest result (a pure architectural refactor, gated behind
+   full regression parity).
+5. Partial-exit EXECUTION (a strategy layer that actually ISSUES partial-exit orders) remains a
+   separate, later concern from Fill/Execution convergence — do not conflate the two.
+
+This checkpoint implements NONE of the above — it is guidance for a future checkpoint only.
+
+## CHECKPOINT 64.40 — EXECUTION CORRECTNESS FIXES
+
+64.39 audited-and-documented (but did not fix) two genuine execution defects and one duplication
+risk. 64.40 fixes exactly those three items, additively, with full regression parity — no `Fill`
+contract, no execution engine, no partial-exit engine.
+
+### F1 — partial MARKET fill completion
+
+**Root cause**: `PaperBroker._maybe_fill_resting_order()` (`broker.py`, pre-64.40) had branches
+only for `OrderType.LIMIT` and `OrderType.STOP_LOSS`/`STOP_LOSS_MARKET`. A MARKET order left
+`PARTIALLY_FILLED` by its one synchronous `_attempt_fill()` call inside `submit_order()` (when
+`partial_fill_ratio < 1`) had NO branch driving any further fill attempt — `record_price()`'s
+resting-order loop iterated it every tick but silently did nothing, forever.
+
+**Intended semantics (decided this checkpoint)**: `partial_fill_ratio` models a ONE-TIME liquidity
+constraint at initial submission, not a repeating one. The remaining quantity completes IN FULL on
+the next valid `record_price()` observation — never re-applies the ratio to the shrinking
+remainder (which would asymptotically approach, but never reach, zero — an infinite-fill risk
+explicitly forbidden by the checkpoint directive). This matches the directive's own preferred flow
+(remaining quantity -> next valid execution observation -> additional fill -> FILLED when
+remaining = 0) and is the conservative, safety-first choice for a live-paper-intent broker: an
+order that can never complete is a worse outcome than one that completes slightly later than a
+strict ratio-repeated model might imply.
+
+**Fix**: `_maybe_fill_resting_order()` gained an `OrderType.MARKET` branch: if `record.status is
+OrderStatus.PARTIALLY_FILLED`, it calls `_attempt_fill(record, price, force_full_remaining=True)`.
+`_attempt_fill()` gained a `force_full_remaining: bool = False` keyword parameter — when `True`,
+`fill_quantity = remaining` (bypassing the `partial_fill_ratio` computation entirely, which was
+already applied once at initial submission). No new `OrderStatus` value, no new order state, no
+change to `OrderStatus` transitions beyond the already-legal `PARTIALLY_FILLED -> FILLED`
+(`state_machine.py`'s existing `ALLOWED_TRANSITIONS` table, unchanged).
+
+**Bounds proof (no infinite/zero/overfill loop)**: `force_full_remaining=True` sets
+`fill_quantity = remaining` unconditionally — never zero (unless `remaining` is already zero, in
+which case the order is already `FILLED` and the branch's own `record.status is PARTIALLY_FILLED`
+guard prevents re-entry), never negative (Decimal arithmetic on a monotonically-decreasing
+`filled_quantity <= intent.quantity` invariant preserved from the pre-existing formula), and never
+more than one additional fill event completes it (the branch only fires while status is
+`PARTIALLY_FILLED`; once `_attempt_fill` sets it to `FILLED`, the loop's own outer filter in
+`record_price()` — `status not in (PENDING, PARTIALLY_FILLED)` — excludes it from all future
+ticks).
+
+**Tests**: `tests/unit/research/test_checkpoint_64_40_execution_correctness.py::TestF1PartialMarketFillCompletes`
+(5 tests: multi-fill completes to exact quantity + FILLED; per-fill cost computed and summed
+correctly; no duplicate fill on a repeated observation after completion; cannot exceed requested
+quantity across an uneven ratio; `partial_fill_ratio = 1` remains ordinary full-fill behavior).
+`test_checkpoint_64_39_execution_fill_audit.py`'s own MARKET-partial-fill test was updated in
+place (it previously characterized the bug; it now characterizes the fix — see that file's
+updated docstring).
+
+### F2 — LIMIT order + slippage boundary
+
+**Root cause**: `PaperBroker._attempt_fill()` (pre-64.40) computed `slipped_price` from whatever
+`price` argument it was given, with no order-type awareness. `_maybe_fill_resting_order()` passed
+`intent.limit_price` itself as that `price` for a crossed LIMIT order, so slippage was then applied
+ON TOP of the stated limit price — a BUY LIMIT could fill WORSE than its own limit, contradicting
+the class docstring's "never worse [than limit]" claim.
+
+**Intended semantics (decided this checkpoint)**: the checkpoint directive's own recommended model
+was verified against the existing docstring and adopted as-is (no contradicting project rule was
+found): determine crossing against the raw observed price (unchanged), determine the execution
+price, apply slippage, then ENFORCE the limit-price boundary by clamping — `min(slipped_price,
+limit_price)` for BUY, `max(slipped_price, limit_price)` for SELL. This is the standard limit-order
+guarantee ("never worse than your stated limit") applied consistently even under nonzero
+`slippage_percent`.
+
+**Scope decision**: the clamp is applied to BOTH plain `OrderType.LIMIT` (explicitly named by F2)
+and the `OrderType.STOP_LOSS` limit leg (which also fills at `intent.limit_price` once triggered
+and crossed — the identical defect, by the identical mechanism, in the same function). Applying the
+fix there too is not scope creep; leaving it unfixed would have left a byte-identical bug
+un-remediated in a sibling code path of the exact function this checkpoint modifies.
+`STOP_LOSS_MARKET` is explicitly NOT clamped — it has no stated limit boundary (it is, by design, a
+market order once triggered), so slippage applies unclamped there, matching its own already-audited
+and unchanged behavior.
+
+**Fix**: `_attempt_fill()` gained a `limit_boundary: Decimal | None = None` keyword parameter.
+`_maybe_fill_resting_order()` passes `limit_boundary=intent.limit_price` for both the LIMIT branch
+and the STOP_LOSS limit-leg branch. After computing and rounding `slipped_price`, `_attempt_fill()`
+clamps it against `limit_boundary` when set, BEFORE computing `notional`/`cost` — so transaction
+cost is always based on the ACTUAL (post-clamp) fill price, never the raw observed price, the
+original limit price coincidentally, or the pre-clamp slipped price. Slippage remains an
+execution-price adjustment, never folded into `CostBreakdown` as a cost line item (unchanged from
+64.39's own finding).
+
+**Tests**: `TestF2LimitOrderSlippageBoundary` (5 tests: BUY LIMIT clamped under adverse slippage;
+SELL LIMIT clamped under adverse slippage; zero slippage unchanged; LIMIT not crossed does not
+fill; STOP_LOSS's own limit leg also clamped). `test_checkpoint_64_39_execution_fill_audit.py`'s
+own LIMIT-slippage test was updated in place (previously characterized the bug; now characterizes
+the fix).
+
+### Shared slippage function
+
+**New module**: `src/intraday/domain/shared_kernel/slippage.py` —
+`apply_flat_percentage_slippage(*, is_buy: bool, price: Decimal, slippage_percent: Decimal) ->
+Decimal`. Pure function, no I/O, no rounding (rounding remains each caller's own responsibility —
+Backtest's `CostModel.slippage_adjusted_price()` has always returned an unrounded Decimal; changing
+that would have altered Backtest's numerical results, which the directive explicitly forbids).
+Placed in `domain.shared_kernel` (not `research.backtesting`, not `infrastructure`) because
+`.importlinter` contract 1/2 makes `domain` the one package both `research` and `infrastructure`
+may depend on — the same placement pattern already used for `domain/trade/net_pnl.py` (64.37) and
+`domain/position/mark_to_market.py` (64.38). Deliberately NOT a `SlippageEngine`/`SlippageManager`
+class, per the directive's explicit instruction — exactly one function.
+
+**Backtest caller**: `research/backtesting/cost_model.py`'s
+`FlatPercentageCostModel.slippage_adjusted_price()` and
+`IndianCashEquityIntradayCostModel.slippage_adjusted_price()` both now compute `is_buy = (direction
+== StrategyDirection.BULLISH) == entering` (unchanged logic) and then call
+`apply_flat_percentage_slippage(is_buy=is_buy, price=price, slippage_percent=self.slippage_percent)`
+— the inline `factor = slippage_percent/100; return price*(1+/-factor)` body was deleted from both
+methods.
+
+**Paper caller**: `infrastructure/brokers/paper/broker.py::PaperBroker._attempt_fill()` now calls
+`apply_flat_percentage_slippage(is_buy=is_buy, price=price, slippage_percent=self._slippage_percent)`
+then applies its own pre-existing `_round()` (2dp, `ROUND_HALF_UP`) to the result — the inlined
+`Decimal("1") +/- self._slippage_percent/Decimal("100")` expression was deleted.
+
+**Proof both callers use the SAME function object (not structurally similar duplicate code)**:
+`TestSharedSlippageFunction` in `test_checkpoint_64_40_execution_correctness.py` monkeypatches
+`apply_flat_percentage_slippage` at each call site's own imported name
+(`intraday.research.backtesting.cost_model.apply_flat_percentage_slippage` and
+`intraday.infrastructure.brokers.paper.broker.apply_flat_percentage_slippage`) with a spy wrapper
+and asserts the spy was actually invoked with the expected keyword arguments — a structural
+duplicate could not pass this test, only a genuinely shared call site can.
+
+**Numerical-parity proof**: `test_backtest_and_paper_produce_identical_numbers_for_same_inputs`
+computes the same slippage-adjusted price via both `FlatPercentageCostModel.slippage_adjusted_price()`
+and a live `PaperBroker` fill, and asserts Paper's (rounded) result equals Backtest's own result
+quantized to 2dp.
+
+### Accounting compatibility
+
+`realized_net_pnl` (64.37's `compute_realized_net_pnl`) and `unrealized_pnl` (64.38's
+`compute_unrealized_pnl`/`mark_position`) were not touched — `TestF1F2AccountingCompatibility`
+proves both remain correct through an F1 multi-fill round trip and an F2 clamped-entry fill.
+Transaction cost is proven to be based on the actual (post-clamp) fill price, never the raw or
+pre-slippage price (`test_transaction_cost_based_on_final_clamped_fill_price_not_raw_price`). The
+Risk Gate (`evaluate_order_risk()`/`RiskEvaluationContext`) was not modified.
+
+### Fill contract / partial-exit status
+
+Still NOT implemented, exactly as directed. No `Fill`/`FillEvent`/`ExecutionReport` class exists
+anywhere in the codebase after this checkpoint (`TestNoNewAbstractionsIntroduced` mechanically
+verifies this). No partial-exit engine/T1/T2/T3 executor was added.
+
+## CHECKPOINT 64.41 — CANONICAL FILL CONTRACT
+
+64.40 fixed F1, F2, and the slippage-formula duplication. 64.41 introduces the ONE canonical
+`Fill` domain contract the 64.39 audit's §12 candidate design foreshadowed — re-evaluated fresh
+against current source (not assumed final), and scoped to the contract ONLY: no unified execution
+engine, no Backtest/PaperBroker producer wiring, no FillBook/FillManager/ExecutionLedger/
+FillService. Files: `src/intraday/domain/execution/__init__.py` (NEW),
+`src/intraday/domain/execution/contracts.py` (NEW — `Fill`, `FillSource`),
+`tests/unit/research/test_checkpoint_64_41_fill_contract.py` (NEW — 49 tests).
+
+### Fill purpose
+
+`Fill` represents ONE actual execution/fill event — a historical fact, immutable once recorded.
+It is the missing seam the 64.39 audit found absent: neither Backtest (`engine.py`'s inline
+`filled_entry`/exit values) nor `PaperBroker` (`_attempt_fill`'s local `slipped_price`/
+`fill_quantity`/`cost` variables) had ever had a first-class, shared shape for "what happened at
+one execution."
+
+### Fill vs order vs position vs trade
+
+- `OrderIntent` (`domain/order/contracts.py`) = a risk-approved REQUEST, prior to and independent
+  of execution. Unchanged by this checkpoint.
+- `OrderStatus`/`OrderEvent` (`domain/order/contracts.py`, `domain/order/events.py`) = the
+  order's LIFECYCLE vocabulary and per-transition event log. `Fill.status_at_fill` reuses
+  `OrderStatus` directly (see below) rather than inventing a parallel vocabulary.
+- `Fill` (this checkpoint) = ONE actual EXECUTION EVENT — how much filled, at what price, when,
+  at what cost, with what slippage, resulting in what order state, from what environment.
+- `Position` (`domain/position/contracts.py`) = current holdings, a snapshot Fills will
+  (eventually, in a future checkpoint) feed into — never represented by `Fill` itself, and `Fill`
+  does not reference `Position` at all.
+- `Trade` (`domain/trade/contracts.py`) = a CLOSED round trip (entry + exit), an aggregate over
+  potentially many Fills across potentially many orders (`Trade.order_ids` is already a tuple) —
+  never a single execution event.
+- Partial Exit = a strategy-level DECISION to reduce a Position (why an order was issued) — never
+  represented by `Fill`, which only ever records that an execution happened.
+- Partial Fill = an execution RESULT where `Fill.quantity < order.quantity` for that order overall
+  — represented structurally by `Fill.quantity` plus `Fill.status_at_fill ==
+  OrderStatus.PARTIALLY_FILLED`, and by the fact that one `order_id` can have more than one `Fill`.
+
+These five concepts are kept structurally distinct in code — `Fill` has no field, method, or
+import that reaches into `Position`, `Trade`, or any partial-exit/risk-decision type.
+
+### Fill field decisions
+
+| Field | Type | Required | Rationale |
+|---|---|---|---|
+| `fill_id` | `str` | Yes | Own identity, distinct from `order_id` (one order may have >1 fill). Producer supplies (deterministic for Backtest, uniquely generated for Paper/Live); contract validates non-empty only, mirroring `OrderIntent.idempotency_key`'s own pattern. |
+| `order_id` | `OrderId` | Yes | Traces back to the originating `OrderIntent` (`Fill.order_id == OrderIntent.order_id`), mirrors `Trade.order_ids`'s linkage pattern. Never overloaded as the fill's own identity. |
+| `instrument_id` | `InstrumentId` | Yes | Required for any cross-instrument aggregation; reused verbatim from `domain.shared_kernel.contracts`. |
+| `side` | `Side` | Yes | BUY/SELL, reused from `domain.shared_kernel.contracts` — never a new enum. |
+| `quantity` | `Decimal` | Yes, `> 0` | THIS fill's own quantity, never the order's total unless the whole order filled in one event (§2 semantics: qty-100 order filling 40-then-60 is two Fills, `quantity=40` and `quantity=60`). |
+| `price` | `Decimal` | Yes, `> 0` | The ACTUAL execution price — AFTER slippage AND after any limit-boundary clamp (64.40 F2). Never the raw observed price, the stated limit price, or a pre-slippage value. |
+| `timestamp` | `datetime` | Yes, UTC-aware | The execution timestamp (`ensure_utc()`, the same convention as every other domain contract) — historical simulated time for Backtest, real observed time for Paper. Never signal or order-creation time. |
+| `transaction_cost` | `Decimal` | Yes, `>= 0` | See "Transaction cost representation" below — a scalar, not `CostBreakdown`. |
+| `slippage_applied` | `Decimal` | Yes | See "Slippage representation" below — a signed price adjustment, kept structurally separate from `transaction_cost`. |
+| `status_at_fill` | `OrderStatus` | Yes, restricted | `OrderStatus.FILLED` or `OrderStatus.PARTIALLY_FILLED` only — the two states a fill event can produce; validated in `__post_init__`, not left to caller discipline. |
+| `source` | `FillSource` | Yes | See "Source/provenance" below — a new closed enum, not a bare string literal. |
+
+No field was added "because it might be useful" — every field maps to one of the eight things the
+directive required a Fill to represent (order/instrument/side/quantity/price/timestamp/
+transaction-cost/slippage/resulting-status/origin).
+
+### Identifier semantics
+
+`fill_id` is the Fill's own identity; `order_id` is a reference to its originating order. The
+relationship is `Fill.order_id == OrderIntent.order_id`, never the reverse and never conflated —
+one `OrderIntent` may produce many `Fill`s, so `order_id` alone can never serve as a Fill's own
+primary key. Enforcing "sum of a producer's Fills for one order stays within that order's
+quantity" is explicitly the PRODUCER's responsibility (Backtest/PaperBroker/future Live), not
+`Fill`'s own — `Fill` remains independently constructible as a valid event without depending on an
+entire `OrderIntent` object (directive §19), since `OrderIntent` itself carries no mutable
+`remaining_quantity` for `Fill` to check against.
+
+### Quantity semantics
+
+`Fill.quantity > 0` is enforced in `__post_init__`; `quantity <= order.remaining_quantity` is NOT
+enforced by `Fill` itself (no Order-aggregate dependency exists), left to the producer, exactly as
+the directive specifies. `TestSumOfFillQuantitiesInvariant` documents both sides of this boundary:
+a well-behaved two-Fill sequence summing correctly, and an explicit test proving `Fill` does NOT
+prevent a pathological producer from constructing an overfilling pair — a deliberate, documented
+non-goal for this checkpoint, not an oversight.
+
+### Actual-price semantics
+
+`Fill.price` means the ACTUAL execution price — after slippage AND after any limit-boundary
+clamp (64.40 F2's own enforcement: `min(slipped_price, limit_price)` for BUY,
+`max(slipped_price, limit_price)` for SELL). Never the raw/reference/limit/pre-slippage price.
+Documented at length in the dataclass docstring; `TestActualExecutionPriceSemantics` exercises the
+LIMIT-clamped case explicitly (price=100.00 final, slippage_applied recorded separately) so the
+distinction between "the price that happened" and "the adjustment that produced it" is testable,
+not only documented prose.
+
+### Timestamp semantics
+
+`Fill.timestamp` uses the same `ensure_utc()` convention as every other domain timestamp in this
+codebase (`OrderIntent.created_at`, `OrderEvent.timestamp_utc`, `Position.opened_at`, ...) — no
+custom time type introduced. It means the execution timestamp specifically: for Backtest, the
+historical simulated bar/tick time; for Paper, the real observed `record_price()`/`submit_order()`
+time. Never signal time, never order-creation time — those already have their own fields elsewhere
+(`OrderIntent.created_at`).
+
+### Source/provenance
+
+A new `FillSource` enum (`BACKTEST`/`PAPER`/`LIVE`) was introduced — a repo-wide grep this
+checkpoint found NO existing canonical type for "which execution environment produced this event."
+`domain.strategy.contracts.StrategyMaturityState.PAPER` was considered and rejected: it is a
+strategy LIFECYCLE/promotion stage (IDEA → ... → PRODUCTION), an unrelated concept — a strategy
+could be in maturity stage `PAPER` while its Fills (once a producer exists) are tagged `PAPER` for
+a completely different reason (execution venue). Conflating the two would be a real modeling
+error, not a convenience. A bare `Literal["BACKTEST","PAPER","LIVE"]` was also rejected in favor
+of a proper enum, matching this project's own established convention (`OrderStatus`,
+`PositionStatus`, `Side`, `TradingHaltStatus`, ... are all typed enums, never string literals).
+`source` is never inferred from `order_id`/`fill_id`/context — it must always be supplied
+explicitly by the (future) producer.
+
+### Status semantics
+
+`status_at_fill` reuses `domain.order.contracts.OrderStatus` directly — no new `FillStatus` enum
+was created (`TestNoOrderStatusVocabularyDuplicated` mechanically confirms no such class exists).
+Validated to be exactly `FILLED` or `PARTIALLY_FILLED` — the only two states a fill event can
+produce; any other `OrderStatus` member is definitionally not a fill outcome (REJECTED/CANCELLED/
+PENDING/etc. mean no execution happened at all in that event). A Fill event CAN and DOES coexist
+with `PARTIALLY_FILLED` — that is precisely how a partial fill is represented.
+
+### Transaction-cost representation
+
+`Fill.transaction_cost: Decimal`, `>= 0` — deliberately a scalar, NOT `research.backtesting
+.cost_model.CostBreakdown`. `CostBreakdown` lives in `intraday.research.backtesting`, and
+`.importlinter` contract 1 forbids `intraday.domain` from importing anything under
+`intraday.research` — reusing it here would either break that contract or require relocating
+`CostBreakdown` into the domain layer, a much larger, unrelated architectural change explicitly
+out of scope for a "canonical contract only" checkpoint. A scalar also matches what both current
+producers already compute at their fill-price point: Backtest has a `CostBreakdown` and can
+trivially pass `.total`; `PaperBroker._attempt_fill` already only ever has a scalar `cost` from its
+injected `compute_cost` closure. No second, competing cost model was created — this field carries
+a number an existing cost model produced.
+
+### Slippage representation
+
+`Fill.slippage_applied: Decimal` — a signed PRICE adjustment (not a percentage, not a cost-model
+line item), kept structurally separate from `transaction_cost`, mirroring `CostBreakdown.total`'s
+own explicit "excludes slippage" design (`cost_model.py` Part 8: slippage is priced into the fill
+price, never summed into a cost total, to avoid double-counting it as both a price adjustment and
+a cost line item). This checkpoint does not require a producer to populate it consistently (no
+producer exists yet) — the contract only requires the field be present and of type `Decimal`; the
+exact "reference price minus fill price" formula is left for the future producer checkpoint to
+implement using the existing `apply_flat_percentage_slippage()` (64.40) as its source of truth.
+
+### Immutability
+
+`@dataclass(frozen=True, slots=True)`, the exact project-standard immutable-contract pattern used
+by every other `domain/*/contracts.py` dataclass (`OrderIntent`, `OrderEvent`, `Trade`,
+`Position`, `RiskDecision`, ...). `TestImmutability` proves both frozen-field-assignment rejection
+and slots-based rejection of arbitrary new attributes.
+
+### Domain dependencies
+
+`src/intraday/domain/execution/contracts.py` imports only `enum`, `dataclasses`, `datetime`,
+`decimal` (stdlib) and `intraday.domain.order.contracts.OrderStatus` +
+`intraday.domain.shared_kernel.contracts` (domain-internal) — verified both by manual reading and
+mechanically by `TestNoDjangoDhanApplicationResearchDependency`'s AST-based import walk, and by a
+fresh `poetry run lint-imports` run (6 kept, 0 broken) after the new module was added.
+
+### Producer integration status
+
+NOT wired, exactly as directed. `PaperBroker` (`infrastructure/brokers/paper/broker.py`) and the
+Backtest engine (`research/backtesting/engine.py`) were not modified — zero diff to either file
+this checkpoint (confirmed via `git diff --stat -- <file>` isolation). No `Fill(...)` construction
+call exists anywhere outside the new test file.
+
+### Backtest/Paper parity implications
+
+The contract is designed so BOTH a future Backtest-sourced Fill and a future Paper-sourced Fill
+would use the identical schema (`TestBacktestPaperParityDesign` proves both `FillSource.BACKTEST`-
+and `FillSource.PAPER`-tagged `Fill` instances share the exact same field set), differing only in
+`source`/`timestamp`/`price` as the execution environment legitimately dictates (per §15's own
+MAY-DIFFER list — historical vs live price-source mechanics, latency, liquidity). This checkpoint
+does not itself increase Backtest/Paper execution convergence — no producer exists yet — it only
+ensures that WHEN producers are built (a future checkpoint), they will populate one shared shape
+rather than two independently-evolved ones.
+
+## CHECKPOINT 64.42 — PAPERBROKER FILL PRODUCER
+
+64.41 introduced the canonical `Fill`/`FillSource` contract, deliberately unwired. 64.42 is the
+FIRST checkpoint permitted to make it real, and does so for exactly one producer: `PaperBroker`.
+The `Fill` contract itself (`src/intraday/domain/execution/contracts.py`) was NOT modified this
+checkpoint — no genuine integration defect was found in it.
+
+### Every actual PaperBroker fill point (execution map)
+
+All fills in `PaperBroker` — regardless of order type — pass through the ONE existing method
+`_attempt_fill()` (`src/intraday/infrastructure/brokers/paper/broker.py`). Verified by re-reading
+the file fresh this checkpoint (not assumed from 64.41's report), the callers of `_attempt_fill`
+are:
+
+1. `submit_order()` — MARKET order, immediate fill against the latest recorded price (full or
+   `partial_fill_ratio`-limited).
+2. `_maybe_fill_resting_order()`, LIMIT branch — fills at `intent.limit_price`,
+   `limit_boundary=intent.limit_price` (64.40 F2 clamp).
+3. `_maybe_fill_resting_order()`, STOP_LOSS_MARKET branch — fills at the triggering price, no
+   boundary clamp (no stated limit leg for this order type).
+4. `_maybe_fill_resting_order()`, STOP_LOSS branch — fills at `intent.limit_price` once triggered
+   AND fillable, `limit_boundary=intent.limit_price` (same F2 reasoning as LIMIT).
+5. `_maybe_fill_resting_order()`, MARKET branch (64.40 F1 completion) — a MARKET order left
+   PARTIALLY_FILLED at initial submission completes its remainder in full on the next
+   `record_price()` observation, via `_attempt_fill(..., force_full_remaining=True)`.
+
+There is no sixth path — `_attempt_fill` is the single, exhaustive fill point for every order type
+this broker supports, confirmed by grepping the file for every call site of `_attempt_fill` (5
+call sites total, all enumerated above).
+
+### Fill construction seam
+
+Exactly one `Fill(...)` construction is added, inside `_attempt_fill()` itself, placed
+IMMEDIATELY AFTER the existing `self._transition(...)` and `self._apply_to_position(...)` calls —
+i.e. after all pre-existing order/position mutation has already happened, using the SAME local
+variables that mutation already used (`fill_quantity`, `slipped_price`, `cost`, `target_state`),
+never independently recomputed. If `_attempt_fill` returns early (insufficient funds -> REJECTED),
+execution never reaches the `Fill` construction — no Fill is produced for a rejected order.
+
+### Fill ID strategy
+
+`fill_id=str(uuid.uuid4())` — a fresh UUID4 per actual execution event, generated via the
+PaperBroker's existing `uuid` import (already used for `Position.position_id`, `Trade.trade_id`,
+`OrderEvent.event_id` in this same file — no new ID mechanism introduced). Per the directive,
+uniqueness matters more than reproducibility for Paper runtime; UUID4 gives that without inventing
+a distributed-ID service. `order_id` is deliberately NEVER reused as `fill_id` — one `OrderIntent`
+may produce multiple `Fill`s (F1 partial-then-complete), so they must have independent identities.
+
+### Multi-fill behavior
+
+Each call to `_attempt_fill` produces exactly one `Fill` for exactly the quantity that ACTUAL call
+filled — never the order's total. A MARKET order with `partial_fill_ratio=0.5` submitted for
+quantity 10 produces Fill #1 (`quantity=5`, `PARTIALLY_FILLED`) at `submit_order()` time, then Fill
+#2 (`quantity=5`, `FILLED`) on the next `record_price()` call that completes it (F1's own
+completion path) — both share `order_id`, both have distinct `fill_id`s, and
+`fill_1.timestamp < fill_2.timestamp` in this exact order (never re-sorted).
+
+### Actual price capture
+
+`Fill.price = slipped_price` — the SAME post-slippage, post-F2-clamp `Decimal` already assigned to
+`record.average_fill_price` and passed into `_apply_to_position()`. Never the raw observed price,
+never the stated limit/trigger price pre-adjustment.
+
+### Slippage capture
+
+`Fill.slippage_applied = slipped_price - price`, where `price` is `_attempt_fill`'s own `price`
+parameter — the reference price BEFORE slippage and BEFORE any F2 clamp (the market price for
+MARKET/STOP_LOSS_MARKET, the stated `limit_price` for LIMIT/STOP_LOSS's limit leg). This is the
+exact, already-available signed adjustment the execution path applied to arrive at the actual fill
+price — not a second, independently-derived formula. Worked example matching the directive's own
+(BUY, 1% slippage, raw=100): `slipped_price=101.00`, `slippage_applied=+1.00`; SELL case:
+`slipped_price=99.00`, `slippage_applied=-1.00`. For a LIMIT fill clamped by F2, the clamp is
+already baked into `slipped_price`, so `slippage_applied` correctly reflects the ACTUAL net
+adjustment applied — verified by `TestLimitBoundaryReflectedInFill` in the new test file.
+
+### Transaction cost capture
+
+`Fill.transaction_cost = cost` — the exact `Decimal` `_attempt_fill` already computed via the
+injected `compute_cost` closure and already charged to/credited from `_available_balance` for THIS
+fill only. For a multi-fill order, each `Fill` carries its own separately-computed `cost` value
+(proven by `test_multi_fill_order_attributes_cost_per_fill_not_per_order`, which injects a
+stateful cost closure returning a different amount per call and asserts each `Fill.transaction_cost`
+matches its own call's result, not the order-level total).
+
+### Timestamp source
+
+`Fill.timestamp` is a fresh call to `self._clock()` — the SAME clock function this class already
+uses for `OrderEvent.timestamp_utc`, `Position.opened_at`, `Trade.closed_at`. Deliberately NOT
+`intent.created_at` (order-creation time). This is one ADDITIONAL `self._clock()` call beyond what
+`_attempt_fill` already made — purely additive, never replacing or reordering any existing
+`self._clock()` call, so no existing timestamp value anywhere else in this class changes.
+
+### status_at_fill
+
+`Fill.status_at_fill = target_state` — the exact `OrderStatus.FILLED`/`OrderStatus.PARTIALLY_FILLED`
+value `_attempt_fill` already computed and passed to `self._transition(...)` immediately above. No
+new vocabulary, no possible drift between the order's own transitioned state and the Fill's
+recorded state, because they are the same Python object reference.
+
+### FillSource.PAPER
+
+Every `Fill` constructed by `PaperBroker` is explicitly given `source=FillSource.PAPER` — never
+inferred, matching the 64.41 contract's own explicit-supply requirement.
+
+### Retention / observation mechanism
+
+`PaperBroker.__init__` gains one new instance attribute, `self._fills: list[Fill] = []`, mirroring
+the EXACT pre-existing pattern already used for `self._trades: list[Trade] = []` in this same
+class. Each actual fill event appends one `Fill` to this list, in execution order, never re-sorted.
+A new accessor, `get_fills() -> tuple[Fill, ...]`, exposes an immutable snapshot copy, mirroring
+`get_trades()`'s own existing `tuple(self._trades)` pattern exactly. This was chosen over every
+other option the directive listed (attaching to `_PaperOrder`, returning from `submit_order()`)
+because: (1) it is the smallest change — one new list field plus one new accessor, no change to
+any existing method signature or return type; (2) it naturally supports multiple fills per order
+without needing a `list[Fill]` field added to `_PaperOrder` (which would touch that dataclass's
+shape); (3) it is exactly the existing, already-reviewed pattern this class uses for `Trade`, so it
+introduces no new architectural idiom for a future reader to learn. `get_fills()` is explicitly NOT
+part of `BrokerGateway` (mirrors `get_order_events()`'s own "not part of BrokerGateway" note) — it
+is Paper-specific observability, not a live-broker-portable Protocol method.
+
+### Position compatibility
+
+`Position` (`domain/position/contracts.py`) and `_apply_to_position()` were NOT modified. The
+`Fill` construction happens strictly AFTER `_apply_to_position(intent, fill_quantity, slipped_price,
+cost)` has already run, using the identical `fill_quantity`/`slipped_price` values —
+`test_fill_quantity_and_price_equal_actual_position_update_values` proves `Fill.quantity ==
+Position.quantity` and `Fill.price == Position.average_entry_price` for a position opened by
+exactly one fill.
+
+### Accounting compatibility
+
+`realized_net_pnl` (64.37), `unrealized_pnl`/`market_value`/`equity` (64.38) formulas and call
+sites (`compute_realized_net_pnl`, `mark_position`, `position_market_value`) were NOT touched.
+`Fill` has no reference to, dependency on, or influence over any of them — it is constructed AFTER
+they would already have been computed for this fill event, and none of those functions reads
+`self._fills`. `test_realized_net_pnl_unrealized_pnl_equity_unaffected_by_fill_producer` proves a
+full BUY-then-SELL round trip still produces `realized_pnl=100.00`, `realized_net_pnl=96.00`
+(after two Decimal("2.00") attributed costs), `unrealized_pnl=0` (position closed), and
+`equity=1000096.00` — identical to what those formulas would produce with no `Fill` producer at
+all — while `get_fills()` independently reports 2 Fill events for the same scenario.
+
+### Backtest deliberately untouched
+
+`src/intraday/research/backtesting/engine.py`, `execution.py`, `portfolio.py`, `cost_model.py`,
+`tradeplan_execution.py`, `position_lifecycle.py` were not read for modification and show zero new
+diff this checkpoint (`git diff --stat -- src/intraday/research/backtesting/` isolates the SAME
+3-file, 162-line diff already carried forward from before this checkpoint — `cost_model.py`,
+`portfolio.py`, `risk_gate_adapter.py` — none of which changed size this session). No Backtest Fill
+producer, no unified execution engine, no `ExecutionAdapter`/`FillBook`/`FillManager`/
+`ExecutionLedger`/event store was created — mechanically confirmed by
+`TestScopeDiscipline.test_no_fillbook_fillmanager_executionledger_introduced` in the new test file.

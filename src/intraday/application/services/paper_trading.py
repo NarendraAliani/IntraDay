@@ -110,13 +110,31 @@ class PaperTradingService:
         current_exposure = sum(
             (p.quantity * p.average_entry_price for p in open_positions), Decimal("0")
         )
-        daily_realized_pnl = sum((p.realized_pnl for p in positions), Decimal("0"))
+        # Checkpoint 64.37: the Risk Gate is fed the cost-INCLUSIVE
+        # `realized_net_pnl` (Position.realized_net_pnl, populated by
+        # `PaperBroker` — see `domain.trade.net_pnl.
+        # compute_realized_net_pnl`), NOT the cost-exclusive
+        # `Position.realized_pnl`. This is the SAME semantic quantity
+        # `evaluate_backtest_entry_risk` feeds it via
+        # `SimulatedTrade.net_pnl` (already cost-inclusive by
+        # construction — see `research/backtesting/risk_gate_adapter.py`).
+        # `Position.realized_pnl` ITSELF is untouched and still summed
+        # nowhere for risk purposes other than this one, now-corrected,
+        # call site; any other consumer of `Position.realized_pnl`
+        # remains fully backward compatible (Rule 6/16). A position whose
+        # producer never populated `realized_net_pnl` (pre-64.37 state,
+        # or a position with no closed trade yet) falls back to `0` —
+        # honest for an all-open, nothing-realized-yet position, never a
+        # fabricated non-zero figure.
+        daily_realized_net_pnl = sum(
+            (p.realized_net_pnl or Decimal("0") for p in positions), Decimal("0")
+        )
 
         context = RiskEvaluationContext(
             risk_limits=self._risk_limits,
             risk_configuration_version=self._risk_configuration_version,
             now=now,
-            current_daily_realized_pnl=daily_realized_pnl,
+            current_daily_realized_pnl=daily_realized_net_pnl,
             current_total_exposure=current_exposure,
             current_open_positions_count=len(open_positions),
             current_position_size_for_instrument=(

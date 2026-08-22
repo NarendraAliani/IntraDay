@@ -2,470 +2,567 @@
 
 ## Checkpoint
 
-64.33 — "CONVERGE PORTFOLIO.PY WITH CANONICAL ORDERINTENT AND POSITION LIFECYCLE". 64.32 (which
-wired the canonical Position Lifecycle into `run_backtest()`'s single-instrument path) is accepted
-in full. This checkpoint closes the last explicitly-identified structural gap: `portfolio.py`'s
-multi-instrument path previously produced `SimulatedTrade` records without either the canonical
-`OrderIntent` (64.31) or Position Lifecycle (64.32). Given this checkpoint immediately followed a
-near-incident in 64.32 (an agent briefly reverted all uncommitted work via a misapplied
-`git apply -R`), this checkpoint carried an explicit, heavily-emphasized read-only-git-only
-restriction, which I independently verified was honored.
+64.42 — "PAPERBROKER -> CANONICAL FILL PRODUCER". Wires the 64.41 canonical `Fill` domain
+contract into `PaperBroker`'s actual execution path so every REAL fill produces one canonical
+`Fill` event, additively, alongside the pre-existing `_PaperOrder`/`Position`/`Trade` mechanics
+which remain unchanged. Backtest, Dhan, and frontend are deliberately untouched.
 
 ## Objective
 
-Make `portfolio.py`'s multi-instrument construction path use the same canonical `OrderIntent` and
-Position Lifecycle representations already established for `run_backtest()`, preserving
-`portfolio.py`'s actual multi-instrument concurrency semantics — never collapsing it into the
-single-position model, never inventing parallel vocabulary.
+Per the verbatim directive: identify every actual `PaperBroker` fill point, construct exactly one
+`Fill` per actual execution event (never per `OrderIntent`), never replace existing order/position/
+accounting structures, add a minimal retention seam, write mandatory tests, run full regression +
+quality gates, document in the architecture file, and overwrite `taskReport.md`.
 
 ## Market State
 
-Not checked — market closed, no live work in scope.
+2026-08-22. Market closed (Saturday). No Dhan connection attempted, no live/network activity of
+any kind this checkpoint.
 
 ## Dhan State
 
-Not touched. Last known state: credential `EXPIRED`. Unrelated to this checkpoint.
+Untouched. No Dhan file read or modified.
 
 ## Previous Checkpoint Status
 
-**Independently re-verified, with additional scrutiny given the prior checkpoint's process
-incident.** 64.30's risk gate, 64.31's `OrderIntent` retention, and 64.32's Position Lifecycle
-wiring in `engine.py`/`contracts.py`/`execution.py` all remain intact — confirmed by direct diff
-reading, which shows only new 64.33-specific hunks in `portfolio.py` and zero unexpected changes
-elsewhere. Critically: no destructive git operation was run this checkpoint (confirmed via
-`git log --oneline -3` showing the same three commits as every prior checkpoint since 64.25, and
-via every carried-forward file's line count matching its previously-reported size exactly — see
-Pre-existing Uncommitted/Untracked Files below).
+64.41 (accepted): introduced `intraday.domain.execution.contracts.Fill` + `FillSource` as a
+contract-only domain type — immutable, validated, 49 tests, zero producer wiring. Re-verified this
+checkpoint by reading `contracts.py` fresh (reproduced above in full) before writing any producer
+code, per the directive's own "do not trust taskReport.md blindly" instruction.
 
-## Architecture Baseline
+## PaperBroker Fill Points
 
-The implementing work read `taskReport.md` (64.32), the architecture document, `portfolio.py`,
-`engine.py`, `contracts.py`, `execution.py`, `order_intent_adapter.py`, `risk_gate_adapter.py`,
-`position_lifecycle.py`, and the relevant 64.29-64.32 tests in full before writing any code, per
-the checkpoint's own explicit instruction not to trust `taskReport.md` blindly.
+Re-read `src/intraday/infrastructure/brokers/paper/broker.py` in full this checkpoint (not
+assumed). Every actual fill, for every order type, funnels through the SAME single method,
+`_attempt_fill()`, called from exactly 5 sites:
 
-## Portfolio Architecture
+1. `submit_order()` — MARKET, immediate fill on submission.
+2. `_maybe_fill_resting_order()` LIMIT branch — `limit_boundary=intent.limit_price` (64.40 F2).
+3. `_maybe_fill_resting_order()` STOP_LOSS_MARKET branch — no boundary clamp.
+4. `_maybe_fill_resting_order()` STOP_LOSS branch — `limit_boundary=intent.limit_price`.
+5. `_maybe_fill_resting_order()` MARKET branch — F1 completion of a prior partial fill.
 
-**Independently confirmed via direct diff/file reading, not merely relayed.** `run_portfolio_
-backtest()` maintains `open_positions: dict[InstrumentId, OpenPosition]` — one slot per
-instrument, reusing the exact same `execution.OpenPosition` dataclass `engine.py` uses (never a
-portfolio-specific type, confirmed by the fact `portfolio.py`'s diff shows only new import lines
-and inline logic, no new dataclass definition). Entry requires: no open position for that
-instrument, a non-neutral signal, and capital/`max_concurrent_positions` checks passing. Exit uses
-a local `_close()` closure handling signal-reversal or end-of-data. Unlike `engine.py`'s single
-global `open_position`, multiple instruments can be simultaneously open, exiting, and re-entering on
-the same bar index — the material structural difference from `run_backtest()`, correctly identified
-and preserved rather than collapsed.
+No sixth path exists. For each, `_attempt_fill` already computes `fill_quantity`, `slipped_price`
+(post-slippage, post-F2-clamp), `cost` (via injected `compute_cost`), and `target_state`
+(`OrderStatus.FILLED`/`PARTIALLY_FILLED`) BEFORE mutating `record`/calling
+`_apply_to_position()` — these are the exact same values the new `Fill` construction reuses.
 
-## Canonical OrderIntent Integration
+## Fill Producer Design
 
-**Achieved — independently verified via direct diff reading.** `portfolio.py`'s diff (`git diff
---stat` confirmed: +92/-0, purely additive) imports the real, unmodified
-`build_backtest_entry_order_intent()` and constructs one real `OrderIntent` per accepted entry per
-instrument — never a parallel "portfolio order intent" type.
+Exactly one `Fill(...)` construction, placed inside `_attempt_fill()`, immediately AFTER the
+existing `self._transition(record, target_state, event_type)` and
+`self._apply_to_position(intent, fill_quantity, slipped_price, cost)` calls. If `_attempt_fill`
+returns early (insufficient funds -> REJECTED, checked before this point), no `Fill` is
+constructed — proven by `test_no_fill_for_rejected_market_order_insufficient_funds`. The flow is
+now exactly:
 
-**A genuine, minimal, disclosed defect was found and fixed in `order_intent_adapter.py`** — the
-sole exception to the "prefer untouched" list, correctly justified: I read the diff directly and
-confirmed `order_id` changed from `f"{strategy_id}-bt-entry-{entry_index}"` to
-`f"{strategy_id}-{instrument_id}-bt-entry-{entry_index}"`. The reasoning is sound: `idempotency_key`
-already included `instrument_id`, but `order_id` did not — under `portfolio.py`'s real "one
-strategy, multiple instruments" semantics (which `run_backtest()`'s single-instrument model never
-exercised), two different instruments under the same strategy entering at the same relative bar
-index could previously collide on `order_id`. I independently confirmed via `grep` that no existing
-test anywhere asserts an exact `order_id` string value — only presence, type, or inequality — so
-this widening is genuinely additive, not breaking.
+```
+OrderIntent -> RiskDecision (unchanged, upstream) -> PaperBroker._attempt_fill()
+    -> existing order/position mutation (unchanged)
+    -> Fill(...) constructed from the SAME already-computed values
+    -> appended to self._fills (additive observability)
+```
 
-## Canonical Position Lifecycle Integration
+## Fill ID Strategy
 
-**Achieved — independently verified.** `portfolio.py` imports and reuses the real, unmodified
-`open_backtest_position()`, `hold_backtest_position()`, `close_backtest_position()`, and
-`BacktestPositionLifecycleStatus` — confirmed via `git diff --stat` on `position_lifecycle.py`
-returning zero output (genuinely unmodified, honoring the checkpoint's strong preference). A
-per-instrument HELD guard, keyed independently for each instrument, mirrors `engine.py`'s 64.32
-guard exactly and makes no exit decision of its own — purely a reflection of what `portfolio.py`'s
-own, entirely unmodified exit logic already decided.
+`fill_id=str(uuid.uuid4())` — one fresh UUID4 per actual fill event, using the SAME `uuid` import
+this file already uses for `Position.position_id`/`Trade.trade_id`/`OrderEvent.event_id`. Chosen
+over a deterministic composite because the directive explicitly prioritizes uniqueness over
+reproducibility for Paper runtime, and UUID4 requires no new ID-generation subsystem.
+`test_fill_ids_unique_across_many_fills` generates >=100 fills (a 100-quantity MARKET order split
+across many `partial_fill_ratio=0.1` ticks, plus 100 separate single-share orders on a second
+instrument) and asserts `len(fill_ids) == len(set(fill_ids))` — all unique, verified, not assumed.
 
-## Multi-Instrument Identity
+## Order ID Relationship
 
-**The most important architectural requirement — independently proven, not merely asserted.** I
-independently re-ran Tests J (`test_j_multiple_instruments_receive_distinct_deterministic_order_
-intents`) and K (`test_k_multiple_instruments_receive_distinct_position_identities`), confirming
-each accepted position across multiple instruments receives its own distinct `OrderIntent` and its
-own distinct `BacktestPosition` — no shared lifecycle object across unrelated instruments, no
-collapse into a single-position model.
+`Fill.order_id = intent.order_id` — the exact `OrderIntent.order_id` from the same `record.intent`
+`_attempt_fill` is already operating on. `test_fill_order_id_equals_intent_order_id` submits an
+order with `order_id="ord-xyz-999"` and asserts `fill.order_id == order.order_id == "ord-xyz-999"`.
 
-## OPEN State
+## Fill Quantity
 
-Test D, independently re-run and confirmed passing.
+`Fill.quantity = fill_quantity` — the exact local variable `_attempt_fill` already computed
+(clamped to `min(remaining, requested-by-ratio)` or forced to the full remainder for F1
+completion) and already passed into `_apply_to_position()`. Never independently recomputed.
+`test_fill_quantity_and_price_equal_actual_position_update_values` proves `Fill.quantity ==
+Position.quantity` for a position opened by exactly one fill.
 
-## HELD State
+## Fill Price
 
-Test E, independently re-run and confirmed passing.
+`Fill.price = slipped_price` — the exact post-slippage, post-F2-clamp `Decimal` already assigned
+to `record.average_fill_price`. `test_fill_price_equals_order_report_average_fill_price` proves
+`fill.price == report.average_fill_price` (the value returned via `BrokerOrderStatusReport`, the
+pre-existing external observation surface).
 
-## CLOSED State
+## Fill Timestamp
 
-Test F, independently re-run and confirmed passing.
+`Fill.timestamp = self._clock()` — one FRESH, additional call to the same `self._clock()` this
+class already uses for `OrderEvent.timestamp_utc`/`Position.opened_at`/`Trade.closed_at`.
+Deliberately NOT `intent.created_at` — `test_fill_timestamp_is_utc_aware_and_not_order_created_at`
+asserts `fill.timestamp != order.created_at` and `fill.timestamp.tzinfo is not None`. This is one
+ADDITIONAL clock call per fill beyond what `_attempt_fill` already made — purely additive; it does
+not replace, remove, or reorder any pre-existing `self._clock()` call, so no existing timestamp
+value produced elsewhere in this class changes.
 
-## SimulatedTrade Integration
+## Fill Source
 
-Tests H and I (`OrderIntent` and Position Lifecycle both retained on the final `SimulatedTrade`,
-using the exact same optional fields 64.31/64.32 already added to the shared `SimulatedTrade`
-contract — no portfolio-specific trade type), independently re-run and confirmed passing.
+`source=FillSource.PAPER` — explicitly assigned as a literal at the one construction site, never
+inferred. `test_market_full_fill_produces_exactly_one_fill` and every other new test assert
+`fill.source is FillSource.PAPER`.
 
-## Rejected Entry Behavior
+## Fill Status
 
-Test Q (`test_q_rejected_entries_produce_no_accepted_state`), independently re-run and confirmed
-passing.
+`status_at_fill=target_state` — the identical `OrderStatus.FILLED`/`OrderStatus.PARTIALLY_FILLED`
+object `_attempt_fill` already computed and passed to `self._transition(...)` on the line
+immediately above. No possible drift, because it is the same reference, not a separately derived
+value. Proven directly: `test_partial_then_completion_produces_two_fills_summing_to_requested_quantity`
+asserts Fill #1's `status_at_fill is OrderStatus.PARTIALLY_FILLED` and Fill #2's `is
+OrderStatus.FILLED`.
 
-## Fill/Execution Status
+## Slippage Capture
 
-No `Fill`/`ExecutionReport`/`BrokerOrder`/`PartialFill`/`SlippageModel` abstraction was created —
-confirmed via `git status` showing no such new file.
+`Fill.slippage_applied = slipped_price - price`, where `price` is `_attempt_fill`'s own `price`
+parameter (the pre-slippage, pre-clamp reference: the observed market price for MARKET/
+STOP_LOSS_MARKET, or the stated `limit_price` for LIMIT/STOP_LOSS's limit leg). This is the exact
+signed delta the execution path actually applied — never recomputed from an ambiguous later
+reference. Worked and tested (`test_slippage_applied_is_signed_actual_adjustment` /
+`test_slippage_applied_negative_for_sell`, BUY/SELL, 1% flat slippage on raw=100): BUY ->
+`price=101.00`, `slippage_applied=+1.00`; SELL -> `price=99.00`, `slippage_applied=-1.00`. No
+ambiguity or missing seam was found — `_attempt_fill`'s own `price` parameter was always the
+correct, already-available pre-slippage reference, so no STOP was required.
 
-## Exit Policy Status
+## Transaction Cost Capture
 
-Unchanged — `portfolio.py`'s existing exit criteria were not modified to accommodate the lifecycle
-representation; the HELD guard I read directly makes zero exit-related decisions.
+`Fill.transaction_cost = cost` — the exact `Decimal` `_attempt_fill` already computed via the
+injected `compute_cost` closure and already charged to/credited from `_available_balance`, for
+THIS fill only. `test_multi_fill_order_attributes_cost_per_fill_not_per_order` injects a stateful
+cost closure returning `1.00` then `2.00` on successive calls and asserts Fill #1's
+`transaction_cost == 1.00`, Fill #2's `== 2.00` — proving per-fill attribution, not an order-level
+total.
 
-## Partial Exit Status
+## Multi-Fill Behavior
 
-Not implemented — correctly out of scope, confirmed untouched.
+`test_partial_then_completion_produces_two_fills_summing_to_requested_quantity`: qty=10,
+`partial_fill_ratio=0.5` -> Fill #1 `quantity=5`, `status_at_fill=PARTIALLY_FILLED`; after the next
+`record_price()` observation (F1 completion path) -> Fill #2 `quantity=5`,
+`status_at_fill=FILLED`. Both share `order_id`; `fill_1.fill_id != fill_2.fill_id`;
+`fill_1.quantity + fill_2.quantity == order.quantity == 10`; `fill_1.timestamp < fill_2.timestamp`
+(execution order preserved, never re-sorted). `test_no_overfill_across_multiple_fills` (ratio=0.3)
+independently confirms the SUM across however many fills occur always equals the requested
+quantity, never more.
 
-## Accounting Status
+## Fill Retention / Observation
 
-Unchanged — `mark_to_market.py` confirmed untouched via `git diff --stat`. No P&L formula was
-modified anywhere in `portfolio.py`'s diff.
+Chosen mechanism: a new `self._fills: list[Fill] = []` instance attribute on `PaperBroker`,
+appended to in execution order inside `_attempt_fill`, exposed via a new `get_fills() -> tuple[Fill,
+...]` accessor returning `tuple(self._fills)`. This is the EXACT pre-existing pattern this same
+class already uses for `Trade` (`self._trades: list[Trade] = []` / `get_trades()`), chosen because
+it is the smallest possible addition (one field, one accessor, zero changes to any existing method
+signature), supports multiple fills per order natively (no change to `_PaperOrder`'s shape
+required), and introduces no new architectural idiom. Not part of `BrokerGateway` (mirrors
+`get_order_events()`'s own already-established "not part of BrokerGateway" pattern).
 
-## P&L Semantics
+## Position Compatibility
 
-Unaffected — confirmed via `git diff --stat` showing zero changes to any P&L-computation line;
-Tests N/O (numerical behavior and P&L fields unchanged) independently re-run and confirmed passing.
+`domain/position/contracts.py` and `_apply_to_position()` were NOT modified (0 diff this
+checkpoint, confirmed via `git diff --stat -- src/intraday/domain/position/contracts.py` showing
+no change beyond the carried-forward 64.34-era diff). `Fill` construction happens strictly AFTER
+`_apply_to_position()` runs, from the same local variables — `test_fill_quantity_and_price_equal_
+actual_position_update_values` is the direct proof: `fill.quantity == position.quantity` and
+`fill.price == position.average_entry_price` for a position opened by exactly one fill.
 
-## Files Modified by This Checkpoint
+## Accounting Compatibility
 
-Independently confirmed via `git diff --stat` and direct diff reading:
+`domain/trade/net_pnl.py` (`compute_realized_net_pnl`, 64.37) and `domain/position/
+mark_to_market.py` (`mark_position`/`position_market_value`, 64.38) were NOT touched this
+checkpoint. Neither reads `self._fills`, and `Fill` has no reference to either module.
 
-- `src/intraday/research/backtesting/portfolio.py` — modified, **+92/-0** (confirmed via direct
-  `git diff --stat`, purely additive — no existing line was changed or removed).
-- `src/intraday/research/backtesting/order_intent_adapter.py` — modified, 118→140 lines (confirmed
-  via `wc -l`); the one, disclosed, justified `order_id` widening described above.
-- `tests/unit/research/test_checkpoint_64_33_portfolio_convergence.py` — new, 20 tests.
-- `docs/architecture/CANONICAL_TRADE_LIFECYCLE_AND_PNL_ARCHITECTURE.md` — a new "CHECKPOINT 64.33
-  IMPLEMENTATION NOTES" section appended; earlier sections untouched.
+## Realized Net P&L Compatibility
 
-`contracts.py`/`engine.py`/`execution.py` carry forward 64.31/64.32's already-present hunks
-unchanged — `portfolio.py`'s convergence needed no further changes to those files, since it reused
-the existing shared `OpenPosition`/`SimulatedTrade` contracts as-is (confirmed: their diff sizes
-against `HEAD` are unchanged from what 64.32's report last stated).
+Unchanged formula, unchanged call sites. `test_realized_net_pnl_unrealized_pnl_equity_unaffected_
+by_fill_producer`: a BUY 10 @ 100 then SELL 10 @ 110 round trip (Decimal("2.00") flat cost per
+fill) produces `trade.realized_pnl == 100.00` and `trade.realized_net_pnl == 96.00` (gross 100 -
+4.00 total attributed cost) — the exact numbers this formula would have produced with no Fill
+producer at all, cross-checked against the known-correct arithmetic independently of the code.
 
-## Pre-existing Uncommitted/Untracked Files
+## Unrealized P&L Compatibility
 
-**Explicitly separated, and given the extra scrutiny this checkpoint's own preceding near-incident
-warranted — every one of these confirmed via line-count match to its previously-reported size, my
-own independent verification, not merely trusting the agent's claim:**
+Same test: `broker.get_total_unrealized_pnl() == Decimal("0")` after the position fully closes —
+unaffected by the two Fill events (BUY, SELL) also produced in this same scenario.
 
-| File | Previously reported | Now (independently measured) | Match? |
-|---|---|---|---|
-| `mark_to_market.py` | 593 | 593 | Yes |
-| `risk_gate_adapter.py` | 147 | 147 | Yes |
-| `position_lifecycle.py` | 186 | 186 | Yes (genuinely unmodified) |
-| `test_checkpoint_64_29_foundations.py` | 496 | 496 | Yes |
-| `test_checkpoint_64_30_risk_gate_wiring.py` | 454 | 454 | Yes |
-| `test_checkpoint_64_31_order_intent_wiring.py` | 467 | 467 | Yes |
-| `test_checkpoint_64_32_position_lifecycle_wiring.py` | 513 | 513 | Yes |
-| `test_mark_to_market_accounting.py` | 1114 | 1114 | Yes |
+## Equity Compatibility
 
-`taskReport.md` shows as modified, reflecting this very overwrite.
+Same test: `broker.get_equity() == Decimal("1000000") + Decimal("96.00") == Decimal("1000096.00")`
+— `get_equity()`'s own pre-existing formula (`available_cash + open-position market value`) was
+not touched and produces the identical figure whether or not `Fill`s are being observed.
+
+## Backtest Compatibility
+
+`src/intraday/research/backtesting/engine.py`, `execution.py`, `portfolio.py`, `cost_model.py`,
+`tradeplan_execution.py`, `position_lifecycle.py` — zero new diff this checkpoint. Verified via
+`git diff --stat -- src/intraday/research/backtesting/`: exactly the same 3-file (`cost_model.py`,
+`portfolio.py`, `risk_gate_adapter.py`), 162-line-total diff already carried forward from BEFORE
+this checkpoint (unchanged from 64.41's own reported state) — `engine.py` does not appear in the
+diff at all, confirming it was never touched. No Backtest Fill producer, no unified execution
+engine, no `FillBook`/`FillManager`/`ExecutionLedger`/event store was created — mechanically
+confirmed by `TestScopeDiscipline.test_no_fillbook_fillmanager_executionledger_introduced`.
 
 ## Tests Added
 
-20 new tests in `tests/unit/research/test_checkpoint_64_33_portfolio_convergence.py`, all
-independently re-run by me and confirmed **20/20 passing**: A (real canonical OrderIntent created),
-B (deterministic), C (honestly populated fields), D (OPEN at entry), E (HELD across bars), F
-(CLOSED at exit), G (`position_id == order_intent.order_id` linkage), H (SimulatedTrade retains
-OrderIntent), I (SimulatedTrade retains Position Lifecycle), J (distinct OrderIntents across
-instruments), K (distinct position identities across instruments), L (no duplicate lifecycle
-vocabulary), M (`run_backtest()`'s 64.31/64.32 behavior intact), N (portfolio numerical behavior
-unchanged), O (portfolio P&L fields unchanged), P (portfolio exit behavior unchanged), Q (rejected
-entries produce no accepted state), R (`position_lifecycle.py` module unmodified), plus 2 extras: a
-genuine `is`-identity spy proof for `OrderIntent`, and an explicit statement/test that
-`BacktestPosition`'s frozen-dataclass nature means field continuity — not false whole-object
-identity — is the honest claim across lifecycle transitions (matching 64.32's own established
-discipline on this exact point).
+`tests/unit/research/test_checkpoint_64_42_paper_fill_producer.py` — **23 new tests**, all passing
+standalone: `poetry run pytest tests/unit/research/test_checkpoint_64_42_paper_fill_producer.py -q`
+-> **23 passed**, 1 warning, 0.46s-0.47s across repeated runs. Covers directive checklist items
+A-Z, AA-AD: MARKET full/partial fill, multi-fill order (shared order_id/distinct fill_id/order
+preserved), Fill quantity/price matching the actual position update, LIMIT F2 boundary (BUY and
+SELL), STOP_LOSS_MARKET and STOP_LOSS fills, transaction-cost-per-fill and slippage-sign capture,
+UTC-aware timestamp distinct from `created_at`, `Fill.order_id == OrderIntent.order_id`, realized/
+unrealized/equity unaffected, no Fill on rejection (both no-reference-price and insufficient-funds
+paths), no duplicate Fill after terminal FILLED state, Fill schema unchanged from 64.41, no
+FillBook/FillManager/ExecutionLedger/EventStore introduced, fill_id uniqueness across >=100 fills,
+and a 2000-fill performance smoke test.
+
+One PRE-EXISTING 64.40 test, `test_no_fill_class_exists_in_broker_module`
+(`tests/unit/research/test_checkpoint_64_40_execution_correctness.py`), asserted
+`not hasattr(broker_module, "Fill")` — correct at 64.40 time, but now obsolete because 64.42 is
+explicitly directed to import `Fill` into `broker.py`. Updated (not deleted) to assert
+`broker_module.Fill is` the canonical `intraday.domain.execution.contracts.Fill` (i.e. an IMPORT
+of the existing contract, not a new locally-defined class) while still asserting no `FillEvent`/
+`ExecutionReport` class exists — the meaningful invariant that test protects is preserved, only the
+now-incorrect premise was corrected, with an inline comment explaining why.
 
 ## Regression Comparison
 
-**Independently re-verified, not merely relayed.** The pre-existing `tests/unit/research/
-test_portfolio_backtesting.py` suite (Part 7/8/9's own portfolio tests) — I independently re-ran it
-directly: **8/8 passed, unchanged**. `tests/unit/research/` + `tests/unit/architecture/`: **246
-passed** (226 pre-existing + 20 new), independently re-run and matching exactly. Full backend
-suite: my own solo re-run produced **1690 passed, 0 failed** (1670 baseline + 20 new), matching the
-agent's claimed count exactly. An earlier concurrent run (both mine and the agent's own
-gate-checking overlapping) hit the same known, transient Postgres test-database contention this
-project has now repeatedly encountered — errors confined entirely to unrelated files
-(`test_provider_settings.py`, `test_active_loop_runtime.py`, `test_scanner_lifecycle_simulation.py`,
-`test_market_data_sync*`, `test_restart_safe_dedup.py` — none touching backtesting), and a clean
-solo re-run reproduced the correct 1690-passed result, confirming contention, not regression.
+All numbers from fresh command runs this session (never copied from 64.41's report).
+
+**Pre-implementation baseline** (re-run fresh, before writing broker.py changes):
+- `test_checkpoint_64_41_fill_contract.py` + `test_checkpoint_64_40_execution_correctness.py` +
+  `test_checkpoint_64_39_execution_fill_audit.py` + `test_checkpoint_64_38_paper_mark_to_market.py`
+  + `test_checkpoint_64_37_net_pnl_risk_contract.py` together: FIRST run showed **1 failed, 133
+  passed** — the pre-existing `test_no_fill_class_exists_in_broker_module` failure described
+  above, caused by the new `from intraday.domain.execution.contracts import Fill, FillSource`
+  import already added to `broker.py` at that point. After correcting that one test's now-outdated
+  premise: **134 passed**, 1 warning, 4.57s.
+
+**After implementing the Fill producer and the new test file**:
+- `test_checkpoint_64_42_paper_fill_producer.py -q` -> **23 passed**, 1 warning, 0.46s-0.47s.
+- `tests/unit/research/ -q` -> **400 passed**, 1 warning, 7.23s (377 pre-64.42 baseline + 23 new =
+  400, exactly accounted for).
+- `tests/unit/architecture/ -q` -> **52 passed**, 1 warning, 0.68s (unchanged from 64.41).
+- `tests/unit/application/services/test_paper_trading.py test_paper_signal_execution.py -q` ->
+  **17 passed**, 1 warning, 0.35s (unchanged from 64.41 — proves the Fill producer addition did
+  not alter any Paper application-service-observable behavior).
+- Full suite `poetry run pytest -q` -> **1896 passed**, 2 warnings, 408.43s (0:06:48 wall time)
+  (1873 pre-64.42 baseline + 23 new = 1896, exactly accounted for). Same pre-existing, unrelated
+  `PytestWarning` about test-database teardown race
+  (`tests/validation/test_reference_engine_isolation.py`) as every prior checkpoint's run — a
+  Postgres concurrency artifact of the local test setup, not caused by this checkpoint.
+
+No count discrepancy, no unexplained failure, no skipped test, no pre-existing test's asserted
+VALUE changed (only the one now-outdated `broker_module` `hasattr` premise, corrected as described
+above, which is a test-scope correction explicitly foreseeable from the directive's own mandate to
+wire `Fill` into `broker.py`, not a production-behavior regression).
 
 ## Performance
 
-**Reported by the implementing work, independently reasoned about rather than re-benchmarked (a
-20-instrument/2000-bar/~6,150-trade benchmark would take meaningful time to reproduce and the
-methodology — file-copy swap, never a git operation — was itself carefully and correctly designed
-to avoid the exact git-safety risk this checkpoint was warned about).** A genuine, honestly-reported
-**~23% runtime increase** (0.665s → 0.816s, pre/post) was disclosed — NOT characterized as noise,
-correctly, since it's a real, structural cost: two additional dataclass constructions
-(`OrderIntent`, `BacktestPosition`) per accepted entry plus a new per-instrument-per-bar HELD guard
-check, multiplied across 20 instruments × 2,000 bars. This is a more honest and useful disclosure
-than 64.30-64.32's "within noise" findings on the single-instrument path, since the multi-instrument
-multiplier makes the per-entry cost genuinely visible at this scale — still confirmed O(1) per
-accepted position, not O(instruments×bars) beyond `portfolio.py`'s pre-existing iteration model.
+`test_two_thousand_fills_construct_quickly`: 2000 real `PaperBroker.submit_order()` calls (each
+producing exactly one `Fill`) completed well under a generous 10-second smoke-test threshold — a
+smoke test against pathological behavior, not a tight microbenchmark, matching the directive's own
+"do not fabricate a broad benchmark" instruction. `Fill` construction inside `_attempt_fill` reuses
+already-computed local variables plus one UUID4 generation and one `self._clock()` call — no
+database access, no network I/O, no scan over `self._positions`/`self._orders`/`self._fills`, O(1)
+per fill by direct inspection of the added code.
 
 ## Scalability
 
-The lifecycle/order-intent overhead scales linearly with accepted-entry count, not with
-instruments×bars beyond the portfolio's existing iteration — confirmed by the reported benchmark's
-own structure (overhead attributable to entries/HELD-checks, not the surrounding bar-iteration
-cost, which is unchanged).
+Not broadly evaluated (matches 64.41's own scope). `self._fills` is an unbounded in-memory list —
+identical growth characteristic to the pre-existing `self._trades` list this pattern mirrors; no
+new scalability concern introduced beyond what already existed for `Trade` accumulation.
 
 ## Security
 
-No Dhan interaction, no credentials — independently grepped `portfolio.py`, `order_intent_
-adapter.py`, and the new test file for Dhan/Telegram/Discord/API-key/secret/password/credential
-patterns: **zero matches**. Clean.
+No Dhan file read or modified. No credentials touched. No live network call made (market closed).
+No frontend file touched. No new external dependency introduced (`pyproject.toml`/`poetry.lock`
+untouched — only `uuid`, already imported in `broker.py`, is used). No secret, token, or credential
+appears in any file created or modified this checkpoint.
 
 ## Quality Gates
 
-All independently re-executed by me, not merely trusted from the agent's report:
+All run fresh this session, exact results:
+- `poetry run mypy src/` -> `Success: no issues found in 321 source files`.
+- `poetry run ruff format --check .` -> initially `1 file would be reformatted` (the new test
+  file's own trailing-format issue); `poetry run ruff format` applied to that one file, then
+  `poetry run ruff format --check .` re-run clean -> `577 files already formatted`.
+- `poetry run ruff check .` -> initially 1 finding (`B007` unused loop variable `i` in the new test
+  file's fill_id-uniqueness test — renamed to `_i`, a pure style fix, no behavioral change); after
+  the fix and format pass -> `All checks passed!`.
+- `poetry run lint-imports` -> `Contracts: 6 kept, 0 broken.` (analyzed 386 files, 1788
+  dependencies — one more dependency than 64.41's own count, from `broker.py`'s new `Fill`/
+  `FillSource` import, still fully within the allowed layering — `infrastructure` importing
+  `domain` is explicitly permitted).
+- `poetry run python manage.py check` -> `System check identified no issues (0 silenced).`
+- `poetry run python manage.py makemigrations --check --dry-run` -> `No changes detected`.
+- `poetry run python manage.py spectacular --fail-on-warn` -> exit code 0 (no warnings/errors).
 
-| Gate | Result |
-|---|---|
-| `poetry run pytest -q` (full suite) | **1690 passed, 0 failed** (solo, clean) |
-| `poetry run pytest tests/unit/research/ tests/unit/architecture/ -q` | **246 passed** (226 + 20) |
-| `poetry run pytest tests/unit/research/test_checkpoint_64_33_portfolio_convergence.py -v` | **20/20 passed** |
-| `poetry run pytest tests/unit/research/test_portfolio_backtesting.py -v` | **8/8 passed, unchanged** |
-| `poetry run mypy src/` | Success, no issues in 316 files |
-| `poetry run ruff format --check .` | 563 files already formatted |
-| `poetry run ruff check .` | All checks passed |
-| `poetry run lint-imports` | **6 kept, 0 broken** |
-| `poetry run python manage.py check` | 0 issues |
-| `poetry run python manage.py makemigrations --check --dry-run` | No changes detected |
-| `poetry run python manage.py spectacular --fail-on-warn` | Clean |
+All seven gates clean.
 
 ## Remaining Gaps
 
-Named precisely, matching the implementing work's own honest disclosure, independently reviewed by
-me and found sound:
-
-1. `portfolio.py` still has no risk gate wired in (its config never routes through
-   `evaluate_backtest_entry_risk()`) — correctly out of this checkpoint's scope, since 64.30's risk
-   gate was only ever wired into `run_backtest()`.
-2. The ~23% multi-instrument performance overhead is real and disclosed — a future checkpoint
-   attempting to optimize this would need to weigh the honest cost of the canonical-object
-   construction against the structural-correctness benefit.
-3. Fill/Execution model, partial exits, exit-policy convergence, and P&L reconciliation — all
-   correctly deferred per explicit scope.
-4. Dhan connectivity — unrelated, unresolved, out of scope.
+(1) No Backtest Fill producer exists — deliberately, this checkpoint's own directive forbids it.
+(2) No formal Backtest/Paper parity test suite exists comparing actual produced Fills between the
+two engines (only one producer exists at all). (3) Backtest partial-exit capability remains
+entirely absent. (4) `Fill` is still not consumed by any accounting/position-update logic — it
+remains a pure OBSERVATION alongside the existing mechanics, exactly as directed; a future
+checkpoint could make Position/Trade DERIVE from Fill, but that is explicitly out of scope here.
+(5) `BacktestTrustLevel.POC` remains hardcoded — Research Readiness is still NO. (6) `Fill` has no
+serialization mechanism (unchanged from 64.41, deliberately). (7) `get_fills()` is unbounded
+in-memory growth with no eviction/persistence — acceptable for a Paper runtime session, not
+evaluated for long-running-session memory characteristics.
 
 ## Blockers
 
-None — the checkpoint's objective was achieved with the minimal seam described, `portfolio.py`'s
-genuine multi-instrument concurrency semantics were preserved rather than collapsed, and the one
-defect found (`order_id` collision risk) was fixed minimally and disclosed rather than worked
-around. **Critically: no destructive git operation occurred this checkpoint** — independently
-verified via unchanged commit log and exact line-count matches on every carried-forward file.
+None encountered. The slippage-adjustment value (`slipped_price - price`, using `_attempt_fill`'s
+own `price` parameter as the pre-slippage reference) was cleanly available at the exact fill point
+— no STOP was required. The transaction-cost value (`cost`, already computed and already charged)
+was likewise unambiguous. Every field had a clear, directly-observable source at the fill point.
 
 ## Production Readiness
 
-Unchanged: still PAPER-mode-only, still not live-trading-eligible. `PaperBroker` and all
-live-trading-adjacent code confirmed untouched via `git diff --stat`.
+Still NOT production-ready (unchanged headline). This checkpoint wires a real, tested Fill
+producer into ONE of two execution engines — a genuine step, but Backtest remains unwired, no
+consumer reads `Fill` for accounting yet, and Live trading readiness is untouched.
 
 ## Next Checkpoint Recommendation
 
-The remaining, precisely-named gap from this checkpoint's own disclosure is wiring the risk gate
-into `portfolio.py`'s entry decision, mirroring 64.30's `run_backtest()` work but respecting
-`portfolio.py`'s own multi-instrument capital/exposure accounting (which already tracks per-portfolio
-capital differently than the single-instrument engine) — a real, separate design question about
-what "risk-gated" means when multiple concurrent positions share one capital pool, correctly
-deserving its own dedicated checkpoint rather than being rushed into this one.
+The symmetric next step: a Backtest -> `Fill` producer adapter (mirroring this checkpoint's exact
+discipline — additive, no change to `engine.py`'s existing numerical results, one `Fill` per
+actual simulated execution event), gated behind full regression parity. NOT the unified execution
+engine, NOT a Fill-driven accounting rewrite of either engine — both remain later, larger-scoped
+checkpoints.
 
 ## Performance Ranking
 
-Format: Previous (64.32) → Current (64.33) → Change, with evidence. 1-10 scale, conservative,
-evidence-based only.
+Conservative 1-10, 64.41 -> 64.42. Only scores directly evidenced by this checkpoint's actual code
+change move.
 
-| Category | Previous | Current | Change | Evidence | Missing Capability |
+| Dimension | Previous (64.41) | Current (64.42) | Change | Evidence | Missing Capability |
 |---|---|---|---|---|---|
-| Architecture | 8 | 9 | ↑ | The multi-instrument gap explicitly named in 64.31/64.32 is now closed, sustaining the same additive discipline | Risk-gate wiring into portfolio.py |
-| Risk Integration | 9 | 9 | — | Unaffected; `portfolio.py` still has no risk gate | Portfolio risk-gate wiring |
-| Risk Policy Correctness | 9 | 9 | — | Unaffected | — |
-| Order Model | 9 | 9 | — | Now genuinely used by BOTH `run_backtest()` and `portfolio.py`, a real breadth improvement, but the model itself is unchanged | — |
-| Position Model | 7 | 8 | ↑ | Multi-instrument concurrency correctly preserved, not collapsed | — |
-| Position Lifecycle | 9 | 9 | — | Now genuinely wired into both paths; the underlying representation is unchanged | — |
-| Fill/Execution Model | 3 | 3 | — | Correctly not created | Design + implementation |
-| Exit Policy | 5 | 5 | — | Unaffected | Convergence |
-| Partial Exit | 3 | 3 | — | Correctly not attempted | Implementation |
-| Accounting | 7 | 7 | — | Unaffected, confirmed untouched | — |
-| P&L Semantics | 5 | 5 | — | Unaffected | Reconciliation |
-| Backtesting | 8 | 8 | — | Single-instrument path unaffected by this checkpoint | — |
-| Paper Trading | 7 | 7 | — | Confirmed unmodified | — |
-| Backtest/Paper Parity | 6 | 6 | — | No new parity gained; structural retention breadth increased, not a new shared decision | Further wiring |
-| Strategy Extensibility | 8 | 8 | — | Unaffected | — |
-| Testing | 9 | 9 | — | Sustained rigor: 20 new tests including genuine multi-instrument distinct-identity proofs, all independently re-verified | — |
-| Performance | 6 | 5 | ↓ | A real, honestly-disclosed ~23% overhead on the multi-instrument path — correctly reported, not hidden, but a genuine cost | Optimization if ever prioritized |
-| Scalability | 6 | 6 | — | Still O(1) per accepted entry, correctly bounded | — |
-| Security | 8 | 8 | — | No new surface | — |
-| Research Readiness | 4 | 4 | — | Unchanged | Remaining wiring steps |
-| Live Paper Readiness | 2 | 2 | — | Unaffected; market closed, unrelated | Fresh Dhan token |
-| Live Trading Readiness | 1 | 1 | — | Unchanged | — |
+| Architecture | 8 | 8 | 0 | Producer wiring is additive integration, not a new architectural seam — the seam itself (`domain/execution/contracts.py`) already existed | Backtest producer, eventual consumer wiring |
+| Risk Integration | 7 | 7 | 0 | Unchanged | — |
+| Risk Policy Correctness | 7 | 7 | 0 | Unchanged | — |
+| Risk Decision Ownership | 7 | 7 | 0 | Unchanged | — |
+| Order Model | 6 | 6 | 0 | `OrderIntent`/`OrderStatus`/`OrderEvent` unchanged | — |
+| Position Model | 8 | 8 | 0 | `Position` contract and `_apply_to_position()` unchanged | — |
+| Position Lifecycle | 7 | 7 | 0 | Unchanged | — |
+| Mark-to-Market | 8 | 8 | 0 | Untouched | — |
+| Unrealized P&L | 8 | 8 | 0 | Untouched, proven unaffected by new test | — |
+| Equity | 8 | 8 | 0 | Untouched, proven unaffected by new test | — |
+| Fill Contract | 7 | 7 | 0 | Contract itself unmodified this checkpoint (correctly, per directive) | Backtest producer |
+| Fill Producer | 0 | 7 | +7 | `PaperBroker` now constructs a real `Fill` at every one of its 5 fill call sites, 23 new tests, exact-value-reuse proven | Backtest producer, Live producer |
+| Fill Lifecycle | 4 | 6 | +2 | Multi-fill (partial-then-complete) now genuinely observable end-to-end via `get_fills()`, not merely defined structurally | Full lifecycle including cancellation/expiry correlation to Fills |
+| Order Lifecycle | 6 | 6 | 0 | Same transition table, same asymmetry | Backtest-side lifecycle representation |
+| Exit Policy | 6 | 6 | 0 | Unchanged | Shared exit-reason vocabulary |
+| Partial Fill | 7 (Paper)/0 (Backtest) | 8/0 | +1 (Paper) | Paper partial-fill now has an OBSERVABLE, tested Fill-level representation (`get_fills()`), not just internal order-state tracking | Backtest partial-fill representation |
+| Partial Exit | 3/0 | 3/0 | 0 | Not touched (directive explicitly forbids) | Confirmed strategy-level partial-exit call site |
+| Accounting | 8 | 8 | 0 | Untouched, proven byte-for-byte via regression test | — |
+| P&L Semantics | 8 | 8 | 0 | Untouched | — |
+| Backtesting | 7 | 7 | 0 | `engine.py` untouched this checkpoint | Trust-level upgrade path |
+| Paper Trading | 7 | 8 | +1 | `PaperBroker` now exposes genuine per-execution-event observability (`get_fills()`) beyond order/position/trade snapshots, a real capability gain, without changing its numerical behavior | Fill consumed by accounting, Live parity |
+| Backtest/Paper Parity | 5 | 5 | 0 | Still only ONE side has a producer — per directive, NOT inflated; parity requires BOTH sides converging | Backtest Fill producer |
+| Strategy Extensibility | 7 | 7 | 0 | Unaffected | — |
+| Testing | 8 | 8 | 0 | +23 new tests is real, but does not qualitatively exceed the already-strong 8/10 baseline | Property-based Fill-producer invariant tests |
+| Performance | 6 | 6 | 0 | O(1) per-fill construction verified, no optimization needed | — |
+| Scalability | 6 | 6 | 0 | Not broadly evaluated, unbounded in-memory list matches existing `Trade` pattern | — |
+| Security | 8 | 8 | 0 | No Dhan/credentials/network touched | — |
+| Research Readiness | 2 | 2 | 0 | `BacktestTrustLevel.POC` unchanged; Backtest Fill producer absent | POC->verified trust-level promotion, Backtest Fill producer |
+| Live Paper Readiness | 6 | 6 | 0 | Existing Paper numerical behavior is byte-for-byte unchanged (regression-proven); observability improved but readiness gates (Dhan connectivity etc.) untouched | Everything Dhan-side |
+| Live Trading Readiness | 1 | 1 | 0 | No live broker adapter exists or was touched | Everything |
 
-**Summary Scores (1-10)**
-
-| Summary Score | Score | Evidence |
-|---|---|---|
-| ENGINEERING MATURITY | 9 | Independently re-verified quality gates all clean; critically, no destructive git operation occurred despite the immediately-preceding near-incident, confirmed via exact line-count matches on every carried-forward file |
-| ACCOUNTING MATURITY | 7 | Unaffected, confirmed untouched |
-| EXECUTION MATURITY | 8 | Both the single-instrument and multi-instrument paths now genuinely share the same canonical order/lifecycle representation — a real breadth milestone |
-| BACKTESTING MATURITY | 8 | The last explicitly-named structural gap (portfolio.py) is closed | Portfolio risk-gate wiring |
-| PAPER TRADING MATURITY | 7 | Unaffected |
-| BACKTEST/PAPER PARITY | 6 | Unchanged this checkpoint — structural retention breadth, not a new shared decision point |
-| ACTIVE PRODUCT MATURITY | 8 | Zero live-path code changed |
-| NEXT-MARKET-OPEN READINESS | 2 | Unchanged; unrelated to this checkpoint |
-| OVERALL PRODUCT SCORE | 7 | The fourth consecutive real wiring checkpoint, executed under an explicit git-safety warning that was fully and correctly honored, with an honestly-disclosed real performance cost rather than a hidden or minimized one, and a genuine, disclosed, minimal defect fix in a shared adapter rather than a workaround |
+ENGINEERING MATURITY: 7/10 (unchanged — same rigor, applied to producer integration this time).
+ACCOUNTING MATURITY: 8/10 (unchanged — untouched this checkpoint, regression-proven).
+EXECUTION MATURITY: 6/10 (+1 from 64.41's 5 — ONE real execution-event producer now genuinely
+exists and is tested end-to-end, but only for Paper, and nothing yet consumes it for accounting).
+BACKTESTING MATURITY: 7/10 (unchanged — `engine.py` untouched, per directive NOT inflated).
+PAPER TRADING MATURITY: 7/10 (unchanged headline — numerical behavior is identical; the new
+observability is real but the directive explicitly says not to claim execution convergence or
+Research/Live readiness gains from it).
+BACKTEST/PAPER PARITY: 5/10 (unchanged, per directive instruction — only one side has a producer).
+ACTIVE PRODUCT MATURITY: 6/10 (unchanged — no active-path/strategy-execution code changed).
+NEXT-MARKET-OPEN READINESS: 6/10 (unchanged — this checkpoint's change has zero runtime effect on
+any live/paper NUMERICAL code path; market closed, no Dhan touched).
+OVERALL PRODUCT SCORE: 7/10 (unchanged headline — a real, additive, well-evidenced producer-
+integration checkpoint, but deliberately not inflated into "convergence," "Research Ready," or
+"Live Trading Ready" claims it has not earned).
 
 ## Final Product Gate
 
-- **A. Does portfolio.py now create the canonical OrderIntent?** **YES** — Test A, independently
-  re-run.
-- **B. Is the canonical OrderIntent deterministic?** **YES** — Test B, independently re-run.
-- **C. Are OrderIntent fields honestly populated?** **YES** — Test C, independently re-run.
-- **D. Does each accepted portfolio position receive canonical OPEN?** **YES** — Test D,
-  independently re-run.
-- **E. Does an active portfolio position correctly transition to HELD?** **YES** — Test E,
-  independently re-run.
-- **F. Does a closed portfolio position correctly transition to CLOSED?** **YES** — Test F,
-  independently re-run.
-- **G. Is the lifecycle position_id deterministically linked to OrderIntent?** **YES** — Test G,
-  independently re-run.
-- **H. Does portfolio SimulatedTrade retain OrderIntent?** **YES** — Test H, independently re-run.
-- **I. Does portfolio SimulatedTrade retain Position Lifecycle?** **YES** — Test I, independently
-  re-run.
-- **J. Are multiple instruments represented independently?** **YES** — Tests J/K, independently
-  re-run, distinct identity proven.
-- **K. Is there any duplicate lifecycle/order vocabulary?** **NO** — Test L, independently re-run;
-  confirmed by my own review that no parallel type was created.
-- **L. Does run_backtest() 64.31/64.32 behavior remain unchanged?** **YES** — Test M, independently
-  re-run; confirmed via zero diff to `engine.py`/`contracts.py`/`execution.py` beyond their already-
-  present 64.31/64.32 hunks.
-- **M. Does existing portfolio numerical behavior remain unchanged?** **YES** — Test N and the
-  pre-existing `test_portfolio_backtesting.py` suite, both independently re-run.
-- **N. Does existing portfolio P&L remain unchanged?** **YES** — Test O, independently re-run.
-- **O. Does existing portfolio exit behavior remain unchanged?** **YES** — Test P, independently
-  re-run.
-- **P. Is position_lifecycle.py untouched?** **YES** — independently confirmed via `git diff --stat`
-  returning no output.
-- **Q. Are protected canonical files untouched?** **YES, with one disclosed, justified exception**
-  — `order_intent_adapter.py`'s `order_id` widening, independently confirmed and reviewed as a
-  genuine, minimal, non-breaking fix, not a scope violation.
-- **R. Is Fill/Execution still deliberately deferred?** **YES** — confirmed.
-- **S. Are partial exits still deliberately deferred?** **YES** — confirmed.
-- **T. Is P&L reconciliation still unresolved?** **YES** — confirmed.
-- **U. Is Backtest/Paper execution fully converged?** **NO** — expected answer, confirmed; risk
-  gate, order representation, and lifecycle status are now shared across both backtest paths, but
-  not yet with the live Paper Trading path itself.
-- **V. Is the system Research Ready?** **NO** — unchanged.
-- **W. Is the system Live-Paper Ready?** **PARTIALLY** — readiness gate remains correctly
-  functional; unrelated to this checkpoint, still blocked by the expired Dhan credential.
-- **X. Is the system Real-Live-Trading Ready?** **NO.**
+A. **Does PaperBroker now create a canonical Fill for every actual fill?** YES — all 5 fill call
+sites route through `_attempt_fill()`, which now constructs one `Fill` per successful fill.
 
-## Honest Final Conclusion
+B. **Does every Fill represent exactly one execution event?** YES — proven by the multi-fill test
+(`quantity=5` then `quantity=5`, never a single `quantity=10` Fill for a two-event fill).
 
-This checkpoint delivered exactly the small, scoped implementation step it was asked for: the
-canonical `OrderIntent` and Position Lifecycle representations, already proven correct on
-`run_backtest()`'s single-instrument path across 64.30-64.32, now genuinely flow through
-`portfolio.py`'s multi-instrument path as well — with each instrument's accepted position receiving
-its own distinct, deterministic identity, proven by tests I independently re-ran, and
-`portfolio.py`'s real concurrency semantics (multiple simultaneously-open positions across
-instruments) correctly preserved rather than collapsed into the simpler single-position model.
+C. **Can one OrderIntent produce multiple Fills?** YES — proven, shared `order_id`, distinct
+`fill_id`s.
 
-Given this checkpoint immediately followed a genuine near-incident in 64.32 (an accidental
-`git apply -R` against a HEAD-spanning diff that briefly reverted all uncommitted work), this
-checkpoint carried an explicit, heavily-emphasized read-only-git-only restriction. I did not accept
-compliance on faith — I independently confirmed no destructive git operation occurred via the
-unchanged commit log AND via exact line-count matches on every one of eight carried-forward files,
-the same rigorous verification standard 64.32's report established and this checkpoint sustained.
+D. **Are fill_ids unique?** YES — UUID4-generated, proven across >=100 fills in one runtime.
 
-One genuine, minimal defect was found and fixed — `order_intent_adapter.py`'s `order_id` lacked the
-`instrument_id` qualifier that `idempotency_key` already had, a real collision risk under
-`portfolio.py`'s multi-instrument-same-strategy semantics that `run_backtest()`'s single-instrument
-model never exercised. I independently confirmed this fix is additive and non-breaking (no existing
-test asserts an exact `order_id` string) before accepting it as within the "objectively proven
-defect" exception the checkpoint's own scope allowed.
+E. **Does Fill.order_id equal OrderIntent.order_id?** YES — direct field reuse, tested.
 
-A real, honestly-disclosed performance cost (~23% on a 20-instrument benchmark) was reported rather
-than minimized or hidden — a more transparent disclosure than the "within noise" findings on the
-lower-multiplier single-instrument path in 64.30-64.32.
+F. **Does Fill.quantity equal actual executed quantity?** YES — same local variable as the position
+update, tested equal.
 
-Every claim in this report was independently verified by me: I read the `portfolio.py` and
-`order_intent_adapter.py` diffs directly, re-ran all 20 new tests plus the pre-existing 8-test
-portfolio suite plus the full 246-test research+architecture suite plus the full 1690-test backend
-suite myself, and independently re-confirmed every protected file (`domain/order/contracts.py`,
-`domain/risk/policy.py`, `domain/risk/contracts.py`, `risk_gate_adapter.py`, `position_lifecycle.py`,
-`mark_to_market.py`, `TradePlan`, `PaperBroker`, frontend, Dhan) remains genuinely untouched via
-`git diff --stat`.
+G. **Does Fill.price equal the actual final execution price?** YES — same `slipped_price` as
+`record.average_fill_price`/`Position.average_entry_price`, tested equal.
 
-**Bottom line: both Backtest execution paths — single-instrument and multi-instrument — now
-genuinely share the same canonical risk decision, order representation, and position lifecycle,
-each instrument's identity kept distinct and deterministic, with `portfolio.py`'s real concurrency
-semantics preserved intact, a real performance cost honestly disclosed, and no destructive git
-operation occurring despite the heightened risk this checkpoint was explicitly warned about.**
+H. **Does Fill.slippage_applied represent the actual signed adjustment?** YES — `slipped_price -
+price` using `_attempt_fill`'s own pre-slippage reference parameter, tested for both BUY (positive)
+and SELL (negative) signs.
+
+I. **Does Fill.transaction_cost represent the actual cost for THIS fill?** YES — the exact `cost`
+value already charged, tested per-fill-distinct via a stateful cost closure.
+
+J. **Is Fill timestamp actual execution time?** YES — fresh `self._clock()` call, UTC-aware, tested
+distinct from `OrderIntent.created_at`.
+
+K. **Is FillSource.PAPER explicitly assigned?** YES — literal at the construction site, never
+inferred.
+
+L. **Does status_at_fill correctly represent PARTIALLY_FILLED/FILLED?** YES — same object reference
+as the order's own `target_state`, tested for both values in the multi-fill scenario.
+
+M. **Does Fill observation preserve execution order?** YES — append-only list, never re-sorted,
+tested (`fill_1.timestamp < fill_2.timestamp`, list order matches call order).
+
+N. **Does existing Position update use the same quantity/price as the Fill?** YES — proven directly
+by `test_fill_quantity_and_price_equal_actual_position_update_values`.
+
+O. **Did realized_net_pnl remain unchanged?** YES — regression-proven exact value (96.00) unchanged
+from what the pre-existing formula alone would produce.
+
+P. **Did unrealized_pnl remain unchanged?** YES — regression-proven (0 after close).
+
+Q. **Did equity remain unchanged?** YES — regression-proven exact value (1000096.00).
+
+R. **Did F1 remain fixed?** YES — `test_checkpoint_64_40_execution_correctness.py`'s F1 tests still
+pass unmodified (134 passed together with 64.41's suite, only the one now-outdated `hasattr`
+premise corrected).
+
+S. **Did F2 remain fixed?** YES — same file's F2 tests still pass unmodified; the new
+`TestLimitBoundaryReflectedInFill` tests independently re-confirm the clamp behavior at the Fill
+level too.
+
+T. **Did the shared slippage function remain unchanged?** YES — `domain/shared_kernel/slippage.py`
+was not read for modification and shows zero new diff this checkpoint.
+
+U. **Was Backtest untouched?** YES — `engine.py`/`execution.py`/`portfolio.py`/`cost_model.py`/
+`tradeplan_execution.py`/`position_lifecycle.py` show zero new diff (verified via `git diff --stat`
+isolation).
+
+V. **Is a Backtest Fill producer implemented?** NO (expected NO, confirmed NO).
+
+W. **Is a unified execution engine implemented?** NO (expected NO, confirmed NO).
+
+X. **Is Backtest/Paper execution fully converged?** NO (expected NO, confirmed NO) — only one side
+has a producer.
+
+Y. **Is Research Ready?** NO (expected NO, confirmed NO) — `BacktestTrustLevel.POC` unchanged.
+
+Z. **Is Live Paper Ready?** No material NEW readiness — Paper's existing numerical/order-lifecycle
+behavior is byte-for-byte unchanged (regression-proven); the added capability is Fill-level
+observability, not a Dhan-connectivity or live-readiness change.
+
+AA. **Is Real Live Trading Ready?** NO (expected NO, confirmed NO) — no live broker adapter exists;
+Dhan untouched (market closed).
 
 ## Git Status
 
-Per this checkpoint's explicit instruction, changes remain **uncommitted for review** — no
-`git commit` or `git push` was performed, and no destructive git operation of any kind was run.
-
+`git status --short` at the START of this session (before any 64.42 change) showed the SAME
+carried-forward, pre-existing uncommitted changes 64.41's own report documented, plus 64.41's own
+new files:
 ```
-$ git status --short
- M src/intraday/research/backtesting/contracts.py
- M src/intraday/research/backtesting/engine.py
- M src/intraday/research/backtesting/execution.py
+ M docs/architecture/CANONICAL_TRADE_LIFECYCLE_AND_PNL_ARCHITECTURE.md
+ M src/intraday/application/services/paper_trading.py
+ M src/intraday/domain/position/contracts.py
+ M src/intraday/domain/trade/contracts.py
+ M src/intraday/infrastructure/brokers/paper/broker.py
+ M src/intraday/research/backtesting/cost_model.py
  M src/intraday/research/backtesting/portfolio.py
+ M src/intraday/research/backtesting/risk_gate_adapter.py
  M taskReport.md
-?? docs/architecture/CANONICAL_TRADE_LIFECYCLE_AND_PNL_ARCHITECTURE.md
-?? src/intraday/research/backtesting/mark_to_market.py
-?? src/intraday/research/backtesting/order_intent_adapter.py
-?? src/intraday/research/backtesting/position_lifecycle.py
-?? src/intraday/research/backtesting/risk_gate_adapter.py
-?? tests/unit/research/test_checkpoint_64_29_foundations.py
-?? tests/unit/research/test_checkpoint_64_30_risk_gate_wiring.py
-?? tests/unit/research/test_checkpoint_64_31_order_intent_wiring.py
-?? tests/unit/research/test_checkpoint_64_32_position_lifecycle_wiring.py
-?? tests/unit/research/test_checkpoint_64_33_portfolio_convergence.py
-?? tests/unit/research/test_mark_to_market_accounting.py
+?? src/intraday/domain/execution/
+?? src/intraday/domain/position/mark_to_market.py
+?? src/intraday/domain/shared_kernel/slippage.py
+?? src/intraday/domain/trade/net_pnl.py
+?? tests/unit/research/test_checkpoint_64_34_portfolio_risk_gate.py
+?? tests/unit/research/test_checkpoint_64_35_risk_decision_convergence.py
+?? tests/unit/research/test_checkpoint_64_36_pnl_accounting_convergence.py
+?? tests/unit/research/test_checkpoint_64_37_net_pnl_risk_contract.py
+?? tests/unit/research/test_checkpoint_64_38_paper_mark_to_market.py
+?? tests/unit/research/test_checkpoint_64_39_execution_fill_audit.py
+?? tests/unit/research/test_checkpoint_64_40_execution_correctness.py
+?? tests/unit/research/test_checkpoint_64_41_fill_contract.py
 ```
 
+`git status --short` at the END of this session, THIS checkpoint's own additions on top:
 ```
-$ git diff --stat -- src/intraday/research/backtesting/portfolio.py
- src/intraday/research/backtesting/portfolio.py | 92 ++++++++++++++++++++++++++
- 1 file changed, 92 insertions(+)
+ M docs/architecture/CANONICAL_TRADE_LIFECYCLE_AND_PNL_ARCHITECTURE.md   (64.42: further appended)
+ M src/intraday/application/services/paper_trading.py                    (carried-forward, untouched)
+ M src/intraday/domain/position/contracts.py                             (carried-forward, untouched)
+ M src/intraday/domain/trade/contracts.py                                (carried-forward, untouched)
+ M src/intraday/infrastructure/brokers/paper/broker.py                   (64.42: Fill producer wired — THE core change)
+ M src/intraday/research/backtesting/cost_model.py                       (carried-forward, untouched this checkpoint)
+ M src/intraday/research/backtesting/portfolio.py                        (carried-forward, untouched)
+ M src/intraday/research/backtesting/risk_gate_adapter.py                (carried-forward, untouched)
+ M taskReport.md                                                          (64.42: full overwrite)
+ M tests/unit/research/test_checkpoint_64_40_execution_correctness.py    (64.42: 1 outdated premise corrected)
+?? src/intraday/domain/execution/                                        (carried-forward from 64.41, contract UNCHANGED this checkpoint)
+?? src/intraday/domain/position/mark_to_market.py                        (carried-forward, untouched)
+?? src/intraday/domain/shared_kernel/slippage.py                         (carried-forward, untouched)
+?? src/intraday/domain/trade/net_pnl.py                                  (carried-forward, untouched)
+?? tests/unit/research/test_checkpoint_64_34_portfolio_risk_gate.py      (carried-forward, untouched)
+?? tests/unit/research/test_checkpoint_64_35_risk_decision_convergence.py (carried-forward, untouched)
+?? tests/unit/research/test_checkpoint_64_36_pnl_accounting_convergence.py (carried-forward, untouched)
+?? tests/unit/research/test_checkpoint_64_37_net_pnl_risk_contract.py    (carried-forward, untouched)
+?? tests/unit/research/test_checkpoint_64_38_paper_mark_to_market.py     (carried-forward, untouched)
+?? tests/unit/research/test_checkpoint_64_39_execution_fill_audit.py     (carried-forward, untouched)
+?? tests/unit/research/test_checkpoint_64_40_execution_correctness.py    (carried-forward, this checkpoint's 1-test edit is IN THIS file, tracked as untracked-new since 64.40)
+?? tests/unit/research/test_checkpoint_64_41_fill_contract.py            (carried-forward, untouched)
+?? tests/unit/research/test_checkpoint_64_42_paper_fill_producer.py      (64.42: NEW)
 ```
 
-`git log --oneline -3` is unchanged from 64.25 onward (`3104f39`, `d4f8e22`, `be3a3ac`), since no
-commit has been made across the last nine checkpoints, and — critically — since no destructive git
-operation reverted any of them either.
+`git diff --stat -- src/intraday/research/backtesting/` this checkpoint: identical 3-file
+(`cost_model.py`, `portfolio.py`, `risk_gate_adapter.py`), 162-line-total diff to 64.41's own
+reported figure — zero new lines this checkpoint, `engine.py` absent from the diff entirely
+(never modified). `git diff --stat -- src/intraday/domain/execution/contracts.py` shows no tracked
+diff (the file remains untracked/new-from-64.41, and its own content was not re-edited this
+checkpoint — verified by re-reading it at the start of this session and confirming it is byte-
+identical to what was captured in this same report's opening context read).
 
-**A note on `git rev-list --left-right --count origin/main...HEAD`**: this checkpoint's own
-read-only check returned `0 0` (`origin/main` and local `HEAD` are identical), a change from the
-`0 45` every recent checkpoint's report has stated. I investigated this myself, via safe, read-only
-commands only (`git branch -a`, `git reflog`, `git fetch origin main --dry-run`, `git show
-origin/main --stat -1`) — never a push or any write operation. The evidence is conclusive that this
-session did not cause it: `git reflog` shows no push and no fetch-triggered ref update from this
-session's own history (only the ordinary commit sequence ending at `3104f39`); `git fetch origin
-main --dry-run` (read-only, contacts GitHub but changes nothing locally) confirms `origin/main` is
-genuinely at `3104f39` on the real remote, authored by the repository owner
-(`Narendra <narendra.aliani@gmail.com>`) — not a commit this session or any of its delegated agents
-authored. The only honest explanation is that the repository owner pushed their own local copy of
-this branch to GitHub independently, outside this session's activity, at some point between the
-64.32 and 64.33 checkpoints. No `git push` was run by this checkpoint's implementing agent (it
-explicitly confirmed this) or by me.
+No commit was made. No push was made. No destructive git command (`checkout .`, `restore .`,
+`reset --hard`, `clean`, `stash pop/drop`, `apply -R`) was run at any point this session — only
+`git status --short` and `git diff --stat` (read-only).
+
+## Honest Final Conclusion
+
+This checkpoint did exactly what its directive asked and nothing more. It re-read `PaperBroker`
+fresh (not trusting 64.41's report) and confirmed every fill in that class funnels through one
+method, `_attempt_fill()`, called from 5 distinct sites covering MARKET, LIMIT, STOP_LOSS,
+STOP_LOSS_MARKET, and the F1 partial-completion path. It added exactly one `Fill(...)`
+construction at that single seam, placed strictly after the pre-existing order/position mutation,
+built entirely from values that mutation had already computed — never a second, independently
+derived number for quantity, price, cost, or status. It chose UUID4 for `fill_id` (uniqueness over
+reproducibility, as directed), a plain `list[Fill]`/`get_fills()` retention mechanism mirroring the
+class's own pre-existing `Trade` pattern exactly, and derived `slippage_applied` directly from
+`_attempt_fill`'s own already-available pre-slippage reference price — no missing seam was found,
+so no STOP was required anywhere in this checkpoint. It wrote 23 new, specific tests covering every
+checklist item the directive named, ran a full fresh regression (1896 passed, exactly 1873 + 23,
+zero unexplained failures, `engine.py`/`execution.py`/`portfolio.py`/`cost_model.py` genuinely
+untouched — verified via `git diff --stat`), ran all seven quality gates clean, and appended (never
+rewrote) the architecture document. One pre-existing 64.40 test's premise — "no Fill import exists
+in broker.py" — was correctly identified as now-obsolete under this checkpoint's own explicit
+mandate and was corrected with a documented rationale, not silently deleted or ignored. Nothing was
+fabricated: every number in this report came from a command actually run this session. The
+accurate, narrowly-scoped state this checkpoint delivers is a real, tested Paper-side Fill producer
+— genuine new execution-event observability — with Backtest, accounting-as-a-Fill-consumer,
+Research Readiness, and Live Trading Readiness all honestly left exactly where they were, per the
+directive's own explicit instruction not to claim gains this checkpoint did not earn.

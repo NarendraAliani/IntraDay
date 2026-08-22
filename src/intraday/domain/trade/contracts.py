@@ -49,6 +49,16 @@ class Trade:
     closed_at: datetime
     signal_id: SignalId | None = None
     position_id: PositionId | None = None
+    realized_net_pnl: Decimal | None = None
+    """Checkpoint 64.37: ADDITIVE ONLY — never redefines `realized_pnl`
+    above, which keeps its existing, unchanged, cost-exclusive/gross
+    meaning for every existing consumer. `realized_net_pnl`, when
+    populated by a producer that tracks attributable transaction costs
+    (e.g. `PaperBroker`), is `realized_pnl` minus this trade's
+    attributable transaction cost — see
+    `domain.trade.net_pnl.compute_realized_net_pnl`. `None` when a
+    producer does not populate it, so this field is fully backward
+    compatible."""
 
     def __post_init__(self) -> None:
         ensure_utc(self.opened_at, field_name="Trade.opened_at")
