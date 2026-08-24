@@ -725,6 +725,144 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/config/paper-trading/session/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description The ONE read the Paper Trading page polls. `exists=false` means no
+         *     paper session has been specified yet - never a 404, so the page can
+         *     render its empty state without treating it as an error.
+         */
+        get: operations["api_v1_config_paper_trading_session_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config/paper-trading/session/configure/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["api_v1_config_paper_trading_session_configure_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config/paper-trading/session/pause/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["api_v1_config_paper_trading_session_pause_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config/paper-trading/session/reset/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["api_v1_config_paper_trading_session_reset_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config/paper-trading/session/resume/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["api_v1_config_paper_trading_session_resume_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config/paper-trading/session/start/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Starts PAPER trading on a deterministic replay. This is not, and
+         *     cannot become, a live-order action - see this module's docstring.
+         */
+        post: operations["api_v1_config_paper_trading_session_start_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config/paper-trading/session/step/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Advances the replay by the session's own `playback_speed`. */
+        post: operations["api_v1_config_paper_trading_session_step_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config/paper-trading/session/stop/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["api_v1_config_paper_trading_session_stop_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/config/paper-trading/trades/": {
         parameters: {
             query?: never;
@@ -2138,6 +2276,113 @@ export interface components {
             closed_at: string | null;
             status: string;
         };
+        PaperSessionAccount: {
+            /** Format: decimal */
+            starting_capital: string;
+            /** Format: decimal */
+            available_capital: string;
+            /** Format: decimal */
+            utilized_margin: string;
+            /** Format: decimal */
+            realized_pnl: string;
+            /** Format: decimal */
+            unrealized_pnl: string;
+            /** Format: decimal */
+            total_pnl: string;
+            /** Format: decimal */
+            equity: string;
+            /** Format: decimal */
+            peak_equity: string;
+            /** Format: decimal */
+            drawdown: string;
+        };
+        PaperSessionCreateRequest: {
+            strategy_id: string;
+            instrument_ids: string[];
+            /** @default 5m */
+            timeframe: components["schemas"]["TimeframeEnum"];
+            /**
+             * Format: decimal
+             * @default 1000000.0000
+             */
+            starting_capital: string;
+            /**
+             * Format: decimal
+             * @default 10.0000
+             */
+            quantity: string;
+            /** Format: date */
+            replay_date?: string | null;
+            /** @default 1 */
+            playback_speed: number;
+        };
+        PaperSessionPosition: {
+            position_id: string;
+            instrument_id: string;
+            direction: string;
+            /** Format: decimal */
+            quantity: string;
+            /** Format: decimal */
+            average_entry_price: string;
+            /** Format: decimal */
+            unrealized_pnl: string;
+            /** Format: decimal */
+            realized_net_pnl: string | null;
+            status: string;
+        };
+        PaperSessionResponse: {
+            mode: string;
+            exists: boolean;
+            accepted: boolean;
+            message: string;
+            session_id: string;
+            status: string;
+            strategy_id: string;
+            timeframe: string;
+            instrument_ids: string[];
+            /** Format: date */
+            replay_date: string;
+            replay_cursor: number;
+            replay_total_steps: number;
+            playback_speed: number;
+            /** Format: decimal */
+            quantity: string;
+            available_strategy_ids: string[];
+            account: components["schemas"]["PaperSessionAccount"];
+            open_positions: components["schemas"]["PaperSessionPosition"][];
+            closed_trades: components["schemas"]["PaperSessionTrade"][];
+            recent_signals: components["schemas"]["PaperSessionSignal"][];
+        };
+        PaperSessionSignal: {
+            step: number;
+            /** Format: date-time */
+            bar_timestamp: string;
+            instrument_id: string;
+            strategy_id: string;
+            direction: string | null;
+            signal_id: string | null;
+            skipped_reason: string | null;
+            risk_outcome: string | null;
+            risk_reason_code: string | null;
+            order_status: string | null;
+        };
+        PaperSessionTrade: {
+            trade_id: string;
+            instrument_id: string;
+            direction: string;
+            /** Format: decimal */
+            entry_price: string;
+            /** Format: decimal */
+            exit_price: string;
+            /** Format: decimal */
+            quantity: string;
+            /** Format: decimal */
+            realized_pnl: string;
+            /** Format: decimal */
+            realized_net_pnl: string | null;
+            /** Format: date-time */
+            closed_at: string;
+        };
         PaperTradeResponse: {
             trade_id: string;
             strategy_id: string;
@@ -2516,6 +2761,18 @@ export interface components {
             channel_id?: string;
             enabled?: boolean;
         };
+        /**
+         * @description * `TICK` - TICK
+         *     * `1m` - 1m
+         *     * `3m` - 3m
+         *     * `5m` - 5m
+         *     * `15m` - 15m
+         *     * `30m` - 30m
+         *     * `1h` - 1h
+         *     * `1d` - 1d
+         * @enum {string}
+         */
+        TimeframeEnum: "TICK" | "1m" | "3m" | "5m" | "15m" | "30m" | "1h" | "1d";
         /**
          * @description * `UNCONFIGURED` - UNCONFIGURED
          *     * `VALID` - VALID
@@ -3452,6 +3709,171 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PaperPositionResponse"][];
+                };
+            };
+        };
+    };
+    api_v1_config_paper_trading_session_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaperSessionResponse"];
+                };
+            };
+        };
+    };
+    api_v1_config_paper_trading_session_configure_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PaperSessionCreateRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["PaperSessionCreateRequest"];
+                "multipart/form-data": components["schemas"]["PaperSessionCreateRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaperSessionResponse"];
+                };
+            };
+            /** @description Invalid paper session specification */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    api_v1_config_paper_trading_session_pause_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaperSessionResponse"];
+                };
+            };
+        };
+    };
+    api_v1_config_paper_trading_session_reset_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaperSessionResponse"];
+                };
+            };
+        };
+    };
+    api_v1_config_paper_trading_session_resume_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaperSessionResponse"];
+                };
+            };
+        };
+    };
+    api_v1_config_paper_trading_session_start_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaperSessionResponse"];
+                };
+            };
+        };
+    };
+    api_v1_config_paper_trading_session_step_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaperSessionResponse"];
+                };
+            };
+        };
+    };
+    api_v1_config_paper_trading_session_stop_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaperSessionResponse"];
                 };
             };
         };

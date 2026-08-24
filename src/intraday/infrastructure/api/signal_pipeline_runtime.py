@@ -20,6 +20,30 @@
 # evaluation, `PaperBroker`, and `SignalCommunicationService` -
 # Telegram/Discord publication - nothing here reimplements any of
 # that).
+#
+# CHECKPOINT 64.56 ADDS: `strategy_execution_enabled` - THE safety gate
+# closing the exact risk Checkpoint 64.55 discovered and named as its
+# own "Remaining Gap 5": a successful `--provider dhan` run reaching
+# this function could automatically drive the default `ema_crossover`
+# strategy against PAPER the instant a bar is promoted, with no
+# explicit operator opt-in for a FIRST live-data validation session.
+# Defaults to `True` so every PRE-EXISTING, already-accepted caller
+# (the REST-ingestion path, `market_data_ingestion_runtime.py`,
+# Checkpoint 41/46 - genuine, established PAPER trading - and this
+# module's own pre-existing test suite) is completely unaffected by
+# this addition - zero behavior change for any caller that does not
+# pass the new parameter explicitly. The NEW, fail-closed default lives
+# one layer up, at the actual point of real risk this checkpoint's
+# directive named: `run_market_data_worker.py`'s own new `--mode`
+# argument (default `"observe-only"`) computes `strategy_execution_
+# enabled=False` unless an operator explicitly passes `--mode paper` -
+# so the FIRST live `--provider dhan` session, with no extra flags,
+# can NEVER reach `run_active_loop_tick()`, `OrderIntent` construction,
+# or `PaperBroker`, no matter how healthy the connection or how
+# promotable the bars are. Bar promotion (`evaluate_bar_promotion()`)
+# still runs and `promoted_count` still increments even when strategy
+# execution is disabled - observe-only means "ingest, aggregate,
+# promote, persist," never "stop grading bars."
 from __future__ import annotations
 
 import datetime as dt
@@ -57,6 +81,7 @@ def promote_bars_and_trigger_signals(
     strategy_id: str = DEFAULT_STRATEGY_ID,
     quantity: Decimal = DEFAULT_QUANTITY,
     on_instrument_progress: Callable[[str, int, int], None] | None = None,
+    strategy_execution_enabled: bool = True,
 ) -> SignalPipelineOutcome:
     """For every newly-CLOSED bar, per instrument, in chronological
     order: run the REAL `evaluate_bar_promotion()` gate (never skipped,
@@ -110,6 +135,17 @@ def promote_bars_and_trigger_signals(
             if promotion.grade is not BarQualityGrade.TRADING_GRADE_BAR:
                 continue
             promoted_count += 1
+
+            if not strategy_execution_enabled:
+                # CHECKPOINT 64.56: MARKET_DATA_OBSERVE_ONLY boundary.
+                # The bar is genuinely `TRADING_GRADE_BAR` - promotion,
+                # and therefore persistence upstream of this call, is
+                # completely unaffected - but strategy evaluation stops
+                # HERE, unconditionally. `run_active_loop_tick()` (and
+                # therefore the strategy engine, `OrderIntent`
+                # construction, risk evaluation, and `PaperBroker`) is
+                # never even referenced below this point for this bar.
+                continue
 
             configuration = StrategyConfigurationValues(strategy_id, "v1", "v1", "v1", {})
             run_active_loop_tick(

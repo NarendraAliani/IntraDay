@@ -113,6 +113,26 @@ class Quote:
     ask_quantity: Decimal | None = None
     source: str = ""
     quality: MarketDataQuality = MarketDataQuality.OK
+    cumulative_volume: Decimal | None = None
+    """Checkpoint 64.64: the provider's own CUMULATIVE (day-to-date, not
+    per-tick) traded volume as of this observation, when the provider
+    supplies one - `None` when it does not (e.g. Dhan's Ticker packet,
+    which carries no volume field at all; only the Quote packet, code 4,
+    does - see `packet_decoder.py::DhanQuotePacket.volume`). Extends the
+    EXISTING `Quote` contract (the smallest-clean-architecture choice
+    named in this checkpoint's own directive) rather than introducing a
+    second, richer observation type - `Quote` is already the ONE shape
+    both the REST point-sample path (`market_data_views.py`) and the
+    live WebSocket path (`packet_to_quote.py`) produce and
+    `BarAggregationService`/`aggregate_quotes_into_bars()` already
+    consume. This field is deliberately NOT itself a per-bar volume -
+    `aggregate_quotes_into_bars()` is the ONE place that differences
+    consecutive cumulative readings into `AggregatedBar.volume` (see
+    that module's own module docstring for the exact differencing rule,
+    including reset/negative-volume handling). Never validated against
+    other quotes here - a single `Quote` cannot know whether its own
+    cumulative reading is a genuine decrease (session reset) or not;
+    only non-negativity of the value ITSELF is enforced below."""
 
     def __post_init__(self) -> None:
         ensure_utc(self.timestamp, field_name="Quote.timestamp")
@@ -124,3 +144,5 @@ class Quote:
             raise ValueError("Quote.ask must be positive when provided")
         if self.bid is not None and self.ask is not None and self.bid > self.ask:
             raise ValueError("Quote.bid must not exceed Quote.ask")
+        if self.cumulative_volume is not None and self.cumulative_volume < 0:
+            raise ValueError("Quote.cumulative_volume must not be negative when provided")

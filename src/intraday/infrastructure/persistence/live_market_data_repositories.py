@@ -37,6 +37,12 @@ class DjangoLiveQuoteRepository:
                 last_price=quote.last_price,
                 source_timestamp=quote.timestamp,
                 fetched_at=fetched_at,
+                # Checkpoint 64.64: persisted so a later `get_observations()`
+                # round-trip (e.g. `BarAggregationService.aggregate_and_
+                # persist()` reading back from the DB) still has the real
+                # cumulative reading to difference into per-bar volume -
+                # `None` unchanged for quotes that never carried one.
+                cumulative_volume=quote.cumulative_volume,
             )
             for quote in quotes
         ]
@@ -89,6 +95,7 @@ class DjangoAggregatedBarRepository:
                     "status": bar.status.value,
                     "observation_count": bar.observation_count,
                     "data_source": bar.data_source,
+                    "volume": bar.volume,
                 },
             )
 
@@ -142,6 +149,13 @@ def _row_to_quote(row: LiveQuoteObservation) -> Quote:
         instrument_id=make_instrument_id(Exchange.NSE, row.instrument_symbol),
         timestamp=row.source_timestamp,
         last_price=Decimal(row.last_price),
+        # Checkpoint 64.64: `row.cumulative_volume` round-trips back into
+        # the domain `Quote` exactly as persisted - `None` stays `None`,
+        # never coerced to `0` (a coerced `0` would be indistinguishable
+        # from "provider genuinely reported zero volume").
+        cumulative_volume=(
+            Decimal(row.cumulative_volume) if row.cumulative_volume is not None else None
+        ),
     )
 
 
@@ -158,4 +172,7 @@ def _row_to_aggregated_bar(row: AggregatedBarObservation) -> AggregatedBar:
         status=BarStatus(row.status),
         observation_count=row.observation_count,
         data_source=row.data_source,
+        # Checkpoint 64.64: real, persisted per-bar volume - see
+        # `AggregatedBarObservation.volume`'s own docstring.
+        volume=Decimal(row.volume),
     )

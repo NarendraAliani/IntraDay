@@ -112,6 +112,19 @@ class AggregatedBar:
     status: BarStatus
     observation_count: int
     data_source: str
+    volume: Decimal = Decimal("0")
+    """Checkpoint 64.64: real per-bar traded volume, derived by
+    `aggregate_quotes_into_bars()` (the ONE place this is computed - see
+    that function's own docstring for the exact differencing rule) by
+    differencing consecutive `Quote.cumulative_volume` readings.
+    `Decimal("0")` remains the honest default for every bar built from
+    quotes that never carried a `cumulative_volume` at all (e.g. every
+    REST point-sample quote, and every Dhan Ticker-packet-sourced quote)
+    - unchanged, not a regression: this field was ALWAYS `Decimal("0")`
+    for those sources before this checkpoint, and still is, because no
+    volume was ever measured for them. Defaulted (rather than required)
+    so every pre-existing direct `AggregatedBar(...)` construction in
+    this codebase's own tests remains valid unchanged."""
     provenance: BarProvenance | None = None
 
     def __post_init__(self) -> None:
@@ -134,6 +147,8 @@ class AggregatedBar:
             )
         if self.observation_count < 1:
             raise ValueError("AggregatedBar.observation_count must be at least 1")
+        if self.volume < 0:
+            raise ValueError("AggregatedBar.volume must not be negative")
 
     def to_bar(self) -> Bar:
         """Converts a CLOSED `AggregatedBar` into the canonical `Bar`
@@ -141,13 +156,14 @@ class AggregatedBar:
         bar (Checkpoint 24A §6's "the existing signal engine must never
         receive an incomplete bar"). `Bar.timestamp` (bar CLOSE time,
         per its own Checkpoint 5/14 convention) is this bar's
-        `interval_end`. Volume is never fabricated (Checkpoint 24A §4) -
-        `Bar.volume` is set to `Decimal("0")` only because `Bar` itself
-        requires a non-negative volume field; this checkpoint's
-        aggregation never claims to have measured real traded volume
-        (see `docs/architecture/LIVE_BAR_AGGREGATION_ARCHITECTURE.md`'s
-        volume-limitation section) - a real volume figure is a future
-        increment, not a value this function invents."""
+        `interval_end`. Checkpoint 64.64: `Bar.volume` now carries THIS
+        `AggregatedBar`'s own `volume` field - real, differenced traded
+        volume when the underlying quotes carried `cumulative_volume`,
+        or the honest `Decimal("0")` default when they did not (see
+        `AggregatedBar.volume`'s own docstring, and
+        `aggregate_quotes_into_bars()`'s differencing rule). Volume is
+        still never fabricated here - this method only forwards whatever
+        `aggregate_quotes_into_bars()` already, legitimately computed."""
         if self.status is not BarStatus.CLOSED:
             raise IncompleteBarError(
                 f"cannot convert a FORMING bar to a closed Bar "
@@ -161,7 +177,7 @@ class AggregatedBar:
             high=self.high,
             low=self.low,
             close=self.close,
-            volume=Decimal("0"),
+            volume=self.volume,
             quality=MarketDataQuality.OK,
             adjustment=PriceAdjustment.RAW,
         )
@@ -230,7 +246,50 @@ def aggregate_quotes_into_bars(
         LOW   = min observed price in the interval
         CLOSE = price of the latest-by-(source_timestamp, arrival
                 order) observation in the interval
-        VOLUME = not computed (see `AggregatedBar.to_bar()`'s docstring)
+        VOLUME = Checkpoint 64.64: differenced from `Quote.
+                cumulative_volume` (see the dedicated "Volume" section
+                below) when present; `Decimal("0")`, honestly, when the
+                underlying quotes never carried one at all (unchanged
+                from before this checkpoint for those sources).
+
+    Volume (Checkpoint 64.64): per instrument, quotes are walked in the
+    SAME chronologically-sorted order used for OHLC above, tracking a
+    running `baseline` = the last real (non-`None`) `cumulative_volume`
+    seen so far for this instrument, across the ENTIRE observed span
+    (not reset per-bucket) - this is what lets a bucket with no volume-
+    carrying quotes of its own still correctly diff against the last
+    real reading from an earlier bucket, rather than losing volume at
+    every ordinary bucket boundary. For each interval:
+      - if no quote in the bucket carries a `cumulative_volume`, this
+        bar's `volume` is `Decimal("0")` (nothing was measured) and
+        `baseline` is left unchanged.
+      - else, `latest` = the LAST (by the same chronological order)
+        `cumulative_volume` observed in the bucket:
+          - FIRST OBSERVATION EVER for this instrument (`baseline is
+            None`): `volume = Decimal("0")` - there is no prior reading
+            to difference against, so nothing is fabricated; `baseline`
+            becomes `latest`.
+          - `latest >= baseline` (the ordinary case): `volume = latest -
+            baseline`. A `Quote` observed a SECOND time with the exact
+            same `cumulative_volume` (a duplicate event, or two packets
+            in the same bucket with no new trades between them)
+            contributes `0` to this difference, correctly.
+          - `latest < baseline` (a genuine DECREASE): treated as a
+            SESSION RESET / provider restart / bad-packet recovery,
+            per this project's own documented rule - the cumulative
+            series is treated as having restarted from zero at this
+            point, so `volume = latest` (never `latest - baseline`,
+            which would be negative). `baseline` becomes `latest`
+            either way, so the NEXT bucket diffs against the new,
+            lower series correctly rather than against the stale
+            pre-reset value.
+      - Out-of-order and duplicate quotes are handled by the SAME
+        chronological sort/bucketing OHLC already relies on - volume
+        differencing never sees its own separate, divergent ordering.
+      - `AggregatedBar.volume` (hence `Bar.volume` via `to_bar()`) is
+        NEVER negative - enforced both by this differencing rule (the
+        reset branch above) and, redundantly, by `AggregatedBar.
+        __post_init__`'s own explicit check.
 
     Ties at the exact same `source_timestamp` are broken by the
     observation's position in the input sequence (its "arrival order")
@@ -291,6 +350,13 @@ def aggregate_quotes_into_bars(
         # reported as missing rather than silently absent from the result.
         cursor = earliest_start
         gaps_so_far = 0
+        # Checkpoint 64.64: the running cumulative-volume baseline for
+        # THIS instrument, tracked across the whole chronological walk
+        # (buckets are visited in ascending `cursor` order, which is the
+        # same chronological order `ordered`/`buckets` were built from
+        # above) - see this function's own "Volume" docstring section
+        # for the exact rule.
+        volume_baseline: Decimal | None = None
         while cursor <= current_interval_start:
             interval_end = cursor + duration
             bucket = buckets.get(cursor)
@@ -312,6 +378,30 @@ def aggregate_quotes_into_bars(
             close_price = bucket[-1].last_price
             high_price = max(q.last_price for q in bucket)
             low_price = min(q.last_price for q in bucket)
+
+            bucket_cumulative_readings = [
+                q.cumulative_volume for q in bucket if q.cumulative_volume is not None
+            ]
+            if not bucket_cumulative_readings:
+                bar_volume = Decimal("0")
+            else:
+                latest_cumulative = bucket_cumulative_readings[-1]
+                if volume_baseline is None:
+                    # First real cumulative-volume observation ever seen
+                    # for this instrument - nothing to difference against
+                    # yet, so this bar's own volume is honestly 0, not
+                    # the whole day's cumulative total.
+                    bar_volume = Decimal("0")
+                elif latest_cumulative >= volume_baseline:
+                    bar_volume = latest_cumulative - volume_baseline
+                else:
+                    # A genuine decrease - session reset / provider
+                    # restart / bad packet, per this project's own
+                    # documented rule (see the "Volume" docstring
+                    # section above): treat the series as restarted from
+                    # zero, never produce a negative volume.
+                    bar_volume = latest_cumulative
+                volume_baseline = latest_cumulative
 
             # Checkpoint 31 Part 5: every bar produced by THIS aggregation
             # path is explicitly, typedly SAMPLE_BAR - REST point-sample
@@ -344,6 +434,7 @@ def aggregate_quotes_into_bars(
                     status=BarStatus.FORMING if is_forming else BarStatus.CLOSED,
                     observation_count=len(bucket),
                     data_source=data_source,
+                    volume=bar_volume,
                     provenance=provenance,
                 )
             )

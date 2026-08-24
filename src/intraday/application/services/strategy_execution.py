@@ -46,12 +46,28 @@ from intraday.domain.feature.contracts import FeatureValue
 from intraday.domain.market_data.contracts import Bar
 from intraday.domain.shared_kernel.contracts import InstrumentId, Timeframe
 from intraday.signal_intelligence.feature_engine.atr import compute_average_true_range
+from intraday.signal_intelligence.feature_engine.candle_body_ratio import (
+    CANDLE_BODY_RATIO_FIELD_ID,
+    compute_candle_body_ratio,
+)
 from intraday.signal_intelligence.feature_engine.definitions import (
     AverageTrueRangeDefinition,
+    DirectionalMovementDefinition,
     ExponentialMovingAverageDefinition,
+    MacdHistogramDefinition,
+    RelativeStrengthIndexDefinition,
+    RelativeVolumeDefinition,
     SimpleMovingAverageDefinition,
 )
+from intraday.signal_intelligence.feature_engine.directional_movement import (
+    compute_average_directional_index,
+    compute_minus_directional_index,
+    compute_plus_directional_index,
+)
 from intraday.signal_intelligence.feature_engine.ema import compute_exponential_moving_average
+from intraday.signal_intelligence.feature_engine.macd_histogram import compute_macd_histogram
+from intraday.signal_intelligence.feature_engine.relative_volume import compute_relative_volume
+from intraday.signal_intelligence.feature_engine.rsi import compute_relative_strength_index
 from intraday.signal_intelligence.feature_engine.sma import compute_simple_moving_average
 from intraday.trading_engine.strategy_execution.contracts import StrategyConfigurationValues
 from intraday.trading_engine.strategy_execution.coordinator import (
@@ -62,21 +78,53 @@ from intraday.trading_engine.strategy_execution.registry import StrategyRegistry
 
 
 def compute_feature_series(field_id: str, bars: tuple[Bar, ...]) -> tuple[FeatureValue, ...]:
-    """Dispatches one "sma_20"/"ema_9"/"atr_14"-shaped field_id to the
+    """Dispatches one "sma_20"/"ema_9"/"atr_14"/"rsi_14"/"adx_14"/
+    "plus_di_14"/"minus_di_14"/"relative_volume_20"/
+    "macd_hist_12_26_9"/"candle_body_ratio"-shaped field_id to the
     matching existing compute function. Raises ValueError for anything
     else - callers only ever pass field_ids strategies themselves
-    declared via `required_features()`, which are always SMA/EMA/ATR
-    (raw OHLCV fields are read straight off `Bar`, never computed)."""
-    kind, _, raw_lookback = field_id.partition("_")
-    lookback = int(raw_lookback)
+    declared via `required_features()` (raw OHLCV fields are read
+    straight off `Bar`, never computed).
+
+    Checkpoint 64.49 adds RSI/ADX/+DI/-DI/Relative Volume/MACD Histogram/
+    Candle Body Ratio dispatch, following the exact same parse-then-
+    construct-a-Definition-then-call-the-pure-function shape SMA/EMA/ATR
+    already established - no second dispatch mechanism introduced."""
+    if field_id == CANDLE_BODY_RATIO_FIELD_ID:
+        return compute_candle_body_ratio(bars)
+
+    # Multi-word kinds ("plus_di", "minus_di", "relative_volume",
+    # "macd_hist") need the SUFFIX of trailing integer parameters
+    # stripped, not just a single first-`_`-partition - unlike
+    # "sma_20"/"ema_9"/"atr_14"/"rsi_14"/"adx_14", which are already a
+    # single-word kind.
+    parts = field_id.split("_")
+    numeric_from = len(parts)
+    while numeric_from > 0 and parts[numeric_from - 1].isdigit():
+        numeric_from -= 1
+    kind = "_".join(parts[:numeric_from])
+    params = tuple(int(p) for p in parts[numeric_from:])
+
     if kind == "sma":
-        return compute_simple_moving_average(SimpleMovingAverageDefinition(lookback), bars)
+        return compute_simple_moving_average(SimpleMovingAverageDefinition(params[0]), bars)
     if kind == "ema":
         return compute_exponential_moving_average(
-            ExponentialMovingAverageDefinition(lookback), bars
+            ExponentialMovingAverageDefinition(params[0]), bars
         )
     if kind == "atr":
-        return compute_average_true_range(AverageTrueRangeDefinition(lookback), bars)
+        return compute_average_true_range(AverageTrueRangeDefinition(params[0]), bars)
+    if kind == "rsi":
+        return compute_relative_strength_index(RelativeStrengthIndexDefinition(params[0]), bars)
+    if kind == "adx":
+        return compute_average_directional_index(DirectionalMovementDefinition(params[0]), bars)
+    if kind == "plus_di":
+        return compute_plus_directional_index(DirectionalMovementDefinition(params[0]), bars)
+    if kind == "minus_di":
+        return compute_minus_directional_index(DirectionalMovementDefinition(params[0]), bars)
+    if kind == "relative_volume":
+        return compute_relative_volume(RelativeVolumeDefinition(params[0]), bars)
+    if kind == "macd_hist":
+        return compute_macd_histogram(MacdHistogramDefinition(*params), bars)
     raise ValueError(f"unrecognized computed field_id {field_id!r}")
 
 

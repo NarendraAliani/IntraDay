@@ -247,7 +247,7 @@ printed, logged, or committed at any point.
    has been performed (Part 12's "historical parity" requires a
    WebSocket-aggregated bar to compare against, which does not exist).
 
-## 15. Recommended Next Checkpoint
+## 15. Recommended Next Checkpoint (as of Checkpoint 31 — see §16 for the 64.55 update)
 
 Given the infrastructure blocker in §5 is the single largest remaining
 gap (it blocks conditions 4, 5, and 6 of the six-condition definition
@@ -259,3 +259,129 @@ Channels' ASGI worker (already scaffolded, unused) as a genuinely
 separate deployable process versus a lightweight non-Docker Celery
 worker — as a pure architecture-decision checkpoint, before any
 WebSocket ingestion code is written.
+
+## 16. CHECKPOINT 64.55 — READ-ONLY LIVE NSE DATA VALIDATION ATTEMPT
+
+64.54 discovered (by reading source, not by trusting this document's own
+stale §5) that the "no persistent process" blocker described in §5/§14
+above no longer exists: `run_market_data_worker.py` (Checkpoints
+57-64.3) is a real, persistent, non-Docker WebSocket-hosting process,
+supporting both `--provider fake-ws` (a genuine RFC 6455 transport
+against a safe local fake server) and `--provider dhan` (the real
+provider). 64.55's mandate was to attempt the FIRST real, read-only,
+live NSE validation against `--provider dhan`.
+
+**Credential-state check (performed exactly once, no retry, no network
+call — `evaluate_dhan_token_lifecycle()`, Checkpoint 64, pure/local/
+claims-only):** this environment's configured Dhan credential IS
+present, and its own `exp` claim reports **EXPIRED** (expired
+2026-08-21 07:01:44 UTC — a non-secret, documented-safe field; the
+token value itself was never printed, logged, or persisted anywhere).
+2026-08-24 (today) is after that expiry.
+
+**Consequence, per this checkpoint's own explicit safety rule ("check
+ONCE, never retry"):** the live-validation portion of this checkpoint
+was correctly STOPPED before any connection attempt. `run_market_data_
+worker.py --provider dhan`'s own pre-existing token-lifecycle guard
+(§"Headline Finding" in `taskReport.md` 64.54, unmodified this
+checkpoint) refuses to start a socket at all once `token_status.state`
+is not `VALID`/`EXPIRING_SOON` — proven again, fresh, this checkpoint,
+by `tests/unit/infrastructure/persistence/management/
+test_run_market_data_worker_command.py::
+test_dhan_provider_refuses_to_connect_with_a_known_expired_token`
+(pre-existing, unmodified, still green) and this checkpoint's own new
+`tests/unit/research/test_checkpoint_64_55_live_market_data_validation.py`
+(`test_a`/`test_h`), the latter additionally monkeypatching
+`DhanWebSocketTransport.connect` to raise `AssertionError` if ever
+called — the strongest available proof, inside an automated test, that
+no network attempt happens for an expired token.
+
+**Six-condition status, re-evaluated this checkpoint — NO CONDITION
+MOVED, because no live connection was attempted:**
+
+| # | Condition | Status after 64.55 | Why unchanged |
+|---|---|---|---|
+| 1 | Same-day intraday availability | SATISFIED (Checkpoint 31, unchanged) | Historical REST path, untouched this checkpoint |
+| 2 | Exact timestamp/timezone verified | SATISFIED (Checkpoint 31, unchanged) | Same |
+| 3 | Candle authority/provenance | NOT SATISFIED (unchanged) | No live WebSocket data was received to compare against anything; independent cross-check requires real candles this checkpoint could not obtain |
+| 4 | WebSocket live ingestion implemented AND validated | Still PARTIAL — **implementation** confirmed again (fresh fake-ws regression, this checkpoint), **live validation against real NSE data still did not happen** | Token EXPIRED; live path correctly never attempted |
+| 5 | Historical/reconciliation gap recovery validated | Still PARTIAL — gap-detection mechanism (`MissingInterval`) re-confirmed via synthetic evidence only (this checkpoint's own `test_g` DB read-back plus 64.54's own tests) | No live gap was ever observed, none was fabricated |
+| 6 | One full trading session independently validated | NOT SATISFIED (unchanged) | Zero live session minutes were observed this checkpoint — the entire live portion was correctly stopped before any connection |
+
+**Overall: `TRADING_GRADE_BAR` remains unreachable against real NSE
+data — unchanged from 64.54's own honest re-tabulation.** This
+checkpoint's genuine contribution is negative-but-honest evidence: the
+worker's own safety gate was exercised against this environment's
+actual (not simulated) expired-token condition and correctly refused,
+with an automated test now pinning that exact behavior as a permanent
+regression (`test_a` above) rather than relying on a one-off manual
+observation.
+
+**What this checkpoint does NOT claim:** no packets, no live Quote, no
+live bar, no live promotion, no live reconnect, no live session, no
+candle-authority evidence. `docs/architecture/
+CANONICAL_TRADE_LIFECYCLE_AND_PNL_ARCHITECTURE.md`'s own new "CHECKPOINT
+64.55" section and `taskReport.md` both state this identically — no
+document in this repository claims live NSE validation occurred this
+checkpoint.
+
+### Recommended Next Checkpoint (64.55's own update)
+
+Obtain a fresh, valid Dhan access token (this environment's own token
+renewal is an operator action this checkpoint correctly did not and
+could not perform automatically — Dhan's documented `RenewToken` API
+itself refuses an already-`EXPIRED` token) and, strictly read-only,
+attempt `--provider dhan` again for the first genuine live-packet
+observation. Only once real packets are received can conditions 4/5/6
+above genuinely move past PARTIAL/NOT SATISFIED.
+
+---
+
+## 17. CHECKPOINT 64.63 — LIVE DATA INTEGRITY REMEDIATION (§75/§305 UPDATE)
+
+64.62 obtained the first real Dhan WebSocket session and found that Criterion 2 ("Exact timestamp/timezone
+verified", previously marked SATISFIED at §75/§305 based on the REST historical-candle endpoint only, §2
+above) does **NOT** extend to the live WebSocket ticker/quote path: the confirmed-live batch showed
+`source_timestamp` ~5.5h ahead of `fetched_at`. 64.63 investigated this (see
+`docs/architecture/CANONICAL_TRADE_LIFECYCLE_AND_PNL_ARCHITECTURE.md`'s own new "CHECKPOINT 64.63"
+section for the full trace) and could **not** conclusively source-back a fix — Dhan's public WebSocket
+docs document the field only as `"Last Trade Time (EPOCH)"`, with no description of how the server itself
+computes that integer. **No timestamp conversion code was changed.**
+
+**Criterion 2 status, corrected:** SATISFIED for the REST historical-candle path only (§2, unchanged,
+re-verified as still true); **NOT SATISFIED for the live WebSocket ticker/quote path** (new, honest
+downgrade from any previous implication that §75/§305's SATISFIED covered both paths). A future checkpoint
+must either obtain conclusive Dhan documentation/support confirmation of the WebSocket epoch's exact
+semantics, or independently prove the offset's cause from a larger, controlled real-session sample, before
+this criterion can be marked SATISFIED for the live path.
+
+64.63 also root-caused and fixed an unrelated `WorkerRuntimeStatus` observability bug (health-tracker
+persistence was gated behind the scanner's `enabled` pause flag) and proved, by test, that the existing
+`AggregatedBar.to_bar()` adapter cleanly produces a canonical `Bar` (volume honestly `Decimal("0")`,
+quality/adjustment reusing existing enums) — neither of these two items changes any TRADING_GRADE_BAR
+criterion's status; they are observability/compatibility fixes, not data-quality proofs.
+
+## 18. CHECKPOINT 64.64 — VOLUME + QUALITY/STRATEGY BOUNDARY (offline)
+
+Two of 64.63's honestly-left-open gaps closed without touching the timestamp criterion above (still NOT
+SATISFIED for the live WebSocket path — unchanged, no new evidence obtained this checkpoint):
+
+- **Volume is no longer unconditionally `Decimal("0")`.** `Quote.cumulative_volume` (new, optional field)
+  carries `DhanQuotePacket.volume` (real, cumulative day volume — Ticker packets have no volume field at
+  all, so a Ticker-sourced quote still carries `None`). `aggregate_quotes_into_bars()` differences
+  consecutive real readings into `AggregatedBar.volume` → `Bar.volume`; `Decimal("0")` remains the honest
+  value whenever no cumulative reading exists to difference (still true for every REST point-sample quote
+  and every Ticker-sourced live quote — not a regression). See
+  `docs/architecture/CANONICAL_TRADE_LIFECYCLE_AND_PNL_ARCHITECTURE.md`'s own "CHECKPOINT 64.64" section
+  for the full differencing/reset/negative-volume rule.
+- **`ScannerConfiguration.enabled=False` no longer blocks TRADING_GRADE_BAR promotion.** The model's own
+  docstring is unambiguous that this flag means "pause the signal pipeline," not "pause market-data
+  ingestion" — `_QuoteSink.aggregate_now()`'s disabled branch now calls `promote_bars_and_trigger_signals()`
+  with `strategy_execution_enabled` forced `False`, so bars are still graded while the scanner is paused,
+  with zero strategy invocations. Does not change any TRADING_GRADE_BAR criterion's own definition — the
+  six `PromotionCondition`s are unchanged — only WHEN the (already strategy-agnostic) gate is reached.
+- A tested, disabled-by-default timestamp-diagnostic collector
+  (`infrastructure/market_data_providers/dhan/timestamp_diagnostics.py`) was prepared for a future REAL NSE
+  SESSION #2 to wire in and collect a larger sample — not wired into the worker, not used this checkpoint.
+
+No criterion in §4 changes status as a result of this checkpoint.

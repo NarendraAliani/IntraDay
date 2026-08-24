@@ -17,6 +17,39 @@
 # existing feature engine). No RSI/VWAP/MACD/Bollinger/Supertrend entry
 # is fabricated - Checkpoint 26 Part 4 explicitly forbids listing
 # indicators that do not exist.
+#
+# ---------------------------------------------------------------------------
+# Checkpoint 64.49 - GAINZ-COMPATIBLE CANONICAL FEATURE EXPANSION
+# ---------------------------------------------------------------------------
+#
+# Checkpoint 64.48 independently re-confirmed (a fourth time, matching
+# three prior checkpoints' findings) that NO real Gainz reference source
+# file exists anywhere in this repository. 64.49 is therefore NOT a
+# Gainz-math port - it is a PLATFORM feature-layer expansion, building
+# reusable canonical features using STANDARD, well-established technical-
+# analysis conventions (Wilder RSI, Wilder ADX/+DI/-DI, standard 12/26/9
+# MACD, etc.) that could serve a future Gainz-like strategy - or any
+# strategy - not features reverse-engineered from a Gainz source that
+# does not exist.
+#
+# Added this checkpoint: `rsi`, `adx`, `plus_di`, `minus_di`,
+# `relative_volume`, `macd_hist`, `candle_body_ratio` - each backed by a
+# real, tested module under `signal_intelligence.feature_engine`
+# (`rsi.py`, `directional_movement.py`, `relative_volume.py`,
+# `macd_histogram.py`, `candle_body_ratio.py`).
+#
+# EXPLICITLY DEFERRED (per the checkpoint directive's own Part 11/12
+# instruction not to guess ambiguous semantics):
+#   - Delta: the directive's own Gainz description does not disambiguate
+#     "volume delta" vs "price delta" vs "tick delta", and no Gainz
+#     source exists to check. NOT implemented, NOT registered here.
+#   - Breakout: the directive's own Gainz description does not fix
+#     lookback / prior-bar-exclusion / direction / threshold conventions
+#     unambiguously, and no Gainz source exists to check. NOT
+#     implemented, NOT registered here.
+# Both remain open, honestly-documented gaps - see taskReport.md and
+# `docs/architecture/CANONICAL_TRADE_LIFECYCLE_AND_PNL_ARCHITECTURE.md`'s
+# Checkpoint 64.49 section.
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -121,6 +154,61 @@ _FIELDS: tuple[FieldDefinition, ...] = (
         "Average True Range",
         ("high", "low", "close"),
         "Wilder ATR(lookback) over Bar OHLC, via signal_intelligence.feature_engine.atr.",
+    ),
+    _derived(
+        "rsi",
+        "Relative Strength Index",
+        ("close",),
+        "Wilder RSI(lookback) over Bar.close, via signal_intelligence.feature_engine.rsi. "
+        "Standard TA convention - NOT verified against a Gainz reference (none exists).",
+    ),
+    _derived(
+        "adx",
+        "Average Directional Index",
+        ("high", "low", "close"),
+        "Wilder ADX(lookback) - Wilder-smoothed average of DX, via "
+        "signal_intelligence.feature_engine.directional_movement. Standard TA convention - "
+        "NOT verified against a Gainz reference (none exists).",
+    ),
+    _derived(
+        "plus_di",
+        "Plus Directional Indicator (+DI)",
+        ("high", "low", "close"),
+        "Wilder +DI(lookback), via signal_intelligence.feature_engine.directional_movement. "
+        "Standard TA convention - NOT verified against a Gainz reference (none exists).",
+    ),
+    _derived(
+        "minus_di",
+        "Minus Directional Indicator (-DI)",
+        ("high", "low", "close"),
+        "Wilder -DI(lookback), via signal_intelligence.feature_engine.directional_movement. "
+        "Standard TA convention - NOT verified against a Gainz reference (none exists).",
+    ),
+    _derived(
+        "relative_volume",
+        "Relative Volume (RVOL)",
+        ("volume",),
+        "current_volume / mean(previous lookback bars' volume), via "
+        "signal_intelligence.feature_engine.relative_volume. Baseline convention explicitly "
+        "chosen (trailing simple average, excludes current bar) - NOT verified against a "
+        "Gainz reference (none exists).",
+    ),
+    _derived(
+        "macd_hist",
+        "MACD Histogram",
+        ("close",),
+        "Standard 12/26/9 MACD histogram = MACD_line - signal_line, via "
+        "signal_intelligence.feature_engine.macd_histogram, reusing the canonical EMA "
+        "implementation for the fast/slow lines. Standard TA convention - NOT verified "
+        "against a Gainz reference (none exists).",
+    ),
+    _derived(
+        "candle_body_ratio",
+        "Candle Body Ratio",
+        ("open", "high", "low", "close"),
+        "abs(close - open) / (high - low), skipping zero-range bars, via "
+        "signal_intelligence.feature_engine.candle_body_ratio. Standard convention - NOT "
+        "verified against a Gainz reference (none exists).",
     ),
 )
 

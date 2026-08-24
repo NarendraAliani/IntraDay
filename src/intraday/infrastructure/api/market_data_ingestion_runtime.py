@@ -228,6 +228,13 @@ def _run_locked(*, session: TradingSession, clock: dt.datetime) -> IngestionTick
         connection_is_healthy=True,
         strategy_id=DEFAULT_STRATEGY_ID,
         quantity=DEFAULT_QUANTITY,
+        # Checkpoint 64.56: explicit, not relied-upon-by-default - this
+        # REST-ingestion path IS the established, already-accepted
+        # PAPER trading tick (Checkpoint 41/46), genuinely distinct
+        # from the new MARKET_DATA_OBSERVE_ONLY mode the live Dhan
+        # WebSocket worker now defaults to. Stated here explicitly so
+        # this call site can never be mistaken for observe-only.
+        strategy_execution_enabled=True,
     )
     promoted_count = pipeline_outcome.promoted_count
     active_loop_invocations = pipeline_outcome.active_loop_invocations

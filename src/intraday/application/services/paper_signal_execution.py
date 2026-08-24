@@ -26,7 +26,6 @@
 from __future__ import annotations
 
 import hashlib
-import uuid
 from dataclasses import dataclass, replace
 from datetime import datetime
 from decimal import Decimal
@@ -344,7 +343,15 @@ class PaperSignalExecutionService:
         )
 
         order = OrderIntent(
-            order_id=str(uuid.uuid4()),  # type: ignore[arg-type]
+            # Checkpoint 64.68: DETERMINISTIC, derived from the signal's
+            # own already-deterministic `signal_id`, replacing a
+            # `uuid.uuid4()`. A signal produces exactly ONE order (the
+            # `idempotency_key` below is the SAME value and already
+            # guarantees that), so this can never collide, and it makes
+            # the strategy -> signal -> order lineage readable end to end
+            # AND makes a deterministic replay's orders reproducible
+            # (§17). No economic value is affected by an identifier.
+            order_id=f"order-{signal_id}",  # type: ignore[arg-type]
             instrument_id=instrument_id,
             side=side,
             quantity=self._quantity,

@@ -15,6 +15,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
 
+from intraday.domain.execution.contracts import Fill
 from intraday.domain.order.contracts import OrderIntent
 from intraday.domain.risk.contracts import RiskLimits
 from intraday.domain.shared_kernel.contracts import InstrumentId, Timeframe, ensure_utc
@@ -422,6 +423,20 @@ class BacktestResult:
     cost_model_identity: CostModelIdentity
     generated_at: datetime
     trust_level: BacktestTrustLevel = BacktestTrustLevel.POC
+    fills: tuple[Fill, ...] = ()
+    """Checkpoint 64.43: the canonical `domain.execution.contracts.Fill`
+    events this run's engine actually produced - one per ACTUAL
+    simulated execution event (entry, exit), never one per
+    `SimulatedTrade`. Defaults to `()` for any caller/tests that
+    construct `BacktestResult` directly without supplying fills (e.g.
+    pre-64.43 test fixtures) - purely additive observability, never
+    consumed by `equity_curve`/`mark_to_market_curve`/`metrics`/
+    `validation` above, which remain the sole existing accounting
+    surfaces. Only `engine.run_backtest()` populates this field as of
+    this checkpoint; `portfolio.py`'s multi-instrument
+    `PortfolioBacktestResult` is a separate result type, out of this
+    checkpoint's scope (mirrors `order_intent`'s own established
+    single-instrument-engine-only precedent, Checkpoint 64.31)."""
 
     def __post_init__(self) -> None:
         ensure_utc(self.generated_at, field_name="BacktestResult.generated_at")

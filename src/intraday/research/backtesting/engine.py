@@ -41,9 +41,12 @@ from collections.abc import Callable
 from datetime import datetime
 from decimal import Decimal
 
+from intraday.domain.execution.contracts import Fill, FillSource
 from intraday.domain.feature.contracts import FeatureValue
 from intraday.domain.market_data.contracts import Bar
+from intraday.domain.order.contracts import OrderStatus
 from intraday.domain.risk.contracts import RiskDecisionOutcome
+from intraday.domain.shared_kernel.contracts import Side
 from intraday.research.backtesting import (
     Strategy,
     StrategyConfigurationValues,
@@ -185,6 +188,15 @@ def run_backtest(
     # build the mark-to-market curve without re-deriving position
     # intervals from timestamps.
     trade_intervals: list[tuple[int, int]] = []
+    # Checkpoint 64.43: the canonical `domain.execution.contracts.Fill`
+    # producer list for THIS engine. One `Fill` per ACTUAL simulated
+    # execution event (never one per completed `SimulatedTrade`) -
+    # appended in execution order, never re-sorted. Purely additive
+    # OBSERVATION alongside the pre-existing `trades`/`trade_intervals`/
+    # equity-curve/metrics machinery below - nothing here reads from or
+    # writes back into `fills`, so its presence cannot change any
+    # existing numerical result.
+    fills: list[Fill] = []
     open_position: OpenPosition | None = None
     # Checkpoint 64.22 §5/§6: set only for a TradePlan-based open
     # position - `None` while a direction-flip position (or no position)
@@ -221,9 +233,16 @@ def run_backtest(
         exit_notional = filled_exit * quantity
         entry_is_buy = open_position.direction == StrategyDirection.BULLISH
         exit_is_buy = not entry_is_buy
-        breakdown = costs.cost_breakdown(is_buy=entry_is_buy, notional=entry_notional).combine(
-            costs.cost_breakdown(is_buy=exit_is_buy, notional=exit_notional)
-        )
+        # Checkpoint 64.43: these two per-leg breakdowns were already
+        # being computed inline (chained straight into `.combine()`)
+        # before this checkpoint - captured as named locals here so the
+        # EXIT-leg breakdown can also be reused, unchanged, as the exit
+        # `Fill.transaction_cost` below. `breakdown`/`trade_costs` below
+        # are numerically IDENTICAL to before this checkpoint (same two
+        # calls, same combine, only now assigned to a name first).
+        entry_leg_breakdown = costs.cost_breakdown(is_buy=entry_is_buy, notional=entry_notional)
+        exit_leg_breakdown = costs.cost_breakdown(is_buy=exit_is_buy, notional=exit_notional)
+        breakdown = entry_leg_breakdown.combine(exit_leg_breakdown)
         trade_costs = breakdown.total
         net_pnl = gross_pnl - trade_costs
         holding_bars = bars[open_position.entry_index : exit_index + 1]
@@ -275,6 +294,44 @@ def run_backtest(
             )
         )
         trade_intervals.append((open_position.entry_index, exit_index))
+
+        # Checkpoint 64.43: the EXIT Fill - one canonical `Fill` for
+        # THIS actual exit execution event, constructed from the exact
+        # already-computed local values above (`filled_exit`,
+        # `quantity`, `exit_leg_breakdown.total`), never independently
+        # recomputed. `order_id`: this engine's exit path (signal
+        # reversal / TradePlan SL-T1-T2-T3-Trailing / EOD force-close)
+        # constructs NO independent exit `OrderIntent` anywhere in this
+        # module - the only real order identity that ever exists for a
+        # round trip is the single entry `OrderIntent` built once at
+        # entry time (`build_backtest_entry_order_intent()`, carried on
+        # `open_position.order_intent`). Per the 64.43 directive's own
+        # explicit instruction NOT to fabricate a new exit order
+        # identity merely to satisfy this field, the exit Fill reuses
+        # that SAME entry `order_id` - the identical, pre-existing
+        # precedent Checkpoint 64.32 already established for
+        # `BacktestPosition.position_id=entry_order.order_id`. This is a
+        # documented architectural limitation (see taskReport.md "Order
+        # ID Relationship" and the architecture doc), not a silent
+        # invention: a genuine, separately-identified exit order does
+        # not exist in this engine today.
+        if open_position.order_intent is not None:
+            exit_side = Side.BUY if exit_is_buy else Side.SELL
+            fills.append(
+                Fill(
+                    fill_id=f"{open_position.order_intent.order_id}-fill-exit-{trade_counter}",
+                    order_id=open_position.order_intent.order_id,
+                    instrument_id=backtest_config.instrument_id,
+                    side=exit_side,
+                    quantity=quantity,
+                    price=filled_exit,
+                    timestamp=exit_timestamp,
+                    transaction_cost=exit_leg_breakdown.total,
+                    slippage_applied=filled_exit - exit_price,
+                    status_at_fill=OrderStatus.FILLED,
+                    source=FillSource.BACKTEST,
+                )
+            )
 
     running_equity = backtest_config.initial_capital
     is_tradeplan_position = False
@@ -414,6 +471,45 @@ def run_backtest(
                                 entry_timestamp=entry_bar.timestamp,
                             ),
                         )
+                        # Checkpoint 64.43: the ENTRY Fill - one
+                        # canonical `Fill` for THIS actual entry
+                        # execution event, built from the exact same
+                        # already-computed local values used for
+                        # `OpenPosition`/`entry_order` above
+                        # (`filled_entry`, `quantity`, `entry_bar.
+                        # timestamp`, `entry_order.order_id`/`.side`) -
+                        # never independently recomputed.
+                        # `transaction_cost` below is the entry-leg-only
+                        # `CostBreakdown.total`, computed via the SAME
+                        # `costs.cost_breakdown()` call `_close_trade`
+                        # makes for its own entry leg (pure/deterministic
+                        # given identical `is_buy`/`notional` inputs) -
+                        # this is an ADDITIONAL call for Fill
+                        # observability only; it does not replace, feed
+                        # into, or alter `_close_trade`'s own entry-leg
+                        # computation or `trade_costs`/`net_pnl` in any
+                        # way (that computation still happens exactly
+                        # once, at exit time, exactly as before this
+                        # checkpoint).
+                        entry_leg_cost = costs.cost_breakdown(
+                            is_buy=entry_order.side == Side.BUY,
+                            notional=filled_entry * quantity,
+                        ).total
+                        fills.append(
+                            Fill(
+                                fill_id=f"{entry_order.order_id}-fill-entry",
+                                order_id=entry_order.order_id,
+                                instrument_id=backtest_config.instrument_id,
+                                side=entry_order.side,
+                                quantity=quantity,
+                                price=filled_entry,
+                                timestamp=entry_bar.timestamp,
+                                transaction_cost=entry_leg_cost,
+                                slippage_applied=filled_entry - entry_bar.open,
+                                status_at_fill=OrderStatus.FILLED,
+                                source=FillSource.BACKTEST,
+                            )
+                        )
                         plan = trade_plans[i]
                         if plan is not None:
                             # Checkpoint 64.22 §5/§6: TradePlan-managed
@@ -525,6 +621,12 @@ def run_backtest(
         cost_model_identity=cost_model_identity,
         generated_at=generated_at,
         trust_level=BacktestTrustLevel.POC,
+        # Checkpoint 64.43: the canonical Fill list, in execution order
+        # (entry Fill immediately before its own trade's exit Fill,
+        # trades themselves in chronological close order) - purely
+        # additive observability, never read by anything above this
+        # line.
+        fills=tuple(fills),
     )
 
 

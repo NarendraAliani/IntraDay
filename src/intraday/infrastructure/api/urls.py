@@ -21,6 +21,7 @@ from intraday.infrastructure.api import (
     market_data_sync_views,
     market_data_views,
     paper_trading_views,
+    replay_paper_session_views,
     reports_views,
     risk_views,
     scanner_configuration_views,
@@ -94,6 +95,48 @@ urlpatterns = [
         "paper-trading/expire-session/",
         paper_trading_views.paper_expire_session,
         name="paper-expire-session",
+    ),
+    # --- Checkpoint 64.68: replay paper-trading SESSION lifecycle -------
+    # PAPER ONLY. No live-broker endpoint exists here or anywhere else.
+    path(
+        "paper-trading/session/",
+        replay_paper_session_views.paper_session_status,
+        name="paper-session-status",
+    ),
+    path(
+        "paper-trading/session/configure/",
+        replay_paper_session_views.paper_session_create,
+        name="paper-session-configure",
+    ),
+    path(
+        "paper-trading/session/start/",
+        replay_paper_session_views.paper_session_start,
+        name="paper-session-start",
+    ),
+    path(
+        "paper-trading/session/pause/",
+        replay_paper_session_views.paper_session_pause,
+        name="paper-session-pause",
+    ),
+    path(
+        "paper-trading/session/resume/",
+        replay_paper_session_views.paper_session_resume,
+        name="paper-session-resume",
+    ),
+    path(
+        "paper-trading/session/stop/",
+        replay_paper_session_views.paper_session_stop,
+        name="paper-session-stop",
+    ),
+    path(
+        "paper-trading/session/reset/",
+        replay_paper_session_views.paper_session_reset,
+        name="paper-session-reset",
+    ),
+    path(
+        "paper-trading/session/step/",
+        replay_paper_session_views.paper_session_step,
+        name="paper-session-step",
     ),
     path("settings/telegram/", settings_views.telegram_settings, name="settings-telegram"),
     path(

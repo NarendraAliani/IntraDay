@@ -132,3 +132,120 @@ class AverageTrueRangeDefinition:
     @property
     def feature_version(self) -> Version:
         return FEATURE_ENGINE_VERSION
+
+
+# ---------------------------------------------------------------------------
+# Checkpoint 64.49 additions - RSI/ADX+DI-DI/Relative Volume/MACD Histogram.
+# Same one-off-dataclass-per-identity pattern as SMA/EMA/ATR above - no
+# generic `FeatureDefinition` framework introduced even now that 7
+# features exist, confirming the Checkpoint 15 prediction again. Candle
+# Body Ratio has no parameters at all (see `candle_body_ratio.py`'s own
+# `CANDLE_BODY_RATIO_FIELD_ID` constant - no dataclass needed for a
+# zero-parameter identity).
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class RelativeStrengthIndexDefinition:
+    """Identifies one parameterized Wilder RSI - `feature_name` "rsi_14"
+    for `RelativeStrengthIndexDefinition(14)`. See
+    `signal_intelligence.feature_engine.rsi` for the full formula/seed/
+    warm-up documentation and the explicit "standard convention, not
+    Gainz-verified" caveat."""
+
+    lookback: int
+
+    def __post_init__(self) -> None:
+        _validate_lookback(self.lookback, owner="RelativeStrengthIndexDefinition")
+
+    @property
+    def feature_name(self) -> str:
+        return f"rsi_{self.lookback}"
+
+    @property
+    def feature_version(self) -> Version:
+        return FEATURE_ENGINE_VERSION
+
+
+@dataclass(frozen=True, slots=True)
+class DirectionalMovementDefinition:
+    """Identifies one parameterized Wilder directional-movement family -
+    a SINGLE `lookback` drives all three related fields (`plus_di_14`,
+    `minus_di_14`, `adx_14`), matching the standard convention that the
+    DI smoothing period and the ADX-of-DX smoothing period are the same
+    N. See `signal_intelligence.feature_engine.directional_movement` for
+    the full formula/seed/warm-up documentation."""
+
+    lookback: int
+
+    def __post_init__(self) -> None:
+        _validate_lookback(self.lookback, owner="DirectionalMovementDefinition")
+
+    @property
+    def plus_di_feature_name(self) -> str:
+        return f"plus_di_{self.lookback}"
+
+    @property
+    def minus_di_feature_name(self) -> str:
+        return f"minus_di_{self.lookback}"
+
+    @property
+    def adx_feature_name(self) -> str:
+        return f"adx_{self.lookback}"
+
+    @property
+    def feature_version(self) -> Version:
+        return FEATURE_ENGINE_VERSION
+
+
+@dataclass(frozen=True, slots=True)
+class RelativeVolumeDefinition:
+    """Identifies one parameterized Relative Volume (RVOL) -
+    `feature_name` "relative_volume_20" for
+    `RelativeVolumeDefinition(20)`. See
+    `signal_intelligence.feature_engine.relative_volume` for the full
+    baseline-choice rationale and missing-data behavior."""
+
+    lookback: int
+
+    def __post_init__(self) -> None:
+        _validate_lookback(self.lookback, owner="RelativeVolumeDefinition")
+
+    @property
+    def feature_name(self) -> str:
+        return f"relative_volume_{self.lookback}"
+
+    @property
+    def feature_version(self) -> Version:
+        return FEATURE_ENGINE_VERSION
+
+
+@dataclass(frozen=True, slots=True)
+class MacdHistogramDefinition:
+    """Identifies one parameterized MACD Histogram - default 12/26/9
+    (`feature_name` "macd_hist_12_26_9"). See
+    `signal_intelligence.feature_engine.macd_histogram` for the full
+    formula and the EMA-reuse rationale (why the signal line cannot
+    literally reuse the Bar-taking canonical EMA function)."""
+
+    fast_lookback: int = 12
+    slow_lookback: int = 26
+    signal_lookback: int = 9
+
+    def __post_init__(self) -> None:
+        _validate_lookback(self.fast_lookback, owner="MacdHistogramDefinition.fast_lookback")
+        _validate_lookback(self.slow_lookback, owner="MacdHistogramDefinition.slow_lookback")
+        _validate_lookback(self.signal_lookback, owner="MacdHistogramDefinition.signal_lookback")
+        if self.fast_lookback >= self.slow_lookback:
+            raise InvalidLookbackError(
+                "MacdHistogramDefinition.fast_lookback must be strictly less than "
+                f"slow_lookback, got fast={self.fast_lookback} slow={self.slow_lookback}"
+            )
+
+    @property
+    def feature_name(self) -> str:
+        return f"macd_hist_{self.fast_lookback}_{self.slow_lookback}_{self.signal_lookback}"
+
+    @property
+    def feature_version(self) -> Version:
+        return FEATURE_ENGINE_VERSION

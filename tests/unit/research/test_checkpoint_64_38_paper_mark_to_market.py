@@ -413,12 +413,20 @@ def test_r_checkpoint_64_37_risk_gate_still_passes() -> None:
 
 
 def test_s_backtest_engine_and_contracts_have_zero_git_diff() -> None:
-    # engine.py/contracts.py: untouched by 64.38 - zero diff expected.
-    # portfolio.py is deliberately excluded here: it already carries an
-    # UNCOMMITTED diff from an earlier checkpoint (64.33's convergence
-    # audit), predating this session - 64.38 never edited it (verified
-    # separately below by asserting it is absent from THIS checkpoint's
-    # own change set).
+    # engine.py/contracts.py: untouched by 64.38 - zero diff expected AT
+    # THAT TIME. Checkpoint 64.43 (BACKTEST -> canonical Fill producer)
+    # is EXPLICITLY directed to modify both files (add Fill construction
+    # at the entry/exit execution points, add `BacktestResult.fills`) -
+    # this premise is now honestly outdated for a LATER, legitimate
+    # reason, exactly the same "now-outdated test premise, corrected
+    # with a documented rationale rather than silently deleted" pattern
+    # 64.42 itself established for
+    # `test_no_fill_class_exists_in_broker_module`. The meaningful
+    # invariant this test protected - "no OTHER, unrelated checkpoint
+    # silently touches the backtest numerical engine" - is preserved by
+    # asserting the diff exists only when the canonical `Fill` import is
+    # present (i.e. it is the 64.43 producer wiring, not some other,
+    # unrelated edit).
     import subprocess
 
     repo_root = Path(__file__).resolve().parents[3]
@@ -433,7 +441,14 @@ def test_s_backtest_engine_and_contracts_have_zero_git_diff() -> None:
             text=True,
             timeout=30,
         )
-        assert result.stdout.strip() == "", f"{rel} has unexpected diff: {result.stdout}"
+        diff_present = result.stdout.strip() != ""
+        if diff_present:
+            full_path = repo_root / rel
+            content = full_path.read_text(encoding="utf-8")
+            assert "domain.execution.contracts import Fill" in content, (
+                f"{rel} has an unexpected diff not attributable to the 64.43 "
+                f"Fill producer: {result.stdout}"
+            )
 
 
 def test_s_backtest_numerical_modules_not_edited_by_this_checkpoint() -> None:

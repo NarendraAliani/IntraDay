@@ -108,15 +108,127 @@ def _fake_compute(field_id: str, bars: tuple[Bar, ...]):
 # --- Field registry (Part 10) ------------------------------------------------
 
 
-def test_field_registry_only_lists_implemented_fields() -> None:
-    field_ids = {f.field_id for f in list_fields()}
-    assert field_ids == {"open", "high", "low", "close", "volume", "sma", "ema", "atr"}
+def test_field_registry_every_field_has_a_real_dispatchable_implementation() -> None:
+    """Checkpoint 64.51: replaces the stale pre-64.49 hard-coded 8-field
+    assertion (`field_ids == {open, high, low, close, volume, sma, ema,
+    atr}`), which broke the moment 64.49 intentionally added 7 more
+    canonical fields (rsi/adx/plus_di/minus_di/relative_volume/macd_hist/
+    candle_body_ratio). The CURRENT architectural contract is not "the
+    registry contains exactly this fixed inventory" - it's "every field
+    the registry lists has a real, working implementation", which must
+    hold no matter how many fields are registered.
+
+    This is deliberately NOT circular: it does not ask the registry
+    whether the registry thinks a field is implemented. For each RAW
+    field it checks the field is a real attribute Bar actually carries;
+    for each DERIVED_FEATURE field it invokes the REAL production
+    dispatcher (`compute_feature_series`, the exact function
+    `build_coordinator()` wires into the real coordinator) with a
+    concrete field_id and real bars, and requires a real, correctly-
+    shaped result. A registered-but-unimplemented field (e.g. a
+    `_derived("supertrend", ...)` entry added to field_registry.py with
+    no matching dispatch branch) would make this test fail with the
+    dispatcher's own `ValueError(f"unrecognized computed field_id ...")`
+    - proven directly below by
+    `test_field_registry_never_lists_unimplemented_indicators`, which
+    exercises that exact failure path for fields NOT in the registry."""
+    from intraday.application.services.strategy_execution import compute_feature_series
+
+    # Relative Volume legitimately emits NO output over an all-zero-volume
+    # series (see relative_volume.py's own documented "baseline == 0 ->
+    # skip, never fabricate" rule) - the default `_bars()` fixture uses
+    # volume=0 throughout (matching every other test in this file's
+    # SAMPLE_BAR convention), so this test needs its own bars with real,
+    # nonzero, varying volume to prove RVOL's dispatch path genuinely
+    # computes rather than trivially short-circuiting.
+    base = datetime(2026, 1, 5, 3, 45, tzinfo=UTC)
+    bars = tuple(
+        Bar(
+            instrument_id=INSTRUMENT,
+            timeframe=Timeframe.ONE_MINUTE,
+            timestamp=base + timedelta(minutes=i),
+            open=Decimal(100 + i) - 1,
+            high=Decimal(100 + i) + 1,
+            low=Decimal(100 + i) - 2,
+            close=Decimal(100 + i),
+            volume=Decimal(1000 + (i % 7) * 50),
+        )
+        for i in range(80)
+    )
+    raw_bar_attrs = {"open", "high", "low", "close", "volume"}
+    # A valid, well-within-fixture-length parameterization per DERIVED_FEATURE
+    # kind - proves each dispatch branch genuinely computes, not merely exists.
+    lookback_by_kind = {
+        "sma": "20",
+        "ema": "20",
+        "atr": "14",
+        "rsi": "14",
+        "adx": "14",
+        "plus_di": "14",
+        "minus_di": "14",
+        "relative_volume": "20",
+    }
+
+    fields = list_fields()
+    assert len(fields) > 0
+    for field_def in fields:
+        if field_def.category in (FieldCategory.RAW_PRICE, FieldCategory.RAW_VOLUME):
+            # Raw fields are read straight off Bar, never dispatched -
+            # the real implementation IS the Bar attribute itself.
+            assert field_def.field_id in raw_bar_attrs
+            assert hasattr(bars[0], field_def.field_id)
+            continue
+
+        assert field_def.category == FieldCategory.DERIVED_FEATURE
+        if field_def.field_id == "candle_body_ratio":
+            concrete_field_id = "candle_body_ratio"
+        elif field_def.field_id == "macd_hist":
+            concrete_field_id = "macd_hist_12_26_9"
+        else:
+            assert field_def.field_id in lookback_by_kind, (
+                f"{field_def.field_id!r} is registered but this test has no "
+                "known parameterization for it - either it is genuinely "
+                "unimplemented (a real regression) or this test's "
+                "`lookback_by_kind` table needs a deliberate, reviewed update."
+            )
+            concrete_field_id = f"{field_def.field_id}_{lookback_by_kind[field_def.field_id]}"
+
+        values = compute_feature_series(concrete_field_id, bars)
+        assert isinstance(values, tuple)
+        # Some computations (e.g. MACD's 34-bar warmup) legitimately emit
+        # fewer FeatureValues than input bars - the real contract is "a
+        # real, non-empty series of the right length class", not
+        # byte-for-byte parity with len(bars).
+        assert 0 < len(values) <= len(bars)
+        assert all(v.feature_name == concrete_field_id for v in values)
 
 
 def test_field_registry_never_lists_unimplemented_indicators() -> None:
+    """Checkpoint 64.51: `rsi`/`macd` were removed from this forbidden
+    list because 64.49 intentionally, correctly implemented them
+    (Wilder RSI, standard MACD histogram) - continuing to forbid them
+    would itself be the stale assumption. The remaining names are
+    genuinely unimplemented today (vwap/supertrend/bollinger - never
+    built; delta/breakout - explicitly deferred by 64.49/64.51, see
+    field_registry.py's own module docstring). This test proves BOTH
+    that they are absent from the registry AND that the real dispatcher
+    genuinely rejects them (not just "the registry doesn't mention them"
+    - the dispatcher itself must have no implementation either)."""
+    from intraday.application.services.strategy_execution import compute_feature_series
+
     field_ids = {f.field_id for f in list_fields()}
-    for forbidden in ("rsi", "macd", "vwap", "supertrend", "bollinger", "bollinger_bands"):
+    still_unimplemented = (
+        "vwap",
+        "supertrend",
+        "bollinger",
+        "bollinger_bands",
+        "delta",
+        "breakout",
+    )
+    for forbidden in still_unimplemented:
         assert forbidden not in field_ids
+        with pytest.raises(ValueError):
+            compute_feature_series(f"{forbidden}_14", _rising_bars(20))
 
 
 def test_field_registry_deterministic_order() -> None:

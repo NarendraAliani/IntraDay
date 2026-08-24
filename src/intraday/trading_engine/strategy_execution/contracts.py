@@ -217,6 +217,22 @@ def validate_configuration(
         _validate_single_value(schema.strategy_id, param, value, known_field_ids=known_field_ids)
 
 
+def default_configuration_values(schema: StrategyParameterSchema) -> dict[str, object]:
+    """Checkpoint 64.68: the schema's OWN `default` field, materialised
+    as a values dict. Deliberately reads `ParameterDefinition.default`
+    - already documented (see `ema_crossover.parameter_schema()`) as
+    "the ONE canonical source of truth for a NEW configuration's
+    starting values" - so this helper can never drift from the defaults
+    the API and the frontend already show. Parameters with no default
+    are omitted, exactly as `validate_configuration()` above tolerates.
+    """
+    return {
+        param.parameter_id: param.default
+        for param in schema.parameters
+        if param.default is not None
+    }
+
+
 def _validate_single_value(
     strategy_id: str,
     param: ParameterDefinition,

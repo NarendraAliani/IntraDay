@@ -74,14 +74,15 @@ def convert_packet_to_quote(
     price. Works identically for `DhanTickerPacket` and
     `DhanQuotePacket` since both packet types carry a last-traded-price
     and last-trade-time in the SAME shape (`Quote`'s own mandatory
-    fields); `DhanQuotePacket`'s additional fields (volume, day OHLC)
-    are NOT mapped into `Quote` this checkpoint - `Quote` has no volume
-    field (see `domain/market_data/contracts.py`), and day OHLC belongs
-    to the bar/aggregation layer, not a point-in-time quote. A future
-    checkpoint building the canonical-observation pipeline in full
-    (Part 9 of this checkpoint's own broader ask) may need a richer
-    contract than `Quote` for that - not attempted here, named
-    honestly rather than silently dropped."""
+    fields). Checkpoint 64.64: `DhanQuotePacket.volume` (a real,
+    documented, CUMULATIVE day-volume field) is now mapped into
+    `Quote.cumulative_volume` - `DhanTickerPacket` has no volume field
+    at all (verified against `packet_decoder.py`'s own struct layout),
+    so a Ticker-sourced `Quote` always carries `cumulative_volume=None`,
+    honestly, never a fabricated value. Day OHLC (`day_open`/`day_close`/
+    `day_high`/`day_low`) still is NOT mapped - those belong to the bar/
+    aggregation layer, not a point-in-time quote, and remain out of this
+    checkpoint's scope."""
     symbol = security_id_to_symbol.get(packet.header.security_id)
     if symbol is None:
         return QuoteConversionResult(
@@ -94,12 +95,25 @@ def convert_packet_to_quote(
             quote=None, rejected_reason=QuoteConversionRejectionReason.NON_POSITIVE_PRICE
         )
 
+    # Checkpoint 64.64: only the Quote packet (code 4) carries a volume
+    # field. A negative/malformed decode is defensively treated as "no
+    # volume observed" rather than raising or fabricating a value -
+    # `decode_packet()` itself never produces a negative `volume` from a
+    # well-formed packet (it is an unsigned quantity on the wire, decoded
+    # via a signed `i` only because Dhan's own documented struct uses a
+    # signed int32), but this guard keeps `Quote.__post_init__`'s own
+    # non-negative invariant from ever being the thing that raises here.
+    cumulative_volume: Decimal | None = None
+    if isinstance(packet, DhanQuotePacket) and packet.volume >= 0:
+        cumulative_volume = Decimal(str(packet.volume))
+
     instrument_id = make_instrument_id(Exchange.NSE, symbol)
     quote = Quote(
         instrument_id=instrument_id,
         timestamp=packet.last_trade_time,
         last_price=last_price,
         source=DHAN_WEBSOCKET_SOURCE,
+        cumulative_volume=cumulative_volume,
     )
     return QuoteConversionResult(quote=quote, rejected_reason=None)
 

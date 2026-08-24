@@ -38,6 +38,7 @@ import type {
 import { useAuth } from "../../common/auth/AuthContext";
 import { CapabilityStatus } from "../../common/components/CapabilityStatus";
 import { ErrorState } from "../../common/components/ErrorState";
+import { PaperSessionPanel } from "./PaperSessionPanel";
 import { LoadingState } from "../../common/components/LoadingState";
 
 const ORDER_TYPES = ["MARKET", "LIMIT", "SL", "SL-M"] as const;
@@ -185,6 +186,12 @@ export function PaperTradingPage(): JSX.Element {
         <strong>LIVE TRADING — NOT AVAILABLE</strong> — there is no control anywhere in this
         application that enables it.
       </div>
+
+      {/* Checkpoint 64.68: the deterministic-replay Paper Trading
+          SESSION - start/pause/resume/stop/reset, paper account, open
+          positions, closed trades and recent signals. Rendered on the
+          EXISTING Paper Trading page rather than as a new page. */}
+      <PaperSessionPanel />
 
       {state.phase === "loading" && <LoadingState label="Loading paper trading status…" />}
       {state.phase === "error" && <ErrorState message={state.message} />}

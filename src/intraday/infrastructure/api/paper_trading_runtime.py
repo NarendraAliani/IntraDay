@@ -88,6 +88,15 @@ def _compute_cost(is_buy: bool, notional: Decimal) -> Decimal:
     return model.cost_breakdown(is_buy=is_buy, notional=notional).total
 
 
+def compute_paper_cost(is_buy: bool, notional: Decimal) -> Decimal:
+    """Checkpoint 64.68: the PUBLIC name for `_compute_cost` above, so
+    the replay-paper-session composition root can inject the SAME
+    verified NSE cash-equity intraday cost model this module already
+    uses, rather than declaring a second cost callable. Deliberately a
+    thin alias - the formula itself stays in exactly one place."""
+    return _compute_cost(is_buy, notional)
+
+
 def get_paper_broker() -> PaperBroker:
     """The process-wide singleton `PaperBroker` - lazily constructed on
     first use, matching this project's established `get_or_create`

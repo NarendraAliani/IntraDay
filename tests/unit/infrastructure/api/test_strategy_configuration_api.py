@@ -35,11 +35,22 @@ def _client_as_operator() -> Client:
 @requires_postgres
 @pytest.mark.django_db
 def test_field_registry_endpoint_lists_canonical_fields() -> None:
+    # Checkpoint 64.51: was a stale pre-64.49 hard-coded 8-field set,
+    # discovered by this checkpoint's repository-wide regression audit.
+    # The API endpoint is a thin read-through of
+    # `field_registry.list_fields()` - the current canonical source of
+    # truth, not this test's own duplicated inventory - so the
+    # expectation is derived from it directly rather than re-hard-coded,
+    # matching the same "derive, don't duplicate" principle applied to
+    # `tests/unit/trading_engine/test_strategy_execution.py`'s own fix
+    # this checkpoint.
+    from intraday.signal_intelligence.feature_engine.field_registry import list_fields
+
     client = _client_as_reader()
     response = client.get("/api/v1/config/strategy-engine/fields/")
     assert response.status_code == 200
     field_ids = {row["field_id"] for row in response.json()}
-    assert field_ids == {"open", "high", "low", "close", "volume", "sma", "ema", "atr"}
+    assert field_ids == {f.field_id for f in list_fields()}
 
 
 @requires_postgres

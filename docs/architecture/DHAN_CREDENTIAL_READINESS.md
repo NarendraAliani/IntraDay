@@ -101,10 +101,42 @@ than trying and failing against Dhan's live systems.
 
 Obtain a fresh access token from Dhan (via their web portal, or their
 documented Generate Token flow using TOTP) and configure it on the
-Settings page or via the `DHAN_ACCESS_TOKEN` environment variable. The
-readiness gate re-evaluates on every request — there is no restart or
-cache-clear step required; the very next check will show `VALID` or
-`EXPIRING_SOON` once a genuinely fresh token is in place.
+Settings page (`POST /api/v1/config/settings/dhan/save/`) — this writes
+directly to the encrypted DATABASE credential record, which is what
+every runtime read (Settings page, `run_market_data_worker`, the
+readiness gate itself) authoritatively consults. The readiness gate
+re-evaluates on every request — there is no restart or cache-clear step
+required; the very next check will show `VALID` or `EXPIRING_SOON` once
+a genuinely fresh token is in place.
+
+**Important — updating `DHAN_ACCESS_TOKEN` in the deployment
+environment alone is NOT sufficient.** Per this project's documented
+precedence rule (`application/services/provider_settings.py`'s own
+module docstring), a DATABASE-configured credential always wins over
+the environment variable, and the environment is never automatically
+promoted into the database — a stale DB credential will keep being
+used even after `.env` is edited and the process restarted. If the
+credential is being managed through the environment (rather than the
+Settings UI/API directly), it must be explicitly synchronized into the
+database with (Checkpoint 64.60):
+
+```
+python manage.py provision_dhan_credentials
+```
+
+This command reads `DHAN_CLIENT_ID`/`DHAN_ACCESS_TOKEN` from the
+current process environment, and writes through the exact same
+encryption/repository path the Settings API uses
+(`DhanSettingsService.save()` → `DjangoDhanCredentialRepository` →
+Fernet-encrypted `encrypted_access_token` column). It must be invoked
+explicitly, every time the environment secret changes — nothing in this
+project synchronizes `.env` into the database automatically, on
+startup, on a schedule, or in the background. Its output reports only
+safe metadata (`token_state`, `token_expires_at`, `enabled`,
+`configured`, `source=ENVIRONMENT_PROVISION`) — never the token itself.
+After running it, a fresh `GET /api/v1/config/settings/dhan/` (or the
+Settings page) will show the new state, since normal runtime continues
+reading from the DATABASE exactly as before.
 
 ## Why does real trading remain disabled even when everything is READY?
 

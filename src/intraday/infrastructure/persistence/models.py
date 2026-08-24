@@ -502,6 +502,15 @@ class LiveQuoteObservation(models.Model):
     high_price = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
     low_price = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
     close_price = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
+    cumulative_volume = models.DecimalField(max_digits=18, decimal_places=0, null=True, blank=True)
+    """Checkpoint 64.64: the provider's own CUMULATIVE (day-to-date)
+    traded volume as of this observation, when the source quote carried
+    one (`Quote.cumulative_volume` - see that field's own docstring) -
+    `null` for every observation that did not (REST point-sample quotes,
+    and Dhan Ticker-packet-sourced quotes). Never itself a per-bar
+    volume - `aggregate_quotes_into_bars()` is the one place that diffs
+    consecutive readings of this column into `AggregatedBarObservation.
+    volume` below."""
 
     class Meta:
         app_label = "persistence"
@@ -553,6 +562,16 @@ class AggregatedBarObservation(models.Model):
     observation_count = models.PositiveIntegerField()
     data_source = models.CharField(max_length=32)
     computed_at = models.DateTimeField(auto_now=True)
+    volume = models.DecimalField(max_digits=18, decimal_places=0, default=0)
+    """Checkpoint 64.64: this bar's real, differenced per-bar traded
+    volume (`AggregatedBar.volume` - see its own docstring for the
+    differencing rule), or the honest `0` default when the underlying
+    quotes never carried a `cumulative_volume` to difference. Added
+    alongside `LiveQuoteObservation.cumulative_volume` above so a bar
+    reloaded from this table (`get_recent()`) carries the SAME volume
+    it was computed with, not a re-defaulted `0` - closing the gap
+    64.63 named (`AggregatedBarObservation` had no volume column at
+    all) now that a real value exists to persist."""
 
     class Meta:
         app_label = "persistence"
@@ -1365,3 +1384,43 @@ class SignalEvidenceRecord(models.Model):
     class Meta:
         app_label = "persistence"
         indexes = [models.Index(fields=["signal_id"])]
+
+
+class PaperTradingSessionRecord(models.Model):
+    """Checkpoint 64.68 §18: the persisted REPLAY PAPER TRADING SESSION.
+
+    Deliberately NOT a second paper database (§18's explicit
+    prohibition) and deliberately NOT a snapshot of positions/trades/
+    P&L: a replay session is a pure deterministic function of the
+    specification fields below plus `replay_cursor`, so these columns
+    ARE the complete session. Positions, trades, fills and P&L are
+    re-derived on read by replaying the same bars through the same
+    canonical `PaperBroker` + risk gate - see
+    `application/services/replay_paper_session.py`'s own module
+    docstring, and `application/repositories/paper_session.py` for why
+    snapshotting derived P&L here would create a competing source of
+    truth for numbers the canonical accounting already owns.
+
+    Distinct from `ScannerConfiguration` (Checkpoint 64.4), which is the
+    LIVE scanner worker's desired state and is untouched by this
+    checkpoint.
+    """
+
+    session_id = models.CharField(max_length=64, unique=True)
+    status = models.CharField(max_length=16, default="STOPPED")
+    strategy_id = models.CharField(max_length=100)
+    timeframe = models.CharField(max_length=8, default="5m")
+    instrument_ids = models.JSONField(default=list)
+    starting_capital = models.DecimalField(max_digits=18, decimal_places=4)
+    quantity = models.DecimalField(max_digits=18, decimal_places=4)
+    replay_date = models.DateField()
+    replay_cursor = models.PositiveIntegerField(default=0)
+    replay_total_steps = models.PositiveIntegerField(default=0)
+    playback_speed = models.PositiveIntegerField(default=1)
+    last_error = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        app_label = "persistence"
+        indexes = [models.Index(fields=["session_id"])]

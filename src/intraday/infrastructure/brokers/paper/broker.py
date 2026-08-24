@@ -168,6 +168,7 @@ class PaperBroker:
         slippage_percent: Decimal = Decimal("0"),
         partial_fill_ratio: Decimal = Decimal("1"),
         clock: Callable[[], datetime],
+        id_factory: Callable[[], str] | None = None,
     ) -> None:
         if initial_capital <= 0:
             raise ValueError("initial_capital must be positive")
@@ -177,6 +178,17 @@ class PaperBroker:
         self._slippage_percent = slippage_percent
         self._partial_fill_ratio = partial_fill_ratio
         self._clock = clock
+        self._id_factory = id_factory or (lambda: str(uuid.uuid4()))
+        """Checkpoint 64.68: ADDITIVE, fully backward compatible - every
+        existing construction site omits it and keeps the previous
+        `uuid.uuid4()` behaviour byte for byte. A caller that needs the
+        broker's SURROGATE identifiers (event_id/fill_id/position_id/
+        trade_id) to be reproducible - specifically the deterministic
+        REPLAY PAPER SESSION, whose §17 acceptance criterion is "the same
+        replay twice produces the same trades and positions" - injects a
+        deterministic factory instead. This changes NO economic value:
+        prices, quantities, costs and P&L are entirely unaffected by
+        which string an identifier happens to be."""
 
         self._orders: dict[OrderId, _PaperOrder] = {}
         self._idempotency_keys: dict[str, OrderId] = {}
@@ -274,7 +286,7 @@ class PaperBroker:
         )
         record.events.append(
             OrderEvent(
-                event_id=str(uuid.uuid4()),
+                event_id=self._id_factory(),
                 event_type=OrderEventType.ORDER_MODIFIED,
                 order_id=order_id,
                 correlation_id=record.correlation_id,
@@ -427,7 +439,7 @@ class PaperBroker:
         now = self._clock()
         record.events.append(
             OrderEvent(
-                event_id=str(uuid.uuid4()),
+                event_id=self._id_factory(),
                 event_type=event_type,
                 order_id=record.intent.order_id,
                 correlation_id=record.correlation_id,
@@ -590,7 +602,7 @@ class PaperBroker:
         #     already-existing field).
         self._fills.append(
             Fill(
-                fill_id=str(uuid.uuid4()),
+                fill_id=self._id_factory(),
                 order_id=intent.order_id,
                 instrument_id=intent.instrument_id,
                 side=intent.side,
@@ -616,7 +628,7 @@ class PaperBroker:
 
         if existing is None or existing.status is PositionStatus.CLOSED:
             self._positions[intent.instrument_id] = Position(
-                position_id=PositionId(str(uuid.uuid4())),
+                position_id=PositionId(self._id_factory()),
                 instrument_id=intent.instrument_id,
                 direction=intent.side,
                 quantity=fill_quantity,
@@ -689,7 +701,7 @@ class PaperBroker:
 
         self._trades.append(
             Trade(
-                trade_id=TradeId(str(uuid.uuid4())),
+                trade_id=TradeId(self._id_factory()),
                 strategy_id=intent.strategy_id,
                 instrument_id=intent.instrument_id,
                 direction=existing.direction,

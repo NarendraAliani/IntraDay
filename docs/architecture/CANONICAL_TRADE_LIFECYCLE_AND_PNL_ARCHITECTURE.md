@@ -2770,3 +2770,2472 @@ diff this checkpoint (`git diff --stat -- src/intraday/research/backtesting/` is
 producer, no unified execution engine, no `ExecutionAdapter`/`FillBook`/`FillManager`/
 `ExecutionLedger`/event store was created — mechanically confirmed by
 `TestScopeDiscipline.test_no_fillbook_fillmanager_executionledger_introduced` in the new test file.
+
+---
+
+## CHECKPOINT 64.43 -- BACKTEST FILL PRODUCER
+
+64.42 made `PaperBroker` a real `Fill` producer. 64.43 is the symmetric checkpoint for
+`research.backtesting.engine.run_backtest()` -- the single-instrument Backtest engine.
+
+### Actual Backtest fill points (mapped by reading `engine.py` fresh, not assumed)
+
+Exactly TWO execution-event shapes exist in `run_backtest()`, both inside the single function body
+of `engine.py`:
+
+1. **Entry** -- inline in the `if quantity > 0:` branch (only when `entry_risk_approved`), the SAME
+   place `OpenPosition`/`entry_order` (the real `OrderIntent`) are already constructed.
+2. **Exit** -- the single nested `_close_trade(exit_index, exit_timestamp, exit_price, reason)`
+   helper, called from exactly 4 sites: TradePlan level-touch, TradePlan EOD force-close,
+   signal-reversal, and direction-flip EOD force-close. All four funnel through this ONE function --
+   there is no fifth exit code path.
+
+There is NO partial-exit capability anywhere in this engine (confirmed by reading the full loop
+body): one accepted entry produces exactly one `OpenPosition`, which is closed exactly once, by
+exactly one `_close_trade()` call, for its entire quantity. One completed `SimulatedTrade` therefore
+maps to exactly 2 Fills (one entry, one exit) -- never more, never fewer, and 64.43 does NOT change
+this (no partial fills or partial exits were invented).
+
+### Entry Fill
+
+Constructed at the exact entry-acceptance point, from already-computed local values:
+- `quantity` / `price=filled_entry` / `timestamp=entry_bar.timestamp` -- the SAME values used to
+  build `OpenPosition`, never independently recomputed.
+- `order_id=entry_order.order_id` / `side=entry_order.side` -- the SAME real `OrderIntent` object
+  (Checkpoint 64.31) fed to the risk gate when configured.
+- `transaction_cost` -- ONE additional `costs.cost_breakdown(is_buy=..., notional=filled_entry *
+  quantity).total` call, using the identical `is_buy`/`notional` inputs `_close_trade` will later
+  use for its own entry leg. `CostModel.cost_breakdown()` is a pure function of its inputs, so this
+  additional call is guaranteed to equal `_close_trade`'s own later entry-leg computation -- proven
+  directly by `test_j_fill_transaction_costs_sum_to_trade_costs`
+  (`entry_fill.transaction_cost + exit_fill.transaction_cost == trade.costs`). It does not feed
+  into, replace, or duplicate `_close_trade`'s own cost computation.
+- `slippage_applied = filled_entry - entry_bar.open` -- the actual signed adjustment
+  `costs.slippage_adjusted_price()` already applied.
+- `status_at_fill=OrderStatus.FILLED` (Backtest has no partial-fill concept for entries).
+- `source=FillSource.BACKTEST`.
+
+### Exit Fill
+
+Constructed inside `_close_trade()`, immediately after the `SimulatedTrade` is appended, from the
+SAME already-computed locals that built that trade:
+- `quantity` (same `open_position.quantity`) / `price=filled_exit` / `timestamp=exit_timestamp` --
+  identical to `trade.quantity`/`trade.exit_price`/`trade.exit_timestamp`.
+- `transaction_cost=exit_leg_breakdown.total` -- this is now a named local (`exit_leg_breakdown`)
+  captured from the SAME `costs.cost_breakdown(is_buy=exit_is_buy, notional=exit_notional)` call
+  `_close_trade` already made before this checkpoint (previously chained directly into
+  `.combine()`; now assigned to a name first, purely a refactor -- `breakdown =
+  entry_leg_breakdown.combine(exit_leg_breakdown)` is numerically IDENTICAL to the prior
+  `costs.cost_breakdown(...).combine(costs.cost_breakdown(...))` one-liner).
+- `slippage_applied = filled_exit - exit_price` -- `exit_price` is `_close_trade`'s own parameter,
+  the exact pre-slippage reference (a TradePlan level, a reversal bar's open, or an EOD bar's
+  close) -- never re-derived.
+- `status_at_fill=OrderStatus.FILLED`.
+- `source=FillSource.BACKTEST`.
+
+### EOD Fill
+
+Both direction-flip EOD and TradePlan EOD force-close route through the SAME `_close_trade()` call
+site as every other exit -- there is no separate EOD Fill construction path. `reason="end_of_data"`
+(direction-flip) or `reason=ExitReason.EOD.value` (TradePlan) is recorded on the `SimulatedTrade` as
+before; the exit Fill itself carries no `reason` field (Fill is execution-event data, not a
+strategy-exit-reason record -- the reason remains solely on `SimulatedTrade`, unchanged).
+
+### TradePlan Fill mapping
+
+`tradeplan_execution.simulate_tradeplan_exit()` itself was NOT modified -- it still only computes
+WHERE/WHY an exit occurs (`TradePlanExitResult`), never executes anything. The engine's own loop
+still ACTS on that precomputed result at the correct bar index, exactly as before 64.43; the only
+change is that the SAME `_close_trade()` call this already triggers now also produces one exit
+`Fill`. STOP_LOSS / TARGET_1/2/3 / TRAILING_STOP / EOD all produce exactly one exit Fill each -- no
+multi-Fill TradePlan exit exists because the engine itself has no partial-exit mechanism to feed a
+second Fill from (verified: `test_q_tradeplan_stop_loss_exit_produces_correct_fills_and_
+unchanged_trade`, `test_r_eod_force_close_produces_correct_fills_and_unchanged_trade`).
+
+### Order ID relationship -- the checkpoint's own flagged critical decision
+
+**Finding**: this engine constructs exactly ONE real `OrderIntent` per round trip -- the entry
+order, built once via `order_intent_adapter.build_backtest_entry_order_intent()`. There is NO exit
+`OrderIntent` construction anywhere in `engine.py`, `execution.py`, or `tradeplan_execution.py`
+(confirmed by reading all three files in full and by grep -- `build_backtest_entry_order_intent`
+has exactly one call site). A signal-reversal exit, a TradePlan SL/T1/T2/T3/Trailing exit, and an
+EOD force-close are all internal engine DECISIONS with no order-identity concept of their own.
+
+**Resolution** (per the directive's own explicit permission to use "the entry order_id, or some
+other well-reasoned, clearly-labeled compromise" rather than fabricate a new order): the exit
+Fill's `order_id` REUSES the entry `OrderIntent.order_id`. This is not an arbitrary choice -- it
+mirrors an EXISTING precedent already established in this exact codebase: Checkpoint 64.32's
+`BacktestPosition.position_id=entry_order.order_id` already reuses the entry order's identity as
+the POSITION's identity for its entire lifecycle (open through close). The exit Fill reusing that
+same identity for its `order_id` is consistent with that established convention, not a new one.
+This is explicitly documented here, in `taskReport.md`, and inline in `engine.py`'s own comment at
+the exit Fill construction site -- never silently assumed. `test_d_exit_fill_reuses_entry_order_
+id_no_fabricated_identity` proves `exit_fill.order_id == entry_fill.order_id == trade.order_
+intent.order_id` directly.
+
+### Fill ID determinism
+
+`fill_id` for the entry Fill: `f"{entry_order.order_id}-fill-entry"`. For the exit Fill:
+`f"{open_position.order_intent.order_id}-fill-exit-{trade_counter}"` -- `trade_counter` is the
+SAME monotonically-incrementing counter `_close_trade` already uses for `SimulatedTrade.trade_id`
+(`f"{strategy_id}-{trade_counter}"`), so it is already a stable, deterministic, per-run-unique
+value with zero new state introduced. Both are pure string formatting of already-deterministic
+inputs (`entry_order.order_id` is itself derived from `strategy_id`/`instrument_id`/`entry_index`,
+Checkpoint 64.29/64.33) -- NOT `uuid.uuid4()`, NOT any random source.
+`test_l_fill_ids_and_values_deterministic_across_identical_runs` runs the identical scripted
+scenario twice and asserts every `Fill` field (`fill_id`, `order_id`, `quantity`, `price`,
+`timestamp`, `transaction_cost`, `slippage_applied`) is byte-identical across both runs, and
+explicitly asserts the `fill_id` is NOT parseable as a `uuid.UUID`.
+
+### Fill quantity / price / timestamp source
+
+All three come directly from the SAME already-computed locals used for `OpenPosition`/
+`SimulatedTrade` construction -- never independently recomputed. `test_e_f_fill_quantity_and_
+price_equal_trade_values` and `test_g_fill_timestamps_equal_trade_entry_exit_timestamps` prove
+exact equality against `trade.quantity`/`trade.entry_price`/`trade.exit_price`/`trade.entry_
+timestamp`/`trade.exit_timestamp` directly.
+
+### Fill source / status
+
+`source=FillSource.BACKTEST` explicitly assigned at both construction sites, never inferred.
+`status_at_fill=OrderStatus.FILLED` always -- this engine has no partial-fill concept for either
+entries or exits, so `OrderStatus.PARTIALLY_FILLED` is never produced, exactly matching what
+already existed before this checkpoint (`test_i_fill_status_is_filled_never_partial`,
+`test_s_no_partial_fills_introduced`).
+
+### Fill retention mechanism
+
+`BacktestResult` gains one new field, `fills: tuple[Fill, ...] = ()` (defaulted so any pre-64.43
+direct-construction caller/fixture remains valid). `run_backtest()` accumulates a local
+`fills: list[Fill] = []`, appended to in execution order (never re-sorted) at both the entry and
+exit construction sites, and returns `fills=tuple(fills)` on the final `BacktestResult`. This
+mirrors the smallest-possible-addition discipline 64.42 established for `PaperBroker.get_fills()`
+-- one field, populated at the natural existing result boundary, no `FillBook`/`FillManager`/
+`ExecutionLedger`/event store. Only `engine.run_backtest()` populates this field as of 64.43;
+`portfolio.py`'s separate `PortfolioBacktestResult` type is unmodified (out of this checkpoint's
+scope, mirroring `order_intent`'s own established single-instrument-engine-only precedent from
+64.31).
+
+### Backtest numerical compatibility
+
+The directive's own most important rule. `_close_trade`'s cost computation changed from a single
+chained expression to two named locals combined identically (`entry_leg_breakdown.combine(
+exit_leg_breakdown)` -- numerically identical to the prior `costs.cost_breakdown(...).combine(
+costs.cost_breakdown(...))`). No other line in the pre-existing entry/exit/EOD/equity-curve/
+mark-to-market/metrics code was touched. Verified two ways: (1)
+`tests/unit/research/test_checkpoint_64_31_order_intent_wiring.py`, `..._64_30_...`,
+`..._64_29_...`, `test_backtesting_engine.py` (72 tests spanning entry/exit/TradePlan/EOD/
+risk-gate scenarios) all pass unmodified after this checkpoint's changes; (2) the new 64.43 test
+file directly asserts `trade.entry_price`/`trade.exit_price`/`trade.gross_pnl`/`trade.net_pnl`/
+`trade.reason`/`result.equity_curve`/`result.metrics.total_trades` against the exact SAME numbers
+the pre-64.43 scripted scenarios already produced.
+
+### Cross-engine parity status
+
+Both engines now produce the canonical `Fill` type (`FillSource.PAPER` and `FillSource.BACKTEST`
+respectively), satisfying the prerequisite for a future CROSS-ENGINE FILL PARITY checkpoint. Full
+execution convergence is explicitly NOT claimed: Backtest has no partial-fill/partial-exit
+mechanism at all (Paper does), Backtest's exit `order_id` is a documented reuse of the entry
+identity rather than a genuine independent exit order (Paper's `_maybe_fill_resting_order` fills
+against real, distinct resting orders), and neither engine's `Fill` output is consumed by any
+accounting/position-update logic yet (both remain pure observation, as directed in both 64.42 and
+64.43).
+
+## CHECKPOINT 64.44 -- CROSS-ENGINE FILL PARITY
+
+64.43 established Backtest as the second real `Fill` producer (`FillSource.BACKTEST`), alongside
+`PaperBroker` (`FillSource.PAPER`, 64.42). 64.44's sole objective was to PROVE, with a focused test
+suite (`tests/unit/research/test_checkpoint_64_44_cross_engine_fill_parity.py`, 43 tests), whether
+these two producers are semantically compatible where the underlying economic scenario is genuinely
+comparable -- and to precisely document where they legitimately differ. No production code was
+modified: neither `engine.py`, `broker.py`, `contracts.py` (Fill), risk policy, accounting, nor
+`Position` was touched this checkpoint. No new execution subsystem, `FillBook`/`FillManager`/
+`ExecutionLedger`/`ExecutionAdapter` was introduced (mechanically proven by
+`test_s_no_new_execution_subsystem_introduced`).
+
+### MUST MATCH (proven, not merely asserted)
+
+| Concept | Backtest | Paper | Result |
+|---|---|---|---|
+| Fill dataclass type | `domain.execution.contracts.Fill` | same | IDENTICAL (`test_a_both_producers_emit_the_same_dataclass_type`) |
+| `side` semantics | `Side.BUY`/`Side.SELL` per leg | same | IDENTICAL (`TestBuySemanticParity`/`TestSellSemanticParity`) |
+| `quantity` for a comparable complete execution | same local as `SimulatedTrade.quantity` | same local as `Position.quantity` | NUMERICALLY EQUAL when the SAME requested quantity is configured (`test_d_comparable_complete_execution_quantity_equal`) |
+| `price` meaning | this engine's own actual final execution price | same | BOTH equal their own engine's authoritative price (`TestExecutionPriceSemantics`); cross-engine numeric equality asserted ONLY under one deliberately controlled same-reference-price scenario |
+| `slippage_applied` meaning | signed delta from THIS engine's own pre-slippage reference | same | signed correctly on both, zero under zero-slippage config on both (`TestSlippageSemantics`) |
+| `transaction_cost` type | `Decimal` | `Decimal` | IDENTICAL type; value matches injected cost model exactly on Paper, matches summed per-leg breakdown exactly on Backtest (`TestTransactionCostSemantics`) |
+| `status_at_fill` for a comparable complete fill | `OrderStatus.FILLED` | `OrderStatus.FILLED` | IDENTICAL (`TestStatusSemantics`) |
+| `source` provenance | `FillSource.BACKTEST`, explicit literal | `FillSource.PAPER`, explicit literal | Both explicit, never inferred, always distinct (`TestSourceSemantics`) |
+| Fill ordering | append-only, entry before exit, never re-sorted | append-only, chronological, never re-sorted | IDENTICAL discipline on both (`TestFillOrdering`) |
+| Position quantity/price after a Fill | `trade.quantity`/`trade.entry_price` == Fill's own values | `Position.quantity`/`average_entry_price` == Fill's own values | IDENTICAL relationship on both engines, observationally (`TestPositionQuantityEquality`/`TestPositionExecutionPriceEquality`) |
+| Accounting unaffected by Fill production | `trade.gross_pnl`/`net_pnl`/`equity_curve` unchanged | `Trade.realized_pnl`/funds unchanged | IDENTICAL invariant on both (`TestAccountingUnchangedByFillProduction`) |
+| Fill immutability | `frozen=True, slots=True` (64.41, unmodified) | same | IDENTICAL, contract untouched (`test_fill_contract_field_set_unchanged`) |
+
+### MAY DIFFER (documented, each with an explicit reason -- never labeled "acceptable" without one)
+
+| Concept | Backtest | Paper | Why the difference is legitimate |
+|---|---|---|---|
+| `fill_id` generation | deterministic string format (`f"{order_id}-fill-entry"` / `-exit-{n}"`) | `uuid.uuid4()` | Backtest MUST be reproducible for identical inputs (research auditability); Paper's fills are genuinely distinct runtime events with no deterministic seed available. Neither scheme is "wrong" -- they solve different problems. Proven: `TestBacktestDeterministicFillIds` (two identical runs -> byte-identical IDs) vs `TestPaperUniqueFillIds` (two identical-input runs -> DIFFERENT IDs, by design). |
+| `order_id` for an exit Fill | REUSES the entry `OrderIntent.order_id` (no independent exit order exists in this engine -- verified again this checkpoint by direct inspection of `engine.py`, unchanged since 64.43) | genuinely distinct order identity when the exit is submitted as its own `OrderIntent` | Backtest's execution model has never had an exit-order concept (signal reversal / TradePlan SL-T1-T2-T3 / EOD are internal DECISIONS, not orders); Paper's `BrokerGateway` surface requires every submission to be a real `OrderIntent`. Fixing this asymmetry would require inventing a genuine Backtest exit-order mechanism -- explicitly out of scope (directive §5, "DO NOT fix this in 64.44"). Proven: `TestBacktestExitOrderIdentityDifference`. |
+| Execution price source | historical bar OHLC + deterministic slippage model | last `record_price()` observation + the same slippage function (`apply_flat_percentage_slippage`, shared since 64.40) | Backtest has no real market to observe -- it replays recorded history; Paper observes whatever price was fed to it. Different DATA SOURCE, same MATHEMATICAL slippage treatment. |
+| Timestamp source | simulated bar/tick time | `self._clock()` (real or injected clock) | Backtest timestamps are historical facts about the data; Paper timestamps are runtime observations. Both are "the actual execution timestamp for that engine," per `Fill.timestamp`'s own docstring contract -- neither is a signal-time or order-creation-time substitute. |
+| Fills per OrderIntent | exactly ONE fill per Fill-construction site (never split) -- the engine has no partial-fill mechanism at all | can be MANY (`partial_fill_ratio < 1` combined with successive `record_price()` calls) | Genuine capability difference, not a producer defect: Backtest was never directed to implement partial fills this checkpoint (or 64.43), and 64.44 explicitly forbids fabricating them. Proven: `TestQuantitySemantics.test_paper_partial_fill_sum_equals_requested_quantity` (Paper) vs `test_backtest_never_produces_partial_fills`/`TestPaperPartialFillCapabilityDocumented.test_r_backtest_never_produces_more_than_one_fill_per_execution_event` (Backtest). |
+| `status_at_fill` vocabulary usage | only ever `FILLED` | `FILLED` or `PARTIALLY_FILLED` | Direct consequence of the partial-fill asymmetry above -- both values are members of the SAME shared `OrderStatus` vocabulary (`_VALID_STATUS_AT_FILL`), just exercised differently because the underlying capability differs. Proven: `TestStatusSemantics`. |
+| Liquidity/realism assumption | historical bar data implicitly assumes the recorded OHLC was tradeable at that size -- never independently verified | Paper's `record_price()` reflects whatever price feed the caller supplies -- also not a guarantee of live tradeable liquidity | Neither producer claims genuine live-market liquidity; this is a pre-existing, unresolved MODEL ASSUMPTION on both sides (see `research.backtesting`'s own "MODEL ASSUMPTION, not verified" language), unchanged by this checkpoint. |
+
+### Position/accounting compatibility
+
+Fill remains a pure OBSERVATION on both engines -- confirmed again this checkpoint, not merely
+carried forward: `TestPositionQuantityEquality`/`TestPositionExecutionPriceEquality` show Fill's
+own recorded quantity/price match what each engine's own Position/Trade update already used (the
+SAME local values, never a second independently-derived source), and
+`TestAccountingUnchangedByFillProduction` re-proves the exact scripted-scenario numbers
+(`gross_pnl=50`, `net_pnl=50`, `equity_curve[-1].balance=100050` for Backtest;
+`realized_pnl=100.00` for a symmetric Paper round trip) are unaffected by Fill construction, on
+BOTH engines, fresh this session.
+
+### What 64.44 explicitly did NOT do
+
+No unified execution engine. No Backtest exit-order-identity mechanism. No partial-exit
+implementation. No accounting rewired to consume `Fill`. No Gainz integration (see the roadmap
+section below -- planning only). No Dhan file read or modified. No frontend file touched. No
+production code change of any kind -- this checkpoint is tests + documentation only, per its own
+directive §14/§15.
+
+## CHECKPOINT 64.44 -- GAINZ STRATEGY INTEGRATION ROADMAP (PLANNING ONLY)
+
+No file containing the string "gainz" (case-insensitive) exists anywhere in this repository as of
+64.44 (verified via `grep -ril "gainz" .` over the full working tree, fresh this session -- zero
+matches). No Gainz reference implementation was read, and none of its claimed internals (`alpha`,
+`trend`, `breakout`, `mean_reversion`, `hybrid`, `scalp`, `consensus` sub-strategies; `signal`/
+`confidence`/`score`/`regime`/`reasons`/`entry`/`stop_loss`/`TP1`/`TP2`/`TP3`/`position_size`
+outputs) were independently verified against real source -- this section records the checkpoint
+directive's OWN description of Gainz as a forward-looking planning target, not a description of
+code this session inspected. Nothing here should be read as "Gainz is integrated," "Gainz produces
+verified output," or "Gainz has been backtested" -- none of that is true as of this checkpoint.
+
+### Target future integration sequence
+
+```
+Strategy Plugin / Registry Foundation
+      |
+Gainz Strategy Adapter
+      |
+Gainz Backtest Integration
+      |
+Gainz Parameter/Configuration Integration
+      |
+Gainz Strategy Benchmark
+      |
+Gainz Paper Trading
+      |
+Gainz Live-Signal Validation
+```
+
+### Target canonical data flow (future, NOT implemented)
+
+```
+OHLCV / Market Data
+      |
+Strategy Registry
+      |
+Gainz Strategy
+      |
+Canonical Signal
+      |
+Risk Engine
+      |
+OrderIntent
+      |
+Execution
+      |
+Fill
+      |
+Position
+      |
+Accounting
+```
+
+Gainz must ultimately produce a canonical `Strategy`/`Signal` representation compatible with this
+project's EXISTING `domain.strategy`/`domain.signal` contracts -- the SAME vocabulary
+`ema_crossover`/`sma_trend_filter`/`atr_volatility_breakout` already use, not a parallel one. Gainz
+must NEVER directly control: the broker, Dhan, `Fill` construction, transaction execution, the
+account ledger, or the final risk-approved order quantity -- all of those remain the exclusive
+responsibility of the existing Risk Engine -> `OrderIntent` -> Execution -> `Fill` -> Position ->
+Accounting pipeline this and prior checkpoints have built. Gainz's own current (unread, unverified)
+pandas-based standalone output model must be preserved as a REFERENCE implementation only, never
+copied directly into production architecture -- a future "Gainz Strategy Adapter" checkpoint is
+where its actual mathematics would be read, verified, and wrapped behind the canonical `Strategy`
+Protocol, exactly as `ema_crossover`/`atr_volatility_breakout` already are.
+
+---
+
+## CHECKPOINT 64.45 -- FILL/POSITION CONSISTENCY
+
+64.44 proved the two `Fill` producers (`research.backtesting.engine.run_backtest()` and
+`infrastructure.brokers.paper.broker.PaperBroker`) are semantically compatible with each other
+where genuinely comparable. 64.45 verifies the NEXT boundary: `Fill` against the `Position`/trade
+values the SAME existing engines actually produced for the SAME execution event.
+
+**Fill remains purely observational.** Neither engine was modified. `Position.update()` is NOT
+driven by `Fill` -- the existing execution logic (`PaperBroker._apply_to_position()`,
+`engine.py`'s `OpenPosition`/`SimulatedTrade` construction) remains the sole authority for
+Position/trade mutation. Proven structurally, not merely asserted: in `_attempt_fill()`,
+`self._apply_to_position(...)` executes and returns BEFORE `self._fills.append(Fill(...))` is even
+constructed -- the mutation cannot read a `Fill` that does not exist yet at the time it runs
+(`test_r_paper_position_mutation_does_not_require_fill_construction_order`). Both engines'
+`Fill(...)` constructor calls read the exact same already-computed local variables
+(`fill_quantity`/`slipped_price` on Paper; `quantity`/`filled_entry`/`filled_exit` on Backtest)
+that were ALSO just passed to the Position/trade constructor -- one shared source of truth, never
+two independently-derived values that could silently diverge.
+
+### Fill quantity -> Position quantity relationship
+
+- **Paper, opening a position** (no existing position, or existing is CLOSED): `Position.quantity`
+  is set to `fill_quantity` -- the exact same local variable the just-appended `Fill.quantity`
+  carries.
+- **Paper, adding to an existing same-direction position**: `Position.quantity` becomes
+  `existing.quantity + fill_quantity` -- i.e. the existing quantity plus THIS fill's own quantity,
+  never a second independently-tracked total.
+- **Paper, reducing/closing an opposite-direction fill**: `closing_quantity = min(existing.quantity,
+  fill_quantity)`. The remaining OPEN quantity becomes `existing.quantity - closing_quantity`. When
+  that reaches zero, the resulting CLOSED `Position.quantity` field is set to `closing_quantity`
+  (the amount that was closed) -- NOT to `0` -- because `Position.__post_init__` requires
+  `quantity > 0` for every `Position` value, closed or open. This is the EXISTING contract's own
+  representation (unchanged by this checkpoint); the verified invariant is
+  `remaining_open = existing.quantity - closing_fill.quantity == 0`, together with
+  `closed.quantity == closing_fill.quantity`, never a naive `Position.quantity == 0` assertion.
+- **Backtest, entry**: `OpenPosition.quantity` and the eventual `SimulatedTrade.quantity` are both
+  the same `quantity` local computed once at entry time; the entry `Fill.quantity` uses that exact
+  same local.
+- **Backtest, exit**: `SimulatedTrade.quantity` (the position's own quantity, carried from entry) is
+  the same value the exit `Fill.quantity` uses -- this engine's `_close_trade()` always closes the
+  ENTIRE position in one call; there is no partial-exit capability to represent.
+
+### Fill price -> Position price relationship
+
+- **Paper, opening**: `Position.average_entry_price = fill_price` (the same `slipped_price` local
+  the `Fill.price` field carries).
+- **Paper, adding to an existing position (average entry)**: the EXISTING blended-average formula
+  (unchanged, not rewritten) --
+  `(existing.average_entry_price * existing.quantity + fill_price * fill_quantity) / total_quantity`
+  -- is fed the SAME `fill_price` the corresponding `Fill.price` carries. Verified directly against
+  two real same-side Paper fills at different prices
+  (`test_e_two_same_side_fills_produce_fill_weighted_average`).
+- **Paper, closing**: the realized P&L formula reads `fill_price` (== the closing `Fill.price`) and
+  `existing.average_entry_price` -- both already-existing inputs, no third source.
+- **Backtest, entry/exit**: `SimulatedTrade.entry_price`/`.exit_price` are the exact
+  `filled_entry`/`filled_exit` locals also passed to the entry/exit `Fill.price` fields.
+
+### Multi-fill behavior
+
+Paper's own `partial_fill_ratio < 1` genuinely produces multiple `Fill`s per `OrderIntent` (a
+capability Backtest does not have and was not fabricated for). Verified: a `partial_fill_ratio =
+0.5`, requested quantity 10 produces Fill #1 (quantity 5, `PARTIALLY_FILLED`) then Fill #2
+(quantity 5, `FILLED`, via the `force_full_remaining` completion path) on the next `record_price()`
+tick. The Position's quantity after Fill #1 is 5 (not yet 10, not overfilled to 15); after Fill #2
+it is 10 (`sum(Fill.quantity) == Position.quantity == 10`, never 5 or 15). A third `record_price()`
+tick against an already-`FILLED` order produces NO further fill (`record_price()` only re-attempts
+`PENDING`/`PARTIALLY_FILLED` orders) -- no overfill is structurally possible.
+
+### Close behavior
+
+A full close (closing quantity == the entire previously-open quantity) reconciles exactly:
+`existing.quantity - closing_fill.quantity == 0`, `closed.status == CLOSED`, and
+`closed.quantity == closing_fill.quantity` (per the CLOSED-quantity representation documented
+above). Both a BUY-open/SELL-close and a SELL-open/BUY-close (short cover) round trip were verified
+on Paper; both a BULLISH (long) and BEARISH (short) round trip were verified on Backtest.
+
+### Long/short behavior
+
+`SimulatedTrade.direction` is a `StrategyDirection` (`BULLISH`/`BEARISH`), a DIFFERENT vocabulary
+from `Fill.side` (`Side.BUY`/`Side.SELL`) -- confirmed by direct source inspection this checkpoint
+(an earlier draft of this checkpoint's own test file incorrectly assumed they were the same enum
+and was corrected before being counted as passing). A BULLISH trade's entry `Fill.side` is
+`Side.BUY` and its exit `Fill.side` is `Side.SELL`; a BEARISH trade's entry `Fill.side` is
+`Side.SELL` and its exit `Fill.side` is `Side.BUY`. Paper's `Position.direction` uses `Side`
+directly (`Side.BUY` for a long open, `Side.SELL` for a short open) and matches the opening
+`Fill.side` exactly in both cases.
+
+### Accounting preservation
+
+Reading `get_fills()`/`BacktestResult.fills` does not mutate anything -- both are plain
+append-only lists read via a tuple-returning accessor. Verified fresh this checkpoint, unchanged
+from every prior checkpoint's own reported values: Backtest's scripted long scenario still produces
+`gross_pnl=50`, `equity_curve[-1].balance=100050`; Paper's symmetric BUY-then-SELL round trip with a
+nonzero flat cost model still produces `realized_pnl=100.00`, `realized_net_pnl=98.00` (100 gross
+minus 1 entry-side + 1 exit-side attributable cost); Paper's `get_total_unrealized_pnl()` for an
+open, marked position is unaffected by whether `get_fills()` has been called; `get_equity()`
+returns the identical value before and after reading `get_fills()`.
+
+### Explicit statement: Fill remains observational
+
+64.45, exactly like 64.41/64.42/64.43/64.44 before it, does NOT wire `Fill` into
+`Position.update()`. No production code in this repository reads `PaperBroker.get_fills()` or
+`BacktestResult.fills` to drive a position, trade, or accounting mutation -- confirmed both by
+direct source inspection (`_apply_to_position()` and `engine.py`'s Position/trade construction
+sites contain no reference to `self._fills`/`fills[...]`/`get_fills`) and by the call-order proof
+above. A future checkpoint may deliberately decide whether `Fill` becomes the canonical input to
+Position mutation; that decision was explicitly NOT made this checkpoint.
+
+Test coverage: `tests/unit/research/test_checkpoint_64_45_fill_position_consistency.py` (31 tests).
+
+## CHECKPOINT 64.46 -- FILL AS CANONICAL EXECUTION EVENT DESIGN
+
+Design/decision checkpoint only. No production code changed. Answers the question 64.41-64.45
+deliberately deferred: should the architecture evolve from
+
+    Execution --> Position/Trade
+              --> Fill (observation)   [Accounting derived from Position/Trade]
+
+toward
+
+    Execution --> Fill --> Position --> Accounting
+
+**DECISION: NOT YET.** Fill remains observational. See "Fill Canonical Decision" below for the
+full reasoning; conditions that would flip this to YES are listed at the end of this section.
+
+### 1. Responsibility matrix (current owner, verified by direct source read this checkpoint)
+
+| Concern | Current owner (Paper) | Current owner (Backtest) | Uses Fill? | Uses Position? | Uses Trade? | Future preferred owner |
+|---|---|---|---|---|---|---|
+| Execution price | `PaperBroker._attempt_fill` (`slipped_price` local) | `engine.py` (`filled_entry`/`filled_exit` locals via `CostModel.slippage_adjusted_price`) | No (Fill records it, does not produce it) | No | No | Unchanged -- a slippage/pricing function, not Fill's job either now or later |
+| Execution quantity | `_attempt_fill` (`fill_quantity` local) | `engine.py` (`quantity` local, fixed for the whole round trip -- no partial exit) | No | No | No | Unchanged |
+| Slippage | `domain.shared_kernel.slippage.apply_flat_percentage_slippage()` (shared, Checkpoint 64.40) | same shared function via `CostModel` | Fill.slippage_applied RECORDS it | No | No | Fill remains the record; the shared function remains the producer |
+| Transaction cost | injected `compute_cost` closure, charged in `_attempt_fill` | `CostModel.cost_breakdown()` via `costs.cost_breakdown()` | Fill.transaction_cost RECORDS it | No (Position carries no cost field) | Trade.costs/net_pnl (Backtest), Position.realized_net_pnl via `_position_entry_cost` attribution (Paper) | Fill could become the SOURCE for per-event cost; Position/Trade-level attribution logic (proportional entry/exit split) is a SEPARATE concern that would still need to exist above Fill |
+| Fill creation | `_attempt_fill` (after `_apply_to_position`) | `engine.py`, two sites (`~L321`, `~L499`), each after the corresponding Position/Trade construction | -- | -- | -- | Unchanged in principle; ORDER would need to invert if Fill became canonical (see Migration Plan) |
+| Position mutation | `_apply_to_position()` | `OpenPosition` construction (entry) / `SimulatedTrade` + position_lifecycle close (exit) | No (structurally proven 64.45: mutation runs and returns before the Fill for the same event is even constructed) | -- | -- | Position mutation |
+| Average entry | `_apply_to_position()`'s blended-average formula | N/A (Backtest is single-fill-per-leg, no averaging needed) | No | -- | -- | Unchanged formula; could be FED by Fill.price/.quantity without being rewritten (64.45 already proved the values agree) |
+| Realized P&L | `_apply_to_position()` (`realized` local) | `engine.py` `_close_trade()` (`gross_pnl`) | No | Position.realized_pnl | Trade.realized_pnl / SimulatedTrade.gross_pnl | Unchanged formula/owner |
+| Realized Net P&L | `domain.trade.net_pnl.compute_realized_net_pnl()`, fed proportional entry/exit cost attribution from `_position_entry_cost` | `SimulatedTrade.net_pnl` (`costs.cost_breakdown()` at close) | Fill.transaction_cost is a per-event NUMBER this formula could eventually consume | Position.realized_net_pnl | Trade.realized_net_pnl | Unchanged formula; Fill could supply the per-event cost inputs without changing the formula |
+| Unrealized P&L | `domain.position.mark_to_market.mark_position()` | `MarkToMarketPoint` per bar | No | Position.unrealized_pnl | No | Unchanged -- mark-to-market is a periodic re-valuation, not an execution event, and has no natural Fill representation |
+| Equity | `PaperBroker.get_equity()` (derived: cash + open-position market value) | `EquityPoint`/`MarkToMarketPoint` running curve | No | Derived from Position | Derived from Trade history | Unchanged -- a derived read, never a stored/mutated value either now or later |
+| Trade completion | `_apply_to_position()`'s opposite-side branch | `engine.py` `_close_trade()` | No | Reads/writes Position | Constructs Trade/SimulatedTrade | Unchanged |
+| Exit reason | N/A (Paper has no `reason` field on Trade) | `engine.py` (`reason` string: `"signal_reversal"`, `"end_of_data"`, TradePlan leg names) | No | No | SimulatedTrade.reason | Unchanged -- exit reason is a STRATEGY/lifecycle-level fact, not an execution-event fact |
+| Order state | `_PaperOrder.status`, `domain.order.state_machine` | Backtest has no persistent order state machine -- `OrderIntent.status` defaults to CREATED and is never transitioned in `engine.py` | Fill.status_at_fill RECORDS the terminal state at fill time | No | No | Unchanged -- Order state machine remains authoritative; Fill only snapshots it |
+| Risk decision | `domain.risk.policy.evaluate_order_risk()`, fed Position-derived exposure figures (`paper_trading.py`) | `evaluate_backtest_entry_risk()`, fed `OpenPosition`/running-equity-derived figures | No (never reads Fill on either engine, confirmed by source read this checkpoint) | Yes (both) | Yes (net_pnl feeds risk) | Unchanged -- risk evaluation happens strictly BEFORE any Fill can exist (see `domain.execution.contracts.Fill`'s own docstring); Fill becoming canonical downstream of Position mutation does not and must not move risk evaluation past Fill |
+
+**Highlights**: (1) nothing today reads Fill for any accounting/position/risk decision -- confirmed
+by grep and by 64.45's own structural proof; (2) transaction-cost ATTRIBUTION (splitting one
+position's accumulated entry cost proportionally across possibly-multiple closing fills) is
+Position/Trade-layer logic that exists ABOVE any single Fill and would not disappear if Fill became
+canonical -- it would simply need to consume Fill.transaction_cost as its per-event input instead of
+the raw `cost` local it uses today; (3) risk evaluation is architecturally required to happen BEFORE
+any Fill exists (Order -> Risk -> Execution -> Fill), so canonical-Fill-as-input-to-Position can never
+legitimately feed risk evaluation itself -- risk stays a pre-execution gate, unaffected by this
+decision either way.
+
+### 2. Fill Canonical Decision -- goals A-H scored
+
+| Goal | Benefit | Risk | Migration cost | Backward-compat impact |
+|---|---|---|---|---|
+| A. Single source of truth for execution events | Medium -- Fill already IS this for observability; making it authoritative for mutation adds little beyond what 64.45 already proved | Low | Medium | None if done additively |
+| B. Backtest/Paper/Live emit same event type | High (genuine future need for Live) | Low (Fill contract already engine-agnostic via FillSource) | None -- already true today | None |
+| C. Position mutation consumes execution events rather than rebuilding details | Low today (64.45 proved rebuilding never disagrees); High once Live exists (async, possibly out-of-order fills make "consume the event" the only sane model) | Medium -- Backtest's exit Fill reuses the entry order_id (a fabricated linkage, see below); building a generic Fill-consuming Position mutator on top of that fabrication would encode the gap into a more central place | High -- would require restructuring both engines' control flow so Fill construction precedes, not follows, Position mutation | Low if kept additive/shadow first |
+| D. Accounting consumes execution events consistently | Low today -- there is no separate "Accounting" component; realized/realized_net/unrealized/equity all live directly on Position/Trade/PaperBroker derivations, not in an independent ledger that Fill could feed | Medium -- inventing an Accounting consumer ahead of an actual need is scope creep beyond this checkpoint's evidence | High | N/A -- no such component exists to impact |
+| E. One execution event -> one immutable Fill | Already true (64.41 section 2, verified) | None | None | None |
+| F. Multiple fills compose into one Order lifecycle | Already true for Paper (`order_id` shared across partial fills, verified 64.45); NOT true for Backtest exit (fabricated `order_id` reuse, see Order Identity below) | Medium for Backtest | Medium (requires a real exit OrderIntent) | Low |
+| G. Partial fills first-class without special accounting path | Paper already supports this (`partial_fill_ratio`, verified); Backtest has NO partial-fill capability at all -- a future canonical Position mutator must not silently assume Backtest partial fills exist | Low if honestly scoped | N/A (Backtest partial fills are out of scope for this decision entirely) | None |
+| H. Execution-specific provenance explicit via FillSource | Already true (64.41 `FillSource.BACKTEST/PAPER/LIVE`) | None | None | None |
+
+Net read: goals A, B, E, H are already substantially satisfied by the EXISTING observational Fill --
+they do not require Fill to become canonical, only to exist and be correct, which 64.41-64.45 already
+delivered. Goals C, D, F, G are the ones that would genuinely benefit from canonical status, but each
+carries a real, currently-unresolved architectural prerequisite (Backtest's fabricated exit order_id
+for F; no Accounting component exists yet for D; Live's async multi-fill reality for C has not
+arrived yet since no Live adapter exists).
+
+### 3. Position mutation analysis -- can it eventually consume Fill without duplicate arithmetic?
+
+**Paper `_apply_to_position()`**: inputs are `(intent, fill_quantity, fill_price, fill_cost)` --
+three of these four values (`fill_quantity`, `fill_price`, `fill_cost` maps to `Fill.quantity`,
+`Fill.price`, `Fill.transaction_cost`) already exist verbatim on the `Fill` object constructed
+immediately afterward in the same method. The fourth (`intent`) supplies `instrument_id`/`side`/
+`strategy_id` -- all of which also exist on `Fill` (`instrument_id`, `side`) except `strategy_id`,
+which `Fill` deliberately does NOT carry (an execution-layer fact should not need to know the
+originating strategy; `OrderIntent.strategy_id` is reachable via `Fill.order_id` lookup if ever
+needed). **Conclusion: Paper's mutation could be re-expressed as `_apply_to_position(fill: Fill,
+strategy_id: StrategyId)` with ZERO duplicate arithmetic** -- every number the function reads is
+already on Fill. State mutations (`self._positions[...]`, `self._trades.append(...)`,
+`self._position_entry_cost[...]`, `self._available_balance`) are unaffected either way; only the
+SOURCE of the four scalar inputs changes.
+
+**Backtest `OpenPosition`/`SimulatedTrade`/`position_lifecycle`**: the entry side is symmetric to
+Paper's finding -- `OpenPosition.entry_price`/`.quantity` already equal the entry Fill's own
+`.price`/`.quantity`. The EXIT side is where Fill construction today happens INSIDE `_close_trade()`'s
+own logic (`filled_exit`, `quantity`, `exit_leg_breakdown.total` are local variables computed as part
+of the SAME function that builds `SimulatedTrade`), not at a clean "receive one Fill, mutate one
+Position" boundary the way Paper's `_attempt_fill` -> `_apply_to_position()` call already is.
+Re-expressing Backtest's exit as "consume a Fill" would require extracting `_close_trade()`'s
+pricing/cost computation into a Fill-producing step that executes BEFORE the trade-construction step
+consumes it -- a real control-flow inversion, not a pure input-source substitution like Paper's.
+**Conclusion: Backtest's entry could adopt this pattern cheaply; Backtest's exit could not, without
+first resolving the exit-OrderIntent gap (below) and restructuring `_close_trade()`'s internal
+ordering.**
+
+### 4. Transaction cost ownership
+
+`Fill.transaction_cost` (64.41/64.42/64.43) already carries the exact per-event cost number
+`_apply_to_position()`'s cost-attribution logic (`_position_entry_cost`, proportional entry/exit
+split, `compute_realized_net_pnl()`) currently reads from its own local `fill_cost` parameter --
+these are provably the SAME number (64.45's own accounting-preservation tests: `realized_net_pnl=
+98.00` reproduced from Fill-observed values). **A future accounting layer COULD consume
+`Fill.transaction_cost` as its authoritative per-event cost input without double-charging cash
+(cash is charged once, in `_attempt_fill`, before either Position mutation or Fill construction) and
+without double-subtracting P&L (the attribution math stays exactly where it is -- only its INPUT
+would change from a bare local to `fill.transaction_cost`)**, PROVIDED the attribution logic
+(proportional split across a position's accumulated entry cost vs. a given closing fill's own exit
+cost) remains a Position/Trade-level concern layered ABOVE Fill, not something Fill itself computes.
+Fill must stay a single-event record; multi-fill cost attribution is inherently a POSITION-lifetime
+concern and does not belong inside `Fill`.
+
+### 5. Slippage ownership
+
+`Fill.price`/`Fill.slippage_applied` (64.41, fed by 64.40's shared `apply_flat_percentage_slippage()`
+on both engines) are already sufficient to serve as the canonical post-execution price record --
+no gap was found. The slippage MODEL itself (flat-percentage, F2's limit-boundary clamp) is
+unaffected by whether Fill becomes canonical; this decision is scoped to WHO CONSUMES `Fill.price`
+downstream, never to how it is computed.
+
+### 6. Order relationship
+
+Backtest's exit Fill reuses the entry `OrderIntent.order_id` (`fill_id=f"{order_id}-fill-exit-..."`,
+`order_id=open_position.order_intent.order_id` -- `engine.py` around L322-323, documented as a known,
+deliberate limitation since 64.43). **A canonical Fill-driven architecture DOES eventually require a
+genuine, separately-identified exit `OrderIntent`** -- reusing the entry identity is tolerable while
+Fill is merely OBSERVATIONAL (nothing downstream trusts `Fill.order_id` to mean "the order that
+specifically produced this exit"), but becomes a real correctness gap the moment Position mutation
+or Accounting is asked to trust that linkage (e.g. reconstructing "how many orders did this position
+require" from Fill.order_id alone would silently undercount for Backtest). Minimum future model:
+Backtest must construct a real exit `OrderIntent` at the same point it currently only computes
+`filled_exit`/`exit_leg_breakdown`, carrying its own `order_id`, before any exit Fill built from it
+could be trusted as canonical. Migration impact: touches `engine.py`'s `_close_trade()` call sites
+and `SimulatedTrade.order_ids` (already a tuple, so it is ALREADY structurally ready to carry two IDs
+without a contract change -- only the entry-only construction habit needs to change). Not
+implemented this checkpoint, per directive.
+
+### 7. Partial fill vs. partial exit
+
+Kept structurally separate, as directed: a PARTIAL FILL (execution quantity < requested quantity,
+e.g. Paper's `partial_fill_ratio`) is an EXECUTION-layer fact about how much of one OrderIntent
+filled right now; a PARTIAL EXIT (a strategy decision to reduce, not close, an open Position) is a
+STRATEGY/risk-layer decision that happens to be REPRESENTED, once approved, as an OrderIntent whose
+quantity is less than the Position's full quantity -- which then produces its own (possibly partial)
+Fill(s). A canonical Fill-driven Position architecture supports both WITHOUT conflating them because
+neither concept lives inside `Fill` itself: `Fill.quantity` only ever answers "how much executed in
+this one event," never "why this OrderIntent's quantity was what it was." Position mutation, whether
+Fill-driven or not, would apply the SAME reduce-vs-close branch it already has today
+(`_apply_to_position()`'s opposite-side branch, `min(existing.quantity, fill_quantity)`) regardless
+of whether the reduction was strategically deliberate (partial exit) or a Backtest force-close.
+Neither Backtest partial fills nor partial exits are implemented this checkpoint, per directive.
+
+### 8. Position representation
+
+Position should remain an IMMUTABLE VALUE SNAPSHOT (current design), not become a state-transition
+object or a running calculator. Nothing in this analysis found a need for a new Position state
+engine: `_apply_to_position()`'s existing pattern (read current snapshot, compute new snapshot,
+replace the dict entry) already IS "Fill -> Position change -> new snapshot" in substance -- only the
+SOURCE of the fill inputs would change under a canonical-Fill design, never the snapshot discipline
+itself. Inventing a separate "PositionStateTransition" object was considered and rejected: it would
+duplicate information already fully present in (old snapshot, Fill, new snapshot) without adding any
+capability this codebase currently lacks.
+
+### 9. Accounting relationship (conceptual, not implemented)
+
+    Fill (immutable event)
+      -> Position change (existing snapshot-replacement pattern, inputs sourced from Fill)
+      -> realized/unrealized state (existing formulas, unchanged: blended-average, closing P&L,
+         proportional cost attribution, mark-to-market)
+      -> Equity (existing DERIVED read: cash + open-position market value, never independently
+         stored)
+
+DERIVED (must never become independently stored/mutated, now or after any future migration):
+unrealized_pnl, equity, get_open_positions_market_value. AUTHORITATIVE SNAPSHOTS (must remain the
+source of truth): Position (per-instrument current state), Trade/SimulatedTrade (closed round-trip
+record), Fill (single execution event, once canonical). No existing formula changes under this
+design -- confirmed no formula in `_apply_to_position()`, `compute_realized_net_pnl()`,
+`mark_position()`, or `engine.py`'s `_close_trade()` needs to change to make Fill canonical; only the
+INPUT SOURCING changes.
+
+### 10. Backtest / Paper / Live compatibility
+
+Backtest must preserve next-bar execution, TradePlan behavior, existing exit semantics, current
+P&L/metrics/equity curves. Because 64.45 already proved Fill's values are IDENTICAL to what
+Backtest's existing Position/Trade mutation independently computes, sourcing that mutation FROM Fill
+instead of from the same local variables cannot itself change any numerical output -- the only way
+Backtest's historical behavior could change is if the CONTROL FLOW inversion required for the exit
+side (see Order Relationship above) introduced a bug, which is exactly why this checkpoint recommends
+NOT implementing it without first closing that gap and testing narrowly. Paper must preserve Market/
+Limit/Stop semantics, partial fills, slippage, transaction costs, current behavior -- same argument
+applies; Paper's entry AND exit mutation are both already trivially re-sourceable from Fill (Position
+Mutation Analysis, above) with no control-flow inversion required, making Paper the SAFER of the two
+engines to migrate first if this is ever pursued. Fill must not force Backtest's simpler
+single-fill-per-leg model onto Paper's genuine multi-fill capability, nor force Paper's
+resting-order/partial-fill richness onto Backtest's simpler POC model -- a canonical Fill CONTRACT is
+shared; canonical Fill-CONSUMPTION timing/behavior remains engine-specific, exactly as execution
+timing already is today.
+
+Live (not built, documented for the future only): would additionally need broker order ID, exchange
+order ID, exchange trade ID, execution venue, real execution timestamp, real liquidity information --
+NONE of these fields are added to `Fill` this checkpoint; this is a roadmap note only, matching the
+directive's explicit "document, do not add" instruction.
+
+### 11. Strategy / Gainz compatibility
+
+Verified: making Fill canonical for Position/Accounting does NOT touch the Strategy -> Signal -> Risk
+-> OrderIntent -> Execution -> Fill contract chain. `domain.risk.policy.evaluate_order_risk()` and
+`evaluate_backtest_entry_risk()` both read Position-derived figures (exposure, realized_net_pnl),
+never Fill, both today and under every phase of the migration plan below -- risk evaluation
+architecturally happens BEFORE any Fill can exist (Fill's own docstring: "risk approval happens
+strictly BEFORE any Fill can exist"), so canonical-Fill-as-Position-input can never move risk
+evaluation downstream of Fill without violating that invariant, and this design does not propose
+doing so. No strategy code (existing EMA/SMA, or a future Gainz integration) will ever need to import
+`domain.execution.contracts.Fill`, `PaperBroker`, or any accounting module -- the Strategy -> Signal
+chain terminates at OrderIntent regardless of what happens to Fill/Position/Accounting below it.
+Gainz remains a roadmap item only (untouched this checkpoint); this design confirms (does not
+change) that its eventual integration point (Strategy -> Signal) is structurally isolated from this
+entire decision.
+
+### 12. Migration plan (documented for a future YES decision -- NOT started this checkpoint)
+
+- **Phase 1 (current state)**: Fill remains purely observational on both engines. No files touched.
+- **Phase 2**: build a Paper-only ADAPTER, e.g. `_apply_to_position_from_fill(fill: Fill,
+  strategy_id: StrategyId)`, that reproduces `_apply_to_position()`'s existing logic sourced from a
+  `Fill` instead of raw locals. Run it in SHADOW mode only (called after the real mutation, its
+  output compared -- never substituted) inside a dedicated test file, not inside `broker.py` itself.
+  Files: one new test file only. Risk: none (shadow, tests-only). Rollback: delete the test file.
+- **Phase 3**: extend shadow cross-validation across the existing 64.41-64.45 fixture corpus plus a
+  handful of new multi-fill/average-entry/close scenarios, still test-only, still never wired into
+  `broker.py`'s real call path. Files: test-only. Risk: none. Rollback: delete test files.
+- **Phase 4**: FIRST real production-code change -- switch `PaperBroker._attempt_fill()` to
+  construct the `Fill` BEFORE calling `_apply_to_position()`, then change `_apply_to_position()`'s
+  signature to accept the `Fill` (Position Mutation Analysis above showed zero duplicate arithmetic
+  results). Backtest's ENTRY side follows the same pattern; Backtest's EXIT side stays on the legacy
+  path until the exit-OrderIntent gap (Order Relationship, above) is closed as its own prerequisite
+  checkpoint. Files: `infrastructure/brokers/paper/broker.py`, `research/backtesting/engine.py`
+  (entry only). Risk: control-flow ordering bug (construction-before-mutation is a real inversion for
+  Paper); mitigated by the existing 64.45 test suite plus new focused tests asserting outputs are
+  BYTE-IDENTICAL to the pre-migration values on the same fixtures. Compatibility strategy: land Paper
+  and Backtest-entry as SEPARATE, independently revertible commits. Rollback: revert either file
+  independently; the other engine/leg is unaffected because they remain architecturally decoupled.
+- **Phase 5**: only after Phase 4 is stable AND the exit-OrderIntent gap is closed as its own
+  checkpoint, migrate Backtest's exit side and retire any now-duplicate arithmetic. Not scoped
+  further here -- genuinely a future checkpoint's own design work, contingent on Phase 4's outcome.
+
+### 13. Conditions under which this decision should be revisited
+
+(1) A real Live broker adapter begins development -- Live's asynchronous, potentially out-of-order,
+genuinely multi-fill-per-order reality is the strongest architectural argument FOR canonical Fill,
+and does not exist yet (no Live adapter exists in this repository). (2) Backtest gains a genuine,
+separately-identified exit `OrderIntent` (closing the Order Relationship gap in section 6) -- without
+it, a canonical Fill-driven Backtest Position would encode a fabricated order linkage as if it were
+authoritative. (3) Partial-exit support is implemented -- multiple, possibly-strategy-driven
+reductions against one Position become common enough that tracking them via ad hoc locals (today's
+approach) becomes noticeably more error-prone than consuming a Fill stream would be; today, with
+`max_concurrent_positions=1`, single-fill-per-leg Backtest, and Paper's already-correct
+`_position_entry_cost` bookkeeping, no such pain point exists. (4) A genuinely separate Accounting
+component is extracted from Position/Trade (goal D above) -- until one exists, "Fill feeds
+Accounting" has no real consumer to feed.
+
+### Explicit statement: no implementation performed
+
+This section is a design decision and migration plan only. No file under `src/intraday/domain`,
+`src/intraday/infrastructure`, `src/intraday/research`, or `src/intraday/application` was modified
+this checkpoint. `Fill` remains exactly as observational as it was at the end of 64.45.
+
+---
+
+## CHECKPOINT 64.47 -- STRATEGY PLUGIN / REGISTRY FOUNDATION
+
+### 1. Classification and honesty statement up front
+
+This is a **VERIFICATION** checkpoint, not a from-scratch build. Repository-wide search (per the
+directive's own Part 1/2 instruction to search before assuming no registry exists) found a complete,
+already-working Strategy Registry / Strategy Plugin foundation dating to **Checkpoint 26** -- 38+
+checkpoints before this one. 64.47's actual contribution is: (a) confirming by direct reading that
+the existing contract satisfies every numbered requirement in the 64.47 directive, (b) adding one new,
+independently-registered proof-of-concept strategy (`TestStrategy`) that exercises the full
+register/get/list/evaluate path without touching Risk/OrderIntent/Execution/Fill/Position/Accounting,
+and (c) documenting the distinction between two DIFFERENT strategy-related clusters that a shallow
+search could easily conflate. No new contract, no new registry, no new Signal type was created --
+doing so would have violated the directive's own Part 2 ("do not create duplicate contracts") and
+Part 7 ("do not add a competing registry").
+
+### 2. Two distinct strategy-related clusters (do not conflate)
+
+**Cluster A -- `trading_engine.strategy_execution` (Checkpoint 26): the EXECUTION-TIME registry.**
+In-memory, process-local, holds live `Strategy` object instances:
+- `strategy.py` -- the canonical `Strategy` Protocol (structural typing, not an ABC).
+- `contracts.py` -- `StrategySignal` (canonical Signal), `StrategyConfigurationValues`,
+  `StrategyParameterSchema`/`ParameterDefinition` (configuration schema), `validate_configuration()`,
+  `coerce_configuration_values()`, `TradePlan`.
+- `registry.py` -- `StrategyRegistry` dataclass (`register`/`get`/`list`/`activate`/`deactivate`/
+  `get_active`/`is_active`/`validate_configuration`) plus `build_default_registry()`, the single
+  place concrete strategy classes are imported and registered.
+- `errors.py` -- `DuplicateStrategyRegistrationError`, `UnknownStrategyError`, and configuration-
+  validation error types.
+- `coordinator.py` -- multi-strategy execution with shared-feature computation and per-strategy
+  failure isolation (one strategy's exception never corrupts another's signal).
+- `strategies/` -- three real implementations: `EmaCrossoverStrategy`, `SmaTrendFilterStrategy`,
+  `AtrVolatilityBreakoutStrategy`.
+
+**Cluster B -- `application`/`domain.strategy` (Checkpoint 5/8): the PERSISTED
+IDENTITY/CONFIGURATION/LIFECYCLE layer.** Database-backed metadata ABOUT strategies, never
+executable code:
+- `domain/strategy/contracts.py` -- `StrategyIdentity` (stable handle), `StrategyVersion` (the
+  reproducibility 5-tuple: strategy_id + specification_version + code_version +
+  configuration_version + universe_version + timeframe + maturity_state), `StrategyMaturityState`
+  (IDEA -> ... -> PRODUCTION/SUSPENDED/REJECTED/DEPRECATED lifecycle enum).
+  `StrategyVersion`'s own docstring is explicit: "NOT the executable implementation, which cannot be
+  represented as a dataclass" -- the runtime code lives ONLY in Cluster A.
+- `application/services/strategy.py`, `strategy_configuration.py`, `strategy_execution.py`,
+  `strategy_research_status.py` -- application services wrapping persisted `StrategyVersionSnapshot`/
+  `StrategyConfigurationRecord` rows, the API-facing configuration CRUD and maturity-transition rules.
+- `application/contracts/strategy.py`, `strategy_configuration.py` -- DRF wire serializers for the
+  above.
+- `infrastructure/persistence/models.py`/`repositories.py` -- the Django ORM rows these persist to.
+
+**The relationship**: Cluster B answers "which strategy_id/version/configuration exists, what state
+is it in, what values does a saved configuration hold" (a database concern, API-facing, changes at
+human/deployment cadence). Cluster A answers "given a bar and computed features, what does this
+strategy's code actually output right now" (a pure in-memory execution concern, no I/O). A real
+execution flow reads a `StrategyConfigurationValues` (materialized from a Cluster B persisted record)
+and hands it to a Cluster A `Strategy.evaluate()` call -- Cluster A never queries the database itself,
+and Cluster B never contains executable strategy logic. This checkpoint's registry work is entirely
+within Cluster A; Cluster B is unmodified and out of scope, exactly as the directive's Part 9
+("configuration must be... separate from execution") already implies this split should exist -- it
+already did, since Checkpoint 5/8/26.
+
+### 3. Canonical Strategy contract (Part 3/4) -- reused, not recreated
+
+`Strategy` (Protocol, `strategy.py`) already carries every field the directive's Part 3 checklist asks
+to "at minimum evaluate": `strategy_id`, `display_name` (name), `specification_version` +
+`code_version` (version), `parameter_schema()` (configuration), `required_features()` +
+`evaluate()` (generate_signal). `description`/`required_market_data`/`metadata` are not separate
+fields -- `display_name` plus the docstring convention already used by all three production
+strategies covers description; `required_features()`'s return value already IS the declared
+market-data/feature dependency list (Part 4's "required_market_data" concern). No order execution,
+broker, position sizing, transaction cost, Dhan, Fill, Position, or Accounting concept appears
+anywhere in `strategy.py` -- confirmed by direct reading, not inference.
+
+### 4. Canonical Signal contract (Part 5/6) -- reused, not recreated
+
+`StrategySignal` (frozen dataclass, `contracts.py`) already carries: `strategy_id`, `instrument_id`,
+`timeframe`+`timestamp` (temporal identity), `direction` (`StrategyDirection`: BULLISH/BEARISH/
+NEUTRAL), `price`, `evidence` (tuple of `FeatureValue` -- the "reason codes"/supporting evidence Part
+5 lists), plus `specification_version`/`code_version`/`configuration_version` (attribution/
+reproducibility, exceeding what Part 5's candidate list even asked for). `signal_id` is NOT a
+separate field -- see Section 6 below for why that is correct, not a gap. `confidence`/`score` are
+deliberately ABSENT from `StrategySignal` -- see Section 5 (Part 6 compliance) immediately below.
+Proposed entry/stop/targets live in the separate `TradePlan` type (`contracts.py`, Checkpoint 64.7),
+independently nullable and NOT a field on `StrategySignal` itself -- exactly the "each field needs an
+owner, meaning, units, lifecycle" discipline Part 5 demands: a directional-only strategy (e.g.
+`ema_crossover`) never fabricates a `TradePlan` it has no basis for.
+
+### 5. Confidence semantics (Part 6) -- verified preserved
+
+No field named `confidence` or `probability` exists on `StrategySignal`. The directive's Part 6
+concern -- do not conflate signal confidence/setup score with probability of profit -- is trivially
+satisfied today because Cluster A has not yet needed a confidence concept at all: none of the three
+existing strategies (EMA crossover, SMA trend filter, ATR volatility breakout) emit one; they are
+purely directional. This checkpoint adds no confidence field either. When Gainz is eventually
+integrated (not this checkpoint), its "setup score"/"confidence" concept must land as a new,
+explicitly-named field (e.g. `setup_score`) on `StrategySignal` or a Gainz-specific extension --
+never silently aliased to a `probability_of_profit` meaning, per Part 6's explicit instruction.
+
+### 6. Strategy Registry (Part 7) -- reused, not recreated
+
+`StrategyRegistry` (`registry.py`) already provides exactly the four operations Part 7 asks for --
+`register(strategy)`, `get(strategy_id)`, `list()`, plus `exists()`-equivalent behavior via `get()`
+raising `UnknownStrategyError` (no separate `exists()` method exists, but `strategy_id in
+registry._strategies` or a try/except around `get()` covers it identically cheaply; adding a literal
+`exists()` wrapper was considered and rejected as unnecessary surface for this checkpoint since no
+caller needs it yet) -- plus `activate()`/`deactivate()`/`get_active()`/`is_active()` for the
+maturity-lifecycle concern Cluster B's `StrategyMaturityState` needs a runtime mirror of.
+`register()`/`get()`/`list()` are all pure `dict`/`set` operations -- O(1) amortized lookup, zero I/O,
+zero heavy service instantiation (confirmed by direct reading and by this checkpoint's own
+`test_l_registry_lookup_is_pure_dict_access`). Configuration (`StrategyConfigurationValues`) is
+already a fully separate type from the `Strategy` implementation object -- Part 7's "must be
+separable" requirement was already true. No dynamic module loading exists (`build_default_registry()`
+statically imports three concrete classes) -- correct per Part 7's explicit "do not add dynamic
+module loading... unless existing architecture already requires it," which it does not.
+
+### 7. Strategy versioning (Part 8) -- reused, not recreated
+
+Every `Strategy` implementation already carries `specification_version` and `code_version` as
+explicit, non-optional class attributes (e.g. `EmaCrossoverStrategy.specification_version = "v1"`,
+`.code_version = "v1"`) -- not hard-coded ad hoc throughout the system, but declared once per
+strategy class and propagated into every `StrategySignal` that strategy produces. Combined with
+`configuration_version` (carried on `StrategyConfigurationValues`, sourced from Cluster B's persisted
+`StrategyVersion.configuration_version`), the reproducibility equation the directive states --
+"same strategy_id + same version + same configuration + same data = reproducible research behavior"
+-- is already fully representable: `(strategy_id, specification_version, code_version,
+configuration_version)` is the exact 4-tuple `StrategyVersionService.get_version()` (Cluster B)
+already keys its persisted lookups by. No versioning mechanism was invented this checkpoint.
+
+### 8. Configuration (Part 9) -- reused, not recreated
+
+The project's existing convention is frozen `dataclass` + explicit runtime validation functions (not
+Pydantic, not Django settings, not TypedDict, not plain dict) -- `StrategyConfigurationValues` is a
+`@dataclass(frozen=True, slots=True)`, `StrategyParameterSchema`/`ParameterDefinition` declare the
+schema, and `validate_configuration()` performs explicit per-parameter type/range/enum/required
+validation raising typed errors (`InvalidParameterValueError`, `MissingRequiredParameterError`,
+`UnknownParameterError`, `UnknownFieldReferenceError`). This matches the dataclass-plus-explicit-
+validator convention used identically elsewhere in the domain layer (e.g. `RiskLimits`, `Bar`). This
+checkpoint's `TestStrategy` reuses this exact convention (Section 10 below) -- no second
+configuration framework was introduced.
+
+### 9. Strategy identity (Part 14) and signal identity (Part 15)
+
+`strategy_id` is a plain `str` (both in `Strategy.strategy_id` and in Cluster B's `StrategyId =
+NewType("StrategyId", str)`) -- not an enum, not a UUID. This is the existing, load-bearing
+convention (three production strategies, the registry's dict keys, and every persisted
+`StrategyVersion` record all key on this string) and was not changed. `StrategySignal` has no
+standalone `signal_id` field -- its NATURAL key is already the tuple `(strategy_id,
+specification_version, code_version, configuration_version, instrument_id, timeframe, timestamp)`,
+which is already unique per evaluation (one bar, one strategy, one configuration produces at most one
+signal). A separate `signal_id` field was evaluated against Part 15's "if the current lifecycle
+requires it" test and found NOT required: nothing downstream (Cluster A's own `coordinator.py`, nor
+any Risk/OrderIntent consumer) looks a signal up by an opaque ID today. `TradePlan` (which IS
+persisted, per its own docstring) is referenced by `signal_id` from downstream types
+(`RiskDecision`, `PaperOrder`, `Position`) -- but that `signal_id` is minted by the PERSISTENCE layer
+at the point a `TradePlan` is stored, not by `StrategySignal` itself, which stays a pure in-memory
+value object. This is a genuine, pre-existing design choice, not a gap introduced this checkpoint --
+no distributed identifier service was invented, matching Part 15's explicit prohibition.
+
+### 10. TestStrategy -- the Part 10 extensibility proof
+
+`tests/unit/research/test_checkpoint_64_47_strategy_registry.py` defines `TestStrategy`, a brand-new
+class satisfying the `Strategy` Protocol structurally (no inheritance -- Python `Protocol` uses
+structural typing). It is deliberately trivial: BULLISH when `bar.close` exceeds a configured
+`threshold` parameter, else BEARISH; `required_features()` returns `()` (proves a strategy can be
+feature-free and still conform). It is registered into a **local** `StrategyRegistry()` instance
+constructed inside the test module -- never into `build_default_registry()` -- so the real strategy
+suite the rest of the system consumes is never polluted (verified by
+`test_q_existing_default_registry_still_builds_with_three_strategies`, which asserts the default
+registry still contains exactly `{ema_crossover, sma_trend_filter, atr_volatility_breakout}` and NOT
+the test strategy's id).
+
+The proof chain executed: `registry.register(TestStrategy())` -> `registry.get(strategy_id)` returns
+the same instance -> `strategy.evaluate(bar, {}, config)` returns a real `StrategySignal` with
+`direction=BULLISH`, `price=Decimal("150")`, correct `strategy_id`/`specification_version`/
+`code_version`/`configuration_version`, deterministic across repeated calls, and correctly flips to
+BEARISH below threshold (proving the signal is not fabricated/constant).
+
+**Zero-modification proof**: the entire test file -- which both defines and registers this new
+strategy -- imports nothing from `intraday.domain.order` (OrderIntent), `intraday.domain.position`
+(Position), `intraday.domain.accounting`, any risk-engine module, `PaperBroker`, or any Dhan module.
+This is verified STRUCTURALLY, not just by inspection: `test_k_strategy_module_isolation_via_ast` and
+`test_m_n_o_p_new_strategy_does_not_touch_downstream_modules` parse this file's own AST (and, for
+`test_k`, every production strategy module's AST) and assert none of those import names appear. No
+file under `src/intraday/domain/order`, `src/intraday/domain/position`, `src/intraday/domain/
+accounting`, `src/intraday/trading_engine/risk` (or wherever Risk evaluation lives),
+`src/intraday/infrastructure/brokers/paper`, or `src/intraday/infrastructure/brokers/dhan` was
+touched or even opened this checkpoint.
+
+### 11. Backtest / Paper / Risk compatibility (Part 17/18/19)
+
+No file under `src/intraday/research/backtesting`, `src/intraday/infrastructure/brokers/paper`, or
+any risk-evaluation module was modified this checkpoint. The full existing research suite --
+`poetry run pytest tests/unit/research/ -q` -- was re-run this session: **514 passed** (see taskReport
+for the exact fresh number), confirming zero behavioral change to Backtest numerics, Paper mutation,
+or existing strategy evaluation logic. `test_s_ema_sma_strategies_unmodified_behaviorally` additionally
+re-exercises `EmaCrossoverStrategy.evaluate()` directly (not through any new registry code path) and
+confirms it still returns the same directional result it always has for the same inputs.
+`Strategy.evaluate()` never calls `evaluate_order_risk()` or any risk function -- confirmed by the
+same AST-import audit in Section 10 above; the registry itself owns no risk limits or thresholds.
+
+### 12. Gainz and EMA/SMA compatibility (Part 12/13) -- roadmap only, NOT integrated
+
+No Gainz module exists anywhere in `trading_engine/strategy_execution/strategies/` as of this
+checkpoint (`test_r_gainz_not_integrated` asserts this by directory listing). Gainz's Alpha/Trend/
+Breakout/Mean-Reversion/Hybrid/Scalp/Consensus mathematics, its own scoring/confidence/regime/entry/
+stop/TP1-3/position-sizing logic, remain entirely unreferenced. The architecture seam already exists
+and requires no new work to accept a future `GainzStrategy`: any class implementing the `Strategy`
+Protocol (as `TestStrategy` demonstrates) can be registered via `registry.register(GainzStrategy())`
+and will produce `StrategySignal` instances through the exact same path -- `GainzStrategy` would need
+to translate Gainz's internal "confidence" concept into an explicitly-named field (e.g. a future
+`setup_score` addition, not a `probability` reuse -- see Section 5) but that translation work is
+future, unstarted, and unnecessary to prove the seam exists. Likewise, no EMA/SMA-as-a-SINGLE-
+COMBINED-strategy exists (only the three already-separate EMA-crossover/SMA-trend-filter/ATR
+strategies do, unchanged) -- the registry already demonstrably supports registering an
+EMA/SMA-flavored strategy (the three that already exist) without any architectural change, satisfying
+Part 13's "verify... without architectural changes" without integrating any NEW EMA/SMA logic.
+
+### 13. What this checkpoint actually changed
+
+One new test file (`tests/unit/research/test_checkpoint_64_47_strategy_registry.py`) and this
+documentation section. `src/intraday/trading_engine/strategy_execution/*` (the production registry/
+contract/strategy code) was read in full but **not modified** -- it already satisfied every
+requirement this checkpoint's directive raises. No genuine gap was found that required the
+"smallest additive strengthening" fallback the directive permits; had one been found (e.g. missing
+`exists()`, missing O(1) proof), it would be documented here rather than silently worked around, per
+the directive's own honesty requirement.
+
+## CHECKPOINT 64.48 -- GAINZ STRATEGY ADAPTER DESIGN
+
+### 0. Honesty notice -- no Gainz reference implementation exists in this repository
+
+Before any mapping work began, a repository-wide search was run (`grep -ril "gainz" src/ tests/
+docs/` and a full-tree case-insensitive grep) to locate the "supplied Gainz reference implementation"
+the checkpoint directive repeatedly instructs to "read in full." **No such file exists anywhere in
+the repository.** The only hits are this checkpoint's own new artifacts (the test file below, this
+document, `taskReport.md`) and the 64.47 report's mentions of Gainz's ABSENCE. This was independently
+re-confirmed a fourth time this session (checkpoints 64.44 and 64.46 report the same zero-match
+result).
+
+Consequently, everything below is derived **exclusively from the checkpoint directive's own
+descriptive prose** about Gainz (SignalConfig fields, the feature list, profile names, TP1/TP2/TP3,
+confidence, position sizing, `disable_repeating_signals`, `require_confirmed_bar`) -- NOT from any
+Gainz source code that was read, because none exists to read. No Gainz function name, variable name,
+class name, or exact implementation detail below is fabricated as if it came from a real file; every
+one is traceable to the directive text itself. When (if) a real Gainz reference file is supplied to
+this repository in a future checkpoint, this entire mapping must be re-verified against the actual
+implementation before any `GainzStrategy` adapter is built from it.
+
+### 1. Gainz field mapping table
+
+Built and verified (`test_a_gainz_field_mapping_exists_and_is_well_formed`) against the REAL,
+existing `trading_engine.strategy_execution` contracts read in full this checkpoint
+(`contracts.py`, `strategy.py`, `registry.py`, `coordinator.py`, `ema_crossover.py`,
+`atr_volatility_breakout.py`). Full table lives in
+`tests/unit/research/test_checkpoint_64_48_gainz_adapter_design.py::GAINZ_FIELD_MAPPING` (20 rows);
+summary:
+
+| Gainz Concept | Canonical Destination | Owner | Reason |
+|---|---|---|---|
+| direction | `StrategySignal.direction` | STRATEGY | Existing field already represents this |
+| signal timestamp | `StrategySignal.timestamp` | STRATEGY | Existing field, UTC-validated |
+| instrument | `StrategySignal.instrument_id` | STRATEGY | Existing field |
+| timeframe | `StrategySignal.timeframe` | STRATEGY | Existing field |
+| score | `evidence` / diagnostic metadata | DIAGNOSTIC | Explains why signal fired, not acted on downstream |
+| confidence / setup quality | diagnostic metadata / evidence, NOT `probability_of_profit` | DIAGNOSTIC | Directive Part 5 forbids probability semantics |
+| regime | diagnostic metadata / evidence | DIAGNOSTIC | Descriptive context only |
+| reasons/evidence | `StrategySignal.evidence` (`tuple[FeatureValue, ...]`) | STRATEGY | Existing field already built for exactly this |
+| entry price | `TradePlan.entry_price` | TRADE_PLAN | Reuse Checkpoint 64.7's `TradePlan` |
+| stop_loss | `TradePlan.stop_loss` | TRADE_PLAN | Reuse |
+| TP1 / TP2 / TP3 | `TradePlan.target_1/2/3` | TRADE_PLAN | Reuse; already independently-nullable |
+| position_size | NOT a Strategy/TradePlan field -- advisory only | RISK | Must flow through Risk Engine before becoming order quantity |
+| risk_per_trade | future Risk Engine input | RISK | Capital/risk-limit constraint, not a strategy authority |
+| profile | `StrategyConfigurationValues.values['profile']` (ENUM) OR distinct `strategy_id` | STRATEGY | Existing ENUM-parameter convention already fits |
+| consensus_signal() | future strategy-composition layer, NOT in `StrategyRegistry` | STRATEGY | Directive Part 10 forbids hard-coding into the global registry |
+| disable_repeating_signals | Gainz-specific config value for now | STRATEGY | No existing strategy has repeat suppression; not proven universal |
+| require_confirmed_bar | proposed future BOOLEAN `ParameterDefinition`, enforcement point TBD | STRATEGY | Directive states this "may not currently be enforced" -- documented, not claimed done |
+| indicator values (EMA, RSI, ATR, ADX, +DI/-DI, rel-vol, MACD-hist, breakout, body ratio, delta) | `evidence` for EMA/ATR (already exist); rest = future work | STRATEGY | See feature mapping below |
+| final order qty / fill / slippage / cost | `OrderIntent`/`Fill` (untouched) | EXECUTION | Pure execution-time facts, never computed by a strategy |
+
+### 2. Ownership classification (Section 4 of the directive)
+
+The directive's starting hypothesis (STRATEGY: direction/score/confidence/regime/reasons/candidate
+entry-stop-targets; RISK: final quantity/capital constraint/max risk/daily-loss restriction;
+EXECUTION: actual fill/price/slippage/cost) was checked against the real architecture read this
+checkpoint and **holds without modification**:
+
+- `Strategy.evaluate()` returns only a `StrategySignal` (direction + evidence) -- confirmed by
+  reading `strategy.py` and all three production strategies' `evaluate()` bodies.
+- `build_trade_plan()` is an OPTIONAL duck-typed capability (`coordinator.py` calls it via
+  `getattr(strategy, "build_trade_plan", None)`) that returns a `TradePlan` (entry/stop/targets) --
+  already the exact shape Gainz's entry/stop/TP1-3 concepts need, with no changes.
+- Nothing in `strategy_execution/` computes final risk-approved quantity, capital constraints, or
+  daily-loss limits -- confirmed absent from `contracts.py`/`strategy.py`/`registry.py`/
+  `coordinator.py` (no import, no field). Risk therefore remains the correct, unclaimed owner of
+  `position_size`/`risk_per_trade`.
+- Nothing in `strategy_execution/` computes actual fills, slippage, or transaction cost -- confirmed
+  by the same reading. Execution remains the correct, unclaimed owner.
+
+No deviation from the directive's starting hypothesis was required.
+
+### 3. StrategySignal decision -- NO contract change
+
+`StrategySignal`'s ten fields (`strategy_id`, `specification_version`, `code_version`,
+`configuration_version`, `instrument_id`, `timeframe`, `timestamp`, `direction`, `price`, `evidence`)
+were read in full and are **sufficient** for every Gainz concept classified STRATEGY above:
+direction, timestamp, instrument, timeframe map onto existing fields directly; reasons/evidence,
+score, and (non-probability) confidence/setup-quality all map onto the existing `evidence` tuple of
+`FeatureValue`s or onto diagnostic metadata carried alongside a signal, never onto a new dataclass
+field. `test_c_strategysignal_unmodified_and_sufficient_for_gainz_mapping` asserts the dataclass's
+field set is unchanged and that no `probability_of_profit`/`confidence`/`probability` field exists.
+**No missing universal semantic was proven** -- per directive Part 6, the contract is therefore left
+untouched.
+
+### 4. TradePlan decision -- reuse, no `GainzTradePlan`
+
+`TradePlan` (Checkpoint 64.7) already carries `entry_price`, `stop_loss`, `target_1`, `target_2`,
+`target_3`, `trailing_stop_loss`, each independently nullable -- exactly the shape Gainz's own
+entry/stop_loss/TP1/TP2/TP3 concepts need, with no missing field. `AtrVolatilityBreakoutStrategy`
+already demonstrates a real strategy populating this type via the same optional
+`build_trade_plan()` hook a future `GainzStrategy` would use. No `GainzTradePlan` is required or
+created (verified: `test_d_tradeplan_reused_for_entry_stop_targets` greps every strategy module for
+`GainzTradePlan`/`GainzSignal`/`GainzOutput` and finds none).
+
+### 5. Risk / position sizing separation
+
+Gainz's proposed `position_size` is explicitly classified RISK, not STRATEGY or TRADE_PLAN, and is
+NOT wired to become an `OrderIntent` quantity in this checkpoint. The documented future flow (per
+directive's own diagram): Gainz proposed risk/stop -> canonical Risk Engine -> actual permitted
+quantity -> `OrderIntent`. Risk Engine was not opened, read for internals beyond confirming its
+absence from the strategy layer's imports, or modified this checkpoint.
+
+### 6. Profile and consensus ownership
+
+**Profile** (`alpha`/`trend`/`breakout`/`mean_reversion`/`hybrid`/`scalp`) changes which internal rule
+variant Gainz applies -- this is a configuration-selection concern, matching the existing
+`ParameterType.ENUM` convention (`ParameterDefinition` already supports `allowed_values` +
+required `ENUM requires allowed_values` validation in `contracts.py`). The preferred default
+hypothesis is `StrategyConfigurationValues.values["profile"]` as an ENUM parameter, not seven
+separate `strategy_id`s -- this avoids seven near-duplicate registry entries for what is really one
+mathematics engine with a selectable ruleset, but the directive leaves the final call open pending
+seeing whether profiles genuinely diverge enough (feature sets, TradePlan shape) to warrant separate
+`strategy_id`s; documented as an open decision, not resolved this checkpoint.
+
+**Consensus** (`consensus_signal()`) must NOT be hard-coded into `StrategyRegistry` (directive Part
+10) -- confirmed `registry.py` contains no reference to "consensus" or "gainz"
+(`test_g_consensus_ownership_not_in_global_registry`). The safest future ownership is a
+strategy-composition layer sitting ABOVE individual registered strategies (e.g. a component that
+calls `registry.get_active()`, evaluates several strategies' signals, and combines them into one
+downstream decision) -- not implemented, not designed in detail, deliberately deferred per directive
+Part 10's "document the safest future ownership" instruction.
+
+### 7. Feature engineering reuse
+
+`signal_intelligence.feature_engine.field_registry.list_fields()` was read in full and currently
+lists exactly 8 fields: `open`, `high`, `low`, `close`, `volume` (raw), `sma`, `ema`, `atr` (derived).
+Mapping against the directive's own listed Gainz indicators:
+
+| Gainz Feature | Exists in canonical registry? | Reusable? | Missing/Future work |
+|---|---|---|---|
+| EMA | YES | YES | -- |
+| ATR | YES | YES | -- |
+| RSI | NO | NO | Future work -- no field_registry entry, no computation module found |
+| ADX | NO | NO | Future work |
+| +DI / -DI | NO | NO | Future work |
+| relative volume | NO | NO | Future work |
+| MACD-like histogram | NO | NO | Future work |
+| breakout | NO | NO | Future work (distinct from the existing `atr_volatility_breakout` STRATEGY, which is a rule, not a registered feature) |
+| candle body ratio | NO | NO | Future work |
+| delta | NO | NO | Future work |
+
+Only EMA and ATR (plus raw OHLCV, not separately Gainz-named) are reusable today. Six Gainz
+indicators (RSI, ADX, +DI/-DI, relative volume, MACD-like histogram, candle body ratio, delta) plus
+"breakout" as a registered feature have NO existing canonical implementation and are explicitly
+**not implemented this checkpoint** -- verified by `test_e_feature_registry_reuse_opportunities_
+identified` reading the real registry.
+
+### 8. Closed-candle / confirmed-bar semantics
+
+No explicit "closed candle" / "confirmed bar" / "current bar" distinction was found in
+`strategy_execution/coordinator.py`, `strategy.py`, or `contracts.py` -- `coordinator.run()` always
+evaluates strategies against `bars[-1]` (the last bar in the supplied series) without a separate
+"is this bar still forming" concept. `require_confirmed_bar` therefore has no existing enforcement
+point in the platform today; the documented proposal is a future BOOLEAN-typed `ParameterDefinition`
+plus enforcement at the coordinator/bar-feed boundary (deciding whether `bars[-1]` is allowed to be
+an in-progress bar). Per the directive's own explicit instruction, this checkpoint documents this
+honestly as unimplemented rather than silently claiming coverage -- exactly mirroring the directive's
+own caveat that `require_confirmed_bar` "may not currently be enforced in the reference
+implementation" either.
+
+### 9. Repeat-signal suppression
+
+`disable_repeating_signals` remains documented as Gainz-specific strategy/configuration behavior for
+now, per directive Part 13's explicit instruction not to build a global deduplication system in
+64.48. No existing strategy (EMA crossover, SMA trend filter, ATR breakout) suppresses repeated
+signals today, so generalizing this is not yet proven necessary.
+
+### 10. Versioning and configuration mapping
+
+Gainz would use the EXISTING versioning convention unchanged: `strategy_id` (proposed `"gainz"`,
+consistent with the existing lowercase-snake-case convention `ema_crossover`/`sma_trend_filter`/
+`atr_volatility_breakout` -- not finalized, pending repository-convention confirmation per directive
+Part 14), `specification_version`/`code_version` class attributes, `configuration_version` from
+`StrategyConfigurationValues`. No second versioning mechanism is proposed. Gainz's `SignalConfig`
+would map onto `StrategyParameterSchema`/`StrategyConfigurationValues` using the existing
+`ParameterType` vocabulary (`INTEGER`, `DECIMAL`, `ENUM`, `FIELD_REFERENCE`, `TIMEFRAME`) -- e.g.
+lookback periods as `INTEGER`, multipliers/thresholds as `DECIMAL` with `minimum`/`maximum` (matching
+the existing conservative-default convention seen in `ema_crossover.py`'s 12/26 defaults and
+`atr_volatility_breakout.py`'s ATR-multiplier defaults), `profile` as `ENUM`. No production-optimized
+Gainz values are decided this checkpoint, per directive Part 15.
+
+### 11. Backtest / Paper / Live compatibility (conceptual)
+
+A future `GainzStrategy` implementing the same `Strategy` Protocol (`strategy_id`, `display_name`,
+`specification_version`, `code_version`, `parameter_schema()`, `required_features()`, `evaluate()`)
+can run unchanged in Backtest, Paper, and future Live because `coordinator.py`'s `run()` method
+takes only `bars` and `configurations` -- no environment-specific dependency exists in the strategy
+execution path. This is the same seam Checkpoint 64.47's `TestStrategy` already proved generically;
+64.48 adds no new proof code (none was needed) beyond re-confirming Gainz's classified STRATEGY
+outputs fit the same `StrategySignal`/`TradePlan` shape every other strategy already produces.
+
+### 12. What this checkpoint actually changed
+
+One new test file
+(`tests/unit/research/test_checkpoint_64_48_gainz_adapter_design.py`, 11 tests) and this
+documentation section. No production code under `src/intraday/trading_engine/strategy_execution/`
+was modified. No `GainzStrategy` class, no `GainzSignal`/`GainzTradePlan`/`GainzOutput` type, and no
+Gainz mathematics were created or ported -- verified structurally by
+`test_j_gainz_remains_unintegrated` (AST class-name scan across every strategy module plus a
+default-registry membership check) and `test_k_no_gainz_reference_file_exists_in_repo` (full-tree
+content re-scan). Risk Engine, OrderIntent, Execution, Fill, Position, Accounting, PaperBroker, and
+Dhan were not opened or touched.
+
+## CHECKPOINT 64.49 -- GAINZ-COMPATIBLE CANONICAL FEATURES
+
+### 1. Objective
+
+64.48 discovered a platform-level gap: the canonical feature registry (`signal_intelligence.feature_
+engine.field_registry`) offered only `open`/`high`/`low`/`close`/`volume`/`sma`/`ema`/`atr` -- of the
+Gainz-described indicators (RSI, ADX, +DI/-DI, relative volume, MACD-like histogram, breakout, candle
+body ratio, delta), only EMA and ATR were reusable. 64.49 addresses this at the PLATFORM FEATURE
+LAYER: reusable canonical features usable by Gainz, future strategies, existing strategies, and
+research -- NOT a Gainz-specific indicator framework, and NOT a port of Gainz mathematics (no real
+Gainz reference source exists anywhere in this repository -- independently re-verified again this
+checkpoint via full-tree `grep -ril "gainz"`, matching 64.48's own finding and three prior
+checkpoints' verifications; see `test_zz_no_real_gainz_source_file_exists` in the new test file).
+
+### 2. Feature inventory before -> after
+
+Before (8 fields): `open`, `high`, `low`, `close`, `volume`, `sma`, `ema`, `atr`.
+
+After (15 fields): the above 8, plus `rsi`, `adx`, `plus_di`, `minus_di`, `relative_volume`,
+`macd_hist`, `candle_body_ratio`.
+
+Deliberately NOT added: `delta`, `breakout` -- both explicitly DEFERRED (see Section 9 below).
+
+### 3. Formula source discipline (CRITICAL)
+
+Every formula below is a STANDARD, well-established technical-analysis convention (Wilder RSI,
+Wilder ADX/+DI/-DI, the standard 12/26/9 MACD, the common trailing-average relative-volume
+definition, the common candle-body-ratio definition). NONE of them is claimed, anywhere in code,
+tests, or this document, to be numerically identical to a Gainz reference implementation -- because
+no such reference exists to check against. Every new module's header states this explicitly. If a
+real Gainz reference source is ever supplied to this repository, EVERY formula below must be
+re-verified numerically against it before any strategy is allowed to assume identical values.
+
+### 4. RSI
+
+`feature_id`: `rsi_{lookback}` (e.g. `rsi_14`). Module: `signal_intelligence/feature_engine/rsi.py`.
+
+Formula (Wilder, 1978 -- the same source this project's pre-existing `atr.py` already cites):
+`diff_t = close_t - close_(t-1)`; `gain_t = max(diff_t, 0)`; `loss_t = max(-diff_t, 0)`; Wilder-smooth
+`avg_gain`/`avg_loss` (seed = simple mean of first N; then `avg_t = (avg_(t-1)*(N-1) + new_t) / N`);
+`RS = avg_gain / avg_loss`; `RSI = 100 - 100/(1+RS)`. Edge cases: `avg_gain == avg_loss == 0 -> RSI =
+50` (flat market, 0/0 case); `avg_loss == 0, avg_gain > 0 -> RSI = 100`.
+
+Input fields: `close`. Parameters: `lookback` (positive int). Warmup: `lookback + 1` bars minimum
+(first bar supplies only a previous close, identical first-bar-policy shape to `atr.py`). Missing
+data: fewer than `lookback + 1` bars -> empty tuple, never fabricated. Output: `Decimal` in `[0,
+100]`. Timeframe: whatever timeframe the input `bars` series carries (no resampling). No
+overbought/oversold threshold is hard-coded -- that remains strategy configuration.
+
+### 5. ADX / +DI / -DI
+
+`feature_id`s: `adx_{lookback}`, `plus_di_{lookback}`, `minus_di_{lookback}` -- ONE shared
+`DirectionalMovementDefinition(lookback)` identity drives all three (standard convention: the DI
+smoothing period and the ADX-of-DX smoothing period are the same N). Module:
+`signal_intelligence/feature_engine/directional_movement.py`.
+
+Formula (Wilder, 1978, same source as ATR/RSI): `+DM_t`/`-DM_t` computed from consecutive high/low
+moves (standard directional-movement rule); `TR_t` identical to `atr.py`'s True Range; `avg_TR`/
+`avg_+DM`/`avg_-DM` each independently Wilder-smoothed over N; `+DI = 100*avg_+DM/avg_TR`, `-DI =
+100*avg_-DM/avg_TR` (0 if `avg_TR == 0`); `DX = 100*|+DI - -DI|/(+DI + -DI)` (0 if denominator 0);
+`ADX` = Wilder-smoothed average of the DX series (its OWN seed, over the same N).
+
+Shared internal calculation: ONE private function (`_compute_directional_series`) computes TR/+DM/
+-DM/+DI/-DI/DX/ADX once; all three public entry points call it and select their own field -- no
+ADX-specific mini framework, no triplicated smoothing logic. Known, honestly-documented limitation:
+the coordinator's shared-feature cache is keyed per `field_id`, so if a run requests all three fields
+in one cycle, each still triggers an independent call into this shared helper -- a named future
+optimization opportunity, not solved this checkpoint (avoiding a second indicator framework took
+priority).
+
+Input fields: `high`, `low`, `close`. Parameters: `lookback`. Warmup: +DI/-DI need `lookback + 1`
+bars; ADX needs `2*lookback` bars (its own DX-seed requirement on top of the DI seed). Missing data:
+empty tuple below the warmup threshold. Output: `Decimal`, `+DI`/`-DI` typically `[0, 100]`, `ADX`
+`[0, 100]`.
+
+### 6. Relative Volume
+
+`feature_id`: `relative_volume_{lookback}`. Module: `signal_intelligence/feature_engine/
+relative_volume.py`.
+
+Formula (explicit convention choice, documented per directive Part 8): `baseline_t = mean(volume_(t-N)
+.. volume_(t-1))` -- a trailing N-bar SIMPLE average of PRIOR volume, EXCLUDING the current bar;
+`RVOL_t = volume_t / baseline_t`. Chosen over a same-time-of-day multi-session baseline (a plausible
+but different convention this checkpoint does NOT assume, per the directive's "do not choose a
+Gainz-specific formula unless supported").
+
+Input fields: `volume`. Parameters: `lookback`. Warmup: `lookback` prior bars (first possible output
+at `bars[lookback]`). Missing data: `baseline_t == 0` (the EXPECTED case for SAMPLE_BAR fixtures,
+which always carry `volume == 0` per the pre-existing `volume` field's own registry docstring) ->
+that bar is SKIPPED, never a fabricated/`inf` value.
+
+### 7. MACD Histogram
+
+`feature_id`: `macd_hist_{fast}_{slow}_{signal}` (default `macd_hist_12_26_9`). Module:
+`signal_intelligence/feature_engine/macd_histogram.py`.
+
+Formula (standard Appel MACD, 12/26/9 default): `MACD_line = EMA_fast - EMA_slow`; `signal_line =
+EMA_signal(MACD_line)`; `histogram = MACD_line - signal_line`.
+
+EMA reuse: `EMA_fast`/`EMA_slow` are computed by calling the EXISTING canonical
+`compute_exponential_moving_average` directly on the real bars -- zero duplicated math. The signal
+line cannot literally reuse that same Bar-taking function, because `Bar.__post_init__` requires every
+OHLC field to be a STRICTLY POSITIVE `Decimal`, while a MACD line value can legitimately be negative
+or zero -- wrapping it in a synthetic `Bar` would violate that domain invariant. A private
+`_ema_of_series` helper applies the IDENTICAL seed+recurrence CONVENTION `ema.py` documents (seed =
+mean of first N; `EMA_t = alpha*value_t + (1-alpha)*EMA_(t-1)`, `alpha = 2/(N+1)`) to a plain
+`Decimal` sequence -- the same non-duplication precedent `ema.py` itself sets for its own seed
+(reimplementing "mean of first N" locally rather than calling `sma.py`). This is NOT a second EMA
+framework -- one private helper applying one already-canonical formula to a value shape `Bar` cannot
+represent.
+
+Input fields: `close`. Parameters: `fast_lookback` (default 12), `slow_lookback` (default 26, must
+exceed `fast_lookback`), `signal_lookback` (default 9). Warmup: `slow_lookback` bars to seed
+`EMA_slow`, then `signal_lookback` more MACD-line values to seed the signal EMA -- minimum
+`slow_lookback + signal_lookback - 1` bars total (34 at the 12/26/9 default). Missing data: empty
+tuple below warmup.
+
+### 8. Candle Body Ratio
+
+`feature_id`: `candle_body_ratio` (no parameters). Module: `signal_intelligence/feature_engine/
+candle_body_ratio.py`.
+
+Formula: `body_ratio_t = |close_t - open_t| / (high_t - low_t)`. Safe by construction --
+`Bar.__post_init__` already guarantees `low <= open <= high` and `low <= close <= high`, so the ratio
+is always in `[0, 1]` when the denominator is positive. `high_t == low_t` (zero-range bar, only
+possible when `open == high == low == close`) is mathematically undefined (0/0) -- that bar is
+SKIPPED, never a fabricated `0`/`1`/crash.
+
+Input fields: `open`, `high`, `low`, `close`. Parameters: none. Warmup: NONE -- stateless, per-bar;
+the first bar in any series can produce a value immediately (unless it is itself zero-range).
+
+### 9. Delta and Breakout -- explicitly deferred
+
+Per directive Parts 11/12's own explicit instruction not to guess ambiguous semantics:
+
+- **Delta**: the directive's own Gainz description does not disambiguate "volume delta" vs. "price
+  delta" vs. "tick delta", and no Gainz source exists to check which one (if any) Gainz actually
+  means. NOT implemented, NOT registered.
+- **Breakout**: the directive's own Gainz description does not fix lookback / prior-bar-exclusion /
+  direction / threshold conventions unambiguously (a plausible "close > prior N-bar high" shape is
+  named only as ONE possibility, explicitly not to be assumed), and no Gainz source exists to check.
+  NOT implemented, NOT registered.
+
+Both remain honestly-documented open gaps, not silently dropped -- see `field_registry.py`'s own
+module docstring and this checkpoint's `taskReport.md`.
+
+### 10. Warmup / missing-data / timeframe semantics (summary)
+
+Every new feature follows the SAME "no fabricated values" discipline the original SMA/EMA/ATR
+features already established: below its documented warmup threshold, a feature returns an EMPTY
+tuple, never `None`-as-a-fabricated-Decimal, never a partial-window average. Timeframe: every
+computation operates strictly on the `bars` series it is given, with no resampling or timeframe
+inference -- a caller requesting a 5-minute RSI must supply 5-minute bars; nothing in the feature
+layer silently mixes timeframes (enforced by the existing `MixedTimeframeSeriesError` check, reused
+identically in every new module).
+
+### 11. Look-ahead bias -- proof, not assertion
+
+`tests/unit/research/test_checkpoint_64_49_gainz_feature_registry.py` Section D proves, for RSI,
++DI/-DI/ADX, Relative Volume, and MACD Histogram, that computing the feature against a bar series and
+again against an IDENTICAL series with a LATER bar mutated (both the immediately-following bar and a
+bar in the middle of a 40-bar series) leaves every earlier-timestamped feature value byte-for-byte
+UNCHANGED -- a real before/after comparison of two computed `FeatureValue` tuples, not a structural
+assertion about implementation internals. Candle Body Ratio is proven trivially (stateless per-bar,
+so a later mutation cannot affect any earlier value even in principle).
+
+### 12. Registry and coordinator integration
+
+All 7 new fields are registered in the SAME `field_registry.list_fields()` real strategies and
+`is_parameterized_feature()` already consume -- no Gainz-only registration path. The real production
+dispatcher (`application.services.strategy_execution.compute_feature_series`, injected into
+`StrategyExecutionCoordinator` exactly as SMA/EMA/ATR already were) now also parses `rsi_N`/`adx_N`/
+`plus_di_N`/`minus_di_N`/`relative_volume_N`/`macd_hist_F_S_G`/`candle_body_ratio` field_ids into the
+matching `Definition` + compute-function call -- same dispatch SHAPE, no second dispatch mechanism.
+`test_g2_coordinator_shares_one_computation_across_two_strategies` proves the coordinator's existing
+per-`field_id` cache computes a shared field (`rsi_14`) exactly ONCE across two strategies both
+requiring it in the same `run()` call -- the "compute once, share many" architecture goal, unchanged
+from how SMA/EMA/ATR already behaved.
+
+### 13. What this checkpoint actually changed
+
+New: `src/intraday/signal_intelligence/feature_engine/rsi.py`, `directional_movement.py`,
+`relative_volume.py`, `macd_histogram.py`, `candle_body_ratio.py`;
+`tests/unit/research/test_checkpoint_64_49_gainz_feature_registry.py` (38 tests). Modified (additive
+only): `definitions.py` (5 new dataclasses), `field_registry.py` (7 new entries + module docstring),
+`application/services/strategy_execution.py` (dispatcher extended for the 7 new field_id shapes), this
+architecture document, `taskReport.md`. Also updated (to keep an assertion honestly current, not
+stale) two pre-existing assertions in `test_checkpoint_64_48_gainz_adapter_design.py` that literally
+counted the registry's field set -- 64.49 legitimately changed that count.
+
+Not touched: `StrategySignal`, `TradePlan`, `Risk`, `OrderIntent`, `Execution`, `Fill`, `PaperBroker`,
+Dhan, any file under `trading_engine/strategy_execution/strategies/`. No `GainzStrategy` class exists.
+No Gainz mathematics were ported (none exist to port). `EMA`/`ATR`/`SMA` computation and dispatch
+behavior verified unchanged (`test_h1`/`test_h2`/`test_h3`).
+
+## CHECKPOINT 64.50 -- REAL STRATEGY FEATURE CONSUMPTION
+
+64.49 built the reusable canonical features (RSI, ADX, +DI, -DI, Relative Volume, MACD Histogram,
+Candle Body Ratio). 64.50 proves a REAL strategy, using the EXISTING `Strategy` protocol/
+`required_features()`/`StrategyExecutionCoordinator`/`StrategySignal`/`TradePlan`/`StrategyRegistry`
+architecture, can consume that feature set end-to-end -- with zero strategy-specific indicator
+framework and zero indicator math computed inside the strategy itself.
+
+### 1. Strategy contract (unchanged, inspected not assumed)
+
+`trading_engine/strategy_execution/strategy.py`'s `Strategy` Protocol requires `strategy_id`/
+`display_name`/`specification_version`/`code_version`, `parameter_schema()`, `required_features(config)
+-> tuple[str, ...]`, and `evaluate(bar, feature_values, config) -> StrategySignal | None`. An optional
+duck-typed `build_trade_plan(bar, feature_values, config, signal) -> TradePlan | None` is consumed by
+the coordinator if present (Checkpoint 64.7). No change was made to this Protocol, `contracts.py`,
+`coordinator.py`, or `registry.py` -- all read-only this checkpoint.
+
+### 2. New strategy: `GainzCompatibleResearchStrategy`
+
+`src/intraday/trading_engine/strategy_execution/strategies/gainz_compatible_research.py`,
+`strategy_id = "gainz_compatible_research"`. Named honestly per existing project convention
+(`ema_crossover`/`sma_trend_filter`/`atr_volatility_breakout` -- lowercase-snake `strategy_id`,
+PascalCase `...Strategy` class) -- deliberately NOT `GainzStrategy`, because this is a
+CANONICAL-FEATURE-CONSUMPTION RESEARCH PROFILE, not verified GainzAlgo V2 mathematics (no Gainz
+reference source exists in this repository to verify against -- unchanged fact, re-confirmed by this
+checkpoint's own honesty-guard test updates, see Section 9 below).
+
+### 3. required_features()
+
+Requests exactly the 7 canonical field_ids the directive named, all parameterized from configuration
+(no hard-coded lookbacks): `rsi_{N}`, `adx_{N}`, `plus_di_{N}`, `minus_di_{N}`,
+`relative_volume_{N}`, `macd_hist_{fast}_{slow}_{signal}`, `candle_body_ratio`. Every field_id is
+computed by the REAL 64.49 dispatcher (`application.services.strategy_execution.
+compute_feature_series`) -- this strategy contains NO indicator math and does not import
+`signal_intelligence` at all (proven by an AST import scan in
+`test_mn_strategy_module_contains_no_indicator_math_and_no_duplicate_contracts`).
+
+### 4. Configuration
+
+Uses the existing `ParameterDefinition`/`ParameterType`/`StrategyParameterSchema`/
+`StrategyConfigurationValues`/`validate_configuration`/`coerce_configuration_values` mechanism
+unchanged. 13 parameters: `rsi_lookback` (14), `rsi_bullish_threshold` (60), `rsi_bearish_threshold`
+(40), `adx_lookback` (14), `adx_minimum` (20), `relative_volume_lookback` (20),
+`relative_volume_minimum` (1.0), `macd_fast` (12), `macd_slow` (26), `macd_signal` (9),
+`candle_body_ratio_minimum` (0.5), plus 3 research-only TradePlan parameters
+(`trade_plan_atr_lookback`=14, `trade_plan_stop_loss_atr_multiplier`=1.0,
+`trade_plan_target_1_atr_multiplier`=1.5). All labeled CONSERVATIVE RESEARCH DEFAULTS, not claimed-
+optimal Gainz values -- matching `ema_crossover.py`/`atr_volatility_breakout.py`'s own Checkpoint
+64.17 §13 "conservative baseline" precedent.
+
+### 5. Signal logic (research profile, not Gainz math)
+
+BULLISH requires ALL of: RSI >= bullish threshold, ADX >= minimum, +DI > -DI, Relative Volume >=
+minimum, MACD Histogram > 0, Candle Body Ratio >= minimum. BEARISH is the symmetric opposite (RSI <=
+bearish threshold, -DI > +DI, MACD Histogram < 0, same ADX/RVOL/body-ratio gates). NEUTRAL otherwise,
+and also whenever ANY required feature is unavailable (see Warmup below) -- the strategy's own
+docstring and this document both state: "THIS IS A RESEARCH/COMPATIBILITY RULE SET, NOT VERIFIED
+GAINZALGO V2 SIGNAL MATHEMATICS."
+
+### 6. StrategySignal / Evidence
+
+Uses the canonical `StrategySignal` unchanged (no `GainzSignal`). `evidence` carries the 7 real
+`FeatureValue`s consumed for the decision -- exactly what a downstream consumer needs to reconstruct
+WHY a signal fired, using the existing evidence mechanism, no new universal fields added.
+
+### 7. TradePlan / Risk boundary
+
+`build_trade_plan()` reuses the canonical `TradePlan` unchanged (no `GainzTradePlan`) -- a research-
+only, ATR-based, configurable SL/target-1 ladder, explicitly labeled
+"RESEARCH-ONLY (NOT verified GainzAlgo V2 TP/SL math)" in its own `calculation_method` string. `ATR`
+is NOT one of this strategy's `required_features()` -- the coordinator therefore does not supply it,
+so `build_trade_plan()` returns `None` in a normal coordinator run (proven, not fabricated -- see
+`test_p_trade_plan_reuses_existing_tradeplan_contract`); it is exercised as an advisory capability only
+when a caller separately supplies ATR alongside the required features. The strategy has NO sizing
+method at all (`position_size`/`order_quantity` do not exist on it) -- Risk, Execution, Fill, and
+PaperBroker were not opened, imported, or modified this checkpoint.
+
+### 8. Registry / Coordinator integration
+
+Registered and exercised through the EXISTING `StrategyRegistry` (`register`/`get`/`activate`/
+`get_active`/`validate_configuration`) -- NOT added to `build_default_registry()` (a deliberate scope
+decision so the default 3-strategy roster every other test in the suite depends on stays byte-for-byte
+unchanged; `test_l1_default_registry_unchanged_by_this_checkpoint` proves this). Executed through the
+REAL `StrategyExecutionCoordinator` via `build_coordinator()` (the same production wiring point 64.49
+already used), with the REAL feature dispatcher -- not a mock -- producing REAL `StrategySignal`s from
+REAL computed feature values (`test_efgh_real_coordinator_produces_real_signal_with_real_evidence`
+cross-checks one evidence value against the dispatcher called directly, confirming no value was
+altered in transit).
+
+### 9. Shared feature computation with a second real strategy
+
+`test_k1_shared_rsi_14_computed_exactly_once_across_two_real_strategies` runs
+`GainzCompatibleResearchStrategy` alongside a second, real (non-mock, but intentionally minimal)
+strategy that also requires `rsi_14`, in ONE `coordinator.run()` call, with a call-counting dispatcher
+wrapper -- confirms `rsi_14` is dispatched exactly once and both strategies receive a real signal. No
+change was needed to the coordinator's existing per-`field_id` cache.
+
+### 10. Warmup / missing-data safety
+
+`evaluate()` returns `None` -- never a fabricated NEUTRAL, zero, or default value -- whenever ANY of
+the 7 required features is unavailable (insufficient warmup, e.g. under MACD's 34-bar minimum).
+Proven at the coordinator level (`test_i1`: a 10-bar series below MACD's warmup produces zero signals,
+zero trade plans, zero failures) and directly at the strategy level (`test_i2`: removing exactly one
+feature from an otherwise-complete `feature_values` dict makes `evaluate()` return `None`).
+
+### 11. Look-ahead safety at the strategy level
+
+`test_j1_mutating_a_future_bar_does_not_change_an_established_signal` computes a real signal anchored
+on a historical bar using only bars up to that anchor, then repeats the SAME computation after
+mutating a bar 5 minutes AFTER the anchor -- the anchor's signal direction is unchanged both times
+(the mutated bar was never in either series slice). A sanity check confirms the SAME mutation DOES
+change a later-anchored RSI evidence value (proving the test isn't vacuously true). This extends
+64.49's feature-level look-ahead proofs to the strategy-evaluation layer, across all 7 combined
+canonical features at once.
+
+### 12. Backtest / paper-trading compatibility
+
+Not modified: the backtest engine, `PaperBroker`, live-paper execution. The existing
+`DiagnosticStrategyExecutionService` (application layer) -- the documented seam for diagnostics/
+backtesting/UI-preview strategy execution -- already calls `self.coordinator.run(bars,
+configurations)` with no strategy-specific code; this checkpoint's tests exercise that exact call
+shape directly (`coordinator.run(bars, {...})`) with the new strategy, proving "Strategy -> Backtest"
+requires zero strategy-specific backtest code. `StrategySignal`/`TradePlan` remain the canonical,
+unmodified downstream contract Paper/backtest consumers already expect.
+
+### 13. Gainz status (explicit, not inflated)
+
+Gainz-compatible FEATURE layer: YES (64.49). Gainz-compatible RESEARCH STRATEGY (consumes those
+features through the real architecture): YES (64.50, this checkpoint). Actual GainzAlgo V2
+mathematics: NO -- still not implemented, because no reference source exists. Production Gainz
+strategy: NO. Live trading: NO. These four facts are independent and none is inflated by the others.
+
+### 14. Test-file honesty-guard updates (why, and what changed)
+
+Adding an honestly Gainz-named module/class legitimately breaks five PRE-EXISTING assertions from
+64.47/64.48/64.49 that literally asserted "no file/class anywhere mentions Gainz" -- those assertions
+were TRUE facts about the codebase before this checkpoint and are now updated (never deleted) to allow
+EXACTLY this one new file (`gainz_compatible_research.py`) and EXACTLY this one class
+(`GainzCompatibleResearchStrategy`), while continuing to fail on any OTHER Gainz-named file/class
+(in particular, still failing hard on a literal `GainzStrategy` class or a `gainz.py` module) --
+mirroring the identical, already-accepted precedent 64.49 itself set updating two of 64.48's own
+assertions for the same reason (field-count and Gainz-mention count legitimately changed).
+
+### 15. What this checkpoint actually changed
+
+New: `src/intraday/trading_engine/strategy_execution/strategies/gainz_compatible_research.py`;
+`tests/unit/research/test_checkpoint_64_50_strategy_integration.py` (18 tests). Modified: this
+architecture document (this section, append-only), `taskReport.md`, and 5 assertions across 3
+pre-existing test files (`test_checkpoint_64_47_strategy_registry.py`'s `test_r_...`,
+`test_checkpoint_64_48_gainz_adapter_design.py`'s `test_j_...`/`test_k_...`,
+`test_checkpoint_64_49_gainz_feature_registry.py`'s `test_j1_...`/`test_zz_...`) to keep them
+honestly current with the fact that one, clearly-labeled Gainz-compatible research strategy now
+legitimately exists.
+
+Not touched: `Strategy` Protocol, `StrategyExecutionCoordinator`, `StrategyRegistry`, `StrategySignal`,
+`TradePlan`, `build_default_registry()`, the 64.49 feature layer itself, Risk, Execution, Fill,
+PaperBroker, the backtest engine, Dhan, the frontend.
+
+## CHECKPOINT 64.51 -- REGISTRY REGRESSION CLEANUP AND RESEARCH STRATEGY BOUNDARY
+
+### 1. Why the 64.49 registry change broke pre-existing tests
+
+64.49 intentionally expanded `field_registry.list_fields()` from the original 8 canonical fields
+(open/high/low/close/volume/sma/ema/atr) to 15, adding rsi/adx/plus_di/minus_di/relative_volume/
+macd_hist/candle_body_ratio -- each backed by a real, tested computation module and dispatched by the
+real `compute_feature_series` function (`application/services/strategy_execution.py`). That expansion
+was correct and is not reverted here.
+
+`tests/unit/trading_engine/test_strategy_execution.py`, however, predates 64.49 (Checkpoint 26) and
+was never re-run by 64.49's or 64.50's own regression passes (both scoped their fresh test runs to
+`tests/unit/research/`). It carried two assertions that hard-coded the PRE-64.49 8-field inventory:
+`test_field_registry_only_lists_implemented_fields` (field_ids equal to the 8-field set) and
+`test_field_registry_never_lists_unimplemented_indicators` (asserted rsi/macd were absent). 64.50
+discovered this live, independently re-confirmed it, and honestly flagged it as an out-of-scope,
+pre-existing regression rather than silently patching it outside its own directive's scope.
+
+### 2. Root cause
+
+Not a bug in 64.49's registry -- a stale TEST ASSUMPTION that the field inventory is fixed at 8, when
+the real architectural contract was always "every field the registry lists has a real
+implementation", regardless of count.
+
+### 3. Correction: architecture, not inventory
+
+Both stale tests were rewritten IN PLACE (not deleted, not trivially weakened) to verify the CURRENT
+contract:
+
+- `test_field_registry_every_field_has_a_real_dispatchable_implementation` (replaces
+  `test_field_registry_only_lists_implemented_fields`): for every field `list_fields()` returns, RAW
+  fields must be real `Bar` attributes and DERIVED fields must be genuinely computable through the
+  real `compute_feature_series` dispatcher (a concrete field_id is constructed and actually invoked;
+  the result must be a non-empty, correctly-named `FeatureValue` tuple). This is not circular -- it
+  does not ask the registry whether the registry thinks a field works. It was verified, during this
+  checkpoint's own work, to genuinely catch a registered-but-unimplemented field: a fake
+  `_derived("supertrend", ...)` entry was temporarily injected into `field_registry.py` and this test
+  (and its sibling below) failed loudly with the dispatcher's own `ValueError`, then the injection was
+  reverted.
+- `test_field_registry_never_lists_unimplemented_indicators`: the forbidden-name list dropped rsi and
+  macd (now legitimately implemented) and kept vwap/supertrend/bollinger/bollinger_bands/delta/
+  breakout (genuinely still unimplemented). It now also proves the real dispatcher rejects each of
+  them with `ValueError`, not merely that the registry omits their name.
+
+A third, genuinely stale occurrence of the same pre-64.49 8-field literal was found during this
+checkpoint's repository-wide audit in
+`tests/unit/infrastructure/api/test_strategy_configuration_api.py::test_field_registry_endpoint_lists_canonical_fields`
+(asserting the `/api/v1/config/strategy-engine/fields/` endpoint returns exactly the old 8 fields).
+Fixed by deriving the expectation from `field_registry.list_fields()` directly instead of duplicating
+another hard-coded inventory -- so this specific staleness class cannot recur silently.
+
+### 4. Canonical registry contract (current)
+
+`field_registry.list_fields()` returns exactly 15 fields today (5 raw OHLCV + sma/ema/atr + the 7
+fields 64.49 added). The count is not itself sacred -- the CONTRACT is "every listed field is real and
+dispatchable" -- but `tests/unit/research/test_checkpoint_64_51_registry_regression.py::
+test_a_canonical_registry_field_count_is_the_current_15_not_the_stale_8` pins the current count as a
+deliberate architectural assertion, so an accidental future addition/removal is caught explicitly
+rather than silently.
+
+### 5. Feature registry validation (current)
+
+Validated at two independent points now: (1) `test_b_every_registered_field_is_dispatchable_...` (new,
+64.51) exercises the real dispatcher end-to-end per field; (2) `test_f_field_registry_lookup_is_
+consistent_between_list_and_get` (new, 64.51) proves `get_field(x) is` the same object `list_fields()`
+returns it as, for every field. No second feature framework or duplicate indicator-calculation path
+was introduced.
+
+### 6. Strategy registry boundary decision
+
+Inspected `StrategyRegistry`, `build_default_registry()`, and every existing strategy-registration call
+site (checkpoint directive Part 7). Finding: the architecture ALREADY has a clean, intentional, minimal
+distinction between the production/default roster and research/prototype strategies -- no second
+registry class is needed or was created.
+
+- `StrategyRegistry` is one canonical, general-purpose class with a public `register()` method.
+- `build_default_registry()` (`trading_engine/strategy_execution/registry.py`) is a plain factory
+  function that constructs a fresh `StrategyRegistry()` and explicitly `register()`s exactly the
+  curated production roster (`EmaCrossoverStrategy`, `SmaTrendFilterStrategy`,
+  `AtrVolatilityBreakoutStrategy`) -- nothing more, nothing automatic.
+- Any caller -- research code, test code -- may construct its own `StrategyRegistry()` and
+  `register()` any additional `Strategy`-protocol-conforming instance, including
+  `GainzCompatibleResearchStrategy`, exactly as 64.50's own test suite already did and 64.51's new
+  `test_e_gainz_compatible_research_strategy_remains_separately_registrable` now documents with a
+  passing test.
+
+This is the "one canonical `StrategyRegistry`, with an explicit distinction between default production
+roster and explicitly registered research strategies" outcome the checkpoint directive preferred,
+achieved with zero new classes.
+
+### 7. Default registry decision
+
+`build_default_registry()` remains unchanged: exactly ema_crossover/sma_trend_filter/
+atr_volatility_breakout. `GainzCompatibleResearchStrategy` is deliberately NOT added.
+`test_d_default_registry_contains_exactly_the_intended_production_roster` and
+`test_e_gainz_compatible_research_strategy_is_not_in_the_default_registry` (both new, 64.51) make this
+an enforced regression test, not just a scope note in a report -- a future checkpoint that wants to
+change this policy must consciously update these tests, not accidentally trip past them.
+
+### 8. GainzCompatibleResearchStrategy status (unchanged from 64.50)
+
+Research/prototype, not production. Proves the 64.49 canonical feature layer is consumable end-to-end
+through the real `StrategyExecutionCoordinator`; does not claim to be, and is not, the eventual
+production Gainz strategy boundary. Its signal logic was NOT touched this checkpoint (directive Part
+12's own instruction).
+
+### 9. Actual Gainz mathematics status (unchanged)
+
+Still NOT implemented. No Gainz reference source exists anywhere in this repository (independently
+re-confirmed again this checkpoint via the honesty-guard tests below, which now also allow this
+checkpoint's own new, honestly-labeled `test_checkpoint_64_51_registry_regression.py`). Delta and
+Breakout remain unimplemented and unregistered, proven again this checkpoint by direct dispatcher
+`ValueError` checks, not just registry-absence checks.
+
+### 10. Honesty-guard updates this checkpoint
+
+Two pre-existing "no Gainz reference file exists" structural scans
+(`test_checkpoint_64_48_gainz_adapter_design.py::test_k_no_gainz_reference_file_exists_in_repo` and
+`test_checkpoint_64_49_gainz_feature_registry.py::test_zz_no_real_gainz_source_file_exists`) needed a
+one-line allow-list addition for this checkpoint's own new file
+(`test_checkpoint_64_51_registry_regression.py`, which discusses the already-allowed
+`gainz_compatible_research.py` artifact) -- mirroring the identical, already-accepted precedent 64.50
+set for its own test file. No other Gainz-named artifact was added.
+
+### 11. What this checkpoint actually changed
+
+New: `tests/unit/research/test_checkpoint_64_51_registry_regression.py` (13 tests). Modified (test-only
+and documentation): `tests/unit/trading_engine/test_strategy_execution.py` (2 stale assertions
+rewritten in place), `tests/unit/infrastructure/api/test_strategy_configuration_api.py` (1 stale
+assertion fixed to derive from `list_fields()`), `test_checkpoint_64_48_gainz_adapter_design.py` and
+`test_checkpoint_64_49_gainz_feature_registry.py` (one allow-list line each), this architecture
+document (this section, append-only), `taskReport.md`.
+
+Not touched: `field_registry.py`, `definitions.py`, any feature computation module, `Strategy`
+Protocol, `StrategyExecutionCoordinator`, `StrategyRegistry`, `StrategySignal`, `TradePlan`,
+`build_default_registry()`'s actual registrations, `GainzCompatibleResearchStrategy`'s signal logic,
+Risk, Execution, Fill, PaperBroker, the backtest engine, Dhan, the frontend. No Delta, Breakout, or
+Gainz mathematics was implemented.
+
+## CHECKPOINT 64.52 -- DATABASE-FIRST STRATEGY BACKTEST PIPELINE
+
+### 1. Objective
+
+Prove the full historical research path end-to-end: Historical Data Request -> Database FIRST ->
+[missing/insufficient] -> Historical Data API -> validate -> persist -> Backtest reads DATABASE ->
+`GainzCompatibleResearchStrategy` -> `StrategySignal` -> existing Backtest execution -> canonical
+`Fill` -> Trade -> P&L -> Metrics, all deterministic and reproducible, using ONLY the existing
+Checkpoint 63.x database-first pipeline and the existing Checkpoint 26/27/64.43-64.50 strategy/
+Backtest/Fill architecture. No new data-acquisition or Backtest engine was built.
+
+### 2. Existing pipeline confirmed and reused, unmodified
+
+Direct source reading (not memory) confirmed this codebase already has a complete, mature
+database-first/API-fallback/persist-then-scan historical-data pipeline, built at Checkpoint 63.x:
+
+- `application/services/historical_data_coverage.py` -- `HistoricalDataCoverageService`. Answers "how
+  much of `(instrument, timeframe, start, end)` is already in the database, and which sub-ranges are
+  missing?" using date/time-aware timestamp-set comparison against
+  `domain.market_data.quality.expected_bar_timestamps`/`domain.session.calendar` -- deliberately NOT a
+  row-count check (Phase 3's own explicit warning, re-verified this checkpoint by
+  `test_g_data_completeness_is_enforced_not_row_existence`, which populates a sparse non-contiguous
+  subset of one day's expected timestamps and proves `is_complete` is correctly `False` despite
+  non-zero rows existing).
+- `application/services/historical_data_preparation.py` -- `HistoricalDataPreparationService`, the
+  ONLY writer of `HistoricalBar` in this codebase. Implements exactly: DB coverage check -> missing
+  range -> historical API (per missing range, i.e. genuine gap-fetch, not whole-range refetch) ->
+  `ensure_chronological` validation -> `bulk_upsert` -> re-check coverage against the DB itself to
+  verify persistence, never assuming a write succeeded just because it didn't raise.
+- `application/services/historical_backtest_run.py` -- `HistoricalBacktestRunOrchestrator`, the only
+  caller of the preparation service, always run strictly BEFORE `BacktestingService.run()`.
+- `infrastructure/persistence/historical_bar_repository.py` -- `DjangoHistoricalBarRepository`,
+  structurally satisfying the read/write `HistoricalBar*Repository` Protocols AND the pre-existing
+  `HistoricalMarketDataRepository` Protocol `BacktestingService` already depends on -- the exact detail
+  that gives the scanner DB-backed reads "for free" once data is persisted, with zero Backtest-engine
+  changes.
+- `infrastructure/market_data_providers/synthetic_historical.py` -- `SyntheticHistoricalBarProvider`,
+  the honestly-disclosed synthetic stand-in for a real Dhan historical-candle adapter (which does not
+  exist in this codebase). Used, alongside a test-local `_TrendingBarProvider` (see below), as the
+  `HistoricalBarProvider` in every 64.52 test -- never a live/Dhan call.
+
+**No new `BacktestDataManager`/`HistoricalDataManager`/`GainzDataManager` was created.** `git diff
+--stat` for this checkpoint confirms zero lines changed in any of the five files above.
+
+### 3. The one test-local addition: `_TrendingBarProvider`
+
+`SyntheticHistoricalBarProvider` generates a pseudo-random per-timestamp OHLCV value via a SHA-256
+hash seed -- deterministic per-bar, but not reliably a sustained multi-bar directional trend. Since
+`GainzCompatibleResearchStrategy`'s BULLISH condition requires RSI/ADX/+DI/-DI/MACD-histogram/
+Relative-Volume/Candle-Body-Ratio to align simultaneously, a hash-random series essentially never
+trips it. `tests/unit/research/test_checkpoint_64_52_database_first_backtest.py` therefore defines a
+test-local `_TrendingBarProvider` -- an accelerating, deterministic uptrend generator satisfying the
+exact same `HistoricalBarProvider` Protocol -- used purely as a fixture/test double, exactly as
+`SyntheticHistoricalBarProvider` itself is used in production code. This is NOT a new production data
+source; it lives only in the test file.
+
+### 4. Database-first proof (concrete call-count/DB-state evidence)
+
+- `test_a_database_hit_returns_historical_data_without_api_call`: seeds the DB via one real fetch,
+  then re-requests the SAME range with a provider whose `fetch()` raises `AssertionError` if ever
+  called -- `outcome.api_requests == 0`, `raising_provider.fetch_call_count == 0`,
+  `outcome.cache_hits > 0`.
+- `test_b_database_miss_calls_historical_api`: empty DB -> `provider.fetch_call_count == 1`,
+  `outcome.api_requests == 1`, `outcome.bars_fetched > 0`.
+- `test_c_api_data_is_persisted`: after a fetch, `repo.get_bars(...)` returns exactly
+  `outcome.bars_persisted` rows, cross-checked against a direct Django ORM `HistoricalBar.objects
+  .filter(source=PROVENANCE_API_FETCH).count()` -- real DB state, not inferred from the provider's
+  return value.
+- `test_e_second_identical_request_does_not_call_api`: `prep.prepare()` called twice with the SAME
+  provider instance -- `provider.fetch_call_count` is unchanged after the second call,
+  `outcome2.api_requests == 0`.
+- `test_end_to_end_orchestrator_runs_gainz_research_strategy_database_first`: the full
+  `HistoricalBacktestRunOrchestrator`, run twice (fresh run IDs) against the same instrument/range --
+  first run: `api_requests > 0` (DB empty -> API fallback genuinely used); second run: constructed
+  with an always-raising provider, `api_requests == 0`, `fetch_call_count == 0`,
+  `cache_hits > 0`, and the SAME `backtest_id` is produced both times.
+
+### 5. Gap-fetch proof (existing architecture genuinely supports it)
+
+`test_f_partial_gap_fetches_only_the_missing_range`: pre-populates only Monday's bars directly (5
+trading-day range requested: Mon-Fri), then calls `prepare()` for the full week. Evidence: `outcome
+.cache_hits == len(first_half_bars)` (Monday NOT refetched), `outcome.bars_fetched > 0` (Tue-Fri WAS
+fetched), every `gap_provider.fetch_calls` request start date is NOT Monday's date, and the combined
+post-fetch DB state (`repo.get_bars(...)`) exactly equals `coverage_after.expected_bar_count`. This
+is a genuine capability of the existing `HistoricalDataCoverageService.missing_ranges` /
+`HistoricalDataPreparationService`'s per-range fetch loop -- no gap was found in this checkpoint.
+
+### 6. Strategy + Backtest integration (real components, unmodified)
+
+- `test_j_gainz_strategy_runs_through_real_coordinator_against_db_bars`: builds the real
+  `StrategyExecutionCoordinator` via `build_coordinator()` (the exact production wiring
+  `application.services.strategy_execution` provides), evaluates database-backed bars, and asserts a
+  real `StrategySignal` with all 7 evidence values populated (non-fabricated) and, on the deliberately
+  trending fixture, a genuine BULLISH direction.
+- `test_h_warmup_bars_are_included_in_the_prepared_range`: proves the coordinator emits NO signal for
+  a strategy from a too-short bar prefix (warmup not yet satisfied) and a real signal once the prefix
+  exceeds the strategy's longest lookback (`macd_slow=26`) -- warmup safety is exercised, not assumed.
+- `test_k`/`test_l`/`test_m`: `BacktestingService.run()` (Checkpoint 27, byte-identical this
+  checkpoint) executed against a `HistoricalMarketDataService(repository=DjangoHistoricalBarRepository())`
+  -- the SAME class used by every other Backtest in this project. Produces real `BacktestResult.fills`
+  (canonical `domain.execution.contracts.Fill`, unique `fill_id`s, positive quantity/price),
+  `BacktestResult.trades`, and `BacktestMetrics` whose `net_pnl` equals the literal sum of each
+  trade's `net_pnl`.
+- `test_n_same_database_snapshot_produces_deterministic_results`: the SAME `BacktestingService.run()`
+  call, invoked twice against the identical persisted DB snapshot, yields an identical
+  `backtest_id`, an identical ordered list of `fill_id`s, and identical per-trade entry/exit
+  price/quantity/net_pnl and `BacktestMetrics` (dataclass equality) -- reproducibility is proven, not
+  asserted.
+
+### 7. Real numbers from one concrete run (FEB_START=2026-02-02 .. FEB_END=2026-02-06, NSE:RELIANCE,
+5-minute bars, `_TrendingBarProvider`, default `GainzCompatibleResearchStrategy` parameters)
+
+```
+BARS: 375
+API_REQUESTS: 5   BARS_FETCHED: 375   BARS_PERSISTED: 375
+TRADES: 8
+FILLS: 16
+METRICS: total_trades=8, winning_trades=1, losing_trades=7, win_rate_percent=12.500,
+         gross_profit=561.0000, gross_loss=-1370.0000, net_pnl=-809.0000,
+         profit_factor=0.4095, max_drawdown=1810.5000, max_drawdown_percent=1.8029,
+         max_drawdown_duration_bars=225, average_trade=-101.1250, final_capital=99191.0000,
+         return_percent=-0.80900
+BACKTEST_ID: 7781c82902a19dce2c204b26e2c1d559 (identical across two runs of the same config)
+```
+
+These are the REAL, unmodified output of the existing Backtest engine against a deliberately
+trending synthetic fixture -- not a favorable-period selection, and not evidence of GainzAlgo V2
+profitability (this fixture's price series is a synthetic accelerating uptrend, not real market
+data; the strategy's rule set is a research/compatibility profile, explicitly not verified Gainz
+mathematics -- see the strategy's own module docstring).
+
+### 8. Numerical safety
+
+`git diff --stat` for this checkpoint touches ONLY: two Gainz honesty-guard test files (one allow-list
+line each, admitting this checkpoint's own new, honestly-labeled test file) and this documentation
+section/`taskReport.md`. Zero lines changed in `research/backtesting/engine.py`,
+`research/backtesting/contracts.py`, `application/services/backtesting.py`,
+`application/services/historical_data_preparation.py`,
+`application/services/historical_data_coverage.py`,
+`application/services/historical_backtest_run.py`,
+`infrastructure/persistence/historical_bar_repository.py`, `trading_engine/strategy_execution/
+strategies/gainz_compatible_research.py`, `domain/execution/contracts.py`. Entry/exit timing,
+`TradePlan`, slippage, transaction costs, Fill generation, P&L, and metrics are byte-identical to the
+64.43-64.51 baseline -- confirmed by direct diff, not inference.
+
+### 9. Provenance (existing, reused)
+
+`HistoricalBar.source` already records provenance (`PROVENANCE_API_FETCH` constant in
+`historical_data_preparation.py`); the model additionally carries `instrument_id`/`exchange`/
+`symbol`/`timeframe`/`bar_timestamp`. No `fetched_at`/`quality`/`adjustment`/`checksum` field exists
+on `HistoricalBar` today -- an honest, pre-existing gap this checkpoint did not close (out of scope
+per the directive's own "do not create a large data-provenance redesign" instruction).
+
+### 10. Known limitations
+
+- `HistoricalBar` provenance is limited to `source` -- no `fetched_at`/`checksum`/`quality`/
+  `adjustment` field exists (see above).
+- The synthetic/test providers (`SyntheticHistoricalBarProvider`, `_TrendingBarProvider`) are the
+  ONLY historical-data sources exercised -- no real Dhan historical-candle adapter exists in this
+  codebase (unchanged from Checkpoint 63.x's own honest disclosure).
+- `GainzCompatibleResearchStrategy`'s signal logic remains a research/compatibility profile, NOT
+  verified GainzAlgo V2 mathematics -- no real Gainz reference source exists anywhere in this
+  repository (re-confirmed again this checkpoint via the pre-existing honesty-guard structural scans).
+- Reported P&L numbers above are from a synthetic accelerating-uptrend fixture, not real market data
+  -- they demonstrate pipeline correctness, not strategy profitability, and must never be read as a
+  claim about GainzAlgo V2 performance.
+
+---
+
+## CHECKPOINT 64.53 -- BACKTEST TRUST / RESEARCH READINESS AUDIT
+
+64.52 proved the database-first historical research PIPELINE runs end-to-end, reproducibly. It did
+NOT, by itself, prove the BACKTEST ITSELF is trustworthy enough to evaluate strategies. 64.53 audits
+that separate question directly: why `BacktestTrustLevel.POC` is still hardcoded, what is required to
+leave POC, which correctness dimensions are proven today with fresh evidence, and which remain open.
+
+### 1. The gate, read fresh from source (not from memory)
+
+`research/backtesting/contracts.py:305-317` -- `BacktestTrustLevel(str, Enum)`: `POC` /
+`RESEARCH_READY` / `VALIDATION_READY` / `PRODUCTION_RESEARCH_READY`. Hardcoded to `POC` at exactly
+three call sites, unchanged this checkpoint (confirmed by `git diff --stat`):
+`research/backtesting/engine.py:623` (`trust_level=BacktestTrustLevel.POC` in every `BacktestResult`
+this engine constructs), `research/backtesting/portfolio.py:173` (the dataclass field default) and
+`research/backtesting/portfolio.py:616` (every `PortfolioBacktestResult`). No API/serialization/
+frontend code reads `trust_level` to gate any BEHAVIOR (it is surfaced, not enforced, today) -- its
+load-bearing role is entirely at the human/checkpoint-discipline level: every checkpoint since 64.35
+has used "has `BacktestTrustLevel` left POC" as its own definition of "Research Ready".
+
+### 2. Existing, authoritative promotion criteria (reused, not reinvented)
+
+`docs/architecture/BACKTESTING_ARCHITECTURE.md` ("Backtest Trust Level", Checkpoint 28) already
+defines five measurable `POC` -> `RESEARCH_READY` criteria. `docs/research/BACKTEST_REFERENCE_
+VALIDATION.md` (Checkpoint 30) and `docs/research/TRADING_GRADE_BAR_VALIDATION.md` (Checkpoint 31)
+re-evaluated them with real evidence. This checkpoint reuses that SAME five-criterion framework --
+it does not invent a competing one, per the directive's own instruction to reuse existing checklists.
+
+| # | Criterion | Status as of Checkpoint 31 (last update) | Re-verified this checkpoint? |
+|---|---|---|---|
+| 1 | Mark-to-market equity/drawdown implemented and tested | SATISFIED (Checkpoint 28) | Yes -- the equity identity is re-proven fresh against two default-registry strategies |
+| 2 | Multi-instrument portfolio capital accounting invariants proven | SATISFIED (Checkpoint 28) | Not re-run this checkpoint (out of this checkpoint's single-instrument-engine focus; `portfolio.py` untouched, `git diff --stat` confirms zero lines changed) |
+| 3 | Verified (not assumed) Indian brokerage/STT/GST cost model | SATISFIED (Checkpoint 29, `IndianCashEquityIntradayCostModel`, sourced from Zerodha's published charges page, fetched 2026-08-14) | Not re-verified against the live source this checkpoint (would require a fresh external fetch, out of this checkpoint's read-only/no-external-calls scope); the cost MATH itself is re-proven fresh against the flat-percentage model actually used in this checkpoint's own fixtures |
+| 4 | At least one backtest validated against an independent, trusted reference | SATISFIED (Checkpoint 30, `tests/validation/`, zero `UNEXPLAINED_MISMATCH`, ast-verified independent implementation) | Re-confirmed present and green this checkpoint (`tests/validation/` re-run, see the Tests section of `taskReport.md`) -- not re-derived from scratch |
+| 5 | `TRADING_GRADE_BAR` data available as an alternative source | **NOT SATISFIED** (Checkpoint 31: 2 of 6 conditions met; WebSocket live ingestion remains blocked -- no persistent-process infrastructure outside Docker, which is permanently deferred by this project's own invariant rules) | Re-confirmed unchanged by fresh grep of `docs/research/TRADING_GRADE_BAR_VALIDATION.md` and `domain/market_data/aggregation.py`'s `BarQualityGrade` -- every bar this codebase can produce remains `SAMPLE_BAR` |
+
+**Conclusion, unchanged since Checkpoint 31 and re-confirmed fresh this checkpoint**: 3 of 5
+`RESEARCH_READY` criteria are satisfied (1, 3, 4); criterion 5 (`TRADING_GRADE_BAR`) is NOT satisfied
+and is blocked on infrastructure this project's own invariant rules keep permanently out of scope
+(no Docker, no persistent WebSocket-hosting process); criterion 2 was satisfied at Checkpoint 28 and
+was not touched (nor needed re-touching) this checkpoint. Per this project's own explicit,
+recurring "no auto-promotion" discipline (Checkpoints 28-31), satisfying most-but-not-all criteria
+does NOT promote the trust level. **`BacktestTrustLevel.POC` is kept, unchanged, this checkpoint.**
+
+### 3. Fresh engine-level trust matrix (64.53's own new evidence)
+
+New test file `tests/unit/research/test_checkpoint_64_53_backtest_trust.py` (20 tests, all passing,
+solo, this session) exercises the ENGINE (not the strategy/feature layer) directly against the
+directive's own checklist, using two of the project's pre-existing default-registry strategies
+(`ema_crossover`, `sma_trend_filter` -- NOT `GainzCompatibleResearchStrategy`) on deterministic
+synthetic fixtures:
+
+| Dimension | Status | Evidence |
+|---|---|---|
+| Execution timing (signal bar's close vs. fill bar's own price) | PROVEN | every trade's `entry_price` matches its own entry bar's `open`, never that bar's `close` |
+| EOD force-close | PROVEN | an EOD/`end_of_data` exit price/timestamp exactly matches the final bar's own close/timestamp |
+| No-lookahead (adversarial future-bar mutation) | PROVEN | a dramatically mutated LATE bar leaves every trade closed BEFORE that bar byte-identical |
+| No-lookahead (truncation) | PROVEN | truncating the series at 3 cutoffs never rewrites an earlier trade's own numbers |
+| Warmup | PROVEN | zero trades on a too-short prefix; `warmup_bars` never exceeds the strategy's own lookback |
+| Fill/Trade reconciliation | PROVEN | every trade has a matching, uniquely-`fill_id`'d entry Fill at the trade's own quantity |
+| Cost reconciliation | PROVEN | `sum(Fill.transaction_cost)` for a trade's fills exactly equals `Trade.costs`, which equals `cost_breakdown.total` |
+| Slippage reconciliation | PROVEN | `Fill.price - Fill.slippage_applied` reconstructs a positive reference price; non-zero slippage genuinely changes the realized entry price versus a zero-slippage run |
+| Net P&L reconciliation | PROVEN | `gross_pnl - costs == net_pnl` per trade, and `sum(trade.net_pnl) == metrics.net_pnl` exactly |
+| Equity reconciliation | PROVEN | `initial_capital + realized_pnl + unrealized_pnl == total_equity` at every mark-to-market point; final equity matches capital + summed net P&L when flat |
+| Realized/unrealized separation | PROVEN | mid-trade mark-to-market points never fold an open trade's own net P&L into `realized_pnl` early |
+| Long round trip | PROVEN | a real long trade's gross/cost/net reconcile |
+| Short round trip | PROVEN | a real short trade (post-reversal) gross/cost/net reconcile |
+| Exit reasons | PROVEN | every trade carries a real, non-blank `reason` |
+| Determinism | PROVEN | identical `backtest_id`, fill IDs, trade fields, and full `metrics` equality across two independent runs of the identical configuration |
+| Strategy independence | PROVEN | `ema_crossover` and `sma_trend_filter` (two DIFFERENT pre-existing default-registry strategies, neither Gainz) both execute through the same `run_backtest()` and produce independently-derived, differently-`backtest_id`'d results |
+| DB/API source independence | PROVEN (at the engine boundary) | two value-identical but object-distinct `Bar` tuples (simulating a DB-read vs. an API-fetch origin) produce an identical `backtest_id` and identical `metrics` -- the engine itself is source-blind by construction, complementing 64.52's pipeline-level proof |
+| Partial fill (Backtest) | DOCUMENTED OPEN BOUNDARY, not implemented | every entry `Fill` this engine emits covers 100% of its trade's quantity in exactly one event; NO partial-fill engine exists in `research.backtesting` today (unchanged, and deliberately not built this checkpoint) -- distinct from `PaperBroker`'s own, separate partial-fill support, which this checkpoint did not touch |
+| Partial exit | NOT PRESENT as a distinct capability | the engine's own `_close_trade` always closes an open position's FULL quantity in one exit event (SL/TP/trailing/reversal/EOD all close 100%); there is no partial-exit (scale-out) capability to test, and none was added |
+| No false VERIFIED transition | PROVEN | `BacktestResult.trust_level` is asserted `POC` today; the enum's four defined levels are pinned as a regression guard against a future silent flip |
+
+Multi-strategy/multi-instrument PORTFOLIO invariants (criterion 2 above) and real-market
+`TRADING_GRADE_BAR` sourcing (criterion 5) were NOT re-derived this checkpoint -- both already have
+their own dedicated, previously-accepted evidence (Checkpoint 28 and Checkpoint 31 respectively) that
+this checkpoint's own read-only re-grep re-confirmed is still current and unchanged in source.
+
+### 4. Genuine correctness defects found this checkpoint
+
+**None.** Every dimension audited above reconciled exactly, using real `Decimal` equality, on fresh
+runs performed this session -- no tolerance was loosened or assumed, and no defect required a
+production-code change. This checkpoint's ONLY new file is the test file itself; `git diff --stat`
+confirms zero lines changed in `engine.py`, `portfolio.py`, `contracts.py`, `execution.py`,
+`cost_model.py`, `domain/execution/contracts.py`, or any strategy module.
+
+### 5. Trust level decision
+
+**`BacktestTrustLevel` remains `POC` because:**
+
+1. `TRADING_GRADE_BAR` data (criterion 5 of the project's own established `RESEARCH_READY`
+   promotion checklist) remains unreachable -- every bar this codebase can produce is still typed
+   `SAMPLE_BAR` (`domain/market_data/aggregation.py`'s `BarQualityGrade`), because live WebSocket
+   ingestion remains blocked on infrastructure (a persistent, non-Docker-hosted process) this
+   project's own invariant rules keep permanently out of scope.
+2. No backtest has ever been run against REAL NSE historical market data -- every fixture used in
+   64.52, 64.53, and the Checkpoint 30 reference-validation report itself is synthetic (frozen,
+   checksummed, and honestly disclosed as such, but not traded prices).
+3. This project's own explicit, repeatedly-applied discipline (Checkpoints 28-31, re-applied here)
+   is that satisfying SOME promotion criteria never auto-promotes the trust level -- every one of
+   the five documented `RESEARCH_READY` criteria must hold, and criterion 5 does not.
+4. No checkpoint, including this one, has defined `VALIDATION_READY` or `PRODUCTION_RESEARCH_READY`
+   in any detail -- doing so before `RESEARCH_READY` itself is reached would be premature
+   specification of an unreached milestone (Checkpoint 28's own explicit position, unchanged).
+
+**What genuinely DID move this checkpoint**: engine-level trust evidence (execution timing,
+no-lookahead at the engine boundary specifically, warmup, Fill/Trade/cost/slippage/P&L/equity
+reconciliation, long/short, determinism, strategy independence, DB/API source-blindness) is now
+freshly re-proven with 20 new, real, passing tests -- not merely re-asserted from a prior
+checkpoint's report. This closes the audit's own stated objective (understand and document WHY POC
+persists and WHICH gaps are provable now vs. later) without changing the trust level itself.
+
+### 6. Checkpoints still required to leave POC
+
+1. A genuine `TRADING_GRADE_BAR` data path (live WebSocket ingestion, hosted on a persistent
+   non-Docker process this project has not yet designed -- Checkpoint 31's own "recommended next
+   checkpoint" already identifies this as the single largest remaining blocker).
+2. At least one backtest run against REAL (not synthetic) NSE historical market data, once (1) makes
+   that data available with a verified provenance/quality grade.
+3. A formal definition of `VALIDATION_READY`/`PRODUCTION_RESEARCH_READY`, only once
+   `RESEARCH_READY` itself is reached (deliberately not attempted prematurely, per Checkpoint 28's
+   own stated position, reaffirmed here).
+
+## CHECKPOINT 64.54 -- TRADING-GRADE MARKET DATA FOUNDATION
+
+64.53 correctly re-confirmed `BacktestTrustLevel.POC` and re-stated the long-standing claim that
+"live WebSocket ingestion remains blocked -- no persistent non-Docker process exists." This
+checkpoint discovered that claim is **stale**: Checkpoints 40 and 57-64.3, entirely separate from
+64.43-64.53's Gainz/backtest-pipeline arc, already built almost the entire market-data foundation
+this checkpoint's directive asked for. **This checkpoint added zero new production code** -- it
+audited, reused, and proved the existing architecture end to end with one new, focused test file.
+
+### 1. Correcting the stale "no persistent process" claim
+
+`python manage.py run_market_data_worker` (`infrastructure/persistence/management/commands/
+run_market_data_worker.py`, Checkpoint 57, extended through 64.1-64.3) IS a real, persistent,
+non-Docker process: `--provider fake-ws` drives a genuine RFC 6455 WebSocket transport
+(`DhanWebSocketTransport`, Checkpoint 61) against a fake server; `--provider dhan` drives the same
+pipeline against real Dhan infrastructure (refused to start in this environment because the
+configured token is expired -- itself correct, honest behaviour, not a gap). A bounded-backoff
+reconnect supervisor (`run_worker_with_reconnect()`), a state machine (`WorkerState`: STOPPED /
+STARTING / AUTHENTICATING / CONNECTING / SUBSCRIBING / RUNNING / DEGRADED / RECONNECTING /
+AUTH_FAILED / TOKEN_EXPIRED / STOPPING / FAILED), a watchdog evaluator
+(`control_plane.market_data_watchdog`: HEALTHY / DEGRADED / STALE / ... ), and a
+`WorkerHealthTracker` that persists real state to `WorkerRuntimeStatusRepository` for the separate
+Django web process to read all already exist and are exercised by pre-existing tests. This
+checkpoint's own remaining honest limitation: this environment's Dhan token is expired, so
+`--provider dhan` cannot be exercised live here -- but the process architecture itself is real,
+not merely designed.
+
+### 2. Two distinct "six conditions" -- an ambiguity, not silently resolved
+
+The directive asks to "reproduce the project's six existing conditions exactly," pointing at
+`docs/research/TRADING_GRADE_BAR_VALIDATION.md` Sec.4. That document's six conditions are an
+**external validation checklist** (same-day availability, timestamp/timezone verification, candle
+authority/provenance, WebSocket live ingestion, gap-recovery reconciliation, one full independently
+validated session) -- evaluated once, by hand, against a real Dhan API call at Checkpoint 31.
+Separately, `domain/market_data/promotion.py`'s `PromotionCondition` enum (Checkpoint 40) defines a
+**different, machine-enforced six-condition gate** actually run on every bar today: `BAR_IS_CLOSED`,
+`SESSION_IS_OPEN`, `NO_DUPLICATE_OR_OUT_OF_ORDER`, `NO_GAP_BEFORE_THIS_BAR`, `CONNECTION_HEALTHY`,
+`SUFFICIENT_OBSERVATIONS`. Both are genuinely part of this project's `TRADING_GRADE_BAR` story; they
+are not interchangeable, and this checkpoint does not silently pick one over the other or invent a
+seventh. Sec.3 below reproduces the Sec.4/Checkpoint-31 document's six conditions exactly, per the
+directive's explicit instruction; the promotion gate's six conditions are the ones this checkpoint's
+new test file (`test_j`) exercises end to end, because they are the ones actually enforced in code.
+
+### 3. `TRADING_GRADE_BAR` -- the project's own six conditions (Checkpoint 31), reproduced exactly
+
+| # | Condition (verbatim from `TRADING_GRADE_BAR_VALIDATION.md` Sec.4) | Status | Evidence |
+|---|---|---|---|
+| 1 | Same-day intraday availability | SATISFIED (Checkpoint 31) | Real Dhan `/v2/charts/intraday` call returned 360 same-day candles |
+| 2 | Exact timestamp/timezone verified | SATISFIED (Checkpoint 31) | Epoch `1786679100.0` matched documented 09:15 IST market open exactly |
+| 3 | Candle authority/provenance sufficiently trusted | NOT SATISFIED | Only one data point of independent (Google Finance) corroboration; Dhan does not document exchange-authoritative vs. self-computed candles |
+| 4 | WebSocket live ingestion implemented and validated | PARTIAL -- upgraded this checkpoint's understanding, not its status | The WebSocket transport, worker, watchdog, and health tracker ARE implemented and tested (Sec.1); "validated" against real NSE data specifically has still never happened (no live session run, expired token) |
+| 5 | Historical/reconciliation gap recovery implemented and validated | PARTIAL | `MissingInterval` gap detection and `NO_GAP_BEFORE_THIS_BAR` ARE implemented and unit-tested (this checkpoint's own `test_h`); no live-session reconciliation against a real gap has been run |
+| 6 | One full trading session independently validated against a trusted price source | NOT SATISFIED | Unchanged since Checkpoint 31 -- still only a single-instrument, single-timestamp comparison, never a full session |
+
+**Net honest change from Checkpoint 31: condition 3 and 6 remain unmet exactly as before; conditions
+4 and 5 move from "NOT SATISFIED / BLOCKED" to "PARTIAL" because the implementation genuinely exists
+and is genuinely tested now (Checkpoints 40/57-64.3, only now correctly credited in this trust
+narrative) -- but "validated against real, live NSE data" remains unmet for both, so this checkpoint
+does NOT claim SATISFIED for either.** This is a documentation correction (the implementation existed
+before this checkpoint), not new implementation work by this checkpoint itself.
+
+### 4. Event contract / aggregation / provenance / session / duplicate / gap handling -- all reused
+
+No new domain contract was created. `domain/market_data/contracts.py`'s `Quote` (Checkpoint 5) is
+already the canonical tick/event contract every layer (backtest, paper, future live) shares --
+adding a second `MarketEvent`/`Tick` type was correctly judged unnecessary and NOT done.
+`aggregate_quotes_into_bars()` (Checkpoint 24A, unmodified) already deterministically resolves
+duplicate-timestamp quotes (documented arrival-order tie-break, proven fresh by this checkpoint's
+`test_f`) and detects gaps (`MissingInterval`, proven fresh by `test_h`). `domain/market_data/
+quality.py`'s `ensure_chronological()` (Checkpoint 14, unmodified) rejects out-of-order/duplicate
+BARS outright rather than silently reordering (proven fresh by `test_f2`/`test_g`).
+`domain/session/calendar.py`'s `build_session_for()`/`session_for_instant()` (Checkpoint 39,
+unmodified) is reused for every session-boundary check (`test_e`) -- no new calendar subsystem.
+`BarProvenance` (Checkpoint 31) already carries `source`, `exchange`, `timeframe`, `timestamp`,
+`source_timestamp`, `ingestion_timestamp`, `aggregation_method`, `quality_grade`, `gap_count` --
+sufficient provenance for the promotion gate's own six conditions; this checkpoint did NOT add
+`fetched_at`/`checksum` fields to `HistoricalBar` (a separate, previously-disclosed gap) because
+nothing in the existing `TRADING_GRADE_BAR` contract requires them -- adding them would have been
+unjustified provenance-subsystem scope creep, per the directive's own explicit Sec.8 instruction.
+
+### 5. Synthetic proof, and its explicit limit
+
+`tests/unit/research/test_checkpoint_64_54_trading_grade_bar.py` (new, 13 tests, all passing) proves,
+using only synthetic `Quote` events (never Dhan, never live): SAMPLE_BAR regression-safety (`test_a`),
+correct promotion-condition evaluation including a never-falsely-promoted case (`test_b`), bar
+completion (`test_c`), distinct UTC timestamp semantics (`test_d`), session boundaries (`test_e`),
+duplicate handling at both the quote level and the bar level (`test_f`/`test_f2`), out-of-order
+rejection (`test_g`), gap detection (`test_h`), correct OHLCV aggregation (`test_i`), and -- the
+directive's Sec.15 centerpiece -- a full synthetic Quote-stream walking through
+`aggregate_quotes_into_bars()` -> `evaluate_bar_promotion()` -> `AggregatedBar.to_bar()` and landing
+on `BarQualityGrade.TRADING_GRADE_BAR` with `failed_conditions == ()` on every bar (`test_j`), then
+confirming the resulting `Bar` is Backtest-compatible with zero new type (`test_l`) and that no Dhan
+import or `BacktestTrustLevel` mutation occurs anywhere in the file (`test_m`).
+
+**This proves only that the architecture CAN produce a `TRADING_GRADE_BAR`-classified bar when a
+provider supplies sufficient evidence (closed bar, open session, no duplicate/out-of-order, no gap,
+healthy connection, enough observations). It is explicitly NOT proof that real NSE data satisfies
+those same six conditions in practice, and it is NOT proof of Sec.3's separate, still-largely-unmet
+Checkpoint-31 six-condition checklist. `BacktestTrustLevel.POC` is unaffected -- this checkpoint does
+not flip it, per its own explicit Sec.16 instruction.**
+
+### 6. Gainz compatibility (verified, not implemented)
+
+`evaluate_bar_promotion()`'s `BAR_IS_CLOSED` condition and `AggregatedBar.to_bar()`'s
+`IncompleteBarError` guard (both pre-existing, re-confirmed by `test_c`) together mean any future
+Gainz execution path consuming bars through this pipeline structurally cannot receive a FORMING bar
+-- it either gets a genuinely CLOSED bar or an explicit exception, never a silently-incomplete one.
+
+## CHECKPOINT 64.55 -- READ-ONLY LIVE NSE DATA VALIDATION
+
+The highest-sensitivity checkpoint in this arc: the FIRST checkpoint permitted to attempt a real Dhan
+WebSocket connection -- strictly read-only market data, and only if a currently valid credential
+already existed. Every prior checkpoint (64.29-64.54) explicitly forbade any Dhan connection.
+
+### 1. Credential-state check (performed exactly once, no network side effect beyond the check itself)
+
+Using the EXISTING, pure, no-network `evaluate_dhan_token_lifecycle()` (Checkpoint 64, unmodified),
+this environment's configured Dhan credential was found **PRESENT but EXPIRED** -- its own `exp`
+claim reports expiry at 2026-08-21 07:01:44 UTC, three days before this checkpoint ran
+(2026-08-24). The token value itself was never printed, logged, returned, or written to any file at
+any point in this checkpoint's work -- only the derived, documented-safe `state`/`expires_at` fields
+were ever read, matching `token_lifecycle.py`'s own module docstring guarantee.
+
+### 2. Live-connection portion correctly stopped, per this checkpoint's own explicit safety rule
+
+Per the directive's own "check ONCE, if invalid STOP the live-connection portion entirely, never
+retry" instruction: no connection attempt of any kind was made to `wss://api-feed.dhan.co` or any
+other Dhan endpoint this checkpoint. `run_market_data_worker.py --provider dhan`'s own pre-existing
+token-lifecycle guard (unmodified, `_run_dhan()`, Checkpoint 64.1) independently enforces the same
+rule in production code -- verified fresh this checkpoint by the pre-existing
+`test_dhan_provider_refuses_to_connect_with_a_known_expired_token` (still green, unmodified) and by
+this checkpoint's own new `test_a`/`test_h`
+(`tests/unit/research/test_checkpoint_64_55_live_market_data_validation.py`), the latter
+additionally monkeypatching `DhanWebSocketTransport.connect` to raise `AssertionError` if ever
+called -- the strongest available proof, inside an automated test, that no network attempt happens
+for an expired token.
+
+### 3. What was safely verified instead
+
+The safe `--provider fake-ws` control path (Checkpoints 61-62, unmodified, a genuine RFC 6455
+WebSocket transport against a local fake server -- never evidence of real NSE quality, used here
+only as the directive's own Sec.3-sanctioned fallback/control test) was re-run fresh this checkpoint:
+real canonical `Quote` events ingested, persisted (`LiveQuoteObservation`), aggregated into
+`AggregatedBarObservation` rows, and read back through the existing database-first path -- all
+green, all pre-existing, zero new production code required to prove it. `FORMING` bars were
+re-confirmed to raise `IncompleteBarError` on `to_bar()` and to fail `PromotionCondition.BAR_IS_CLOSED`
+(never silently promotable); the six-condition `evaluate_bar_promotion()` gate was re-confirmed to
+reach `TRADING_GRADE_BAR` only with full synthetic evidence, and to correctly demote to `SAMPLE_BAR`
+when `connection_is_healthy=False`.
+
+### 4. Six-condition status (`TRADING_GRADE_BAR_VALIDATION.md` Sec.16, this checkpoint's own update)
+
+No condition moved this checkpoint, because no live connection was attempted. Conditions 1/2 remain
+SATISFIED (Checkpoint 31, unaffected); conditions 4/5 remain PARTIAL (implementation re-confirmed,
+live validation still absent); conditions 3/6 remain NOT SATISFIED. `BacktestTrustLevel.POC` is
+unchanged (verified fresh by grep, all 4 call sites). Research Readiness remains **NO**.
+
+### 5. Tests added
+
+`tests/unit/research/test_checkpoint_64_55_live_market_data_validation.py` -- 11 new tests, covering
+the directive's Sec.18 A-H checklist: expired-credential rejection with a network-call-forbidding
+monkeypatch (A), no-credential-in-output (B), the real token-lifecycle-evaluation mechanism exposing
+only `state`/`expires_at` (B2), `WorkerState` lifecycle membership (C), canonical `Quote` ingestion
+via the safe fake-ws transport (D), `FORMING`-bar refusal (E), the six-condition promotion gate (F),
+database persistence/read-back (G), and structural + dynamic proof that the signal/order pipeline is
+never reached from an expired-token `--provider dhan` invocation (H).
+No Gainz mathematics were implemented or touched this checkpoint.
+
+## CHECKPOINT 64.56 -- FIRST-LIVE-SESSION SAFETY GATE (MARKET-DATA-OBSERVE-ONLY MODE)
+
+### 1. Why this checkpoint exists
+
+Checkpoint 64.55 (immediately above) found the Dhan credential PRESENT but EXPIRED, so it correctly
+never attempted a live WebSocket connection -- but while reading `signal_pipeline_runtime.py` it
+discovered a real, still-open risk for the future checkpoint that WILL have a valid token: a
+successful `--provider dhan` run reaches `promote_bars_and_trigger_signals()`, which -- with no
+further gate -- would automatically drive the default `ema_crossover` strategy against PAPER the
+instant a bar is promoted to `TRADING_GRADE_BAR`. Checkpoint 64.56's sole purpose is closing that gap
+BEFORE any future checkpoint uses a real, valid Dhan token for the first time.
+
+### 2. Existing-gate search (reuse-first discipline)
+
+Searched the codebase for `MARKET_DATA_OBSERVE_ONLY`, `OBSERVE_ONLY`, `SIGNALS_ENABLED`,
+`STRATEGY_EXECUTION_ENABLED`, `PAPER_EXECUTION_ENABLED`, `strategy_enabled`, `dry_run`, `read_only`,
+`market_data_only` -- none existed anywhere in `src/`. One ADJACENT, pre-existing gate was found and
+is worth naming honestly: `ScannerConfiguration.enabled` (Checkpoint 64.4, defaults `False` on a
+fresh row) already pauses/resumes the whole scanner pipeline for a given provider, including the
+signal pipeline. It is NOT reused as this checkpoint's own gate, for a specific, deliberate reason:
+it is a general, DB-mutable, UI-controlled operator pause/resume switch shared with genuine PAPER
+trading semantics -- flipping it to `True` (as an operator legitimately would, to run PAPER trading
+live) does not distinguish "observe-only" from "paper trading" at all, and the directive explicitly
+requires the two concepts stay impossible to confuse. A new, narrower, purpose-built gate was
+therefore genuinely necessary -- not a second COMPETING flag, but the ONE flag that governs exactly
+the boundary the risk was found at.
+
+### 3. The gate itself
+
+`promote_bars_and_trigger_signals()` (`infrastructure/api/signal_pipeline_runtime.py`) gains one new
+parameter: `strategy_execution_enabled: bool = True`. When `False`, the function still evaluates the
+REAL `evaluate_bar_promotion()` gate and still increments `promoted_count` for every genuine
+`TRADING_GRADE_BAR` -- promotion and (upstream of this call) persistence are completely unaffected --
+but it `continue`s BEFORE constructing a `StrategyConfigurationValues` or calling
+`run_active_loop_tick()`. `run_active_loop_tick()` composes the strategy engine,
+`PaperSignalExecutionService.evaluate_and_submit()` (which constructs the `OrderIntent` and submits to
+`PaperBroker`), and `SignalCommunicationService` -- none of that is ever reached.
+
+The parameter's own default (`True`) preserves every PRE-EXISTING caller unchanged -- specifically the
+established, already-accepted REST-ingestion PAPER-trading tick (Checkpoint 41/46,
+`market_data_ingestion_runtime.py`), which now passes `strategy_execution_enabled=True` EXPLICITLY (a
+documentation-only change, not a behavior change) so that call site can never be mistaken for
+observe-only.
+
+The actual FAIL-CLOSED default lives one layer up, at the real point of risk: `run_market_data_worker.py`
+(`python manage.py run_market_data_worker`) gains a new `--mode {observe-only,paper}` argument,
+defaulting to `observe-only`. `strategy_execution_enabled = (mode == "paper")` -- any value other than
+the exact string `"paper"` (including no flag at all, argparse `choices` rejecting anything malformed
+outright) computes `False`. The resulting bool is threaded through `_QuoteSink.__init__` (itself
+defaulting to `False`, defense in depth, independent of the CLI layer) into every
+`promote_bars_and_trigger_signals()` call the worker makes, for every provider (`fake`, `fake-ws`,
+`dhan` alike). This is a SINGLE existing runtime with an explicit new mode/feature gate -- no second
+runtime, no `ObserveOnlyRuntime`, no parallel implementation, exactly as the directive requires.
+
+The credential/token-lifecycle gate (`TOKEN_EXPIRED` refusal, Checkpoint 64.1) is untouched and takes
+precedence over the mode flag entirely -- an expired token refuses the connection before `--mode` is
+even consulted, so `--mode paper` can never be used to bypass it (proven by this checkpoint's own
+`test_h`).
+
+### 4. Safe sequence this gate enforces
+
+```
+Dhan WebSocket -> Quote -> Bar aggregation -> Promotion -> TRADING_GRADE_BAR -> OBSERVE / PERSIST ONLY
+```
+
+NOT (unless `--mode paper` is explicitly passed):
+
+```
+Dhan WebSocket -> Quote -> Bar -> Promotion -> Strategy -> OrderIntent -> PaperBroker
+```
+
+### 5. Observe-only vs. paper trading -- kept conceptually distinct
+
+`MARKET_DATA_OBSERVE_ONLY` (`--mode observe-only`, the default): market-data ingestion, bar
+aggregation, bar promotion, and persistence ALL remain enabled; strategy evaluation, signal
+generation, `OrderIntent` construction, and `PaperBroker` submission are ALL disabled. `PAPER_TRADING`
+(`--mode paper`, or the pre-existing REST-ingestion tick): the full strategy/signal/risk/PaperBroker
+pipeline runs, exactly as before Checkpoint 64.56. The command's own stdout reports the active mode
+and whether strategy execution is ENABLED or DISABLED on every run, so the two can never be confused
+by an operator reading the output.
+
+### 6. Gainz / EMA / SMA
+
+Unaffected and untouched -- Gainz remains unintegrated (no mathematics touched), and the
+`strategy_execution_enabled` gate operates BEFORE any strategy id is dispatched, so it protects EMA,
+SMA, Gainz, or any future strategy id uniformly, proven by this checkpoint's own parametrized test
+(`test_c`, `strategy_id` in `{"ema_crossover", "sma_crossover", "third_party_strategy"}`).
+
+### 7. Tests added
+
+`tests/unit/research/test_checkpoint_64_56_live_observe_only_gate.py` -- 14 new tests, all dynamic
+(spy/mock-based, never source-inspection-only): default behavior unchanged for pre-existing callers
+(A), the core proof -- a REAL, unmocked `evaluate_bar_promotion()`-graded `TRADING_GRADE_BAR` bar does
+NOT reach `run_active_loop_tick()` under `strategy_execution_enabled=False`, with a spy that raises if
+ever called (B), the same proof across three different strategy ids (C), a DEEPER boundary spy on
+`PaperSignalExecutionService` itself -- proving the pipeline never even constructs the strategy-eval /
+`OrderIntent` / `PaperBroker` composition object under observe-only (D), a structural scan confirming
+no order-placement identifier exists anywhere in the two modules this checkpoint touched (E), CLI-level
+integration proof through the real `run_market_data_worker` command that the default mode is
+observe-only and produces zero new `SignalRecord` rows (F, F2, F3, F4 -- including that a malformed
+`--mode` value is rejected outright), that market-data persistence still works end to end under
+observe-only (G), that an expired token still refuses the connection even when `--mode paper` is
+explicitly requested (H), and a fresh grep-equivalent confirming `BacktestTrustLevel.POC` is untouched
+(I).
+
+### 8. What did NOT change
+
+No live Dhan connection was attempted this checkpoint (the credential was re-checked once, fresh, and
+found still EXPIRED -- identical to Checkpoint 64.55's own finding). `BacktestTrustLevel.POC` was not
+touched. No Gainz mathematics were added. `WorkerHealthTracker`/`MarketDataWatchdog` were not modified
+and continue to function identically under either mode (they observe connection/token/bar facts, none
+of which this checkpoint's gate affects). No frontend file was read or touched. No database schema
+changed -- the same `LiveQuoteObservation`/`AggregatedBarObservation` persistence path is used
+regardless of mode.
+
+---
+
+## CHECKPOINT 64.57 -- DHAN CREDENTIAL REFRESH / LIVE-SESSION READINESS
+
+### 1. Current blocker
+
+The Dhan access token stored for this environment is `EXPIRED` (`expires_at = 2026-08-21 07:01:44
+UTC`) -- confirmed unchanged across 64.55, 64.56, Milestone 1, and this checkpoint's own single,
+read-only, no-network, no-retry re-check. Per this checkpoint's own directive, no further blind
+credential-state retry was performed; the objective here was to make the existing credential lifecycle
+and refresh path operationally ready for the moment a fresh token is supplied, not to re-discover the
+same expiry a fourth time.
+
+### 2. Existing credential workflow (found, not rebuilt)
+
+A complete, encrypted, masked, source-aware credential lifecycle already existed BEFORE this checkpoint
+and was verified sufficient:
+
+- **Persistence**: `DjangoDhanCredentialRepository` (`infrastructure/persistence/provider_settings_repositories.py`)
+  stores `client_id` in the clear (a non-secret identifier) and the access token via Fernet symmetric
+  encryption (`infrastructure/persistence/encryption.py::encrypt_value`/`decrypt_value`) -- the raw
+  token is never persisted in plaintext.
+- **Application service**: `DhanSettingsService` (`application/services/provider_settings.py`) exposes
+  `get_display()` -- a safe, secret-free `DhanSettingsView` (masked `client_id`, `access_token_configured`
+  boolean, configuration source, `token_state`, `token_expires_at`) -- and `save()`, a write-only update
+  path where an omitted/blank field means "leave unchanged" (`_blank_to_none()`), so an operator can
+  replace ONLY the expired token without re-entering the client ID.
+- **API**: `GET /api/v1/config/settings/dhan/` (read, `IsAuthenticated`) and
+  `POST /api/v1/config/settings/dhan/` (save, `IsAuthenticated` + `IsConfigurationOperator` RBAC tier) --
+  `infrastructure/api/settings_views.py`. A separate `POST .../test-connection/` endpoint exists for an
+  explicit, rate-limited (`ScopedRateThrottle` + a 5-second server-side debounce), operator-initiated
+  connectivity probe -- never run automatically.
+- **Token lifecycle**: `evaluate_dhan_token_lifecycle()` (`application/services/token_lifecycle.py`) is
+  pure and I/O-free -- it decodes ONLY the JWT `exp` claim (never verifies the signature, never makes a
+  network call) and classifies the token as `UNCONFIGURED` / `VALID` / `EXPIRING_SOON` / `EXPIRED` /
+  `MALFORMED`. This is computed FRESH on every `get_display()` call, so it can never go stale the way a
+  cached "Connected" badge can.
+
+This checkpoint's review confirmed: the update path already exists, expiry is already visible, an
+operator can already safely replace an expired token (a genuinely new `access_token` value in the save
+request overwrites the encrypted row; nothing else is required), the update path already validates
+lifecycle state on every read, secrets are already encrypted at rest, and no secret can leak into a log,
+API response, or `taskReport.md` -- every existing display type is structurally secret-free (no field on
+`DhanSettingsView` can hold a raw token). **No second credential-management subsystem was built.**
+
+### 3. Operator refresh workflow (unchanged, reused)
+
+```
+Dhan login / consent (external, operator's own browser -- NEVER automated by this project)
+     |
+operator obtains a fresh access token from Dhan's own Generate Token flow
+     |
+operator submits it via POST /api/v1/config/settings/dhan/  (access_token field; client_id
+   omitted/unchanged if it has not changed)
+     |
+DhanSettingsService.save() -> DjangoDhanCredentialRepository.save() -> Fernet-encrypts and
+   persists the new token
+     |
+every subsequent get_display() / evaluate_dhan_token_lifecycle() call re-decodes the NEW
+   token's own exp claim -- token_state flips to VALID (or EXPIRING_SOON) immediately, no
+   network call needed to observe the state change
+     |
+the connect-time gate inside run_market_data_worker.py (unchanged, Checkpoint 64) re-evaluates
+   the SAME evaluate_dhan_token_lifecycle() call at connect time -- a VALID/EXPIRING_SOON token
+   is required before any websocket connection is attempted
+     |
+ready for: manage.py run_market_data_worker --provider dhan --mode observe-only
+```
+
+### 4. Token states (existing vocabulary, unchanged)
+
+`TokenLifecycleState`: `UNCONFIGURED`, `VALID`, `EXPIRING_SOON`, `EXPIRED`, `MALFORMED` (plus
+`RENEWED`/`AUTH_FAILURE`/`OPERATOR_ACTION_REQUIRED`, reachable only through the separate
+`attempt_dhan_token_renewal()` call path, not through a plain lifecycle read). None of these expose the
+token value -- only the derived state and the (non-secret) expiry instant.
+
+### 5. New readiness contract added this checkpoint
+
+`application/services/observe_only_readiness.py::evaluate_dhan_observe_only_readiness()` -- a small,
+pure, additive function (the one genuine, small gap this checkpoint found) that maps
+`TokenLifecycleState` onto the exact vocabulary this checkpoint's directive named:
+
+| `TokenLifecycleState` | `ObserveOnlyReadinessState` | `ready` |
+|---|---|---|
+| `VALID` | `READY_FOR_OBSERVE_ONLY` | `True` |
+| `EXPIRING_SOON` | `READY_FOR_OBSERVE_ONLY` | `True` |
+| `EXPIRED` | `BLOCKED_TOKEN_EXPIRED` | `False` |
+| `MALFORMED` | `BLOCKED_TOKEN_MALFORMED` | `False` |
+| `UNCONFIGURED` | `BLOCKED_TOKEN_ABSENT` | `False` |
+
+This is deliberately a NARROWER, DISTINCT contract from `evaluate_live_paper_readiness()` (Checkpoint
+64.12): paper readiness additionally requires a worker that has ALREADY reported a healthy watchdog
+state and checks kill-switch engagement, because it gates the strategy/`OrderIntent`/`PaperBroker`
+pipeline; observe-only readiness gates nothing but a read-only market-data connection, so it depends on
+the credential's own claimed state alone -- no dependency on a worker having run before. It extracts,
+names, and makes independently testable the SAME decision `run_market_data_worker.py`'s own connect-time
+gate (Checkpoint 64) already made inline; the worker's own inline gate is unchanged and remains
+authoritative at actual connect time.
+
+### 6. Secure persistence
+
+Unchanged from Checkpoint 22/64: Fernet encryption at rest, write-only replacement semantics, and a
+`DhanSettingsView`/`ObserveOnlyReadiness` pair that are structurally incapable of carrying a raw token
+value (no such field exists on either dataclass) -- verified this checkpoint by fresh, dynamic tests
+(`test_e`, `test_f` in the new test file) asserting the synthetic token text never appears in any
+`repr()`/`str()` this checkpoint's code paths can produce.
+
+### 7. Readiness states / observe-only entry condition
+
+`READY_FOR_OBSERVE_ONLY` is the sole, explicit precondition the next milestone should check before
+attempting `manage.py run_market_data_worker --provider dhan --mode observe-only`. Any `BLOCKED_*` state
+means the worker's own inline gate will refuse the connection anyway (fail-closed, unchanged since
+Checkpoint 64) -- this contract lets that outcome be predicted, tested, and reported WITHOUT attempting
+a connection.
+
+### 8. Separation from paper/live execution
+
+Unchanged and re-confirmed this checkpoint (`test_h`): `ObserveOnlyReadinessState` and
+`LivePaperReadinessState` are two disjoint vocabularies. `--mode observe-only` remains the default and
+fail-closed (Checkpoint 64.56, 14/14 tests re-run green this checkpoint); `--mode paper` remains a
+separate, explicit mode; `real_trading_state` remains the permanent, structural literal `"DISABLED"`
+(no live broker exists anywhere in this codebase). This checkpoint did not connect live, did not
+activate Gainz/EMA/SMA/PaperBroker, and did not modify `BacktestTrustLevel.POC`.
+
+---
+
+## CHECKPOINT 64.63 -- LIVE DATA INTEGRITY REMEDIATION
+
+Forensic follow-up to 64.62's first real NSE Dhan WebSocket session (observe-only, zero strategy
+execution). Market was CLOSED this checkpoint -- no live Dhan connection was attempted; all findings
+below come from real 64.62 evidence, source-code tracing, and DB-backed (Django test DB) unit tests.
+
+### 1. Timestamp semantics -- NOT conclusively fixed
+
+`packet_decoder.py`'s Ticker/Quote packets decode `last_trade_time` as
+`datetime.fromtimestamp(ltt_epoch, tz=UTC)` (Checkpoint 53/54, unchanged). Dhan's own public WebSocket
+documentation (`https://dhanhq.co/docs/v2/live-market-feed/`) documents this int32 field only as
+`"Last Trade Time (EPOCH)"` -- it does not describe how the server itself computes that integer, and does
+not corroborate (or rule out) an IST-derived-epoch server-side quirk. The real 64.62 evidence
+(confirmed-live batch, ids 65-68) showed `source_timestamp` ~5h27m-5h33m AHEAD of `fetched_at`, close to
+but not exactly the IST/UTC offset (5:30:00) -- consistent with, but not conclusively proven to be, a
+provider-side quirk where the epoch integer is computed from IST wall-clock fields rather than true UTC.
+Per the checkpoint directive's explicit instruction not to add an unproven `+/-5:30` constant, **no
+timestamp conversion was changed this checkpoint.** `tests/unit/research/test_checkpoint_64_63_live_data_
+integrity.py::TestTimestampForensics` characterizes the CURRENT decoder behaviour precisely (so a future,
+conclusively-proven fix has a regression net) and reproduces the anomaly against a
+`REAL_SESSION_FORENSIC_FIXTURE` derived from 64.62's own numbers, without asserting a "corrected" value.
+
+### 2. `WorkerRuntimeStatus` truthfulness -- ROOT-CAUSED AND FIXED
+
+Root cause, confirmed by source tracing + a live DB query against the real `dhan` `ScannerConfiguration`
+row (`enabled=False`, the Django MODEL's own field default -- `ScannerConfiguration.enabled =
+models.BooleanField(default=False)`): `_QuoteSink.aggregate_now()` (`run_market_data_worker.py`) used to
+call `WorkerHealthTracker.persist()` -- the ONLY write path that sets `worker_state`/`token_state`/
+`watchdog_state`/`last_packet_at`/`last_bar_at` from the tracker's real in-memory state -- AFTER the
+`if not enabled: return` early-exit that pauses the STRATEGY pipeline. Since the 64.62 session's `dhan`
+scanner had never been explicitly enabled through the UI/API, `enabled=False`, so `persist()` was skipped
+for the entire session. Meanwhile `save_effective_scanner_state()` (a SEPARATE write, called just above
+the gate, unconditionally) reached the row first via Django's `update_or_create()`, whose `defaults` dict
+never mentions the health columns -- `get_or_create`'s row-creation path left them at the MODEL's own
+field defaults: `STOPPED`/`UNCONFIGURED`/`DISCONNECTED`/`None`/`None`, EXACTLY the row 64.62 observed.
+
+**Fix (smallest, single call site moved):** `health_tracker.persist()` now runs unconditionally, before
+the `enabled` gate, in `run_market_data_worker.py::_QuoteSink.aggregate_now()` -- observability must never
+depend on whether the strategy/signal pipeline happens to be administratively paused. The former, now-
+redundant second `persist()` call (after the strategy loop) was removed rather than duplicated, since
+nothing in that loop mutates `health_tracker`'s own tracked fields. Verified by
+`TestWorkerRuntimeStatus` (9 tests, including one that locks the exact source-line ordering so a future
+refactor cannot silently reintroduce the bug).
+
+### 3. Canonical `Bar` mapping -- adapter already existed, now proven by test
+
+`domain.market_data.aggregation.AggregatedBar.to_bar()` (pre-existing, Checkpoint 24A/14) already converts
+a CLOSED `AggregatedBar` into the canonical `Bar`, reached from a persisted `AggregatedBarObservation` row
+via `live_market_data_repositories.py::_row_to_aggregated_bar()` + `.to_bar()` (exercised today by
+`LiveAggregatedBarRepository.get_recent()`). No new adapter was built. `volume=Decimal("0")` is an
+existing, documented (not new) honesty choice -- live tick-only aggregation (`packet_to_quote.py`'s own
+docstring: `Quote` has no volume field) structurally cannot measure real per-bar traded volume from
+Ticker/Quote packets' LTP stream; `quality=MarketDataQuality.OK` reuses the existing enum (no second
+quality vocabulary invented); `adjustment=PriceAdjustment.RAW` is correct because live ticks are genuinely
+unadjusted prices. `TestCanonicalBarMapping` (8 tests) proves this chain end-to-end, including a direct
+exercise of the persistence-layer `_row_to_aggregated_bar()` adapter itself, and that a FORMING bar is
+refused (`IncompleteBarError`), never silently promoted.
+
+### 4. Quality/strategy-execution separation -- already correctly separated; documented, not redesigned
+
+`domain/market_data/promotion.py::evaluate_bar_promotion()` is already a pure, strategy-agnostic function
+(its six `PromotionCondition`s name only bar/session/connection facts, nothing strategy-related), and
+`infrastructure/api/signal_pipeline_runtime.py::promote_bars_and_trigger_signals()` already calls it
+UNCONDITIONALLY, before checking `strategy_execution_enabled` -- a bar can be graded/promoted to
+`TRADING_GRADE_BAR` with zero strategies ever invoked (`strategy_execution_enabled=False` skips only the
+`run_active_loop_tick()` call, never the promotion gate). No redesign was needed or attempted here.
+The REAL coupling problem this checkpoint found and fixed is the ADJACENT one described in §2 above: the
+OUTER `enabled` gate in `run_market_data_worker.py` was skipping BOTH bar-quality-independent concerns
+(worker observability) and the strategy trigger together, conflating "scanner administratively paused"
+with "can this connection's health be reported." §2's fix addresses the observability half; whether
+`evaluate_bar_promotion()` should ALSO run for a paused (`enabled=False`) scanner (today it still does not
+reach that call at all when paused, since `aggregate_now()` still returns early for the strategy/promotion
+section) is left as a documented, NOT-fixed gap for a future checkpoint, per the directive's explicit
+"do not implement this separation blindly" instruction.
+
+### Tests
+
+`tests/unit/research/test_checkpoint_64_63_live_data_integrity.py` -- 23 tests (5 timestamp forensics, 9
+worker-runtime-status, 8 canonical-bar-mapping, 3 quality/strategy-separation... plus regression coverage
+via the existing suites re-run this checkpoint, see `taskReport.md`).
+
+## CHECKPOINT 64.64 -- MARKET-DATA CONTRACT COMPLETION
+
+Closes two of 64.63's honestly-left-open gaps, offline, without guessing the timestamp anomaly.
+
+### 1. Volume architecture
+
+**Where cumulative volume now lives**: `domain/market_data/contracts.py::Quote` gained one new optional
+field, `cumulative_volume: Decimal | None = None` -- the smallest-clean-architecture choice named by the
+directive (extend the EXISTING canonical `Quote`, not a second richer observation contract, and not both).
+`packet_to_quote.py::convert_packet_to_quote()` maps `DhanQuotePacket.volume` (a real, documented,
+CUMULATIVE day-volume field -- confirmed 64.63) into `Quote.cumulative_volume`; `DhanTickerPacket` has no
+volume field at all (verified against `packet_decoder.py`'s own struct layout), so a Ticker-sourced `Quote`
+always carries `cumulative_volume=None`, honestly.
+
+**Per-bar differencing rule** (`domain/market_data/aggregation.py::aggregate_quotes_into_bars()`, see its
+own module docstring's dedicated "Volume" section for the full rule): a running `baseline` (the last real
+cumulative reading seen for an instrument, tracked across the WHOLE chronological walk, not reset per
+bucket) is diffed against each bucket's own last real reading:
+- **first observation ever** for an instrument: `volume = 0` (nothing to difference against yet).
+- **ordinary increase or unchanged** (`latest >= baseline`): `volume = latest - baseline` (unchanged
+  contributes `0`, correctly handling duplicate packets).
+- **decrease** (`latest < baseline`, a session reset / provider restart / bad packet): the series is
+  treated as restarted from zero -- `volume = latest`, NEVER `latest - baseline` (which would be negative).
+  `baseline` is updated to `latest` either way, so the NEXT bucket diffs correctly against the new series.
+- **no cumulative reading in a bucket at all** (missing/Ticker-sourced/malformed): `volume = 0`, `baseline`
+  left unchanged -- never fabricated.
+- Out-of-order and duplicate quotes are handled by the SAME chronological sort/bucketing OHLC already
+  relies on -- volume differencing never uses a separate ordering.
+- Non-negativity is enforced twice: by the differencing rule itself (the reset branch), and, redundantly,
+  by `AggregatedBar.__post_init__`'s own explicit check (and `Quote.__post_init__`'s own check on
+  `cumulative_volume` itself).
+
+`AggregatedBar` gained a `volume: Decimal = Decimal("0")` field (defaulted so every pre-existing direct
+`AggregatedBar(...)` construction across the test suite remains valid unchanged); `to_bar()` now forwards
+`self.volume` into `Bar.volume` instead of the previous hardcoded `Decimal("0")` -- `Bar.volume` is real
+when the underlying quotes carried a `cumulative_volume`, and still honestly `Decimal("0")` when they did
+not (REST point-sample quotes, and any Ticker-sourced live quote) -- NOT a regression, that source
+genuinely never measured a volume.
+
+**Persistence**: `LiveQuoteObservation` gained a nullable `cumulative_volume` column and
+`AggregatedBarObservation` gained a `volume` column (migration `0026_aggregatedbarobservation_volume_and_
+more.py`) -- closing the exact gap 64.63 named (`AggregatedBarObservation` had no volume column at all) now
+that a real value exists to persist; `DjangoLiveQuoteRepository.save_all()`/`_row_to_quote()` and
+`DjangoAggregatedBarRepository.save_all()`/`_row_to_aggregated_bar()` round-trip both new fields, so a bar
+reloaded from the DB after a process restart carries the SAME volume it was computed with.
+
+### 2. `ScannerConfiguration.enabled` semantics -- resolved, not ambiguous
+
+Read `ScannerConfiguration`'s own model docstring (`infrastructure/persistence/models.py`) in full: "`True`
+means the worker's next reconciliation cycle resumes triggering the signal pipeline; `False` means it stops
+triggering it (existing positions/history are untouched -- this never affects `PaperBroker` state)." This
+is direct, unambiguous, pre-existing evidence for semantics **B**: "no strategy/scanner execution, but
+market-data quality/persistence should continue" -- NOT "no market-data processing at all." Every caller
+(`scanner_configuration_views.py`, `live_paper_session.py`, `run_market_data_worker.py`'s own 64.4-era
+comments) is consistent with this reading. No genuine ambiguity was found this checkpoint.
+
+### 3. Quality/strategy boundary -- the smallest change matching the confirmed semantics
+
+`_QuoteSink.aggregate_now()`'s `if not enabled:` branch previously returned immediately, never reaching
+`promote_bars_and_trigger_signals()` at all while the scanner was administratively paused -- meaning
+TRADING_GRADE_BAR promotion (a data-quality fact about the bar itself, already proven strategy-agnostic at
+64.63) never ran during a pause, even though the model docstring says only the SIGNAL PIPELINE should be
+paused. The fix: the disabled branch now calls `promote_bars_and_trigger_signals()` once, with
+`strategy_execution_enabled` forced to `False` regardless of this sink's own configured value, before
+returning -- bars are graded/promoted while the scanner is paused, with ZERO strategy invocations (no
+`run_active_loop_tick()` call, no signal, no `PaperBroker` touch). Deliberately does NOT move the
+`ScannerScanProgress`/multi-strategy fan-out/`signals_found` bookkeeping into the disabled branch -- that
+bookkeeping is a separate, still-open "is a scan actively running for the operator's dashboard" concern the
+directive explicitly said not to move blindly. Verified by `TestQualityStrategyBoundary` (both the
+scanner-disabled path with `strategy_execution_enabled` proven forced `False`, and the scanner-enabled +
+strategy-execution-enabled path).
+
+### 4. Timestamp diagnostic framework -- prepared, not executed
+
+`infrastructure/market_data_providers/dhan/timestamp_diagnostics.py` (new, tested, imported nowhere in
+`run_market_data_worker.py` this checkpoint -- mechanically confirmed by a source-inspection test) provides
+`TimestampDiagnosticSample` (symbol/packet_type/source_timestamp_utc/fetched_at_utc/delta_seconds, no
+credential/account-ID/secret ever included) and `TimestampDiagnosticCollector` (`enabled=False` by default;
+`record()` is a silent no-op while disabled) -- ready for a future REAL NSE SESSION #2 checkpoint to wire in
+and collect a statistically useful sample. No timestamp conversion code (`packet_decoder.py`) was touched;
+no `+/-5:30` constant was added; the anomaly remains explicitly unresolved.
+
+### Tests
+
+`tests/unit/research/test_checkpoint_64_64_market_data_contract.py` -- volume (13 deterministic tests
+A-M), packet-to-Quote volume mapping (2), quality/strategy boundary (3, DB-backed), 64.63 worker-health
+fix source-ordering regression lock (1), timestamp diagnostic framework (6, including the
+never-wired-into-the-worker mechanical check).

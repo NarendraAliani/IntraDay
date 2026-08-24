@@ -234,8 +234,14 @@ class _QuoteSink:
         scanner_config_provider: str | None = None,
         effective_universe_requested_count: int = 0,
         effective_universe_subscribed_count: int = 0,
+        strategy_execution_enabled: bool = False,
     ) -> None:
         self._stdout = stdout
+        # Checkpoint 64.56: FAIL-CLOSED default at this layer too
+        # (defense in depth, independent of `handle()`'s own default) -
+        # a `_QuoteSink` constructed with no explicit value NEVER
+        # enables strategy execution.
+        self._strategy_execution_enabled = strategy_execution_enabled
         self._quote_repository = DjangoLiveQuoteRepository()
         self._bar_service = BarAggregationService(
             quote_repository=self._quote_repository,
@@ -356,12 +362,79 @@ class _QuoteSink:
                 effective_universe_subscribed_count=self._effective_universe_subscribed_count,
             )
 
+        # Checkpoint 64.63: THE `WorkerRuntimeStatus` truthfulness fix.
+        # Root cause (confirmed against real 64.62 evidence): this call
+        # used to sit AFTER the `if not enabled: return` below, so a
+        # scanner configuration with `enabled=False` (a strategy/signal
+        # PAUSE flag, `ScannerConfiguration.enabled` - unrelated to
+        # whether the WebSocket is actually connected) silently skipped
+        # `health_tracker.persist()` for the entire session. The FIRST
+        # write to this provider's `WorkerRuntimeStatus` row then came
+        # from `save_effective_scanner_state()` above via `update_or_
+        # create()`, whose `defaults` dict never mentions `worker_state`/
+        # `token_state`/`watchdog_state`/`last_packet_at`/`last_bar_at` -
+        # so Django's `get_or_create` path left those columns at the
+        # MODEL's own field defaults (STOPPED/UNCONFIGURED/DISCONNECTED/
+        # None/None - see `persistence/models.py::WorkerRuntimeStatus`),
+        # which is EXACTLY the inconsistent row 64.62 observed, even
+        # though the process was genuinely connected and had just closed
+        # a real bar in the same aggregation cycle. Observability must
+        # never depend on whether the strategy/signal pipeline happens
+        # to be administratively enabled - moved here, unconditional,
+        # so the persisted row always reflects this tracker's real,
+        # continuously-updated in-memory state.
+        if self._runtime_status_provider is not None:
+            await sync_to_async(self.health_tracker.persist)(
+                self._runtime_status_repository, provider=self._runtime_status_provider, now=clock
+            )
+
         if not enabled:
             # Checkpoint 64.4: THE real, in-scope PAUSE/STOP mechanism -
             # bars still aggregate and persist (never lost), but the
             # signal pipeline is skipped entirely. Existing positions/
             # history are completely untouched.
-            self._stdout("  scanner disabled (desired configuration) - signal pipeline skipped")
+            #
+            # Checkpoint 64.64: `ScannerConfiguration.enabled`'s own model
+            # docstring (`persistence/models.py`) is explicit that this
+            # flag means "the worker's next reconciliation cycle
+            # resumes/stops triggering THE SIGNAL PIPELINE" - it says
+            # nothing about pausing market-data ingestion, aggregation, or
+            # quality assessment. `promote_bars_and_trigger_signals()` was
+            # ALREADY proven strategy-agnostic at 64.63 (it calls the pure
+            # `evaluate_bar_promotion()` gate unconditionally, before ever
+            # checking `strategy_execution_enabled`) - so calling it here,
+            # with `strategy_execution_enabled` forced to `False`
+            # regardless of this sink's own configured value, lets
+            # TRADING_GRADE_BAR promotion (a data-quality fact about the
+            # bar itself) continue to be assessed and logged while the
+            # scanner is administratively paused, WITHOUT executing any
+            # strategy, generating any signal, or touching PaperBroker -
+            # `strategy_id` here is only ever a promotion-grading input
+            # (see `evaluate_bar_promotion()`'s own strategy-agnostic
+            # `PromotionCondition` vocabulary, 64.63), never a strategy
+            # invocation when this flag is `False`. Deliberately does NOT
+            # touch `ScannerScanProgress`/multi-strategy fan-out/
+            # signals_found bookkeeping below (`mark_idle()` already
+            # reports the scan as idle) - that bookkeeping is genuinely
+            # tied to "is a scan actively running for the operator's
+            # dashboard," a different, still-open concern this checkpoint
+            # was directed not to move blindly.
+            session = session_for_instant(clock)
+            connection_is_healthy = self.health_tracker.is_healthy(now=clock)
+            observe_only_outcome = await sync_to_async(promote_bars_and_trigger_signals)(
+                aggregation,
+                session=session,
+                clock=clock,
+                connection_is_healthy=connection_is_healthy,
+                strategy_id=self._strategy_id,
+                strategy_execution_enabled=False,
+            )
+            self._stdout(
+                "  scanner disabled (desired configuration) - signal pipeline skipped, "
+                f"quality assessment continued: promoted={observe_only_outcome.promoted_count} "
+                f"active_loop_invocations={observe_only_outcome.active_loop_invocations} "
+                "(must be 0 while disabled)"
+            )
             if self._scan_progress_provider is not None:
                 await sync_to_async(self._scan_progress_repository.mark_idle)(
                     self._scan_progress_provider
@@ -445,6 +518,7 @@ class _QuoteSink:
                     connection_is_healthy=connection_is_healthy,
                     strategy_id=strategy_id,
                     on_instrument_progress=_report_progress,
+                    strategy_execution_enabled=self._strategy_execution_enabled,
                 )
                 total_promoted += pipeline_outcome.promoted_count
                 total_invocations += pipeline_outcome.active_loop_invocations
@@ -484,10 +558,11 @@ class _QuoteSink:
                 signals_found=signals_found,
             )
 
-        if self._runtime_status_provider is not None:
-            await sync_to_async(self.health_tracker.persist)(
-                self._runtime_status_repository, provider=self._runtime_status_provider, now=clock
-            )
+        # Checkpoint 64.63: the unconditional persist() now happens
+        # earlier in this method (before the `enabled` gate) - no second
+        # write is needed here, since nothing in the strategy loop above
+        # mutates `health_tracker`'s own tracked fields (only `on_quote`/
+        # `record_bar`/the connect/reconnect callbacks in `_run_dhan` do).
 
         if total_promoted or total_invocations:
             self._stdout(
@@ -549,11 +624,34 @@ class Command(BaseCommand):
             "to an unrecoverable state (expired/invalid token) - that is "
             "never retried, regardless of this value.",
         )
+        parser.add_argument(
+            "--mode",
+            choices=["observe-only", "paper"],
+            default="observe-only",
+            help="Checkpoint 64.56 safety gate. 'observe-only' (default, "
+            "FAIL-CLOSED) ingests market data, aggregates bars, and "
+            "promotes them through the real TRADING_GRADE_BAR gate, and "
+            "persists everything - but NEVER evaluates a strategy, "
+            "generates a signal, constructs an OrderIntent, or touches "
+            "PaperBroker/any broker. 'paper' explicitly opts into the "
+            "existing strategy/signal/risk/PaperBroker pipeline "
+            "(Checkpoint 64.2) - intended for --provider fake/fake-ws "
+            "control-testing, never implied automatically by a successful "
+            "market-data connection, live or synthetic. A malformed or "
+            "omitted value NEVER enables strategy execution - only the "
+            "exact string 'paper' does.",
+        )
 
     def handle(self, *args: object, **options: object) -> None:
         packet_count = int(str(options["packet_count"]))
         provider = str(options["provider"])
         max_reconnect_attempts = int(str(options["max_reconnect_attempts"]))
+        # Checkpoint 64.56: FAIL-CLOSED - only the exact string "paper"
+        # enables strategy execution. Anything else (including a future
+        # unrecognized/malformed value, were `choices` ever relaxed)
+        # keeps this worker in observe-only mode.
+        mode = str(options["mode"])
+        strategy_execution_enabled = mode == "paper"
         self.stdout.write(
             self.style.WARNING(
                 f"Starting market-data worker (provider={provider}"
@@ -565,7 +663,15 @@ class Command(BaseCommand):
                 )
             )
         )
-        result = asyncio.run(self._run(provider, packet_count, max_reconnect_attempts))
+        self.stdout.write(
+            self.style.WARNING(
+                f"mode={mode} - strategy execution "
+                + ("ENABLED (PAPER)." if strategy_execution_enabled else "DISABLED (observe-only).")
+            )
+        )
+        result = asyncio.run(
+            self._run(provider, packet_count, max_reconnect_attempts, strategy_execution_enabled)
+        )
         self.stdout.write(
             self.style.SUCCESS(
                 f"Worker finished: final_state={result.final_state.value} "
@@ -576,10 +682,14 @@ class Command(BaseCommand):
         )
 
     async def _run(
-        self, provider: str, packet_count: int, max_reconnect_attempts: int
+        self,
+        provider: str,
+        packet_count: int,
+        max_reconnect_attempts: int,
+        strategy_execution_enabled: bool,
     ) -> AsyncWorkerRunResult:
         if provider == "dhan":
-            sink, result = await self._run_dhan(max_reconnect_attempts)
+            sink, result = await self._run_dhan(max_reconnect_attempts, strategy_execution_enabled)
             await sink.flush_remainder()
             await sync_to_async(close_old_connections)()
             return result
@@ -587,7 +697,9 @@ class Command(BaseCommand):
         instruments = observation_universe()
         security_id_to_symbol = {i.security_id: i.symbol for i in instruments}
         script = _build_synthetic_script(packet_count)
-        sink = _QuoteSink(stdout=self.stdout.write)
+        sink = _QuoteSink(
+            stdout=self.stdout.write, strategy_execution_enabled=strategy_execution_enabled
+        )
 
         if provider == "fake-ws":
             result = await self._run_fake_ws(script, security_id_to_symbol, sink)
@@ -645,7 +757,7 @@ class Command(BaseCommand):
             await server.stop()
 
     async def _run_dhan(
-        self, max_reconnect_attempts: int
+        self, max_reconnect_attempts: int, strategy_execution_enabled: bool
     ) -> tuple[_QuoteSink, AsyncWorkerRunResult]:
         """Checkpoint 64.1: the real production provider. MARKET DATA
         ONLY - see this command's own module docstring for the
@@ -674,7 +786,11 @@ class Command(BaseCommand):
             self.stdout.write(
                 self.style.ERROR("Dhan credentials are not configured - refusing to connect.")
             )
-            sink = _QuoteSink(stdout=self.stdout.write, health_tracker=health_tracker)
+            sink = _QuoteSink(
+                stdout=self.stdout.write,
+                health_tracker=health_tracker,
+                strategy_execution_enabled=strategy_execution_enabled,
+            )
             return sink, AsyncWorkerRunResult(final_state=WorkerState.AUTH_FAILED)
 
         client_id, access_token = credentials
@@ -688,7 +804,11 @@ class Command(BaseCommand):
                     "to be connected while the token is known bad."
                 )
             )
-            sink = _QuoteSink(stdout=self.stdout.write, health_tracker=health_tracker)
+            sink = _QuoteSink(
+                stdout=self.stdout.write,
+                health_tracker=health_tracker,
+                strategy_execution_enabled=strategy_execution_enabled,
+            )
             return sink, AsyncWorkerRunResult(final_state=WorkerState.TOKEN_EXPIRED)
 
         watchlist_repository = DjangoWatchlistRepository()
@@ -702,7 +822,11 @@ class Command(BaseCommand):
         )
         if not instruments:
             self.stdout.write(self.style.ERROR("No instruments resolved - refusing to connect."))
-            sink = _QuoteSink(stdout=self.stdout.write, health_tracker=health_tracker)
+            sink = _QuoteSink(
+                stdout=self.stdout.write,
+                health_tracker=health_tracker,
+                strategy_execution_enabled=strategy_execution_enabled,
+            )
             return sink, AsyncWorkerRunResult(final_state=WorkerState.FAILED)
 
         security_id_to_symbol = {i.security_id: i.symbol for i in instruments}
@@ -721,6 +845,7 @@ class Command(BaseCommand):
             scanner_config_provider="dhan",
             effective_universe_requested_count=requested_count,
             effective_universe_subscribed_count=len(instruments),
+            strategy_execution_enabled=strategy_execution_enabled,
         )
 
         async def connect_and_run() -> AsyncWorkerRunResult:
