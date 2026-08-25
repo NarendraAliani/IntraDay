@@ -775,3 +775,551 @@ Dhan's own documented behavior.** The system is correctly designed
 around human renewal + local readiness validation
 (`live_paper_readiness.py`, Checkpoint 64.12) - no refresh mechanism
 was invented or silently introduced this checkpoint.
+
+---
+
+## Checkpoint 64.71 — WebSocket Timestamp Normalization, Quote-Packet Subscription, Graceful Shutdown
+
+Offline implementation checkpoint. **No live Dhan connection was made.**
+It implements the fixes for the two defects Checkpoint 64.70's real
+~9.5-minute observe-only session exposed, plus the shutdown gap that
+session ran into.
+
+### 1. The 64.70 evidence
+
+64.70 collected **2,154 real WebSocket Ticker observations** across
+HDFCBANK / INFY / RELIANCE / TCS, persisted as `LiveQuoteObservation`
+rows 72-2225. Re-measured read-only this checkpoint:
+
+| Metric | `source_timestamp - fetched_at` |
+|---|---|
+| mean | **+19,799.250 s** |
+| median | +19,799.26 s |
+| stdev | 0.385 s |
+| min | +19,797.271 s |
+| max | +19,799.990 s |
+| samples | 2,154 (100% of the session) |
+
+19,800 s is **exactly 5h30m**, the IST (Asia/Kolkata, UTC+05:30)
+offset. The spread is sub-second-to-2.7s - ordinary tick latency plus
+the LTT field's own 1-second wire resolution. This is a **systematic
+labelling error, not clock drift**.
+
+### 2. The timestamp problem
+
+Dhan's live-feed WebSocket LTT field is documented only as "Last Trade
+Time (EPOCH)". Empirically, that integer counts seconds from the Unix
+epoch **as if IST wall-clock time were UTC**. Decoding it with
+`datetime.fromtimestamp(ltt_epoch, tz=UTC)` therefore produced an
+instant 5h30m in the *future*.
+
+`domain/market_data/aggregation.py` correctly rejects any observation
+with `quote.timestamp > as_of`. Because 100% of live quotes were
+future-dated, **100% were rejected and ZERO bars formed** across the
+entire live session.
+
+### 3. The normalization, and its exact conversion point
+
+One canonical function:
+
+- `infrastructure/market_data_providers/dhan/timestamp_normalization.py`
+  provides `normalize_dhan_websocket_timestamp(ltt_epoch)`, plus the
+  single `IST_UTC_OFFSET` constant.
+- Applied at exactly two call sites, both in
+  `dhan/packet_decoder.py` - the Ticker (code 2) and Quote (code 4)
+  `last_trade_time` construction, replacing
+  `datetime.fromtimestamp(ltt_epoch, tz=UTC)`.
+
+The conversion is `timestamp_utc = fromtimestamp(epoch, tz=UTC) - 5h30m`.
+A regression test asserts the literal `hours=5, minutes=30` appears
+**nowhere else under `src/`**.
+
+**Why generic aggregation was NOT modified:** the `quote.timestamp >
+as_of` guard is a genuine safety property - it is what stops
+future-dated data from corrupting bars, and it behaved exactly as
+designed. Widening its tolerance to ~5h30m would have disabled that
+protection for *every* provider in order to work around one provider's
+labelling quirk. The correction belongs at the provider boundary,
+before the value ever enters the canonical domain. The guard is
+unchanged, and a test asserts that an *uncorrected* Dhan timestamp is
+still rejected as future.
+
+**Scope:** Dhan WebSocket LTT only. Dhan REST, historical/candle data,
+Backtest, synthetic providers, other providers, and already-stored DB
+rows are untouched. The `Quote`/`Bar`/`AggregatedBar` timestamp
+contracts are unchanged - they still receive a timezone-aware UTC
+`datetime`, just a correct one.
+
+### 4. Before/after evidence (all 2,154 samples)
+
+| | Before | After |
+|---|---|---|
+| mean delta vs receipt | +19,799.250 s | -0.750 s |
+| range | +19,797.27 to +19,799.99 s | -2.73 to -0.01 s |
+| future-dated observations | 2,154 / 2,154 (100%) | **0 / 2,154 (0%)** |
+
+Every corrected observation now lands slightly *before* its receipt
+instant, which is the physically correct ordering (a trade is always
+observed after it happens). The sanitized corpus is frozen in
+`tests/unit/research/checkpoint_64_70_timestamp_fixtures.py` (symbol
+plus two timestamps only, no prices or credentials). **The original DB
+rows were read only and not modified.**
+
+### 5. Quote packets - root cause of the "Ticker only" finding
+
+64.70 received only Ticker (code 2) packets and never Quote (code 4).
+The cause is fully explained, and it was in this project's own code.
+
+`RequestCode: 15` had been hard-coded as though it were a generic
+"subscribe" code. It is not. Dhan's Annexure feed-request-code enum
+(`https://dhanhq.co/docs/v2/annexure/#feed-request-code`, re-verified
+this checkpoint) maps each code to a specific **data mode**:
+
+| Code | Meaning |
+|---|---|
+| 11 / 12 | Connect / Disconnect feed |
+| **15 / 16** | **Subscribe / Unsubscribe - Ticker packet** |
+| **17 / 18** | **Subscribe / Unsubscribe - Quote packet** |
+| 21 / 22 | Subscribe / Unsubscribe - Full packet |
+| 23 / 24 | Subscribe / Unsubscribe - Full market depth |
+
+**Dhan does not choose the packet type server-side - the client selects
+it per subscription message.** The worker only ever received Ticker
+packets because it only ever asked for Ticker. Nothing was wrong with
+the decoder, the transport, or Dhan.
+
+**Change made:** `run_market_data_worker.py`'s default subscribe code
+is now `17` (Quote). Quote is a strict superset of Ticker (same LTP and
+LTT, plus volume / ATP / day OHLC), so nothing that worked before stops
+working. The Ticker code remains available to an explicit caller as a
+documented fallback.
+
+### 6. Volume path
+
+The Ticker packet has **no volume field at all** in its documented
+12-byte layout, so subscribing to Ticker made real cumulative volume
+*structurally* unobtainable - no amount of downstream work could have
+recovered it, and none was fabricated.
+
+The Quote packet carries the documented cumulative day `volume` field,
+which `packet_to_quote.py` has mapped into `Quote.cumulative_volume`
+since Checkpoint 64.64. That path is **unchanged** by this checkpoint;
+the subscription change simply makes it reachable for the first time.
+
+**Honest limitation:** real volume is now *technically* obtainable, but
+it has **not** been observed against live data. Volume validation
+remains an open gap until a live session actually receives real Quote
+packets.
+
+### 7. Graceful shutdown
+
+64.70 required `taskkill /T /F`: `run_worker_against_websocket()` had
+no `stop_event`, and the reconnect supervisor checked one only *after*
+a disconnect. A hard kill gives the worker no chance to close the
+socket, flush pending quotes, or record a final status.
+
+Implemented:
+
+- `run_worker_against_websocket()` now accepts an optional
+  `stop_event`, reaching parity with `run_worker_against_stream()`
+  (which has had one since Checkpoint 57).
+- A stop cannot be polled "between packets" - `receive_packets()`
+  awaits the *next* message, which on a quiet feed may never arrive. A
+  small watcher task awaits the event and **closes the transport**,
+  ending the iteration promptly and sending a proper RFC 6455 close
+  frame. The watcher is cancelled *and awaited* in `finally`, so no
+  orphan task survives.
+- A close caused by our own stop is recorded as a clean `STOPPED`,
+  never as a reconnect-relevant disconnect.
+- `run_worker_with_reconnect()` now also checks the stop event
+  **before** opening a connection, so a stop requested during backoff
+  cannot be followed by one more reconnect attempt.
+- `WorkerHealthTracker.mark_stopped()` (new) records a clean stop and
+  clears `consecutive_failures` - a deliberate stop is not a failure.
+  The worker persists `WorkerRuntimeStatus` = `STOPPED` on shutdown
+  instead of leaving a stale `RUNNING`.
+- `_install_stop_signal_handlers()` wires SIGINT/SIGTERM to the event.
+  **Cross-platform note:** this project runs on Windows, where
+  asyncio's `loop.add_signal_handler()` is unimplemented and SIGTERM is
+  not deliverable; the loop-native path is tried first and
+  `signal.signal()` is the documented fallback. Installation is
+  best-effort and never prevents the worker from starting.
+
+**Reconnect behavior is preserved:** a real disconnect with no stop
+request still reconnects with bounded backoff, proven by dedicated
+tests.
+
+### 8. What this checkpoint does NOT claim
+
+- No live Dhan session was run; the correction is validated **offline
+  only**, against synthetic packets and the frozen 64.70 corpus.
+- No live bar has been observed forming from real Dhan data.
+- Real Quote packets have never been received from Dhan.
+- Research Readiness is unchanged - it still requires the existing
+  5-criterion gate in `BACKTESTING_ARCHITECTURE.md`, including real
+  live-market TRADING_GRADE_BAR data.
+
+Live validation of all of the above is REAL NSE SESSION #3's job.
+
+---
+
+## Checkpoint 64.76 â€” Stock-Options / Option-Chain / OI / IV / Greeks Capability Verification
+
+Research-only. **No live Dhan connection. No options schema created.**
+This section deliberately extends the "Research Scope" note above, which
+had explicitly excluded Dhan's option-chain API from investigation.
+
+### Sources fetched this checkpoint (official Dhan documentation only)
+
+| Page | URL |
+|---|---|
+| Option Chain | `https://dhanhq.co/docs/v2/option-chain/` |
+| Annexure (enums) | `https://dhanhq.co/docs/v2/annexure/` |
+| Live Market Feed | `https://dhanhq.co/docs/v2/live-market-feed/` |
+| Historical Data | `https://dhanhq.co/docs/v2/historical-data/` |
+| Instrument List | `https://dhanhq.co/docs/v2/instruments/` |
+
+No blog, forum, third-party SDK, or GitHub repository was used.
+
+### Capability register
+
+| CAPABILITY | Endpoint / feed | Format | Snapshot/Streaming | Live/Historical | Source | Status |
+|---|---|---|---|---|---|---|
+| Option chain (all strikes, CE+PE) | `POST /optionchain` | JSON `data.oc.{strike}.{ce,pe}` | SNAPSHOT | LIVE only | option-chain | VERIFIED |
+| Expiry list | `POST /optionchain/expirylist` | JSON | SNAPSHOT | LIVE | option-chain | VERIFIED |
+| LTP (option premium) | chain `last_price`; WS Ticker/Quote | JSON / binary | both | both | option-chain, live-market-feed | VERIFIED |
+| Bid / ask + quantities | chain `top_bid_price`/`top_ask_price`/`top_bid_quantity`/`top_ask_quantity`; WS Full (code 8, 5-level depth) | JSON / binary | both | LIVE only | option-chain, live-market-feed | VERIFIED |
+| Volume | chain `volume`, `previous_volume`; WS Quote; historical candles | JSON / binary | both | both | all three | VERIFIED |
+| Open interest | chain `oi`; WS **OI packet code 5**; historical `oi=true` -> `open_interest` | int32 | both | both | annexure, live-market-feed, historical-data | VERIFIED |
+| OI change | **NOT a published field** | â€” | â€” | â€” | option-chain | VERIFIED ABSENT |
+| Implied volatility | chain `implied_volatility` | float | SNAPSHOT | **LIVE ONLY** | option-chain | VERIFIED |
+| Greeks delta/gamma/theta/vega | chain `greeks.{delta,gamma,theta,vega}` | float | SNAPSHOT | **LIVE ONLY** | option-chain | VERIFIED |
+| Greek rho | **NOT published** | â€” | â€” | â€” | option-chain | VERIFIED ABSENT |
+| Underlying LTP | chain root `data.last_price` | float | SNAPSHOT | LIVE | option-chain | VERIFIED |
+| Instrument master (strike/expiry/CE-PE/underlying/lot) | scrip-master CSV | CSV | SNAPSHOT | REFERENCE | instruments | VERIFIED |
+| Chain observation timestamp | **NOT published** | â€” | â€” | â€” | option-chain | VERIFIED ABSENT |
+
+### Headline findings
+
+1. **Dhan genuinely supplies OI, IV and four Greeks** â€” but *only* through
+   the REST Option Chain snapshot, and *only* for the live moment. There
+   is **no historical IV/Greeks endpoint of any kind**. Any IV or Greeks
+   time series this project ever wants must be **self-archived, snapshot
+   by snapshot, as the trading day happens**. This is the single most
+   consequential finding of the checkpoint: IV/Greeks history is
+   *unrecoverable after the fact*.
+2. **The Option Chain API is rate-limited to one unique request every 3
+   seconds** (VERIFIED, quoted from Dhan). This is a hard architectural
+   constraint on any multi-underlying options scanner: N underlyings x M
+   expiries costs 3*N*M seconds per full sweep. It is roughly 20x slower
+   than the equity Quote API's 1/second.
+3. **OI is available live via WebSocket** (feed response code 5, a 12-byte
+   packet) and **historically via the charts endpoints** (`oi` request
+   flag, `open_interest` response field). OI is therefore the one
+   options-specific field with both a live and a historical path.
+4. **OI change is never supplied.** Dhan gives `oi` and `previous_oi`
+   (previous *day's* close). Intraday OI delta must be computed by this
+   project against its own stored baseline â€” exactly the same discipline
+   `aggregate_quotes_into_bars()` already applies to cumulative volume.
+5. **The option chain carries no timestamp.** The consumer must stamp its
+   own observation instant. Relevant directly to the "exact market state
+   at a Gainz signal timestamp" requirement â€” the chain alone cannot
+   answer it without project-side stamping.
+6. **Stock options vs index options:** Dhan's documentation draws **no
+   distinction whatsoever** in the option-chain, feed, or historical
+   contracts. The Annexure lists `OPTSTK` and `OPTIDX` as sibling
+   instrument types in the same `NSE_FNO` (code 2) segment, consumed by
+   the same endpoints with the same fields. Whether Greeks/IV *coverage
+   quality* is equivalent for less-liquid stock options is **UNVERIFIED**
+   and cannot be established from documentation â€” it needs an empirical
+   read-only check in a future live-market checkpoint.
+
+### Architectural compatibility with the existing market-data domain
+
+Read this checkpoint: `domain/market_data/contracts.py` (`Bar`, `Quote`),
+`domain/market_data/archive.py`, `domain/shared_kernel/contracts.py`,
+`dhan/packet_decoder.py`, `dhan/instruments.py`.
+
+| Existing element | Fits options? | Why |
+|---|---|---|
+| `Quote` | PARTIAL | Premium/bid/ask/volume map cleanly. Has **no OI, IV, or Greeks field**. |
+| `Bar` | MOSTLY | Option premium OHLCV is structurally identical. Positive-price validation holds for real traded premiums. Carries no OI. |
+| `InstrumentId` (plain `str`) | PARTIAL | Can *hold* an option trading symbol, but has no structure for underlying/expiry/strike/CE-PE, so "all options for expiry X" is not an expressible query. |
+| `Exchange` enum (`NSE`/`BSE` only) | **NO** | Cash-equity-only vocabulary. No `NSE_FNO` concept exists anywhere in the domain. |
+| `NSE_EQ_SEGMENT` in `instruments.py` | **NO** | Live universe hard-pins `"NSE_EQ"`. |
+| `packet_decoder.py` | **NO** (safely) | OI packet code 5 is classified `UNSUPPORTED_PACKET_TYPE` â€” correctly rejected, never misdecoded, but never captured either. |
+| `MarketDataArchiveDay` | PARTIAL | Trading-date/completeness model generalises well; cell identity is `(symbol, timeframe, source)` with no expiry/strike dimension. |
+
+**Recommended architectural decision (NOT implemented this checkpoint):
+generalise, do not duplicate.** The bar/quote/archive/aggregation
+machinery is instrument-agnostic in substance and should be reused. What
+must be *added* is (a) a structured `OptionContract` reference identity
+(underlying, expiry, strike, option_type, security_id, lot_size) sourced
+from the scrip master, and (b) a separate observation type for the
+fields `Quote` genuinely lacks (OI/IV/Greeks) rather than bolting five
+optional nullable columns onto the equity contract every provider shares.
+Forcing OI/IV/Greeks into `Quote` would put derivatives-only concepts
+into the one contract backtest, paper and live all share for equities.
+
+**Standing scope conflict, raised explicitly:** `Exchange`,
+`instruments.py`, and several domain docstrings all cite "Rule 2: the
+project's scope is permanently Indian cash equities only." The stated
+intent that this platform is primarily for STOCK OPTIONS contradicts
+that recorded invariant. **This is a product-scope decision for the
+owner, not an engineering one, and it blocks the options data model.**
+
+> **RESOLVED at Checkpoint 64.77.** Primary trading instrument = NSE
+> stock options (OPTSTK); NSE cash equities retained as supporting/
+> reference/underlying instruments; NSE index options, BSE options and
+> BSE equities not enabled. See
+> [PRODUCT_SCOPE.md](PRODUCT_SCOPE.md). The recommended "generalise,
+> do not duplicate" decision above was adopted: 64.77 added the
+> `OptionContract` reference identity and extended the existing Dhan
+> instrument master; the OI/IV/Greeks observation layer remains
+> deferred.
+
+### Minimum historical retention contract (specification only)
+
+To answer "all RELIANCE option data for date X" / "OI history" / "IV
+history" / "market state at a Gainz signal timestamp":
+
+| Object | Class | Must be archived because |
+|---|---|---|
+| `OptionContract` | REFERENCE-MASTER | Strike/expiry/CE-PE identity; scrip master is a *current-state* file with no history â€” expired contracts may vanish from it. Must be snapshotted daily. |
+| `OptionChainSnapshot` | RAW | The ONLY way IV/Greeks/full-chain OI ever become historical. Unrecoverable if not captured live. |
+| `OptionQuote` | RAW | Per-contract tick observations from the WebSocket. |
+| `OIObservation` | RAW | Time-stamped OI readings (WS code 5). |
+| `OptionBar` | AGGREGATED | Premium OHLCV; also re-derivable from the historical charts endpoint. |
+| `OIChange` | DERIVED | Never store as raw â€” compute from the OI series against a declared baseline. |
+| `IVObservation` / `GreeksObservation` | RAW (provider-supplied) | Despite "looking derived", these are **provider-supplied values**, not project computations, and must be stored as observations with provenance. |
+
+### Open questions (UNVERIFIED â€” cannot be closed from documentation)
+
+1. Does `POST /charts/intraday` serve **expired** option contracts, or
+   only currently-listed ones? Decisive for whether option price/OI
+   history is retrievable retroactively at all. Not stated by Dhan.
+2. Are Greeks/IV populated for illiquid **stock** option strikes, or
+   returned as zero/null?
+3. Does the scrip master retain expired contracts?
+4. What `instrument` value (`OPTSTK`) and `expiryCode` semantics do the
+   charts endpoints require for options? Documented as parameters, but
+   their option-specific usage is not spelled out.
+5. Is the WebSocket 5,000-instrument-per-connection limit sufficient for
+   a realistic stock-option universe? (A single underlying's full chain
+   across 3 expiries is easily 200+ contracts.) Arithmetic is clear; the
+   universe target is a product decision not yet made.
+
+
+---
+
+## Checkpoint 64.78 â€” Option Observation Layer + NSE_FNO Live-Subscription Foundation
+
+64.77 built option IDENTITY (`domain/instrument/options.py`) and
+deliberately deferred every OBSERVATION concept. 64.78 builds the
+smallest clean observation layer on top of it, and **nothing more**.
+The end-to-end path now exists, offline and tested:
+
+```
+OptionContract (64.77)
+  -> NSE_FNO subscription (RequestCode 17, existing batching)
+  -> Dhan Quote packet (code 4)  -> OptionQuote     -> OptionQuoteObservation
+  -> Dhan OI packet    (code 5)  -> OIObservation   -> OpenInterestObservation
+```
+
+### The two observation contracts
+
+`domain/market_data/option_observations.py` â€” provider-independent,
+no Django, no Dhan.
+
+| Contract | Carries | Deliberately absent |
+|---|---|---|
+| `OptionQuote` | canonical `OptionContract`, `provider`, `provider_security_id`, `timestamp` (provider instant), `last_price` (premium), day OHLC + `previous_close`, `cumulative_volume`, bid/ask + quantities, `data_source` | open interest, IV, Greeks |
+| `OIObservation` | canonical `OptionContract`, `provider`, `provider_security_id`, `observed_at`, `open_interest`, `data_source` | OI change, premium, IV, Greeks |
+
+**Why OI is not a field on `OptionQuote`.** Dhan does not deliver them
+together: premium arrives in the Quote packet (code 4), open interest in
+a separate OI packet (code 5). They have independent arrival instants
+and either can arrive without the other. An `open_interest: int | None`
+on `OptionQuote` would be `None` on *every* quote-sourced row, making
+"this packet has no OI field" indistinguishable from "OI unknown". This
+follows 64.76's own recommendation to add a separate observation type
+rather than bolt nullable derivative-only columns onto a shared contract.
+
+**Why `OIObservation.observed_at` is not called `timestamp`.** The OI
+packet carries **no timestamp field** â€” its 12 bytes are header + int32.
+The instant is necessarily our receipt clock, and the name says so
+rather than implying a provider-supplied instant that does not exist.
+
+**`fetched_at` is not on either contract**, matching the equity `Quote`:
+our local receive clock is stamped at the single persistence write
+boundary, because it is a fact about our ingestion, not about the market.
+
+**OI change is never stored as raw data.** Dhan does not publish it
+(64.76: VERIFIED ABSENT). It is derived later from this project's own
+stored OI series against a declared baseline â€” the same discipline
+`aggregate_quotes_into_bars()` already applies to cumulative volume.
+
+### Dhan OI packet, feed response code 5
+
+`packet_decoder.py` previously classified code 5 as
+`UNSUPPORTED_PACKET_TYPE` (correctly refused, never captured). It now
+decodes it into `DhanOpenInterestPacket`.
+
+Wire layout (VERIFIED 64.76, unchanged): **12 bytes** = the shared
+8-byte header + one little-endian **int32** open interest. Nothing else.
+No timestamp, no price, no day high/low OI (those live only in the Full
+packet, code 8, still unimplemented). No undocumented field is inferred.
+
+Validation order is deliberate â€” shape, then addressability, then
+segment â€” each with its own distinct, inspectable failure reason:
+
+| Condition | Result |
+|---|---|
+| exactly 12 bytes, segment 2, security_id > 0 | `DhanOpenInterestPacket` |
+| < 12 bytes | `TRUNCATED_BODY` |
+| < 8 bytes | `TRUNCATED_HEADER` |
+| **> 12 bytes** | `MALFORMED_LENGTH` (new) |
+| `security_id <= 0` | `INVALID_SECURITY_ID` (new) |
+| segment != NSE_FNO (2) | `UNSUPPORTED_SEGMENT` (new) |
+
+`MALFORMED_LENGTH` applies to the OI packet **only**. The pre-existing
+Ticker/Quote/Disconnect paths keep their historical `len(raw) >= size`
+tolerance â€” this checkpoint does not retroactively tighten packet types
+that have already run against a real feed.
+
+**Signedness.** The field is a documented int32 and is decoded with the
+signed `i` code, exactly as the Quote packet's volume already is, so
+whatever Dhan sends is reproduced faithfully. Open interest is a
+contract count and can never legitimately be negative; the decoder still
+reports what the wire said (its job is faithful decoding) and the
+**domain** boundary (`OIObservation`) rejects a negative rather than
+archiving it. Zero is a legitimate reading â€” a listed strike with no
+open positions â€” and is accepted.
+
+**Response codes are not request codes.** These are two separate,
+non-overlapping Dhan enumerations that happen to share small integers.
+There is **no "subscribe to OI" request code 5**: OI arrives as a
+response packet on an existing Quote subscription. Nothing in the
+subscription layer may ever send a `5`.
+
+### NSE_FNO subscription â€” what was actually missing
+
+Almost nothing, and that is the point. `_build_subscribe_messages()`
+(64.4) already emitted `{"ExchangeSegment": i.exchange_segment,
+"SecurityId": ...}`, reading the segment **per instrument**. It was
+never pinned to NSE_EQ â€” only the *universe* feeding it was, since
+`instruments.py` is an equity symbol table whose dataclass merely
+*defaults* the segment to `"NSE_EQ"`.
+
+So the whole capability is `option_subscription.py::
+option_subscription_instruments()`: produce the same `DhanInstrument`
+rows carrying `"NSE_FNO"`, from the 64.77 option instrument master. No
+parallel batching mechanism, no second transport, no new request-code
+vocabulary. Batching, chunk determinism and the **unchanged** documented
+100-instruments-per-message limit are therefore correct for options by
+construction rather than by re-implementation.
+
+Request codes are reused verbatim from 64.71's verified Annexure table:
+**17 = Subscribe Quote**, **18 = Unsubscribe Quote**
+(`_build_unsubscribe_messages()` delegates to the subscribe builder so
+the batching rule cannot drift between the two).
+
+**Index options remain structurally excluded.** `option_subscription_
+instruments()` filters non-stock options unconditionally â€” the last gate
+before bytes go on the wire â€” and the routing boundary rejects them
+again on the way back in. "Index options are not enabled" is a
+structural property, not a comment.
+
+**The equity path is byte-for-byte unchanged.** `packet_to_quote.py` is
+untouched. The one change to the equity workers is an explicit skip of
+the newly-decodable OI packet (which a cash instrument can never
+produce), *not* counted as a decode failure â€” the packet decoded
+perfectly, it simply does not belong to that consumer.
+
+### Routing and provider identity resolution
+
+`packet_to_option_observation.py` is a **sibling** of
+`packet_to_quote.py`, not a fork of it. The two differ in identity
+resolution, not arithmetic: the equity mapper resolves
+`security_id -> symbol -> InstrumentId`; the option mapper resolves
+`security_id -> ProviderOptionIdentity -> OptionContract`.
+
+**The hard rule: strike, expiry and CE/PE are never read out of a
+packet.** A Dhan feed packet carries only `(segment, security_id)`; the
+contract those address is looked up in the 64.77 instrument master via a
+caller-supplied index. Every rejection is typed, never a free-text log
+line, so a worker can count rejections by cause:
+`UNRESOLVED_SECURITY_ID`, `INDEX_OPTION_NOT_IN_SCOPE`,
+`NON_POSITIVE_PREMIUM`, `NEGATIVE_OPEN_INTEREST`, `INVALID_OBSERVATION`.
+A contract identity is **never fabricated** â€” a fabricated identity
+would file a real market print against the wrong strike, permanently
+and undetectably.
+
+Dhan's Quote packet wire format is identical for NSE_EQ and NSE_FNO, so
+the decoder is reused verbatim; only identity resolution and the output
+contract differ.
+
+### Persistence
+
+Two new tables, `OptionQuoteObservation` and `OpenInterestObservation`
+(migration `0030_option_observations`, which only CREATEs â€” it touches
+no existing table and rewrites no forensic-evidence row).
+
+Both store the **canonical** contract identity (`contract_id` plus
+exploded `underlying_symbol`/`expiry`/`strike`/`option_type`/`lot_size`,
+so "all RELIANCE CE at expiry X" is an indexed query rather than a
+string parse) **and** the provider identity (`provider`,
+`provider_security_id`). Neither substitutes for the other:
+`contract_id` is stable across instrument-master refreshes and
+providers; the provider pair traces a row to the exact stream that
+produced it. `lot_size` is stored on the observation because the scrip
+master is a current-state file with no history â€” a historical row must
+stay interpretable after a contract expires out of the master.
+
+Options are **not** routed into `LiveQuoteObservation`. That table's
+identity is a plain `instrument_symbol`; an option's identity is
+(underlying, expiry, strike, CE/PE).
+
+**Trading date** is the canonical 64.73 `trading_date_for()`, applied to
+the provider's own instant (never `fetched_at`), stamped at the single
+write boundary â€” the same derivation the equity archive uses. No second
+trading-date function was created.
+
+**Idempotency: neither table has a unique constraint**, exactly like
+`LiveQuoteObservation`, and this is deliberate. Dhan's WebSocket
+last-trade-time has **one-second** resolution and a liquid strike trades
+many times within a second, so a unique constraint on
+`(contract, timestamp)` â€” or any timestamp-containing tuple â€” would
+silently **destroy real market events**. That is a far worse failure
+than storing a duplicate, and it is the explicit lesson carried from
+64.73's Phase 11. Append-only raw observations plus a recomputable
+downstream projection is this project's established pattern.
+
+### Archive compatibility (documented, NOT implemented)
+
+**No option daily archive exists.** `MarketDataArchiveDay` was not
+modified and was not made derivatives-specific â€” its cell identity
+remains `(exchange, trading_date, symbol, timeframe, data_source)` with
+no expiry/strike dimension.
+
+What 64.78 guarantees is that a future option archive layer has the
+identity it will need, present and indexed on every row: `trading_date`,
+observation instant, `provider`, `provider_security_id`, canonical
+contract identity (and its exploded components), and `data_source`.
+Building that layer â€” an option-aware archive cell identity and a
+completeness model for option series â€” is future work.
+
+### Explicitly deferred at 64.78
+
+`OptionChainSnapshot`, `IVObservation`, `GreeksObservation`,
+`OptionBar`, and any option aggregation layer. IV and Greeks are
+REST-option-chain-sourced and **LIVE-ONLY** provider values (64.76), so
+capturing them needs a snapshot layer with its own rate-limit
+architecture (one unique request per 3 seconds). None of it is built,
+and no table for any of it exists.
+
+**No live validation was performed.** Everything above is verified
+offline against synthetic fixtures: synthetic security_ids in the
+obviously-fake 9000000+ range, RELIANCE CE and PE, two strikes, two
+expiries, plus an OPTIDX row for exclusion testing. **Real option
+packets have never been received from Dhan.**

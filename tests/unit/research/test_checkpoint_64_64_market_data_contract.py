@@ -611,13 +611,25 @@ class TestTimestampDiagnosticFramework:
         assert len(rows) == 3
         assert all("symbol" in row for row in rows)
 
-    def test_run_market_data_worker_never_constructs_the_collector_this_checkpoint(self) -> None:
-        """Directive §10: 'DO NOT perform the live collection now' -
-        mechanically confirms this checkpoint did not wire the collector
-        into the composition root, only prepared it."""
+    def test_collector_remains_disabled_unless_explicitly_opted_in_via_env_var(self) -> None:
+        """Directive §10 (64.64): 'DO NOT perform the live collection now' -
+        this checkpoint deliberately did NOT wire the collector into the
+        composition root, only prepared it. Checkpoint 64.70 later wired it
+        in for its own real-session use, exactly as 64.64's own docstring
+        anticipated ("a future REAL NSE SESSION #2 checkpoint can wire into
+        the live worker") - so the ORIGINAL guard (`TimestampDiagnosticCollector`
+        never appears in the source at all) is now obsolete BY DESIGN, not a
+        regression. What still must hold, and is asserted here instead: the
+        collector is constructed with `enabled=False` UNLESS the operator
+        explicitly sets `DHAN_TIMESTAMP_DIAGNOSTICS_ENABLED=1` - never
+        default-enabled, never enabled by any other means."""
         from intraday.infrastructure.persistence.management.commands import (
             run_market_data_worker,
         )
 
         source = inspect.getsource(run_market_data_worker)
-        assert "TimestampDiagnosticCollector" not in source
+        assert "TimestampDiagnosticCollector" in source
+        assert '_TIMESTAMP_DIAGNOSTICS_ENV_VAR = "DHAN_TIMESTAMP_DIAGNOSTICS_ENABLED"' in source
+        assert (
+            'enabled=os.environ.get(_TIMESTAMP_DIAGNOSTICS_ENV_VAR) == "1"' in source
+        ), "the collector must default to disabled unless the exact opt-in env var is '1'"

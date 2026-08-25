@@ -10,6 +10,9 @@
 // as CONNECTED.
 import type { components } from "@shared/generated_contracts/api-types";
 
+import { Icon } from "../icons/Icon";
+import type { IconName } from "../icons/Icon";
+
 type Status = components["schemas"]["ConnectionStatusResponseStatusEnum"];
 
 const STATUS_LABELS: Record<Status, string> = {
@@ -24,16 +27,20 @@ const STATUS_LABELS: Record<Status, string> = {
   DISABLED: "Disabled",
 };
 
-const STATUS_ICONS: Record<Status, string> = {
-  NOT_CONFIGURED: "○",
-  CONFIGURED: "◐",
-  CONNECTING: "◐",
-  CONNECTED: "●",
-  DISCONNECTED: "○",
-  AUTHENTICATION_FAILED: "✕",
-  TOKEN_EXPIRED: "✕",
-  CONNECTION_ERROR: "✕",
-  DISABLED: "○",
+// Checkpoint 64.80-F2 Phase 8: SVG icon names from the single icon
+// system, replacing Unicode glyphs. The CONFIGURED-vs-CONNECTED honesty
+// distinction is preserved exactly: CONFIGURED still gets the "warning"
+// (partial) marker and the pending badge, never CONNECTED's success one.
+const STATUS_ICONS: Record<Status, IconName> = {
+  NOT_CONFIGURED: "info",
+  CONFIGURED: "warning",
+  CONNECTING: "warning",
+  CONNECTED: "success",
+  DISCONNECTED: "info",
+  AUTHENTICATION_FAILED: "error",
+  TOKEN_EXPIRED: "error",
+  CONNECTION_ERROR: "error",
+  DISABLED: "info",
 };
 
 const STATUS_CLASS: Record<Status, string> = {
@@ -51,7 +58,7 @@ const STATUS_CLASS: Record<Status, string> = {
 export function ConnectionStatusBadge({ status }: { status: Status }): JSX.Element {
   return (
     <span className={`badge ${STATUS_CLASS[status]}`}>
-      {STATUS_ICONS[status]} {STATUS_LABELS[status]}
+      <Icon name={STATUS_ICONS[status]} /> {STATUS_LABELS[status]}
     </span>
   );
 }

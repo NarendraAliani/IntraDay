@@ -8,7 +8,6 @@
 from __future__ import annotations
 
 import struct
-from datetime import UTC, datetime
 
 from intraday.infrastructure.market_data_providers.dhan.packet_decoder import (
     DhanDisconnectPacket,
@@ -18,6 +17,9 @@ from intraday.infrastructure.market_data_providers.dhan.packet_decoder import (
     PacketDecodeFailureReason,
     decode_header,
     decode_packet,
+)
+from intraday.infrastructure.market_data_providers.dhan.timestamp_normalization import (
+    normalize_dhan_websocket_timestamp,
 )
 
 _HEADER_STRUCT = struct.Struct("<BHBi")
@@ -79,7 +81,7 @@ def test_decodes_a_valid_ticker_packet() -> None:
     assert result.header.security_id == 1333
     assert result.header.exchange_segment_code == 1
     assert abs(result.last_traded_price - 2885.5) < 0.01  # float32 rounding
-    assert result.last_trade_time == datetime.fromtimestamp(1735900800, tz=UTC)
+    assert result.last_trade_time == normalize_dhan_websocket_timestamp(1735900800)
 
 
 def test_decodes_a_valid_disconnect_packet() -> None:
@@ -113,19 +115,29 @@ def test_truncated_body_never_raises_and_is_classified_correctly() -> None:
 
 
 def test_unsupported_but_syntactically_valid_packet_type_never_raises() -> None:
-    """Feed response code 5 (OI) is a REAL, documented Dhan packet type
-    this checkpoint's decoder does not implement - it must be
-    recognized and refused explicitly, never silently misread as a
-    Ticker/Quote or crash the caller."""
-    body = b"\x00" * 4  # OI packet's real documented body size - irrelevant here
-    header = _HEADER_STRUCT.pack(5, len(body), 1, 1333)
+    """Feed response code 8 (Full) is a REAL, documented Dhan packet type
+    this decoder still does not implement - it must be recognized and
+    refused explicitly, never silently misread as a Ticker/Quote or
+    crash the caller.
+
+    CHECKPOINT 64.78 UPDATE: this test previously used code 5 (OI) as
+    its example of an unimplemented-but-real packet type. 64.78
+    IMPLEMENTS code 5 (see `test_checkpoint_64_78_option_observations.
+    py`), so continuing to assert that code 5 is unsupported would be
+    asserting the opposite of the intended behaviour. The property under
+    test - "a real documented packet type this decoder does not
+    implement is refused explicitly rather than misread" - is unchanged
+    and is now exercised against the Full packet, which genuinely
+    remains unimplemented."""
+    body = b"\x00" * 4
+    header = _HEADER_STRUCT.pack(8, len(body), 1, 1333)
     raw = header + body
 
     result = decode_packet(raw)
 
     assert isinstance(result, PacketDecodeFailure)
     assert result.reason is PacketDecodeFailureReason.UNSUPPORTED_PACKET_TYPE
-    assert result.feed_response_code == 5
+    assert result.feed_response_code == 8
 
 
 def test_decodes_a_valid_quote_packet() -> None:
@@ -150,7 +162,7 @@ def test_decodes_a_valid_quote_packet() -> None:
     assert result.header.security_id == 1333
     assert abs(result.last_traded_price - 1650.25) < 0.01
     assert result.last_traded_quantity == 10
-    assert result.last_trade_time == datetime.fromtimestamp(1735900800, tz=UTC)
+    assert result.last_trade_time == normalize_dhan_websocket_timestamp(1735900800)
     assert abs(result.average_trade_price - 1648.5) < 0.01
     assert result.volume == 125000
     assert result.total_sell_quantity == 5000

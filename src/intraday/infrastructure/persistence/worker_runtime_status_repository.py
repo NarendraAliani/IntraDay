@@ -8,7 +8,10 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from intraday.application.repositories.worker_runtime_status import WorkerRuntimeStatusRecord
+from intraday.application.repositories.worker_runtime_status import (
+    WorkerRuntimeStatusRecord,
+    WorkerStopRequest,
+)
 from intraday.infrastructure.persistence.models import WorkerRuntimeStatus
 
 
@@ -63,6 +66,37 @@ class DjangoWorkerRuntimeStatusRepository:
                 "subscribed_instrument_count": subscribed_instrument_count,
                 "last_error_safe": last_error_safe,
             },
+        )
+
+    # Checkpoint 64.73: process-independent stop request. Deliberately
+    # `update_or_create` on the SAME provider row the worker already
+    # owns - no second table, no PID file, no control endpoint.
+    def request_stop(
+        self, provider: str, *, requested_at: datetime, requested_by: str, reason_safe: str
+    ) -> None:
+        WorkerRuntimeStatus.objects.update_or_create(
+            provider=provider,
+            defaults={
+                "stop_requested_at": requested_at,
+                "stop_requested_by": requested_by,
+                "stop_reason_safe": reason_safe,
+            },
+        )
+
+    def get_stop_request(self, provider: str) -> WorkerStopRequest | None:
+        row = WorkerRuntimeStatus.objects.filter(provider=provider).first()
+        if row is None or row.stop_requested_at is None:
+            return None
+        return WorkerStopRequest(
+            provider=row.provider,
+            requested_at=row.stop_requested_at,
+            requested_by=row.stop_requested_by,
+            reason_safe=row.stop_reason_safe,
+        )
+
+    def clear_stop_request(self, provider: str) -> None:
+        WorkerRuntimeStatus.objects.filter(provider=provider).update(
+            stop_requested_at=None, stop_requested_by="", stop_reason_safe=""
         )
 
     def save_effective_scanner_state(

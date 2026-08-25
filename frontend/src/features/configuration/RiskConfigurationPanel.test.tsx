@@ -72,8 +72,8 @@ describe("RiskConfigurationPanel", () => {
 
     await waitFor(() => expect(screen.getByText(/default — v1/)).toBeInTheDocument());
     expect(screen.getByText(/default — v2/)).toBeInTheDocument();
-    expect(screen.getAllByText("● Active")).toHaveLength(1);
-    expect(screen.getAllByText("○ Historical")).toHaveLength(1);
+    expect(screen.getAllByTitle(/currently active version/)).toHaveLength(1);
+    expect(screen.getAllByTitle(/Historical version/)).toHaveLength(1);
   });
 
   it("renders a safe error message instead of leaking backend internals", async () => {

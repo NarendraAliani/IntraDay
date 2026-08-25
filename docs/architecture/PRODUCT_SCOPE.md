@@ -12,12 +12,37 @@ for the Indian Equity Market
 focused on Intraday Trading
 ```
 
-Intraday trading of Indian cash equities/stocks only. Futures, options,
-positional/swing/carry-forward trading, overnight positions, commodity
-derivatives, currency derivatives, and crypto are permanently out of
-scope. Indices (e.g. NIFTY, SENSEX) may be used only for market context
-and research — never as tradable instruments. This boundary predates
-this checkpoint (Checkpoint 1) and is restated here, unchanged.
+Indian NSE intraday trading.
+
+**Scope resolution, Checkpoint 64.77.** Checkpoint 64.76's Dhan
+capability research surfaced a genuine conflict: this document and
+several code-level invariants recorded the platform as "permanently
+Indian cash equities only", while the actual product intent is NSE
+stock options as the primary trading instrument. That is a product
+decision, and it is resolved here as follows — this section supersedes
+the earlier "cash equities only" wording wherever it appears.
+
+| | |
+|---|---|
+| Platform | Indian NSE intraday trading platform |
+| **Primary trading instrument** | **NSE STOCK OPTIONS (OPTSTK, NSE_FNO segment)** |
+| Supporting / reference instrument | NSE CASH EQUITIES — retained in full, and used for underlying price, reference and derived features |
+| Not enabled | NSE INDEX OPTIONS (OPTIDX), BSE OPTIONS, BSE EQUITIES |
+
+Index options are *representable but never active*: an OPTIDX contract
+must be parseable so it can be excluded on purpose rather than misread
+as a stock option, and every stock-option selector rejects it
+(`domain/instrument/options.py::require_stock_option`).
+
+Still permanently out of scope: futures, positional/swing/carry-forward
+trading, overnight positions, commodity derivatives, currency
+derivatives, and crypto. Indices (e.g. NIFTY, SENSEX) may be used only
+for market context and research — never as tradable instruments, and
+index *options* are not enabled.
+
+The existing cash-equity data pipeline (equity WebSocket, `Quote`,
+`Bar`, aggregation, archive) is unchanged by this decision: only the
+scope *statement* changed, not the equity machinery.
 
 ## Capabilities in scope
 

@@ -34,10 +34,13 @@
 
 ## Scope
 
-This platform is exclusively for **intraday trading of Indian cash
-equities/stocks**. Futures, options, positional/swing/carry-forward trading,
-overnight positions, commodity derivatives, currency derivatives, and crypto
-are permanently out of scope. Indices (e.g. NIFTY, SENSEX) may be used only
+This platform is exclusively for **Indian NSE intraday trading**. As resolved at
+Checkpoint 64.77, the primary trading instrument is **NSE stock options
+(OPTSTK)**, with **NSE cash equities** retained as supporting/underlying
+reference instruments; NSE index options, BSE options and BSE equities are not
+enabled. Futures, positional/swing/carry-forward trading, overnight positions,
+commodity derivatives, currency derivatives, and crypto are permanently out of
+scope. Indices (e.g. NIFTY, SENSEX) may be used only
 for market context and research — never as tradable instruments.
 
 > **The full, current authoritative scope statement** — execution modes,

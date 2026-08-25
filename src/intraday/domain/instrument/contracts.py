@@ -14,14 +14,22 @@ from intraday.domain.shared_kernel.contracts import Exchange, InstrumentId
 
 
 class InstrumentType(enum.Enum):
-    """Deliberately minimal: EQUITY is the only tradable type. INDEX exists
-    ONLY for market-context/regime-detection reference (Rule 2) and is
-    never tradable — see `Instrument.is_tradable` below. No FUTURE/OPTION
-    member exists anywhere in this enum, by design: the project is
-    permanently scoped to Indian cash equities, intraday only (Checkpoint 1
-    Section 2; re-validated at Checkpoint 5 Sections 20-21). Do not add a
-    derivative instrument type here without an explicit, approved
-    architecture change — none is anticipated.
+    """Deliberately minimal: within THIS contract, EQUITY is the only
+    tradable type, and INDEX exists ONLY for market-context/regime-
+    detection reference and is never tradable — see
+    `Instrument.is_tradable` below.
+
+    CHECKPOINT 64.77 (product-scope resolution). NSE stock options are
+    now a first-class supported trading instrument, but no OPTION member
+    was added here, and that is the design — an option's identity is
+    (underlying, expiry, strike, CE/PE), which this flat symbol-based
+    contract cannot express. Options therefore get their own identity
+    contract, `domain.instrument.options.OptionContract`, and this one
+    continues to describe cash equities/indices exactly as before.
+    `Instrument` and `OptionContract` are siblings under the conceptual
+    `Instrument -> CashEquity | OptionContract` identity layer; neither
+    forces its fields onto the other. Still do not add a derivative
+    member to this enum — the sibling contract is the approved route.
     """
 
     EQUITY = "EQUITY"
@@ -66,10 +74,13 @@ class Instrument:
 
     @property
     def is_tradable(self) -> bool:
-        """Only EQUITY instruments with ACTIVE status are tradable. INDEX
-        instruments (e.g. NIFTY, SENSEX) are never tradable, regardless of
-        status — this enforces Rule 2 structurally, not merely by
-        convention or documentation."""
+        """Only EQUITY instruments with ACTIVE status are tradable here.
+        INDEX instruments (e.g. NIFTY, SENSEX) are never tradable,
+        regardless of status — enforced structurally, not merely by
+        convention or documentation. Option tradability is the
+        equivalent structural gate on the sibling contract
+        (`OptionContract.is_stock_option`), not a case in this
+        property."""
         return (
             self.instrument_type is InstrumentType.EQUITY
             and self.trading_status is TradingStatus.ACTIVE

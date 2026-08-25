@@ -262,9 +262,16 @@ and [docs/api/CONFIGURATION_API.md](../api/CONFIGURATION_API.md).
 
 ## Explicit Non-Dependencies (Guardrails)
 
-- `domain/instrument` and `domain/universe` cannot represent derivatives,
-  commodities, currency or crypto instruments — there is no directory or
-  contract location for them, by design (Rule 2).
+- `domain/instrument` represents exactly two instrument identities, as
+  siblings: `contracts.Instrument` (NSE cash equities + reference indices)
+  and `options.OptionContract` (NSE **stock** options — the primary trading
+  instrument since the Checkpoint 64.77 scope resolution). `Instrument`
+  itself still cannot represent a derivative, by design — an option's
+  identity is (underlying, expiry, strike, CE/PE), so it gets its own
+  contract instead of nullable derivative columns on the shared equity one.
+  NSE index options are parseable but excluded from the active universe;
+  commodities, currency, futures and crypto have no contract location at
+  all, by design.
 - `domain/position` and `trading_engine/position_lifecycle` model intraday
   positions only; there is no "carry-forward" or "overnight" state.
 - Strategies (future code under `trading_engine/strategy_execution` /

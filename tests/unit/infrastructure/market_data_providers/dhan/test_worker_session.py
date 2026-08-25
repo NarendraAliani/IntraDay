@@ -14,6 +14,9 @@ from datetime import UTC, datetime
 from intraday.infrastructure.market_data_providers.dhan.packet_to_quote import (
     QuoteConversionRejectionReason,
 )
+from intraday.infrastructure.market_data_providers.dhan.timestamp_normalization import (
+    normalize_dhan_websocket_timestamp,
+)
 from intraday.infrastructure.market_data_providers.dhan.worker_session import (
     CLEAN_SHUTDOWN_EVENTS,
     NORMAL_RECONNECT_EVENTS,
@@ -163,4 +166,4 @@ def test_quotes_preserve_real_decoded_timestamps() -> None:
 
     outcome = run_worker_session(steps, security_id_to_symbol=_SECURITY_MAP)
 
-    assert outcome.quotes[0].timestamp == datetime.fromtimestamp(epoch, tz=UTC)
+    assert outcome.quotes[0].timestamp == normalize_dhan_websocket_timestamp(epoch)

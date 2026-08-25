@@ -79,6 +79,9 @@ from intraday.infrastructure.market_data_providers.dhan.packet_decoder import (
     DhanFeedResponseCode,
     decode_packet,
 )
+from intraday.infrastructure.market_data_providers.dhan.timestamp_normalization import (
+    normalize_dhan_websocket_timestamp,
+)
 from intraday.infrastructure.persistence.live_market_data_repositories import (
     _row_to_aggregated_bar,
 )
@@ -98,17 +101,42 @@ def _build_ticker_packet(*, ltp: float, ltt_epoch: int, security_id: int = 1333)
 
 
 class TestTimestampForensics:
-    def test_a_decoder_currently_treats_ltt_as_a_raw_utc_epoch(self) -> None:
-        """Characterizes CURRENT, UNCHANGED behaviour (Checkpoint 53/54):
-        `datetime.fromtimestamp(ltt_epoch, tz=UTC)` - the exact
-        semantics Dhan's own public docs assert ("Last Trade Time
-        (EPOCH)", an int32, no documented timezone caveat beyond "epoch
-        is UTC by definition"). This test locks in that this checkpoint
-        did NOT silently change decode semantics without proof."""
-        known_epoch = 1_700_000_000  # 2023-11-14T22:13:20Z, a fixed known instant
+    def test_a_decoder_normalizes_ltt_from_ist_labelled_epoch_to_utc(self) -> None:
+        """UPDATED AT CHECKPOINT 64.71 - deliberately, with proof.
+
+        This test previously locked in the raw
+        `datetime.fromtimestamp(ltt_epoch, tz=UTC)` reading, on the
+        grounds that Dhan's public docs say "Last Trade Time (EPOCH)"
+        with no timezone caveat, and that no checkpoint should change
+        decode semantics WITHOUT evidence. That guard did its job: the
+        semantics are changing now precisely because the evidence
+        finally exists.
+
+        Checkpoint 64.70 collected 2,154 real observations from a live
+        Dhan WebSocket session. Every single one had a decoded
+        `source_timestamp` ahead of its actual receipt instant by
+        19,799.25s (mean, stdev 0.385s) - exactly the 19,800s IST
+        offset, to within tick latency. Dhan's WebSocket LTT epoch
+        counts from the Unix epoch as if IST wall-clock time were UTC.
+        Reading it raw therefore produced timestamps 5h30m in the
+        FUTURE, which the aggregation guard correctly rejected - and
+        which is why ZERO bars formed in that entire live session.
+
+        The correction lives in ONE place
+        (`timestamp_normalization.normalize_dhan_websocket_timestamp`),
+        at the provider boundary, upstream of the canonical domain.
+        See `tests/unit/research/
+        test_checkpoint_64_71_dhan_timestamp_normalization.py` for the
+        full 2,154-sample regression."""
+        known_epoch = 1_700_000_000  # as sent by Dhan: an IST-labelled epoch
         packet = _build_ticker_packet(ltp=100.0, ltt_epoch=known_epoch)
         decoded = decode_packet(packet)
-        assert decoded.last_trade_time == datetime.fromtimestamp(known_epoch, tz=UTC)
+        assert decoded.last_trade_time == normalize_dhan_websocket_timestamp(known_epoch)
+        # The raw reading is now exactly 5h30m LATER than what we decode.
+        assert datetime.fromtimestamp(known_epoch, tz=UTC) - decoded.last_trade_time == timedelta(
+            hours=5, minutes=30
+        )
+        # The canonical contract is unchanged: still timezone-aware UTC.
         assert decoded.last_trade_time.tzinfo is UTC
 
     def test_b_decoded_last_trade_time_is_always_timezone_aware_utc(self) -> None:

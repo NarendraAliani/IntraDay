@@ -512,10 +512,57 @@ class LiveQuoteObservation(models.Model):
     consecutive readings of this column into `AggregatedBarObservation.
     volume` below."""
 
+    data_source = models.CharField(max_length=32, blank=True, default="")
+    """Checkpoint 64.75: the PROVENANCE of this raw observation - the
+    verbatim `Quote.source` of the quote that produced it (e.g.
+    `"dhan_websocket"`, `packet_to_quote.DHAN_WEBSOCKET_SOURCE`).
+
+    Closes a provenance gap 64.75's audit found: `Quote.source` already
+    existed on the domain contract and was already stamped by the live
+    Dhan path, but this table had no column for it - so it was DROPPED
+    on write and reconstructed as `""` on read
+    (`live_market_data_repositories._row_to_quote`). The raw layer
+    therefore could not answer "where did this observation come from?"
+    even though the AGGREGATED layer
+    (`AggregatedBarObservation.data_source`) and the ARCHIVE layer
+    (`MarketDataArchiveDay.data_source`) both could - and the archive
+    keys its cell identity on `data_source`, so a symbol-day observed
+    by two sources attributed the SAME undifferentiated quote count to
+    both cells.
+
+    Blank (`""`) is the honest value for a pre-64.75 row, NOT a
+    fabricated one: migration 0029 adds this column without inventing a
+    provider for the 64.62/64.70/64.72/64.74 forensic-evidence rows,
+    which are never rewritten. `""` therefore reads as "provenance not
+    recorded at observation time", which is exactly true of them."""
+
+    trading_date = models.DateField(null=True, blank=True)
+    """Checkpoint 64.73: THE trading-day identity column whose absence
+    64.72 named as the reason "the daily market data archive is NOT yet
+    complete". It is the IST calendar date of `source_timestamp`
+    (`domain.market_data.archive.trading_date_for()` is the single
+    canonical derivation - NEVER a naive `.date()`, which would file
+    every NSE observation before 05:30 UTC, i.e. the whole 09:15-11:00
+    IST opening range, under the previous day).
+
+    Nullable ONLY as a migration-safety valve: 0028 backfills every
+    pre-existing row (including the 64.62/64.70/64.72 forensic
+    evidence rows, which are UPDATED in place on this derived column
+    and never deleted or otherwise altered). Every write path sets it."""
+
     class Meta:
         app_label = "persistence"
         indexes = [
             models.Index(fields=["instrument_symbol", "-fetched_at"]),
+            # Checkpoint 64.73: the two archive access patterns. Ordered
+            # (trading_date, instrument_symbol) so BOTH "everything for
+            # day X" (prefix scan) and "symbol S on day X" (full match)
+            # are index scans - a research workload replaying a day must
+            # never provoke a full-table scan of an append-only tick log.
+            models.Index(
+                fields=["trading_date", "instrument_symbol"],
+                name="lqo_trading_date_symbol_idx",
+            ),
         ]
 
 
@@ -572,6 +619,11 @@ class AggregatedBarObservation(models.Model):
     it was computed with, not a re-defaulted `0` - closing the gap
     64.63 named (`AggregatedBarObservation` had no volume column at
     all) now that a real value exists to persist."""
+    trading_date = models.DateField(null=True, blank=True)
+    """Checkpoint 64.73: the IST calendar date of `interval_end` (the
+    bar's CLOSE instant - a bar belongs to the trading day it closed
+    in). See `LiveQuoteObservation.trading_date` for the full rationale
+    and the migration-safety note."""
 
     class Meta:
         app_label = "persistence"
@@ -583,6 +635,105 @@ class AggregatedBarObservation(models.Model):
         ]
         indexes = [
             models.Index(fields=["timeframe", "-interval_start"]),
+            # Checkpoint 64.73: per-symbol-day-timeframe archive reads.
+            models.Index(
+                fields=["trading_date", "instrument_symbol", "timeframe"],
+                name="abo_trading_date_sym_tf_idx",
+            ),
+        ]
+
+
+class MarketDataArchiveDay(models.Model):
+    """Checkpoint 64.73: the queryable, auditable ARCHIVAL STATUS of one
+    (exchange, trading_date, symbol, timeframe, data_source) cell -
+    the persisted projection of `domain.market_data.archive.
+    ArchiveDayAssessment`.
+
+    Why a projection and not a second source of truth: every value here
+    is recomputable from `LiveQuoteObservation` /
+    `AggregatedBarObservation` via `MarketDataArchiveService.
+    refresh_trading_date()`. The row exists so that "which days are
+    COMPLETE?" and "which symbol-days have gaps?" are single indexed
+    queries rather than a recomputation over every observation ever
+    recorded. If this table were dropped it could be rebuilt exactly -
+    that is the intended property.
+
+    Identity is the natural key `(exchange, trading_date,
+    instrument_symbol, timeframe, data_source)`, enforced by a unique
+    constraint, so re-running a refresh UPSERTS rather than appending -
+    the archive's idempotency guarantee.
+
+    This table NEVER causes deletion of market data. See
+    `domain.market_data.archive_retention` for the (deliberately
+    retain-forever, currently non-acting) retention policy."""
+
+    STATUS_CHOICES = [
+        (s, s) for s in ("NOT_OBSERVED", "IN_PROGRESS", "PARTIAL", "COMPLETE", "FAILED")
+    ]
+    RECONCILIATION_CHOICES = [(s, s) for s in ("NOT_RECONCILED", "RECONCILED", "MISMATCH")]
+
+    exchange = models.CharField(max_length=8, default="NSE")
+    trading_date = models.DateField()
+    instrument_symbol = models.CharField(max_length=32)
+    timeframe = models.CharField(max_length=8)
+    data_source = models.CharField(max_length=32)
+
+    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default="NOT_OBSERVED")
+    reason = models.CharField(max_length=120, blank=True, default="")
+    """The machine-readable WHY behind `status`, e.g.
+    `"non_trading_day"`, `"session_not_closed"`, `"missing_bars:37"`,
+    `"completeness_unsupported_timeframe:30m"`. A status without a
+    reason would force an operator to guess whether an empty Saturday
+    is correct or a real outage."""
+
+    completeness_supported = models.BooleanField(default=False)
+    """`False` for timeframes whose bar boundaries do not align with
+    the NSE session window (30m, 1h, DAY, TICK) - such a cell can never
+    be declared COMPLETE, because no defensible expected-bar count
+    exists for it. Modelling the limitation instead of hiding it."""
+
+    expected_bar_count = models.PositiveIntegerField(default=0)
+    closed_bar_count = models.PositiveIntegerField(default=0)
+    forming_bar_count = models.PositiveIntegerField(default=0)
+    missing_bar_count = models.PositiveIntegerField(default=0)
+    duplicate_bar_count = models.PositiveIntegerField(default=0)
+    quote_observation_count = models.PositiveIntegerField(default=0)
+
+    first_observation_at = models.DateTimeField(null=True, blank=True)
+    last_observation_at = models.DateTimeField(null=True, blank=True)
+
+    reconciliation_status = models.CharField(
+        max_length=16, choices=RECONCILIATION_CHOICES, default="NOT_RECONCILED"
+    )
+    """Checkpoint 64.73 MODELS independent reconciliation; it does not
+    yet PERFORM it. Every row this checkpoint writes is honestly
+    `NOT_RECONCILED` - the column exists so a future checkpoint's
+    candle-authority cross-check has somewhere truthful to record its
+    verdict, and so nothing can mistake "aggregated from our own
+    ticks" for "verified against an independent source"."""
+    reconciled_at = models.DateTimeField(null=True, blank=True)
+    computed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        app_label = "persistence"
+        constraints = [
+            models.UniqueConstraint(
+                fields=[
+                    "exchange",
+                    "trading_date",
+                    "instrument_symbol",
+                    "timeframe",
+                    "data_source",
+                ],
+                name="unique_archive_day_cell",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["-trading_date", "status"], name="mdad_trading_date_status_idx"),
+            models.Index(
+                fields=["trading_date", "instrument_symbol", "timeframe"],
+                name="mdad_date_sym_tf_idx",
+            ),
         ]
 
 
@@ -1142,6 +1293,34 @@ class WorkerRuntimeStatus(models.Model):
     effective_universe_requested_count = models.PositiveIntegerField(default=0)
     effective_universe_subscribed_count = models.PositiveIntegerField(default=0)
 
+    # Checkpoint 64.73: PROCESS-INDEPENDENT STOP REQUEST.
+    #
+    # 64.72 failed three genuine graceful-shutdown attempts (CTRL_C_EVENT
+    # via console attach, plain taskkill) for one root cause: a
+    # background-launched Windows process is not console-attached the way
+    # `GenerateConsoleCtrlEvent` requires, and SIGTERM does not exist as
+    # a deliverable signal on Windows at all. The worker was force-killed
+    # and `worker_state` was left lying at RUNNING.
+    #
+    # The fix deliberately abandons OS signals as the PRIMARY mechanism
+    # rather than adding a fourth signal workaround. The worker already
+    # owns a row here and already runs a polling loop; a stop request is
+    # therefore just another column the worker reads - no network control
+    # endpoint, no new infrastructure, no PID discovery, and (crucially)
+    # deterministically testable with no live provider connection.
+    # Signal handlers remain installed as a best-effort SECOND path for
+    # the interactive-foreground case.
+    stop_requested_at = models.DateTimeField(null=True, blank=True)
+    """Set by `manage.py request_market_data_worker_stop`; observed by
+    the running worker's stop-request watcher, which sets the shared
+    asyncio stop event. CLEARED by the worker at startup (so a stale
+    request from a previous run can never instantly kill a fresh one)
+    and again once honoured."""
+    stop_requested_by = models.CharField(max_length=150, blank=True, default="")
+    stop_reason_safe = models.CharField(max_length=255, blank=True, default="")
+    """Operator-supplied, non-credential text only - same
+    `*_safe` discipline as `last_error_safe`."""
+
     class Meta:
         app_label = "persistence"
 
@@ -1424,3 +1603,161 @@ class PaperTradingSessionRecord(models.Model):
     class Meta:
         app_label = "persistence"
         indexes = [models.Index(fields=["session_id"])]
+
+
+class OptionQuoteObservation(models.Model):
+    """Checkpoint 64.78: an APPEND-ONLY observation log of option premium
+    ticks - the option-side sibling of `LiveQuoteObservation` above, and
+    the persisted form of `domain.market_data.option_observations.
+    OptionQuote`.
+
+    A SEPARATE TABLE, NOT EXTRA NULLABLE COLUMNS ON
+    `LiveQuoteObservation`. That table's identity is a plain
+    `instrument_symbol`; an option's identity is
+    (underlying, expiry, strike, CE/PE). Storing options there would
+    have meant either five nullable derivative-only columns on every
+    equity tick row, or an overloaded symbol string that no query could
+    filter by expiry. It would also have made the equity path - the one
+    that has actually run against a live feed - carry this checkpoint's
+    risk. The equity table is untouched.
+
+    IDENTITY COLUMNS. Both the CANONICAL contract identity
+    (`contract_id` plus its exploded components, so "all RELIANCE CE at
+    expiry X" is an indexed query rather than a string parse) and the
+    PROVIDER identity (`provider`, `provider_security_id`) are stored.
+    Neither substitutes for the other: `contract_id` is stable across
+    instrument-master refreshes and providers, while the provider pair
+    is what makes a row traceable to the exact stream that produced it.
+    The exploded columns are a projection of `contract_id`, which
+    remains the single canonical key.
+
+    IDEMPOTENCY / NO UNIQUE CONSTRAINT (Checkpoint 64.78 Phase 12, and
+    an explicit lesson carried from 64.73's Phase 11). This table has NO
+    unique constraint, exactly like `LiveQuoteObservation`. Two genuine,
+    distinct option prints can share a provider timestamp: Dhan's
+    WebSocket last-trade-time has one-SECOND resolution, and a liquid
+    strike trades many times within a second. A unique constraint on
+    (contract, observed_at) - or on any timestamp-containing tuple -
+    would therefore silently DESTROY real market events, which is a far
+    worse failure than storing a duplicate. Append-only plus a
+    recomputable downstream projection is this project's established
+    pattern for raw observations, and it is the right one here."""
+
+    contract_id = models.CharField(max_length=96)
+    """The canonical `OptionContractId`, e.g.
+    `"NSE:FNO:RELIANCE:2026-09-24:2500:CE"` - provider-independent and
+    deterministic (`domain.instrument.options.make_option_contract_id`)."""
+
+    exchange = models.CharField(max_length=8, default="NSE")
+    segment = models.CharField(max_length=8, default="NSE_FNO")
+    underlying_symbol = models.CharField(max_length=32)
+    expiry = models.DateField()
+    strike = models.DecimalField(max_digits=14, decimal_places=4)
+    option_type = models.CharField(max_length=2, choices=[("CE", "CE"), ("PE", "PE")])
+    lot_size = models.PositiveIntegerField()
+    """Contract SPECIFICATION as of observation time. Stored on the
+    observation because the scrip master is a CURRENT-STATE file with no
+    history (64.77) - if a lot size is revised, or an expired contract
+    drops out of the master entirely, a historical row must still be
+    interpretable on its own."""
+
+    provider = models.CharField(max_length=32)
+    provider_security_id = models.BigIntegerField()
+
+    source_timestamp = models.DateTimeField()
+    """The PROVIDER's own observation instant (`OptionQuote.timestamp`)."""
+    fetched_at = models.DateTimeField()
+    """OUR receive clock, stamped at the write boundary - the same
+    separation `LiveQuoteObservation` already draws."""
+    trading_date = models.DateField()
+    """Canonical IST trading day, from `domain.market_data.archive.
+    trading_date_for(source_timestamp)` - the SAME single derivation the
+    equity archive uses (64.73). Never a naive `.date()`. NOT nullable
+    here, unlike the equity column: that one is nullable purely as a
+    migration valve for pre-existing rows, and this table starts empty."""
+
+    last_price = models.DecimalField(max_digits=14, decimal_places=4)
+    """The option PREMIUM."""
+    open_price = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
+    high_price = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
+    low_price = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
+    previous_close = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
+    cumulative_volume = models.DecimalField(max_digits=18, decimal_places=0, null=True, blank=True)
+    bid = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
+    ask = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
+    bid_quantity = models.DecimalField(max_digits=18, decimal_places=0, null=True, blank=True)
+    ask_quantity = models.DecimalField(max_digits=18, decimal_places=0, null=True, blank=True)
+
+    data_source = models.CharField(max_length=32, blank=True, default="")
+    """Provenance, verbatim (`"dhan_websocket"`) - 64.75's discipline."""
+
+    class Meta:
+        app_label = "persistence"
+        indexes = [
+            models.Index(fields=["trading_date", "contract_id"], name="oqo_date_contract_idx"),
+            models.Index(
+                fields=["underlying_symbol", "expiry", "-source_timestamp"],
+                name="oqo_underlying_expiry_idx",
+            ),
+            models.Index(fields=["contract_id", "-source_timestamp"], name="oqo_contract_ts_idx"),
+        ]
+
+
+class OpenInterestObservation(models.Model):
+    """Checkpoint 64.78: an APPEND-ONLY log of open-interest readings -
+    the persisted form of `domain.market_data.option_observations.
+    OIObservation`, sourced from Dhan WebSocket OI packets (feed
+    response code 5).
+
+    SEPARATE FROM `OptionQuoteObservation` FOR THE SAME REASON THE
+    DOMAIN CONTRACTS ARE SEPARATE: OI arrives in its own packet, on its
+    own cadence, and either can arrive without the other. An
+    `open_interest` column on the quote table would have been NULL on
+    every quote-packet row, making "not in this packet" and "unknown"
+    indistinguishable.
+
+    `observed_at` is OUR receipt instant, not a provider timestamp - the
+    OI packet carries none (12 bytes: 8-byte header + int32 OI). The
+    column is named to say so.
+
+    OI CHANGE IS NOT STORED. Dhan does not publish it (64.76: VERIFIED
+    ABSENT), so it is DERIVED from this series against a declared
+    baseline, exactly as per-bar volume is derived from consecutive
+    cumulative-volume readings. Storing a delta as raw data would
+    fabricate a provider fact.
+
+    No unique constraint, for the same reason as
+    `OptionQuoteObservation` - see that model's docstring."""
+
+    contract_id = models.CharField(max_length=96)
+    exchange = models.CharField(max_length=8, default="NSE")
+    segment = models.CharField(max_length=8, default="NSE_FNO")
+    underlying_symbol = models.CharField(max_length=32)
+    expiry = models.DateField()
+    strike = models.DecimalField(max_digits=14, decimal_places=4)
+    option_type = models.CharField(max_length=2, choices=[("CE", "CE"), ("PE", "PE")])
+    lot_size = models.PositiveIntegerField()
+
+    provider = models.CharField(max_length=32)
+    provider_security_id = models.BigIntegerField()
+
+    observed_at = models.DateTimeField()
+    fetched_at = models.DateTimeField()
+    trading_date = models.DateField()
+    """Canonical IST trading day from `trading_date_for(observed_at)` -
+    the same single 64.73 derivation as every other observation table."""
+
+    open_interest = models.BigIntegerField()
+    """Contract count. `BigIntegerField` rather than a positive-integer
+    field for headroom; non-negativity is enforced at the domain boundary
+    (`OIObservation.__post_init__`), which is where a misparsed negative
+    is rejected before it can ever reach this table."""
+
+    data_source = models.CharField(max_length=32, blank=True, default="")
+
+    class Meta:
+        app_label = "persistence"
+        indexes = [
+            models.Index(fields=["trading_date", "contract_id"], name="oio_date_contract_idx"),
+            models.Index(fields=["contract_id", "-observed_at"], name="oio_contract_ts_idx"),
+        ]

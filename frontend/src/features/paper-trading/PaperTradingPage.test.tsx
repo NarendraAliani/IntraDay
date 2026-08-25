@@ -105,20 +105,20 @@ describe("PaperTradingPage", () => {
   it("shows kill switch status as Active by default", async () => {
     stubEndpoints(ACTIVE);
     renderWithAuth(<PaperTradingPage />, READER_AUTH);
-    await waitFor(() => expect(screen.getByText("● Active")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTitle("Kill switch not engaged")).toBeInTheDocument());
   });
 
   it("shows HALTED status and reason when engaged", async () => {
     stubEndpoints(HALTED);
     renderWithAuth(<PaperTradingPage />, READER_AUTH);
-    await waitFor(() => expect(screen.getByText("✕ HALTED")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTitle("Kill switch engaged")).toBeInTheDocument());
     expect(screen.getByText("manual halt")).toBeInTheDocument();
   });
 
   it("read-only users cannot see engage/reset controls or the order form", async () => {
     stubEndpoints(ACTIVE);
     renderWithAuth(<PaperTradingPage />, READER_AUTH);
-    await waitFor(() => expect(screen.getByText("● Active")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTitle("Kill switch not engaged")).toBeInTheDocument());
     expect(screen.queryByText("Engage Kill Switch")).not.toBeInTheDocument();
     expect(screen.queryByText("Submit Paper Order")).not.toBeInTheDocument();
     expect(screen.getByText(/read-only access/)).toBeInTheDocument();
@@ -127,7 +127,7 @@ describe("PaperTradingPage", () => {
   it("operators can engage the kill switch", async () => {
     const fetchMock = stubEndpoints(ACTIVE);
     renderWithAuth(<PaperTradingPage />, OPERATOR_AUTH);
-    await waitFor(() => expect(screen.getByText("● Active")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTitle("Kill switch not engaged")).toBeInTheDocument());
 
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
@@ -145,13 +145,13 @@ describe("PaperTradingPage", () => {
     });
     fireEvent.click(screen.getByText("Engage Kill Switch"));
 
-    await waitFor(() => expect(screen.getByText("✕ HALTED")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTitle("Kill switch engaged")).toBeInTheDocument());
   });
 
   it("never renders a bare, ambiguous trading control", async () => {
     stubEndpoints(ACTIVE);
     renderWithAuth(<PaperTradingPage />, READER_AUTH);
-    await waitFor(() => expect(screen.getByText("● Active")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTitle("Kill switch not engaged")).toBeInTheDocument());
     for (const forbidden of ["Buy", "Sell", "Place Order"]) {
       expect(screen.queryByText(forbidden)).not.toBeInTheDocument();
     }

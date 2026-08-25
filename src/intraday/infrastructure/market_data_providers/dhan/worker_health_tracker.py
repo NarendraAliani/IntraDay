@@ -63,6 +63,19 @@ class WorkerHealthTracker:
         self.consecutive_failures += 1
         self.last_error_safe = reason
 
+    def mark_stopped(self, *, reason: str = "stop_requested") -> None:
+        """Checkpoint 64.71: the clean-shutdown counterpart to
+        `mark_failed()`. A worker that was asked to stop and did so is
+        NOT a failure and must not be recorded as one - it ends in
+        `WorkerState.STOPPED`, so the persisted `WorkerRuntimeStatus`
+        an operator (or the readiness API) reads afterwards says
+        "stopped", never a stale "RUNNING" from the last successful
+        connect. `consecutive_failures` is cleared for the same reason:
+        a deliberate stop is not a failure streak."""
+        self.worker_state = WorkerState.STOPPED
+        self.consecutive_failures = 0
+        self.last_error_safe = reason
+
     def mark_failed(self, worker_state: WorkerState, *, reason: str) -> None:
         self.worker_state = worker_state
         self.last_error_safe = reason

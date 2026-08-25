@@ -1,0 +1,767 @@
+/* frontend/src/app/theme/theme.css
+ *
+ * CHECKPOINT 64.80-F2 — THEME TOKEN LAYER + VISUAL IDENTITY LAYER
+ * ==============================================================
+ *
+ * WHY THIS IS A SEPARATE FILE FROM `styles.css`
+ * `styles.css` is the STRUCTURAL design system built up from Checkpoint
+ * 9 onward: layout, spacing, component skeletons. It is guarded by
+ * `styles.quality.test.ts`, whose rules ("no hex outside :root", "no
+ * rgba() outside :root") exist to stop per-component colour drift - and
+ * those rules are correct and are NOT relaxed here.
+ *
+ * A multi-theme token system cannot live inside a single `:root` block
+ * by definition: it needs one token block per theme. So the theme layer
+ * is its own file with its own quality gate (`theme.quality.test.ts`),
+ * which enforces the stricter rule that actually matters here: EVERY
+ * theme must define EVERY token in the canonical set. `styles.css` is
+ * untouched by theming and keeps its original gate intact.
+ *
+ * PRECEDENCE
+ * `main.tsx` imports this file AFTER `styles.css`. Every theme block is
+ * an attribute selector (`[data-theme="…"]`), which outranks the bare
+ * `:root` in `styles.css` on specificity regardless of order - so the
+ * Checkpoint 9 `:root` palette survives as the no-JavaScript fallback
+ * and the active theme always wins once `ThemeProvider` has stamped
+ * `data-theme` on <html>.
+ *
+ * SWATCH PREVIEWS (Phase 12)
+ * Each theme's selector list also matches `.theme-swatch--<id>`. The
+ * picker's preview chips therefore render from the theme's REAL tokens
+ * rather than from hand-copied hex values that could silently drift out
+ * of sync with the theme they claim to preview.
+ *
+ * TYPOGRAPHY DECISION (Phase 7)
+ * NO web font is loaded - not Google Fonts, not a bundled face.
+ * Reasons, recorded as Phase 7 requires:
+ *   1. This is an operator tool that must render identically on a
+ *      workstation with no outbound internet access; a remote font is a
+ *      render-blocking third-party dependency on the critical path of a
+ *      screen a trader reads under time pressure.
+ *   2. No external request is made from the application shell today, and
+ *      adding one purely for typography is not a trade worth making.
+ *   3. The hierarchy Phase 7 asks for (page title / section title / KPI
+ *      value / label / status / metadata) is achieved below with size,
+ *      weight, letter-spacing, case and colour - all of which work
+ *      perfectly in a system stack.
+ * Two stacks are defined: a UI/body stack, and a tabular monospace
+ * stack used for every number, timestamp and status word, which is the
+ * single most "financial terminal" typographic decision available.
+ */
+
+/* ==================================================================
+   1. NON-THEMED TOKENS
+   Values that are genuinely constant across all four themes, plus
+   defaults for tokens `styles.css` already references but never
+   defined (--color-accent, --color-danger, --color-surface-raised were
+   dangling `var()` lookups before this checkpoint - a real latent bug
+   that this layer fixes rather than papers over).
+   ================================================================== */
+:root {
+  --font-ui:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, "SF Mono", "Cascadia Mono", "Segoe UI Mono", "Roboto Mono",
+    Menlo, Consolas, monospace;
+
+  --tracking-label: 0.08em;
+  --tracking-display: -0.01em;
+
+  --icon-size-sm: 0.95em;
+  --icon-size-md: 1.1em;
+
+  --elevation-lift: -1px;
+}
+
+/* ==================================================================
+   2. THEME TOKEN BLOCKS
+   Canonical token set - all four blocks define the SAME token names.
+   `theme.quality.test.ts` fails the build if any theme omits one.
+   ================================================================== */
+
+/* --- FOCUS -- daylight analytical. Cool paper, deep indigo signal.
+   The default theme, and a direct descendant of the Checkpoint 9
+   palette so an unconfigured install looks as it always has. ------ */
+[data-theme="focus"],
+.theme-swatch--focus {
+  --color-bg: #f5f7fa;
+  --color-bg-deep: #eaeef3;
+  --color-surface: #ffffff;
+  --color-surface-raised: #f9fafc;
+  --color-border: #d7dbe2;
+  --color-border-strong: #b3bac4;
+  --color-text: #16202b;
+  --color-text-muted: #58636f;
+  --color-accent: #3b4ea8;
+  --color-accent-soft: #e8ebf8;
+  --color-accent-2: #0f766e;
+  --color-active-bg: #e6f4ea;
+  --color-active-border: #2e7d46;
+  --color-historical-bg: #eef0f3;
+  --color-historical-border: #7a8290;
+  --color-error-bg: #fdecea;
+  --color-error-border: #b53225;
+  --color-danger: #b53225;
+  --color-warning-bg: #fff4e0;
+  --color-warning-border: #96600d;
+  --color-info-bg: #e8f1fc;
+  --color-info-border: #2b6cb0;
+  --color-on-accent: #ffffff;
+  --color-overlay: rgba(16, 22, 30, 0.5);
+  --color-equity-line: #2f7d4f;
+  --color-paper-bg: #eef0ff;
+  --color-paper-border: #4c51bf;
+  --color-paper-text: #363c96;
+  --focus-ring-color: #3b4ea8;
+  --focus-ring: 0 0 0 3px rgba(59, 78, 168, 0.35);
+  --shadow-sm: 0 1px 2px rgba(22, 32, 43, 0.06);
+  --shadow-md: 0 4px 14px rgba(22, 32, 43, 0.1);
+  --shadow-lg: 0 12px 34px rgba(22, 32, 43, 0.18);
+  --grid-line: rgba(22, 32, 43, 0.05);
+  --focus-field: rgba(59, 78, 168, 0.06);
+  --signal-line: rgba(59, 78, 168, 0.35);
+}
+
+/* --- MIDNIGHT -- deep navy terminal, cool cyan signal. ----------- */
+[data-theme="midnight"],
+.theme-swatch--midnight {
+  --color-bg: #0b1220;
+  --color-bg-deep: #070c16;
+  --color-surface: #111a2b;
+  --color-surface-raised: #16223a;
+  --color-border: #23324c;
+  --color-border-strong: #35496b;
+  --color-text: #e6edf7;
+  --color-text-muted: #9db0c6;
+  --color-accent: #46b8d8;
+  --color-accent-soft: #12303c;
+  --color-accent-2: #8b96f8;
+  --color-active-bg: #10301f;
+  --color-active-border: #4ec98a;
+  --color-historical-bg: #16202f;
+  --color-historical-border: #7c8ca0;
+  --color-error-bg: #351319;
+  --color-error-border: #f0797c;
+  --color-danger: #f0797c;
+  --color-warning-bg: #33270f;
+  --color-warning-border: #e0ac45;
+  --color-info-bg: #10263c;
+  --color-info-border: #6cb2ec;
+  --color-on-accent: #06121c;
+  --color-overlay: rgba(3, 7, 14, 0.7);
+  --color-equity-line: #4ec98a;
+  --color-paper-bg: #1b1f42;
+  --color-paper-border: #8b93ff;
+  --color-paper-text: #c6cbff;
+  --focus-ring-color: #46b8d8;
+  --focus-ring: 0 0 0 3px rgba(70, 184, 216, 0.45);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow-md: 0 6px 18px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.6);
+  --grid-line: rgba(157, 176, 198, 0.08);
+  --focus-field: rgba(70, 184, 216, 0.08);
+  --signal-line: rgba(70, 184, 216, 0.4);
+}
+
+/* --- OBSIDIAN -- near-black, near-neutral. Maximum contrast,
+   minimum chroma, single amber accent. For long sessions and for
+   users who find coloured dark themes fatiguing. ------------------ */
+[data-theme="obsidian"],
+.theme-swatch--obsidian {
+  --color-bg: #0d0d0f;
+  --color-bg-deep: #060607;
+  --color-surface: #151517;
+  --color-surface-raised: #1c1c1f;
+  --color-border: #2b2b30;
+  --color-border-strong: #45454d;
+  --color-text: #f2f2f3;
+  --color-text-muted: #a8a8b0;
+  --color-accent: #dda43a;
+  --color-accent-soft: #2e2314;
+  --color-accent-2: #a3a9b0;
+  --color-active-bg: #14261a;
+  --color-active-border: #63c684;
+  --color-historical-bg: #1a1a1d;
+  --color-historical-border: #7b7b85;
+  --color-error-bg: #2e1416;
+  --color-error-border: #ec7376;
+  --color-danger: #ec7376;
+  --color-warning-bg: #2e2413;
+  --color-warning-border: #dda43a;
+  --color-info-bg: #14212e;
+  --color-info-border: #74afe0;
+  --color-on-accent: #14100a;
+  --color-overlay: rgba(0, 0, 0, 0.72);
+  --color-equity-line: #63c684;
+  --color-paper-bg: #22203a;
+  --color-paper-border: #9b96e8;
+  --color-paper-text: #d2cef7;
+  --focus-ring-color: #dda43a;
+  --focus-ring: 0 0 0 3px rgba(221, 164, 58, 0.45);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.6);
+  --shadow-md: 0 6px 18px rgba(0, 0, 0, 0.55);
+  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.7);
+  --grid-line: rgba(255, 255, 255, 0.05);
+  --focus-field: rgba(221, 164, 58, 0.05);
+  --signal-line: rgba(221, 164, 58, 0.35);
+}
+
+/* --- AURORA -- slate-teal depth, restrained jade/violet accents. - */
+[data-theme="aurora"],
+.theme-swatch--aurora {
+  --color-bg: #0e1618;
+  --color-bg-deep: #08100f;
+  --color-surface: #142022;
+  --color-surface-raised: #1a2a2c;
+  --color-border: #26393b;
+  --color-border-strong: #3d585b;
+  --color-text: #e4eeec;
+  --color-text-muted: #9db2b0;
+  --color-accent: #3fbf9f;
+  --color-accent-soft: #10302a;
+  --color-accent-2: #ad95f2;
+  --color-active-bg: #0f2e22;
+  --color-active-border: #4ecb9f;
+  --color-historical-bg: #1a2426;
+  --color-historical-border: #7a908e;
+  --color-error-bg: #33161a;
+  --color-error-border: #ef7c83;
+  --color-danger: #ef7c83;
+  --color-warning-bg: #33290f;
+  --color-warning-border: #dfb349;
+  --color-info-bg: #10283a;
+  --color-info-border: #6bb0e4;
+  --color-on-accent: #04140f;
+  --color-overlay: rgba(4, 12, 12, 0.7);
+  --color-equity-line: #4ecb9f;
+  --color-paper-bg: #1e1f3d;
+  --color-paper-border: #ad95f2;
+  --color-paper-text: #d1c6fb;
+  --focus-ring-color: #3fbf9f;
+  --focus-ring: 0 0 0 3px rgba(63, 191, 159, 0.4);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow-md: 0 6px 18px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.6);
+  --grid-line: rgba(157, 178, 176, 0.08);
+  --focus-field: rgba(63, 191, 159, 0.07);
+  --signal-line: rgba(63, 191, 159, 0.38);
+}
+
+/* ==================================================================
+   3. VISUAL IDENTITY LAYER (Phase 6)
+   "Cerebral / mental acuity" expressed through DEPTH and PRECISION,
+   not decoration. Everything here is either (a) a single very low
+   opacity field, (b) a 1px analytical rule, or (c) an elevation
+   change. There is no continuous animation anywhere in this file, no
+   glow larger than a border, and no decorative motif above ~8%
+   opacity. Restraint is the design.
+   ================================================================== */
+
+body {
+  font-family: var(--font-ui);
+  background-color: var(--color-bg);
+  /* ONE soft radial "field of attention" behind the whole workspace,
+     brightest near the top where the market status sits and falling
+     away to nothing. At 5-8% alpha this reads as depth, not as a
+     graphic. */
+  background-image: radial-gradient(
+    ellipse 80rem 45rem at 50% -12%,
+    var(--focus-field),
+    transparent 70%
+  );
+  background-attachment: fixed;
+  background-repeat: no-repeat;
+  transition:
+    background-color var(--transition-base),
+    color var(--transition-base);
+}
+
+/* Theme changes should settle, not snap - but only the surface
+   properties, and only once. */
+.app-shell__header,
+.dashboard__card,
+.dashboard__market,
+.settings-card,
+.nav-link {
+  transition:
+    background-color var(--transition-base),
+    border-color var(--transition-base),
+    color var(--transition-base),
+    box-shadow var(--transition-fast),
+    transform var(--transition-fast);
+}
+
+/* --- Iconography base (Phase 8) ---------------------------------- */
+.icon {
+  width: var(--icon-size-md);
+  height: var(--icon-size-md);
+  flex: 0 0 auto;
+  vertical-align: -0.14em;
+  /* Icons are ALWAYS visually secondary to the data they label. */
+  opacity: 0.85;
+}
+
+.badge .icon {
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
+  opacity: 1;
+}
+
+/* ==================================================================
+   4. APPLICATION SHELL
+   ================================================================== */
+.app-shell__header {
+  border-bottom-color: var(--color-border);
+  background: linear-gradient(to bottom, var(--color-bg-deep), transparent);
+}
+
+.app-shell__brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-weight: 700;
+  letter-spacing: var(--tracking-display);
+  color: var(--color-text);
+}
+
+.app-shell__brand .icon {
+  color: var(--color-accent);
+  opacity: 1;
+}
+
+.app-shell__identity {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.nav-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  border-radius: var(--radius-pill);
+}
+
+.nav-link:hover {
+  color: var(--color-text);
+  background: var(--color-surface-raised);
+}
+
+/* The active screen is marked by an accent left rule AND a filled
+   surface AND `aria-current` - never by colour alone. */
+.nav-link--active {
+  border-color: var(--color-border-strong);
+  background: var(--color-surface);
+  box-shadow: inset 2px 0 0 var(--color-accent);
+}
+
+/* ==================================================================
+   5. MARKET STATUS HERO (Phase 6 - the strongest visual anchor)
+   ================================================================== */
+.dashboard__market {
+  position: relative;
+  overflow: hidden;
+  border-left-color: var(--color-accent);
+  background-color: var(--color-surface);
+  /* A thin analytical grid, an accent wash, and nothing else. */
+  background-image:
+    linear-gradient(to right, var(--grid-line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px),
+    radial-gradient(ellipse 40rem 20rem at 85% -30%, var(--focus-field), transparent 70%);
+  background-size:
+    2.5rem 2.5rem,
+    2.5rem 2.5rem,
+    100% 100%;
+  box-shadow: var(--shadow-sm);
+}
+
+/* Signal-line motif: a single 1px rule across the top of the hero
+   that fades in from the accent and out to nothing. Static. */
+.dashboard__market::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1px;
+  background: linear-gradient(to right, var(--color-accent), var(--signal-line), transparent);
+}
+
+/* Concentric/orbital accent - three hairline rings at the far right,
+   heavily clipped by the card, at grid-line opacity. Suppressed below
+   tablet width where it would compete with the data. */
+.dashboard__market::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: -6rem;
+  width: 22rem;
+  height: 22rem;
+  transform: translateY(-50%);
+  border-radius: 50%;
+  pointer-events: none;
+  background:
+    radial-gradient(circle, transparent 62%, var(--grid-line) 62.4%, transparent 63.2%),
+    radial-gradient(circle, transparent 78%, var(--grid-line) 78.4%, transparent 79.2%),
+    radial-gradient(circle, transparent 92%, var(--signal-line) 92.3%, transparent 93%);
+  opacity: 0.7;
+}
+
+.dashboard__market > * {
+  position: relative;
+}
+
+.dashboard__market-value {
+  font-family: var(--font-mono);
+  letter-spacing: var(--tracking-display);
+}
+
+.dashboard__market-value[data-tone="HEALTHY"] {
+  color: var(--color-active-border);
+}
+
+.dashboard__market-value[data-tone="WARNING"] {
+  color: var(--color-warning-border);
+}
+
+.dashboard__market-value[data-tone="BLOCKED"] {
+  color: var(--color-danger);
+}
+
+.dashboard__eyebrow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.dashboard__eyebrow .icon {
+  color: var(--color-accent);
+}
+
+/* ==================================================================
+   6. CARDS, SECTIONS AND MICRO-INTERACTIONS (Phase 10)
+   ================================================================== */
+.dashboard__card {
+  position: relative;
+  background-color: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+}
+
+/* Hover = a 1px lift plus a slightly stronger border. That is the
+   entire interaction vocabulary for a card. */
+.dashboard__card:hover {
+  transform: translateY(var(--elevation-lift));
+  border-color: var(--color-border-strong);
+  box-shadow: var(--shadow-md);
+}
+
+/* Keyboard focus inside a card marks the whole card, so a keyboard
+   user can see which panel they are in - "the focused card". */
+.dashboard__card:focus-within {
+  border-color: var(--color-accent);
+  box-shadow: var(--shadow-md);
+}
+
+.dashboard__card-header h2 {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  letter-spacing: var(--tracking-display);
+}
+
+.dashboard__card-header .icon {
+  color: var(--color-accent);
+}
+
+/* Paper Trading is emphasised (Phase 9) with its established paper
+   hue as a left rule - the SAME hue used everywhere else in the app
+   to mean "simulated", never a new colour. */
+.dashboard__card--paper {
+  border-left: 3px solid var(--color-paper-border);
+  background-image: linear-gradient(to right, var(--color-paper-bg), transparent 40%);
+}
+
+.dashboard__card--future {
+  border-style: dashed;
+}
+
+.dashboard__section-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-6) 0 var(--space-3);
+  font-size: var(--font-size-xs);
+  font-weight: 700;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.dashboard__section-title .icon {
+  color: var(--color-accent);
+}
+
+.dashboard__section-title::after {
+  content: "";
+  flex: 1 1 auto;
+  height: 1px;
+  background: linear-gradient(to right, var(--color-border), transparent);
+}
+
+/* KPI / value typography: tabular figures so columns of numbers align
+   digit-for-digit, which is the whole point of a terminal. */
+.dashboard__facts dd,
+.dashboard__market-value,
+.badge {
+  font-variant-numeric: tabular-nums;
+}
+
+.dashboard__facts dt {
+  letter-spacing: 0.02em;
+}
+
+.dashboard__facts dd {
+  font-family: var(--font-mono);
+  color: var(--color-text);
+}
+
+.dashboard__action {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  border-color: var(--color-border-strong);
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+}
+
+.dashboard__action:hover {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+
+.dashboard__action:active {
+  transform: translateY(1px);
+}
+
+.dashboard__action .icon {
+  color: var(--color-accent);
+}
+
+/* ==================================================================
+   7. THEME SELECTOR (Phases 3, 12, 13, 14)
+   ================================================================== */
+.theme-selector {
+  position: relative;
+  display: inline-block;
+}
+
+.theme-selector__trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+
+.theme-selector__trigger:hover {
+  border-color: var(--color-accent);
+}
+
+.theme-selector__trigger .icon {
+  color: var(--color-accent);
+  opacity: 1;
+}
+
+.theme-selector__trigger-value {
+  font-weight: 600;
+}
+
+.theme-selector__chevron {
+  color: var(--color-text-muted);
+}
+
+.theme-selector__popover {
+  position: absolute;
+  right: 0;
+  top: calc(100% + var(--space-2));
+  z-index: var(--z-dropdown);
+  width: min(22rem, calc(100vw - 2rem));
+  padding: var(--space-2);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-lg);
+}
+
+.theme-selector__popover-title {
+  margin: var(--space-1) var(--space-2) var(--space-2);
+  font-size: var(--font-size-xs);
+  font-weight: 700;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.theme-selector__option {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.theme-selector__option:hover {
+  background: var(--color-surface-raised);
+  border-color: var(--color-border);
+}
+
+.theme-selector__option--selected {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+
+.theme-selector__option-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.theme-selector__option-name {
+  font-weight: 600;
+}
+
+.theme-selector__option-description {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  line-height: var(--line-height-base);
+}
+
+.theme-selector__selected-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 0 0 auto;
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  color: var(--color-accent);
+}
+
+.theme-selector__selected-mark .icon {
+  opacity: 1;
+}
+
+/* --- Preview swatch (Phase 12) ----------------------------------- */
+.theme-swatch {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  width: 2.25rem;
+  height: 1.6rem;
+  margin-top: 0.15rem;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.theme-swatch__surface {
+  display: block;
+  width: 65%;
+  height: 100%;
+  background: var(--color-surface);
+  border-right: 1px solid var(--color-border);
+}
+
+.theme-swatch__accent {
+  display: block;
+  width: 35%;
+  height: 100%;
+  background: var(--color-accent);
+}
+
+/* ==================================================================
+   8. RESPONSIVE (Phase 13)
+   ================================================================== */
+@media (max-width: 900px) {
+  .dashboard__market::after {
+    display: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .theme-selector {
+    display: block;
+    width: 100%;
+  }
+
+  .theme-selector__trigger {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  /* Anchored to the viewport edge rather than the trigger so the
+     popover can never push the page into horizontal overflow. */
+  .theme-selector__popover {
+    left: 0;
+    right: auto;
+    width: 100%;
+  }
+}
+
+@media (max-width: 420px) {
+  /* The label collapses; the icon plus the theme name still say what
+     the control is, so nothing becomes icon-only-and-unlabelled. */
+  .theme-selector__trigger-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+}
+
+/* ==================================================================
+   9. REDUCED MOTION (Phase 10/14)
+   `styles.css` already zeroes durations globally. This block removes
+   the TRANSFORMS as well - a duration of 0.01ms still moves the card,
+   and "reduce motion" means the element must not move at all.
+   ================================================================== */
+@media (prefers-reduced-motion: reduce) {
+  .dashboard__card:hover,
+  .dashboard__action:active {
+    transform: none;
+  }
+
+  .app-shell__header,
+  .dashboard__card,
+  .dashboard__market,
+  .settings-card,
+  .nav-link,
+  body {
+    transition: none;
+  }
+}

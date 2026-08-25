@@ -17,6 +17,7 @@ from intraday.application.repositories.live_market_data import (
 )
 from intraday.domain.instrument.contracts import make_instrument_id
 from intraday.domain.market_data.aggregation import AggregatedBar, BarStatus
+from intraday.domain.market_data.archive import trading_date_for
 from intraday.domain.market_data.contracts import Quote
 from intraday.domain.shared_kernel.contracts import Exchange, Timeframe
 from intraday.infrastructure.persistence.models import (
@@ -43,6 +44,21 @@ class DjangoLiveQuoteRepository:
                 # cumulative reading to difference into per-bar volume -
                 # `None` unchanged for quotes that never carried one.
                 cumulative_volume=quote.cumulative_volume,
+                # Checkpoint 64.73: the trading-day identity is stamped
+                # HERE, at the single write boundary, from the quote's
+                # own SOURCE timestamp (never `fetched_at`, which is our
+                # local receive clock - a quote observed at 15:29:59 IST
+                # but written a second later must still belong to the
+                # session it was quoted in).
+                trading_date=trading_date_for(quote.timestamp),
+                # Checkpoint 64.75: provenance, stamped at the same single
+                # write boundary as `trading_date` above. `Quote.source`
+                # was previously dropped here and reconstructed as `""` on
+                # read - so a replayed observation could not say which
+                # provider/packet path produced it. Persisted VERBATIM and
+                # never defaulted to a provider name: a quote that
+                # genuinely carried no source stays `""`.
+                data_source=quote.source,
             )
             for quote in quotes
         ]
@@ -96,6 +112,10 @@ class DjangoAggregatedBarRepository:
                     "observation_count": bar.observation_count,
                     "data_source": bar.data_source,
                     "volume": bar.volume,
+                    # Checkpoint 64.73: a bar belongs to the trading day
+                    # it CLOSED in - derived from `interval_end`, the
+                    # canonical bar timestamp.
+                    "trading_date": trading_date_for(bar.interval_end),
                 },
             )
 
@@ -156,6 +176,12 @@ def _row_to_quote(row: LiveQuoteObservation) -> Quote:
         cumulative_volume=(
             Decimal(row.cumulative_volume) if row.cumulative_volume is not None else None
         ),
+        # Checkpoint 64.75: provenance round-trips exactly as persisted.
+        # A pre-64.75 row (no recorded provenance) yields `""` - the same
+        # value `Quote.source` already defaults to - so replaying historic
+        # observations is unchanged, while new ones now carry their real
+        # source instead of silently losing it.
+        source=row.data_source,
     )
 
 

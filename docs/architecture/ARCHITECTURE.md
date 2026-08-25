@@ -46,9 +46,13 @@ everything that changed and why.
 
 ## 1. Product Scope
 
-Exclusively **intraday trading of Indian cash equities/stocks**.
+**Indian NSE intraday trading.** Resolved at Checkpoint 64.77: the primary tradable
+instrument is **NSE stock options (OPTSTK)**; **NSE cash equities** remain fully
+supported as underlying/reference instruments. Not enabled: NSE **index** options
+(OPTIDX — recognised and parseable, deliberately excluded from the active universe),
+BSE options, BSE equities.
 
-Permanently out of scope: futures, options, positional/swing/carry-forward trading,
+Permanently out of scope: futures, positional/swing/carry-forward trading,
 overnight positions, commodity derivatives, currency derivatives, crypto and crypto
 derivatives. NIFTY/SENSEX and other indices may be used only for market context,
 regime detection, analytical filters and benchmarking — never as tradable instruments.

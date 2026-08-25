@@ -214,6 +214,105 @@ created):
 | Capability Status | `CapabilityStatus` (Checkpoint 32) - the ONE placeholder mechanism, reused (not duplicated) for every new Paper Trading capability card this checkpoint. |
 | Status Indicator | The icon+text+color badge pattern (`●`/`◐`/`○`/`✕`) - audited consistent across Market Data, Reports, and now Paper Trading. |
 
+## Theme system (Checkpoint 64.80-F2)
+
+The design system became **multi-theme and user-selectable**. Nothing
+below replaces the token model above - it generalises it: the same token
+NAMES are now redefined per theme.
+
+### Architecture
+
+| Concern | Location |
+| --- | --- |
+| Structural design system (layout, spacing, component skeletons) | `frontend/src/app/styles.css` - unchanged in purpose, still guarded by `styles.quality.test.ts` |
+| Theme token blocks + visual-identity layer | `frontend/src/app/theme/theme.css`, guarded by `theme.quality.test.ts` |
+| Theme identity/naming (data only, no colour) | `frontend/src/app/theme/themeRegistry.ts` |
+| Persistence + preference priority | `frontend/src/app/theme/themeStorage.ts` |
+| Runtime application of the theme | `frontend/src/app/theme/ThemeProvider.tsx` |
+| User control | `frontend/src/app/theme/ThemeSelector.tsx` |
+
+`ThemeProvider` stamps `data-theme="<id>"` (and `data-theme-scheme`) on
+`<html>`. Every theme is a `[data-theme="…"]` block of CSS custom
+properties. **No component reads a theme colour in JavaScript**, and no
+component hard-codes one - that is what keeps this a single token-driven
+system rather than two competing ones.
+
+The theme layer lives in its own file because a multi-theme token set
+cannot fit in a single `:root` block, and `styles.css`'s existing
+"no colour outside `:root`" gate is deliberately left intact rather than
+weakened. `theme.css` carries the stricter equivalent gate: *every theme
+must define every token*, enforced by test - a theme that omits one
+would silently inherit a light-mode colour into a dark surface.
+
+### Themes
+
+| Theme | Scheme | Character |
+| --- | --- | --- |
+| **Focus** (default) | light | Daylight analytical. Cool paper surfaces, deep indigo signal accent. Direct descendant of the Checkpoint 9 palette. |
+| **Midnight** | dark | Deep navy terminal. Low-glare surfaces, cool cyan accent. |
+| **Obsidian** | dark | Near-black, near-neutral. Maximum contrast, minimum chroma, single amber accent. |
+| **Aurora** | dark | Slate-teal depth. Cool graphite surfaces, restrained jade/violet accents. |
+
+### Persistence and preference priority
+
+Stored in `localStorage` under the namespaced key
+**`intraday.ui.theme.v1`**. No backend field, no database column, no
+cookie. Resolution order:
+
+1. explicit user choice (this session)
+2. stored preference
+3. `prefers-color-scheme` - **initial default only**
+4. application default (Focus)
+
+A stored choice is never overridden by a later OS theme change. An
+unknown or corrupted stored value is discarded, not applied. Every
+storage access is wrapped in `try`/`catch`; if storage is unavailable the
+theme still applies for the session.
+
+### Iconography
+
+**One system: hand-authored inline SVG** in
+`frontend/src/common/icons/Icon.tsx`. No icon npm package was added -
+the app has two runtime dependencies (react, react-dom) and a closed set
+of ~19 glyphs did not justify a third plus its supply-chain surface. All
+icons share one grammar: 24x24 box, stroke-only, `currentColor`, 1.5
+stroke width, round caps/joins. `currentColor` makes every icon
+automatically correct under all four themes.
+
+Decorative by default (`aria-hidden="true"`, `focusable="false"`), since
+adjacent text always carries the meaning. Passing `label` promotes an
+icon to `role="img"` with an accessible name.
+
+Migrated to the icon system in 64.80-F2: the application shell, the
+Dashboard, `ActiveBadge`, `ConnectionStatusBadge`, `CapabilityStatus`,
+the dashboard `StatusBadge`, and the Paper Trading kill-switch badge.
+Individual feature pages still carry their own inline Unicode markers -
+see *Deferred* below.
+
+### Typography
+
+**No web font is loaded** - not Google Fonts, not a bundled face. This is
+an operator tool that must render identically on a workstation with no
+outbound internet access, the application shell makes no other external
+request, and the required hierarchy is achievable in a system stack.
+Two stacks: `--font-ui` (system UI) for prose and chrome, `--font-mono`
+(system monospace, tabular figures) for every number, timestamp and
+status word.
+
+### Visual identity and motion
+
+The "cerebral / mental acuity" language is expressed through depth and
+precision only: one low-opacity radial focus field behind the workspace,
+a thin analytical grid and static hairline signal/orbital motifs confined
+to the Market Status hero, 1px hover elevation on cards, and an accent
+border on the focused card. There are **no `@keyframes`, no `animation`
+declarations and no infinite loops anywhere in the theme layer** - this
+is enforced by test.
+
+`prefers-reduced-motion: reduce` removes both transitions *and*
+transforms (the pre-existing global rule only zeroed durations, which
+still let elements move).
+
 ## Deferred / explicitly out of scope
 
 A dedicated `<Button>`/`<Input>` React component library (classes are
@@ -221,3 +320,11 @@ standardized; component extraction is a larger refactor than this
 checkpoint's scope), per-page mobile-width verification below 480px,
 measured color-contrast ratios, full keyboard tab-order walkthrough,
 a Tabs component (not yet needed), checkbox/radio standardization.
+
+Added by 64.80-F2: migrating the remaining ~40 feature-page files from
+inline Unicode status markers to the icon system (the shell, dashboard
+and the four shared status components are migrated and gated by test;
+the rest is a larger, riskier change than one checkpoint should make and
+is honestly recorded as outstanding rather than claimed as done);
+measured WCAG contrast ratios for the three dark themes; browser-based
+visual regression (no browser automation exists in this repo).

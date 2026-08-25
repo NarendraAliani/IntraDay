@@ -51,8 +51,21 @@ class Version:
 
 
 class Exchange(enum.Enum):
-    """Indian cash-equity exchanges this platform trades on (Rule 2: the
-    project's scope is permanently Indian cash equities only)."""
+    """Indian exchanges this platform knows about.
+
+    Rule 2, RESTATED at Checkpoint 64.77 (product-scope resolution).
+    This platform is an Indian NSE intraday trading platform whose
+    PRIMARY tradable instrument is NSE STOCK OPTIONS, with NSE CASH
+    EQUITIES retained in full as supporting/reference/underlying
+    instruments. NSE index options, BSE options and BSE equities are
+    NOT enabled. The earlier "permanently Indian cash equities only"
+    wording is superseded - see docs/architecture/PRODUCT_SCOPE.md.
+
+    Note this enum still answers only "which exchange", NOT "which
+    segment": the cash/derivative distinction lives in
+    `domain.instrument.options.DerivativeSegment`, deliberately not
+    here, so that no existing equity call site that switches on
+    `Exchange` was silently made incomplete by the scope change."""
 
     NSE = "NSE"
     BSE = "BSE"

@@ -11,6 +11,8 @@ import json
 
 from intraday.infrastructure.market_data_providers.dhan.instruments import DhanInstrument
 from intraday.infrastructure.persistence.management.commands.run_market_data_worker import (
+    SUBSCRIBE_REQUEST_CODE_QUOTE,
+    SUBSCRIBE_REQUEST_CODE_TICKER,
     _build_subscribe_messages,
 )
 
@@ -46,9 +48,25 @@ def test_a_universe_of_287_is_split_into_100_100_87_never_truncated() -> None:
     assert len(all_security_ids) == 287
 
 
-def test_every_message_is_a_real_documented_request_code_15_subscribe() -> None:
+def test_every_message_defaults_to_the_documented_quote_subscribe_request_code() -> None:
+    """Checkpoint 64.71: the default changed from 15 to 17.
+
+    Dhan's feed-request-code enum makes 15 mean "Subscribe - Ticker
+    Packet", NOT a generic subscribe - which is exactly why Checkpoint
+    64.70's live session received only Ticker packets and could never
+    obtain real volume. 17 is "Subscribe - Quote Packet"."""
     messages = _build_subscribe_messages(_instruments(150))
     for message in messages:
         body = json.loads(message)
-        assert body["RequestCode"] == 15
+        assert body["RequestCode"] == SUBSCRIBE_REQUEST_CODE_QUOTE == 17
         assert "InstrumentList" in body
+
+
+def test_ticker_mode_is_still_expressible_for_an_explicit_caller() -> None:
+    """The Ticker code is not deleted, only stopped being the default -
+    a live session that needed to fall back has a real, documented way
+    to ask for it."""
+    messages = _build_subscribe_messages(
+        _instruments(10), request_code=SUBSCRIBE_REQUEST_CODE_TICKER
+    )
+    assert [json.loads(m)["RequestCode"] for m in messages] == [15]

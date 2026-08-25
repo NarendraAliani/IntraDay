@@ -75,8 +75,10 @@ def test_suspended_equity_is_not_tradable() -> None:
 
 def test_index_is_never_tradable_even_if_active() -> None:
     """NIFTY/SENSEX-style reference instruments must never be tradable,
-    regardless of status — Rule 2's intraday-cash-equity-only scope
-    enforced structurally."""
+    regardless of status — the index-is-reference-only rule enforced
+    structurally. (Unchanged by the Checkpoint 64.77 scope resolution:
+    index OPTIONS are also not enabled, and a tradable option is an
+    `OptionContract`, never an `Instrument`.)"""
     assert _make(instrument_type=InstrumentType.INDEX).is_tradable is False
 
 

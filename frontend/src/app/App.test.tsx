@@ -94,6 +94,14 @@ describe("App - end-to-end authentication/authorization path", () => {
 
     renderApp();
 
+    // Checkpoint 64.80-F: the landing screen is now the Application
+    // Dashboard, so this test navigates explicitly to the Configuration
+    // Viewer it is actually about. The authorization behaviour under
+    // test is unchanged.
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Configuration" })).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Configuration" }));
     await waitFor(() => expect(screen.getByText("Configuration Viewer")).toBeInTheDocument());
     await waitFor(() => expect(screen.getByText(/default — v1/)).toBeInTheDocument());
     expect(screen.queryByRole("button", { name: /Activate Version/ })).not.toBeInTheDocument();
@@ -133,6 +141,13 @@ describe("App - end-to-end authentication/authorization path", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     renderApp();
+
+    // Checkpoint 64.80-F: navigate off the new Dashboard landing screen
+    // to the Configuration Viewer this test is actually about.
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Configuration" })).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Configuration" }));
 
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "Activate Version v1" })).toBeInTheDocument(),
@@ -179,6 +194,14 @@ describe("App - end-to-end authentication/authorization path", () => {
     fireEvent.change(screen.getByLabelText("Password"), { target: { value: "secret" } });
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
+    // Checkpoint 64.80-F: the landing screen is now the Application
+    // Dashboard, so this test navigates explicitly to the Configuration
+    // Viewer it is actually about. The authorization behaviour under
+    // test is unchanged.
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Configuration" })).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Configuration" }));
     await waitFor(() => expect(screen.getByText("Configuration Viewer")).toBeInTheDocument());
     expect(screen.getByText("operator", { exact: false })).toBeInTheDocument();
 

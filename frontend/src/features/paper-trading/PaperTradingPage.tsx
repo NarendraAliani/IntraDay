@@ -22,6 +22,7 @@ import {
 import type { KillSwitchStatusResponse } from "../../common/api/killSwitchApi";
 import { ApiNetworkError, ApiRequestError } from "../../common/api/client";
 import { InstrumentPickerSingle } from "../../common/components/InstrumentPicker";
+import { Icon } from "../../common/icons/Icon";
 import {
   getPaperFunds,
   getPaperOrders,
@@ -202,10 +203,29 @@ export function PaperTradingPage(): JSX.Element {
             <h2 id="kill-switch-heading">Kill Switch</h2>
             <p>
               Status:{" "}
+              {/* Checkpoint 64.80-F2 Phase 8/11: the marker is now an SVG
+                  from the single icon system instead of a Unicode glyph.
+                  The status WORDS (HALTED / Active) and the badge classes
+                  are unchanged - this is a rendering change only, and the
+                  `title` gives this safety-critical badge a stable,
+                  non-glyph handle for tests and hover text. */}
               <span
                 className={`badge ${state.killSwitch.status === "HALTED" ? "badge--danger" : "badge--active"}`}
+                title={
+                  state.killSwitch.status === "HALTED"
+                    ? "Kill switch engaged"
+                    : "Kill switch not engaged"
+                }
               >
-                {state.killSwitch.status === "HALTED" ? "✕ HALTED" : "● Active"}
+                {state.killSwitch.status === "HALTED" ? (
+                  <>
+                    <Icon name="error" /> HALTED
+                  </>
+                ) : (
+                  <>
+                    <Icon name="success" /> Active
+                  </>
+                )}
               </span>
             </p>
             {state.killSwitch.status === "HALTED" && state.killSwitch.reason && (

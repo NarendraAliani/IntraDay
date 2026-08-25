@@ -705,6 +705,18 @@ def test_zz_no_real_gainz_source_file_exists() -> None:
         # REFUSED by the paper-session API because it is not in the
         # default registry. No Gainz math, module or activation is added.
         "64_68",
+        # Checkpoint 64.73: the daily-archive architecture doc's own
+        # Phase 11 requirement ("explicit statement that Gainz remains
+        # disabled") - a single safety-disclaimer sentence, not a
+        # reference implementation. No Gainz math or module was added.
+        "DAILY_MARKET_DATA_ARCHIVE_ARCHITECTURE",
+        # Checkpoint 64.76: Dhan option-capability RESEARCH. Its single
+        # Gainz mention is one prose line naming "market state at a Gainz
+        # signal timestamp" as a FUTURE historical-retention requirement -
+        # a statement of what would be needed, not an implementation. No
+        # Gainz math, module or activation was added there or since.
+        "64_76",
+        "DHAN_MARKET_DATA_CAPABILITY_RESEARCH",
     )
     for hit in hits:
         assert any(

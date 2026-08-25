@@ -1844,3 +1844,417 @@ dd {
     transition: none;
   }
 }
+
+/* --- Checkpoint 64.80-F: Application Dashboard ----------------------
+ * Uses ONLY the existing design tokens (Checkpoint 9 + 35). No new
+ * color literal is introduced anywhere in this block - status tone is
+ * carried by the existing `badge--*` classes, and the tone-specific
+ * accents below resolve to already-defined tokens.
+ */
+.dashboard {
+  padding: var(--space-5);
+  max-width: 80rem;
+  margin: 0 auto;
+}
+
+.dashboard__header {
+  margin-bottom: var(--space-5);
+}
+
+.dashboard__subtitle {
+  color: var(--color-text-muted);
+  margin: var(--space-2) 0 var(--space-3);
+}
+
+.dashboard__action {
+  display: inline-block;
+  margin-top: var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--color-active-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font: inherit;
+}
+
+.dashboard__action:hover {
+  background: var(--color-active-bg);
+}
+
+.dashboard__market {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-left-width: 6px;
+  border-radius: var(--radius-md);
+  padding: var(--space-5);
+  margin-bottom: var(--space-5);
+}
+
+.dashboard__market-value {
+  margin: var(--space-3) 0;
+  font-size: 1.35rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.dashboard__market-value .badge {
+  font-size: 1.05rem;
+  padding: var(--space-2) var(--space-4);
+}
+
+.dashboard__market-value[data-tone="HEALTHY"] {
+  color: var(--color-active-border);
+}
+
+.dashboard__market-value[data-tone="INACTIVE"] {
+  color: var(--color-text-muted);
+}
+
+.dashboard__market-detail {
+  color: var(--color-text-muted);
+  margin: 0 0 var(--space-4);
+  max-width: 60ch;
+}
+
+/* Checkpoint 64.80-F2 Phase 9: card GROUPS. Structural only - the
+   group's visual treatment (rule, label typography, accent) lives in
+   the theme layer, this is just its spacing. */
+.dashboard__group {
+  margin-bottom: var(--space-5);
+}
+
+.dashboard__group:last-child {
+  margin-bottom: 0;
+}
+
+.dashboard__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
+  gap: var(--space-4);
+  align-items: start;
+}
+
+.dashboard__card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+}
+
+.dashboard__card-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.dashboard__card-header h2 {
+  font-size: 1rem;
+  margin: 0;
+}
+
+.dashboard__card-detail {
+  color: var(--color-text-muted);
+  margin: 0 0 var(--space-3);
+}
+
+.dashboard__facts {
+  display: grid;
+  grid-template-columns: minmax(9rem, auto) 1fr;
+  gap: var(--space-2) var(--space-4);
+  margin: 0;
+}
+
+.dashboard__facts > div {
+  display: contents;
+}
+
+.dashboard__facts dt {
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+}
+
+.dashboard__facts dd {
+  margin: 0;
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+.dashboard__reasons {
+  margin: var(--space-3) 0 0;
+  padding-left: var(--space-5);
+  color: var(--color-text-muted);
+}
+
+@media (max-width: 600px) {
+  .dashboard {
+    padding: var(--space-3);
+  }
+
+  .dashboard__grid {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard__facts {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard__market-value {
+    font-size: 1.1rem;
+  }
+}
+
+/* ------------------------------------------------------------------
+   Checkpoint 64.80-F3: Decision Pipeline (Phases 3, 8, 10).
+
+   Desktop reads as a horizontal flow of stages separated by precision
+   connector rules; below 1100px the same markup stacks vertically and
+   the connector rotates to a vertical rule, so the sequence stays
+   readable without a second layout implementation.
+
+   Every colour is a var() from the 64.80-F2 token set - no new token is
+   introduced (theme.quality.test.ts requires all four themes to define
+   an IDENTICAL token set, so a new token would be a four-theme change).
+   There is no @keyframes, no infinite loop and no `animation:` property:
+   the pipeline communicates sequence, not motion.
+   ------------------------------------------------------------------ */
+
+.pipeline {
+  margin-top: var(--space-5);
+  padding: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.pipeline__header {
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.pipeline__intro {
+  margin: var(--space-2) 0 0;
+  max-width: 78ch;
+  color: var(--color-text-muted);
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+
+.pipeline__chain {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: var(--space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: pipeline-stage;
+}
+
+.pipeline__stage {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.pipeline-node {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  flex: 1 1 auto;
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-left: 3px solid var(--color-accent);
+  border-radius: 8px;
+  background: var(--color-surface-raised);
+  min-width: 0;
+}
+
+.pipeline-node__header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.pipeline-node__ordinal {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.pipeline-node__title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: 1rem;
+}
+
+.pipeline-node__summary {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--color-text-muted);
+}
+
+.pipeline-node__apis {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.pipeline-node__apis code {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  overflow-wrap: anywhere;
+  color: var(--color-text-muted);
+}
+
+.pipeline__connector {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.pipeline__connector-rule {
+  display: block;
+  height: 2px;
+  width: 100%;
+  border-radius: 2px;
+  background: var(--signal-line);
+}
+
+.pipeline__connector[data-status="FOUND"] .pipeline__connector-rule {
+  background: var(--color-active-border);
+}
+
+.pipeline__connector[data-status="PARTIAL"] .pipeline__connector-rule {
+  background: var(--color-warning-border);
+}
+
+.pipeline__connector[data-status="NOT FOUND"] .pipeline__connector-rule {
+  background: var(--color-error-border);
+}
+
+.pipeline__connector[data-status="NOT AVAILABLE"] .pipeline__connector-rule,
+.pipeline__connector[data-status="NOT APPLICABLE"] .pipeline__connector-rule,
+.pipeline__connector[data-status="NOT YET IMPLEMENTED"] .pipeline__connector-rule {
+  background: var(--color-historical-border);
+}
+
+.pipeline-link {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface);
+  min-width: 0;
+}
+
+.pipeline-link__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.pipeline-link__pair {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  color: var(--color-text);
+}
+
+.pipeline-link__relationship {
+  margin: 0;
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
+.pipeline-link__evidence,
+.pipeline-link__gap {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--color-text-muted);
+  overflow-wrap: anywhere;
+}
+
+.pipeline-link__evidence-label {
+  font-family: var(--font-mono);
+  letter-spacing: 0.04em;
+  color: var(--color-text);
+}
+
+.pipeline__section {
+  margin-top: var(--space-5);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--color-border);
+}
+
+.pipeline__link-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+
+.pipeline__legend {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 0;
+}
+
+.pipeline__legend-row {
+  display: grid;
+  grid-template-columns: minmax(11rem, auto) 1fr;
+  gap: var(--space-3);
+  align-items: start;
+}
+
+.pipeline__legend-row dt {
+  margin: 0;
+}
+
+.pipeline__legend-row dd {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--color-text-muted);
+}
+
+@media (max-width: 1100px) {
+  .pipeline__chain {
+    grid-template-columns: 1fr;
+  }
+
+  .pipeline__connector-rule {
+    height: 24px;
+    width: 2px;
+    margin-left: var(--space-4);
+  }
+
+  .pipeline__link-list {
+    grid-template-columns: 1fr;
+  }
+
+  .pipeline__legend-row {
+    grid-template-columns: 1fr;
+    gap: var(--space-1);
+  }
+}

@@ -25,9 +25,20 @@
 // are added the same way - still no routing library. Every new nav
 // entry reads DISCOVER/CONFIGURE/BACKTEST/REVIEW language, never
 // BUY/SELL/DEPLOY LIVE (Part 34).
+//
+// Checkpoint 64.80-F2: the shell gains a product identity (brand mark +
+// semantic navigation icons + a user-facing Theme control). The
+// navigation MECHANISM is unchanged - still one piece of local state,
+// still no routing library. `ThemeProvider` wraps the shell here rather
+// than in `main.tsx` so that every test which renders <App /> gets a
+// correctly themed tree without having to know the theme system exists.
 import { useState } from "react";
 
 import { useAuth } from "../common/auth/AuthContext";
+import { Icon } from "../common/icons/Icon";
+import type { IconName } from "../common/icons/Icon";
+import { ThemeProvider } from "./theme/ThemeProvider";
+import { ThemeSelector } from "./theme/ThemeSelector";
 import { LoadingState } from "../common/components/LoadingState";
 import { ConfigurationViewer } from "../features/configuration/ConfigurationViewer";
 import { LoginScreen } from "../features/auth/LoginScreen";
@@ -42,8 +53,16 @@ import { StrategyMonitorPage } from "../features/backtesting/StrategyMonitorPage
 import { WatchlistPage } from "../features/backtesting/WatchlistPage";
 import { ReportsOverviewPage } from "../features/reports/ReportsOverviewPage";
 import { PaperTradingPage } from "../features/paper-trading/PaperTradingPage";
+// Checkpoint 64.80-F: the Application Dashboard becomes the landing
+// screen, and the Market Data Archive gets a minimal detail shell. Both
+// are added as ordinary entries in the EXISTING screen-state pattern -
+// no routing library is introduced, no navigation redesign.
+import { DashboardPage } from "../features/dashboard/DashboardPage";
+import { MarketDataArchivePage } from "../features/market-data/MarketDataArchivePage";
 
 type Screen =
+  | "dashboard"
+  | "market-data-archive"
   | "configuration"
   | "settings"
   | "live-scanner"
@@ -57,24 +76,30 @@ type Screen =
   | "paper-trading"
   | "reports";
 
-const NAV_ITEMS: Array<{ id: Screen; label: string }> = [
-  { id: "configuration", label: "Configuration" },
-  { id: "settings", label: "Settings" },
-  { id: "live-scanner", label: "Live Scanner" },
-  { id: "live-paper-operations", label: "Live Paper Operations" },
-  { id: "market-data", label: "Market Data" },
-  { id: "strategies", label: "Strategies" },
-  { id: "backtesting", label: "Backtesting" },
-  { id: "comparison", label: "Compare" },
-  { id: "watchlists", label: "Watchlists" },
-  { id: "strategy-monitor", label: "Strategy Monitor" },
-  { id: "paper-trading", label: "Paper Trading" },
-  { id: "reports", label: "Reports" },
+/** Checkpoint 64.80-F2 Phase 8: every navigation entry carries a
+ * semantic icon from the ONE icon system. The icons are decorative -
+ * the text label is always present and is what assistive technology
+ * announces - so they are `aria-hidden` by construction (see Icon.tsx). */
+const NAV_ITEMS: Array<{ id: Screen; label: string; icon: IconName }> = [
+  { id: "dashboard", label: "Dashboard", icon: "dashboard" },
+  { id: "configuration", label: "Configuration", icon: "settings" },
+  { id: "settings", label: "Settings", icon: "settings" },
+  { id: "live-scanner", label: "Live Scanner", icon: "signal" },
+  { id: "live-paper-operations", label: "Live Paper Operations", icon: "paper-trading" },
+  { id: "market-data", label: "Market Data", icon: "market" },
+  { id: "market-data-archive", label: "Market Data Archive", icon: "archive" },
+  { id: "strategies", label: "Strategies", icon: "research" },
+  { id: "backtesting", label: "Backtesting", icon: "research" },
+  { id: "comparison", label: "Compare", icon: "research" },
+  { id: "watchlists", label: "Watchlists", icon: "market" },
+  { id: "strategy-monitor", label: "Strategy Monitor", icon: "system-health" },
+  { id: "paper-trading", label: "Paper Trading", icon: "paper-trading" },
+  { id: "reports", label: "Reports", icon: "archive" },
 ];
 
 function AppShell(): JSX.Element {
   const { state, logout } = useAuth();
-  const [screen, setScreen] = useState<Screen>("configuration");
+  const [screen, setScreen] = useState<Screen>("dashboard");
 
   if (state.status === "loading") {
     return (
@@ -91,6 +116,10 @@ function AppShell(): JSX.Element {
   return (
     <main>
       <header className="app-shell__header">
+        <p className="app-shell__brand">
+          <Icon name="signal" />
+          IntraDay
+        </p>
         <nav className="app-shell__nav" aria-label="Primary">
           {NAV_ITEMS.map((item) => (
             <button
@@ -100,17 +129,37 @@ function AppShell(): JSX.Element {
               aria-current={screen === item.id ? "page" : undefined}
               onClick={() => setScreen(item.id)}
             >
+              <Icon name={item.icon} />
               {item.label}
             </button>
           ))}
         </nav>
-        <span>
-          Signed in as <strong>{state.username}</strong>
-        </span>
-        <button type="button" onClick={() => void logout()}>
-          Sign out
-        </button>
+        <div className="app-shell__identity">
+          <ThemeSelector />
+          <span>
+            Signed in as <strong>{state.username}</strong>
+          </span>
+          <button type="button" onClick={() => void logout()}>
+            Sign out
+          </button>
+        </div>
       </header>
+      {screen === "dashboard" && (
+        <DashboardPage
+          onOpenMarketData={() => setScreen("market-data")}
+          onOpenArchive={() => setScreen("market-data-archive")}
+          onOpenPaperTrading={() => setScreen("paper-trading")}
+          onOpenBacktesting={() => setScreen("backtesting")}
+          // Checkpoint 64.80-F3 Phase 7: the Decision Pipeline drills
+          // down into EXISTING screens through the EXISTING navigation
+          // mechanism (this project has no router - one piece of screen
+          // state, see the header comment). `PipelineDestination` is a
+          // closed union of screen ids that already exist, so a node can
+          // never point at a screen this application does not have.
+          onNavigate={(destination) => setScreen(destination)}
+        />
+      )}
+      {screen === "market-data-archive" && <MarketDataArchivePage />}
       {screen === "configuration" && <ConfigurationViewer />}
       {screen === "settings" && <SettingsPage />}
       {screen === "live-scanner" && <LiveScannerConsole />}
@@ -128,5 +177,9 @@ function AppShell(): JSX.Element {
 }
 
 export function App(): JSX.Element {
-  return <AppShell />;
+  return (
+    <ThemeProvider>
+      <AppShell />
+    </ThemeProvider>
+  );
 }

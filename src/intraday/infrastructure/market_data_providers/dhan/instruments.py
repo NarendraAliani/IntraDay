@@ -41,8 +41,14 @@ from intraday.infrastructure.market_data_providers.dhan.instrument_master import
 )
 
 # Dhan's own exchange-segment vocabulary for the Market Quote API - see
-# docs/architecture/LIVE_MARKET_DATA_ARCHITECTURE.md. NSE cash equity
-# only, matching this project's permanent scope (Rule 2).
+# docs/architecture/LIVE_MARKET_DATA_ARCHITECTURE.md. This constant is
+# and remains the CASH-EQUITY segment: the equity live-quote universe
+# below is equity-specific by design and was not generalised at
+# Checkpoint 64.77's scope change. The option segment ("NSE_FNO") is a
+# separate constant on the option side
+# (`dhan/instrument_master.py::NSE_FNO_SEGMENT`), and options reach the
+# provider through `OptionInstrumentMasterService`, not through this
+# symbol-keyed equity table.
 NSE_EQ_SEGMENT = "NSE_EQ"
 
 

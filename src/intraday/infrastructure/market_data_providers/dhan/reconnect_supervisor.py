@@ -76,6 +76,15 @@ async def run_worker_with_reconnect(
     result = ReconnectSupervisorResult(final_state=WorkerState.STOPPED)
 
     for attempt in range(1, max_attempts + 1):
+        # Checkpoint 64.71: check BEFORE opening a connection, not only
+        # after one is lost. Without this, a stop requested during a
+        # backoff sleep would still be followed by one more full
+        # connection attempt - the operator would watch the worker
+        # reconnect to Dhan after they had already asked it to stop.
+        if stop_event is not None and stop_event.is_set():
+            result.final_state = WorkerState.STOPPED
+            return result
+
         result.attempts = attempt
         run_result = await connect_and_run()
         result.total_quotes_processed += run_result.quotes_processed

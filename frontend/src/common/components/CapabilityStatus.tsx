@@ -8,6 +8,9 @@
 // real UI, not this component.
 import type { JSX } from "react";
 
+import { Icon } from "../icons/Icon";
+import type { IconName } from "../icons/Icon";
+
 export type CapabilityState =
   | "AVAILABLE"
   | "PARTIAL"
@@ -35,13 +38,15 @@ const STATE_LABEL: Record<CapabilityState, string> = {
   RESEARCH_ONLY: "Research Only",
 };
 
-const STATE_ICON: Record<CapabilityState, string> = {
-  AVAILABLE: "●",
-  PARTIAL: "◐",
-  PLANNED: "○",
-  BLOCKED: "✕",
-  NOT_YET_IMPLEMENTED: "○",
-  RESEARCH_ONLY: "◐",
+// Checkpoint 64.80-F2 Phase 8: icon names from the single icon system,
+// replacing Unicode glyphs. Capability semantics are unchanged.
+const STATE_ICON: Record<CapabilityState, IconName> = {
+  AVAILABLE: "success",
+  PARTIAL: "warning",
+  PLANNED: "info",
+  BLOCKED: "error",
+  NOT_YET_IMPLEMENTED: "info",
+  RESEARCH_ONLY: "warning",
 };
 
 const STATE_BADGE_CLASS: Record<CapabilityState, string> = {
@@ -70,7 +75,7 @@ export function CapabilityStatus({
       <div className="capability-status__header">
         <span className="capability-status__title">{title}</span>
         <span className={`badge ${STATE_BADGE_CLASS[status]}`}>
-          {STATE_ICON[status]} {STATE_LABEL[status]}
+          <Icon name={STATE_ICON[status]} /> {STATE_LABEL[status]}
         </span>
       </div>
       <p className="capability-status__description">{description}</p>

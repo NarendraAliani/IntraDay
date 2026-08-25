@@ -33,6 +33,7 @@ from dataclasses import dataclass
 from intraday.domain.market_data.contracts import Quote
 from intraday.infrastructure.market_data_providers.dhan.packet_decoder import (
     DhanDisconnectPacket,
+    DhanOpenInterestPacket,
     PacketDecodeFailure,
     decode_packet,
 )
@@ -114,6 +115,17 @@ def run_worker_session(
             continue
         if isinstance(decoded, DhanDisconnectPacket):
             transition(WorkerEvent.CONNECTION_LOST)
+            continue
+
+        if isinstance(decoded, DhanOpenInterestPacket):
+            # Checkpoint 64.78: OI packets (feed response code 5) are now
+            # DECODED rather than classified UNSUPPORTED_PACKET_TYPE. They
+            # are not equity quotes and must never enter the equity path,
+            # which subscribes NSE_EQ only (a cash instrument has no open
+            # interest). Skipped explicitly, and NOT counted as a decode
+            # failure - the packet decoded perfectly, it simply does not
+            # belong to this consumer. Option OI routing lives in
+            # `packet_to_option_observation.py`.
             continue
 
         conversion = convert_packet_to_quote(decoded, security_id_to_symbol=security_id_to_symbol)

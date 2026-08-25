@@ -25,8 +25,12 @@ from __future__ import annotations
 
 import struct
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from enum import IntEnum
+
+from intraday.infrastructure.market_data_providers.dhan.timestamp_normalization import (
+    normalize_dhan_websocket_timestamp,
+)
 
 # All Dhan v2 WebSocket packets share this 8-byte header
 # (VERIFIED_PRIMARY, see research doc): byte 0 = feed response code,
@@ -55,6 +59,35 @@ _TICKER_PACKET_SIZE = _HEADER_SIZE + _TICKER_BODY_STRUCT.size
 _QUOTE_BODY_STRUCT = struct.Struct("<fhifiiiffff")
 _QUOTE_PACKET_SIZE = _HEADER_SIZE + _QUOTE_BODY_STRUCT.size
 
+# OI packet (code 5, VERIFIED at Checkpoint 64.76 against Dhan's own
+# live-market-feed documentation): a 12-byte packet - the SAME 8-byte
+# header every packet carries, plus a single int32 open-interest value.
+# Nothing else. No timestamp, no price, no day high/low OI (those exist
+# only inside the Full packet, code 8, which this decoder still does not
+# implement). No additional field is inferred here: the documented
+# layout is exactly one int32 and this decoder reads exactly one int32.
+#
+# SIGNEDNESS. The wire field is a documented int32 and is decoded with
+# the signed `i` code, exactly as the Quote packet's volume/quantity
+# fields already are, so a value Dhan sends is reproduced faithfully
+# rather than reinterpreted as a huge unsigned number. Open interest is
+# a contract COUNT and can never legitimately be negative; this decoder
+# still reports whatever the wire said (its job is faithful decoding),
+# and the DOMAIN boundary (`OIObservation`) is where a negative value is
+# rejected rather than archived.
+_OI_BODY_STRUCT = struct.Struct("<i")
+_OI_PACKET_SIZE = _HEADER_SIZE + _OI_BODY_STRUCT.size  # == 12
+
+# Dhan's documented exchange-segment code for NSE F&O (VERIFIED 64.76:
+# "the same `NSE_FNO` (code 2) segment"). Open interest exists ONLY in
+# the derivatives segment - a cash-equity instrument has no open
+# interest at all - so an OI packet claiming any other segment is a
+# packet this decoder refuses to interpret rather than one it silently
+# accepts. Only this ONE segment code is named, because it is the only
+# one this project has verified from Dhan's own documentation; no other
+# segment's numeric code is guessed here.
+NSE_FNO_SEGMENT_CODE = 2
+
 # Disconnect packet (code 50): header + int16 disconnect reason code.
 _DISCONNECT_BODY_STRUCT = struct.Struct("<h")
 _DISCONNECT_PACKET_SIZE = _HEADER_SIZE + _DISCONNECT_BODY_STRUCT.size
@@ -62,13 +95,26 @@ _DISCONNECT_PACKET_SIZE = _HEADER_SIZE + _DISCONNECT_BODY_STRUCT.size
 
 class DhanFeedResponseCode(IntEnum):
     """Only the codes this decoder actually acts on are named as
-    members - every OTHER documented code (5/6/8/...) is still
+    members - every OTHER documented code (6/8/...) is still
     correctly recognized as UNSUPPORTED_PACKET_TYPE by
     `decode_packet()` below, never silently misinterpreted as one of
-    these three."""
+    these four.
+
+    Checkpoint 64.78 adds OPEN_INTEREST (5), which until now was
+    correctly-but-uselessly classified UNSUPPORTED_PACKET_TYPE.
+
+    THESE ARE RESPONSE CODES, NOT REQUEST CODES. They are two different,
+    non-overlapping enumerations in Dhan's own Annexure and must never be
+    confused: a client SUBSCRIBES with a RequestCode (17 = Subscribe
+    Quote, 18 = Unsubscribe Quote - see `run_market_data_worker.py`) and
+    the server REPLIES with packets carrying these feed response codes.
+    In particular there is NO "subscribe to OI" request code 5: OI
+    arrives as a response packet on an existing subscription, so nothing
+    in the subscription layer may ever send a `5`."""
 
     TICKER = 2
     QUOTE = 4
+    OPEN_INTEREST = 5
     DISCONNECT = 50
 
 
@@ -81,6 +127,30 @@ class PacketDecodeFailureReason(IntEnum):
     TRUNCATED_BODY = 3
     """The header parsed and named a supported packet type, but fewer
     bytes remain than that packet type's own documented body size."""
+    UNSUPPORTED_SEGMENT = 4
+    """Checkpoint 64.78: a well-formed packet of a supported type whose
+    header names an exchange segment for which that packet type cannot
+    meaningfully exist - currently only an OI packet (code 5) claiming a
+    segment other than NSE_FNO, since open interest is a derivatives-only
+    quantity. Distinct from UNSUPPORTED_PACKET_TYPE so a diagnostic can
+    tell "we do not decode this packet shape" apart from "this packet
+    shape arrived describing an instrument that cannot have it"."""
+    INVALID_SECURITY_ID = 5
+    """Checkpoint 64.78: the header parsed but carries a non-positive
+    `security_id`, so the packet does not address any instrument. Never
+    accepted and then dropped later: an unaddressable observation cannot
+    be attributed to a contract, and decoding it further would only
+    produce a value with nowhere to belong."""
+    MALFORMED_LENGTH = 6
+    """Checkpoint 64.78: the packet is LONGER than its documented fixed
+    size. Applied to the OI packet (code 5) only, whose documented size
+    is exactly 12 bytes. The pre-existing Ticker/Quote/Disconnect paths
+    keep their historical `len(raw) >= size` tolerance unchanged - this
+    checkpoint does not retroactively tighten packet types that have
+    already run against a real feed. For the NEW packet type, extra
+    trailing bytes mean the frame is not the thing it claims to be, and
+    decoding its first 12 bytes anyway would be exactly the "silently
+    decode a malformed packet" this checkpoint forbids."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,7 +168,14 @@ class DhanTickerPacket:
     last_trade_time: datetime
     """Converted from the documented epoch-seconds int32 to a UTC
     `datetime` at decode time - never left as a bare int for a caller
-    to misinterpret as local time or milliseconds."""
+    to misinterpret as local time or milliseconds.
+
+    Checkpoint 64.71: that conversion now goes through
+    `normalize_dhan_websocket_timestamp()`, which corrects Dhan's
+    IST-labelled WebSocket epoch to true UTC (2,154 real 64.70
+    observations showed it running exactly +5h30m ahead of receipt).
+    The resulting value is still, as always, timezone-aware UTC - only
+    its correctness improved."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,6 +195,21 @@ class DhanQuotePacket:
 
 
 @dataclass(frozen=True, slots=True)
+class DhanOpenInterestPacket:
+    """Checkpoint 64.78: the decoded OI packet (feed response code 5).
+
+    Carries ONLY what the 12-byte wire layout carries: the shared header
+    and one int32 open-interest value. It deliberately has NO timestamp
+    field - the packet has none, and synthesising one here would put a
+    fabricated instant inside a "decoded provider fact" object. The
+    ingesting side stamps its own receipt instant when it builds the
+    domain `OIObservation`."""
+
+    header: DhanPacketHeader
+    open_interest: int
+
+
+@dataclass(frozen=True, slots=True)
 class DhanDisconnectPacket:
     header: DhanPacketHeader
     disconnect_reason_code: int
@@ -132,7 +224,13 @@ class PacketDecodeFailure:
     even read the code byte)."""
 
 
-DecodedDhanPacket = DhanTickerPacket | DhanQuotePacket | DhanDisconnectPacket | PacketDecodeFailure
+DecodedDhanPacket = (
+    DhanTickerPacket
+    | DhanQuotePacket
+    | DhanOpenInterestPacket
+    | DhanDisconnectPacket
+    | PacketDecodeFailure
+)
 
 
 def decode_header(raw: bytes) -> DhanPacketHeader | None:
@@ -176,7 +274,7 @@ def decode_packet(raw: bytes) -> DecodedDhanPacket:
         return DhanTickerPacket(
             header=header,
             last_traded_price=ltp,
-            last_trade_time=datetime.fromtimestamp(ltt_epoch, tz=UTC),
+            last_trade_time=normalize_dhan_websocket_timestamp(ltt_epoch),
         )
 
     if header.feed_response_code == DhanFeedResponseCode.QUOTE:
@@ -203,7 +301,7 @@ def decode_packet(raw: bytes) -> DecodedDhanPacket:
             header=header,
             last_traded_price=ltp,
             last_traded_quantity=ltq,
-            last_trade_time=datetime.fromtimestamp(ltt_epoch, tz=UTC),
+            last_trade_time=normalize_dhan_websocket_timestamp(ltt_epoch),
             average_trade_price=atp,
             volume=volume,
             total_sell_quantity=total_sell_qty,
@@ -213,6 +311,40 @@ def decode_packet(raw: bytes) -> DecodedDhanPacket:
             day_high=day_high,
             day_low=day_low,
         )
+
+    if header.feed_response_code == DhanFeedResponseCode.OPEN_INTEREST:
+        # Checkpoint 64.78. Validation order is deliberate: SHAPE first
+        # (can these bytes even be an OI packet?), then ADDRESSABILITY
+        # (does it name a real instrument?), then SEGMENT (can that
+        # instrument have open interest at all?). Each failure keeps its
+        # own distinct reason so a diagnostic never has to guess which
+        # of the three went wrong.
+        if len(raw) < _OI_PACKET_SIZE:
+            return PacketDecodeFailure(
+                reason=PacketDecodeFailureReason.TRUNCATED_BODY,
+                raw_length=len(raw),
+                feed_response_code=header.feed_response_code,
+            )
+        if len(raw) > _OI_PACKET_SIZE:
+            return PacketDecodeFailure(
+                reason=PacketDecodeFailureReason.MALFORMED_LENGTH,
+                raw_length=len(raw),
+                feed_response_code=header.feed_response_code,
+            )
+        if header.security_id <= 0:
+            return PacketDecodeFailure(
+                reason=PacketDecodeFailureReason.INVALID_SECURITY_ID,
+                raw_length=len(raw),
+                feed_response_code=header.feed_response_code,
+            )
+        if header.exchange_segment_code != NSE_FNO_SEGMENT_CODE:
+            return PacketDecodeFailure(
+                reason=PacketDecodeFailureReason.UNSUPPORTED_SEGMENT,
+                raw_length=len(raw),
+                feed_response_code=header.feed_response_code,
+            )
+        (open_interest,) = _OI_BODY_STRUCT.unpack(raw[_HEADER_SIZE:_OI_PACKET_SIZE])
+        return DhanOpenInterestPacket(header=header, open_interest=open_interest)
 
     if header.feed_response_code == DhanFeedResponseCode.DISCONNECT:
         if len(raw) < _DISCONNECT_PACKET_SIZE:

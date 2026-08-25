@@ -549,6 +549,18 @@ def test_k_no_gainz_reference_file_exists_in_repo() -> None:
         # already-allowed `gainz_compatible_research.py` artifact, no
         # new Gainz-named module was added.
         "test_checkpoint_64_52_database_first_backtest.py",
+        # Checkpoint 64.73: the daily-archive architecture doc's own
+        # Phase 11 requirement ("explicit statement that Gainz remains
+        # disabled") - a single safety-disclaimer sentence, not a
+        # reference implementation. No Gainz math or module was added.
+        "DAILY_MARKET_DATA_ARCHIVE_ARCHITECTURE.md",
+        # Checkpoint 64.76: Dhan option-capability RESEARCH. Its single
+        # Gainz mention is one prose line naming "market state at a Gainz
+        # signal timestamp" as a FUTURE historical-retention requirement -
+        # a statement of what would be needed, not an implementation. No
+        # Gainz math, module or activation was added there or since.
+        "test_checkpoint_64_76_dhan_option_capability.py",
+        "DHAN_MARKET_DATA_CAPABILITY_RESEARCH.md",
     }
     for path in hits:
         assert path.name in allowed_names, (

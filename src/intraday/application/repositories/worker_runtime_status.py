@@ -37,8 +37,41 @@ class WorkerRuntimeStatusRecord:
     effective_universe_subscribed_count: int
 
 
+@dataclass(frozen=True, slots=True)
+class WorkerStopRequest:
+    """Checkpoint 64.73: a pending, PROCESS-INDEPENDENT request that the
+    named worker stop. Carried on the worker's own runtime-status row
+    rather than delivered as an OS signal - see
+    `models.py::WorkerRuntimeStatus.stop_requested_at` for why 64.72's
+    three signal-based attempts could not work on Windows."""
+
+    provider: str
+    requested_at: datetime
+    requested_by: str
+    reason_safe: str
+
+
 class WorkerRuntimeStatusRepository(Protocol):
     def get(self, provider: str) -> WorkerRuntimeStatusRecord | None: ...
+
+    def request_stop(
+        self, provider: str, *, requested_at: datetime, requested_by: str, reason_safe: str
+    ) -> None:
+        """Records a stop request. Idempotent: requesting a stop twice
+        leaves exactly one pending request."""
+        ...
+
+    def get_stop_request(self, provider: str) -> WorkerStopRequest | None:
+        """The pending stop request, or `None`. Polled by the running
+        worker; returns `None` once the request has been cleared."""
+        ...
+
+    def clear_stop_request(self, provider: str) -> None:
+        """Clears any pending request. Called by the worker BOTH at
+        startup (so a stale request left over from a previous run can
+        never instantly kill a freshly started worker) and once a
+        request has been honoured."""
+        ...
 
     def save(
         self,
@@ -72,4 +105,8 @@ class WorkerRuntimeStatusRepository(Protocol):
         ...
 
 
-__all__ = ["WorkerRuntimeStatusRecord", "WorkerRuntimeStatusRepository"]
+__all__ = [
+    "WorkerRuntimeStatusRecord",
+    "WorkerRuntimeStatusRepository",
+    "WorkerStopRequest",
+]

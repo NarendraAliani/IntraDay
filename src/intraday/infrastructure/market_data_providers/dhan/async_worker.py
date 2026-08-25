@@ -29,6 +29,8 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import datetime as dt
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
@@ -37,6 +39,8 @@ from websockets.exceptions import ConnectionClosedError
 from intraday.domain.market_data.contracts import Quote
 from intraday.infrastructure.market_data_providers.dhan.packet_decoder import (
     DhanDisconnectPacket,
+    DhanFeedResponseCode,
+    DhanOpenInterestPacket,
     PacketDecodeFailure,
     decode_packet,
 )
@@ -45,6 +49,10 @@ from intraday.infrastructure.market_data_providers.dhan.packet_to_quote import (
 )
 from intraday.infrastructure.market_data_providers.dhan.stream_framing import (
     read_one_packet_from_stream,
+)
+from intraday.infrastructure.market_data_providers.dhan.timestamp_diagnostics import (
+    TimestampDiagnosticCollector,
+    make_timestamp_diagnostic_sample,
 )
 from intraday.infrastructure.market_data_providers.dhan.websocket_transport import (
     DhanWebSocketTransport,
@@ -138,6 +146,17 @@ async def run_worker_against_stream(
             transition(WorkerEvent.CONNECTION_LOST)
             break  # this checkpoint's loop does not itself reconnect - see scope note
 
+        if isinstance(decoded, DhanOpenInterestPacket):
+            # Checkpoint 64.78: OI packets (feed response code 5) are now
+            # DECODED rather than classified UNSUPPORTED_PACKET_TYPE. They
+            # are not equity quotes and must never enter the equity path,
+            # which subscribes NSE_EQ only (a cash instrument has no open
+            # interest). Skipped explicitly, and NOT counted as a decode
+            # failure - the packet decoded perfectly, it simply does not
+            # belong to this consumer. Option OI routing lives in
+            # `packet_to_option_observation.py`.
+            continue
+
         conversion = convert_packet_to_quote(decoded, security_id_to_symbol=security_id_to_symbol)
         if not conversion.accepted:
             result.rejected_packets += 1
@@ -158,6 +177,8 @@ async def run_worker_against_websocket(
     *,
     security_id_to_symbol: dict[int, str],
     on_quote: QuoteCallback | None = None,
+    timestamp_diagnostics: TimestampDiagnosticCollector | None = None,
+    stop_event: asyncio.Event | None = None,
 ) -> AsyncWorkerRunResult:
     """Checkpoint 61: the REAL-WebSocket sibling of
     `run_worker_against_stream()` - reuses the EXACT SAME decode
@@ -175,7 +196,25 @@ async def run_worker_against_websocket(
     `transport` must already be connected (`await transport.connect()`)
     before this function is called - matches
     `run_worker_against_stream()`'s own "assumes the transport is
-    already past its handshake" scope note exactly."""
+    already past its handshake" scope note exactly.
+
+    Checkpoint 64.71 adds `stop_event`, bringing this function to
+    parity with `run_worker_against_stream()`, which has accepted one
+    since Checkpoint 57. Its absence here is precisely why Checkpoint
+    64.70's real `--provider dhan` session had to be killed with
+    `taskkill /T /F`: there was no way to ask a live WebSocket worker
+    to stop.
+
+    A `stop_event` cannot simply be polled between packets on this
+    path. `receive_packets()` awaits the NEXT message, so on a quiet
+    feed (outside market hours, or a thin instrument) that await can
+    block far longer than a stop request should ever wait - polling
+    would honor a stop only when the next tick happened to arrive.
+    Instead a small watcher task awaits the event and CLOSES the
+    transport, which ends the async iteration promptly and, on a real
+    connection, sends a proper RFC 6455 close frame rather than
+    dropping the socket. The watcher is always cancelled and awaited
+    in `finally`, so no orphan task can outlive this call."""
     state = WorkerState.STOPPED
     result = AsyncWorkerRunResult(final_state=state)
 
@@ -193,8 +232,26 @@ async def run_worker_against_websocket(
     ):
         transition(startup_event)
 
+    async def _close_transport_on_stop(event: asyncio.Event) -> None:
+        await event.wait()
+        await transport.close()
+
+    watcher: asyncio.Task[None] | None = None
+    if stop_event is not None:
+        if stop_event.is_set():
+            # Already asked to stop before the first packet was ever
+            # read - honor it immediately rather than opening an
+            # iteration we would only have to tear straight back down.
+            transition(WorkerEvent.STOP_REQUESTED)
+            transition(WorkerEvent.STOPPED_CLEANLY)
+            result.final_state = state
+            return result
+        watcher = asyncio.create_task(_close_transport_on_stop(stop_event))
+
     try:
         async for raw in transport.receive_packets():
+            if stop_event is not None and stop_event.is_set():
+                break
             decoded = decode_packet(raw)
             if isinstance(decoded, PacketDecodeFailure):
                 result.decode_failures += 1
@@ -204,6 +261,17 @@ async def run_worker_against_websocket(
                 transition(WorkerEvent.CONNECTION_LOST)
                 break
 
+            if isinstance(decoded, DhanOpenInterestPacket):
+                # Checkpoint 64.78: OI packets (feed response code 5) are now
+                # DECODED rather than classified UNSUPPORTED_PACKET_TYPE. They
+                # are not equity quotes and must never enter the equity path,
+                # which subscribes NSE_EQ only (a cash instrument has no open
+                # interest). Skipped explicitly, and NOT counted as a decode
+                # failure - the packet decoded perfectly, it simply does not
+                # belong to this consumer. Option OI routing lives in
+                # `packet_to_option_observation.py`.
+                continue
+
             conversion = convert_packet_to_quote(
                 decoded, security_id_to_symbol=security_id_to_symbol
             )
@@ -212,6 +280,29 @@ async def run_worker_against_websocket(
                 continue
             assert conversion.quote is not None
             result.quotes_processed += 1
+            if timestamp_diagnostics is not None and timestamp_diagnostics.enabled:
+                # Checkpoint 64.70: THE first real wiring of the
+                # Checkpoint 64.64-prepared collector - explicit opt-in
+                # only (caller passes an already-`enabled=True`
+                # collector), a no-op otherwise. `packet_type` comes
+                # straight from the decoded header's own feed response
+                # code (never guessed), `fetched_at_utc` is captured
+                # HERE, immediately on receipt, before any DB/aggregation
+                # work that could add its own latency to the measurement.
+                try:
+                    packet_type = DhanFeedResponseCode(decoded.header.feed_response_code).name
+                except ValueError:
+                    packet_type = f"UNKNOWN_{decoded.header.feed_response_code}"
+                timestamp_diagnostics.record(
+                    make_timestamp_diagnostic_sample(
+                        symbol=security_id_to_symbol.get(
+                            decoded.header.security_id, str(decoded.header.security_id)
+                        ),
+                        packet_type=packet_type,
+                        source_timestamp_utc=conversion.quote.timestamp,
+                        fetched_at_utc=dt.datetime.now(tz=dt.UTC),
+                    )
+                )
             if on_quote is not None:
                 callback_result = on_quote(conversion.quote)
                 if callback_result is not None:
@@ -224,14 +315,40 @@ async def run_worker_against_websocket(
             transition(WorkerEvent.STOP_REQUESTED)
             transition(WorkerEvent.STOPPED_CLEANLY)
     except ConnectionClosedError:
-        # An ABNORMAL close (the real `websockets` library's own
-        # signal for this, distinct from a clean close) - treated the
-        # same as a Disconnect packet on the raw-TCP path: a
-        # connection problem the worker's own state machine must know
-        # about, never silently swallowed.
-        result.reconnect_relevant_disconnects += 1
-        result.last_close_code = transport.close_code
-        transition(WorkerEvent.CONNECTION_LOST)
+        if stop_event is not None and stop_event.is_set():
+            # Checkpoint 64.71: the close we are observing is the one
+            # our OWN watcher task just performed because a stop was
+            # requested. That is a clean, intentional shutdown - it
+            # must NOT be counted as a reconnect-relevant disconnect,
+            # or the supervisor would dutifully reconnect to a worker
+            # the operator just asked to stop.
+            transition(WorkerEvent.STOP_REQUESTED)
+            transition(WorkerEvent.STOPPED_CLEANLY)
+        else:
+            # An ABNORMAL close (the real `websockets` library's own
+            # signal for this, distinct from a clean close) - treated
+            # the same as a Disconnect packet on the raw-TCP path: a
+            # connection problem the worker's own state machine must
+            # know about, never silently swallowed.
+            result.reconnect_relevant_disconnects += 1
+            result.last_close_code = transport.close_code
+            transition(WorkerEvent.CONNECTION_LOST)
+    finally:
+        if watcher is not None:
+            watcher.cancel()
+            # Awaiting the cancelled task is what actually guarantees
+            # "no orphan remains" - `cancel()` alone only REQUESTS
+            # cancellation and returns immediately.
+            with contextlib.suppress(asyncio.CancelledError):
+                await watcher
+
+    if state is WorkerState.RUNNING and stop_event is not None and stop_event.is_set():
+        # Left the loop via the in-loop stop check (`break`), which
+        # bypasses the `else:` clean-stop branch - converge on the same
+        # clean STOPPED outcome here so a stop reaches STOPPED by
+        # whichever route it was noticed.
+        transition(WorkerEvent.STOP_REQUESTED)
+        transition(WorkerEvent.STOPPED_CLEANLY)
 
     result.final_state = state
     return result

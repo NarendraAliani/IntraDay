@@ -49,8 +49,11 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import datetime as dt
 import json
+import os
+import signal
 import struct
 from collections.abc import Callable
 
@@ -58,13 +61,17 @@ from asgiref.sync import sync_to_async
 from django.core.management.base import BaseCommand, CommandParser
 from django.db import close_old_connections
 
+from intraday.application.repositories.worker_runtime_status import WorkerStopRequest
 from intraday.application.services.bar_aggregation import BarAggregationService
+from intraday.application.services.market_data_archive import MarketDataArchiveService
 from intraday.application.services.provider_settings import DhanSettingsService
 from intraday.application.services.token_lifecycle import (
     TokenLifecycleState,
     evaluate_dhan_token_lifecycle,
 )
+from intraday.application.services.worker_stop_request import watch_for_stop_request
 from intraday.domain.market_data.aggregation import BarStatus
+from intraday.domain.market_data.archive import trading_date_for
 from intraday.domain.market_data.contracts import Quote
 from intraday.domain.session.calendar import session_for_instant
 from intraday.domain.shared_kernel.contracts import Timeframe
@@ -91,6 +98,9 @@ from intraday.infrastructure.market_data_providers.dhan.reconnect_supervisor imp
 from intraday.infrastructure.market_data_providers.dhan.scanner_universe import (
     resolve_scanner_universe,
 )
+from intraday.infrastructure.market_data_providers.dhan.timestamp_diagnostics import (
+    TimestampDiagnosticCollector,
+)
 from intraday.infrastructure.market_data_providers.dhan.websocket_transport import (
     DhanWebSocketTransport,
     DhanWebSocketTransportError,
@@ -102,6 +112,9 @@ from intraday.infrastructure.market_data_providers.dhan.worker_state import Work
 from intraday.infrastructure.persistence.live_market_data_repositories import (
     DjangoAggregatedBarRepository,
     DjangoLiveQuoteRepository,
+)
+from intraday.infrastructure.persistence.market_data_archive_repository import (
+    DjangoMarketDataArchiveRepository,
 )
 from intraday.infrastructure.persistence.models import SignalRecord
 from intraday.infrastructure.persistence.provider_settings_repositories import (
@@ -123,7 +136,62 @@ DHAN_LIVE_FEED_ENDPOINT = "wss://api-feed.dhan.co"
 (https://dhanhq.co/docs/v2/live-market-feed/) at Checkpoint 64/64.1 -
 never invented. The `version`/`token`/`clientId`/`authType` query
 parameters below match that same source exactly."""
-_SUBSCRIBE_REQUEST_CODE = 15
+_TIMESTAMP_DIAGNOSTICS_ENV_VAR = "DHAN_TIMESTAMP_DIAGNOSTICS_ENABLED"
+"""Checkpoint 64.70: THE explicit opt-in this session (and only this
+session) uses to enable the Checkpoint 64.64-prepared
+`TimestampDiagnosticCollector` for a real `--provider dhan` run.
+DISABLED unless this exact env var is set to "1" - never enabled by
+default, matching the collector's own `enabled=False` field default
+and the 64.64 directive's "prepare, but do NOT execute" instruction
+now being deliberately, narrowly opted into for one real session."""
+SUBSCRIBE_REQUEST_CODE_TICKER = 15
+"""Dhan's documented "Subscribe - Ticker Packet" request code."""
+SUBSCRIBE_REQUEST_CODE_QUOTE = 17
+"""Dhan's documented "Subscribe - Quote Packet" request code.
+
+CHECKPOINT 64.71 ROOT CAUSE. Until this checkpoint this command hard-
+coded RequestCode 15 as though it were a generic "subscribe" code. It
+is not. Dhan's own Annexure feed-request-code enum
+(https://dhanhq.co/docs/v2/annexure/#feed-request-code, re-verified
+this checkpoint) maps the code to a specific DATA MODE:
+
+    11 Connect Feed          12 Disconnect Feed
+    15 Subscribe - Ticker    16 Unsubscribe - Ticker
+    17 Subscribe - Quote     18 Unsubscribe - Quote
+    21 Subscribe - Full      22 Unsubscribe - Full
+    23 Subscribe - Depth     24 Unsubscribe - Depth
+
+That single constant is the complete explanation for Checkpoint
+64.70's "only Ticker (code 2) packets, never Quote (code 4) packets"
+finding: the worker only ever ASKED for Ticker. Nothing was wrong with
+the decoder, the server, or the subscription plumbing. Dhan does NOT
+choose the packet type server-side - the client selects it, per
+subscription message, via this code.
+
+This matters beyond packet shape: the Ticker packet carries only LTP
+and LTT (no volume field exists in its documented 12-byte layout), so
+subscribing to Ticker made real cumulative volume structurally
+unobtainable. The Quote packet carries the documented cumulative
+`volume` field that `packet_to_quote.py` already maps into
+`Quote.cumulative_volume` (built at Checkpoint 64.64 and unchanged
+here)."""
+UNSUBSCRIBE_REQUEST_CODE_QUOTE = 18
+"""Dhan's documented "Unsubscribe - Quote Packet" request code, the
+exact counterpart of 17 in the Annexure enum quoted above (Checkpoint
+64.78 - reused from that already-verified table, not newly invented).
+
+NOT TO BE CONFUSED WITH FEED RESPONSE CODES. RequestCode (this) and
+feed response code (`packet_decoder.DhanFeedResponseCode`) are two
+separate enumerations that happen to share small integers. In
+particular, 64.78 implements OI packet **response** code 5: there is no
+"subscribe to OI" request code, OI simply arrives on an existing
+subscription, and nothing in this module may ever send a RequestCode of
+5."""
+_DEFAULT_SUBSCRIBE_REQUEST_CODE = SUBSCRIBE_REQUEST_CODE_QUOTE
+"""Quote is now the default: it is a strict SUPERSET of Ticker (same
+LTP + LTT, plus volume/ATP/day OHLC), so nothing that worked against
+Ticker stops working, and the already-built real-volume path becomes
+reachable for the first time."""
 _MAX_INSTRUMENTS_PER_SUBSCRIBE_MESSAGE = 100
 """Dhan's own documented per-message limit (verified against
 https://dhanhq.co/docs/v2/live-market-feed/) - Checkpoint 64.4 closes
@@ -136,18 +204,25 @@ truncated."""
 def _build_subscribe_messages(
     instruments: tuple[DhanInstrument, ...],
     chunk_size: int = _MAX_INSTRUMENTS_PER_SUBSCRIBE_MESSAGE,
+    request_code: int = _DEFAULT_SUBSCRIBE_REQUEST_CODE,
 ) -> list[str]:
     """Splits `instruments` into `chunk_size`-sized batches, each
-    encoded as its own real `RequestCode: 15` subscribe message -
-    e.g. 287 instruments -> 3 messages of 100/100/87. Never silently
-    drops anything past the first `chunk_size`."""
+    encoded as its own real subscribe message - e.g. 287 instruments
+    -> 3 messages of 100/100/87. Never silently drops anything past the
+    first `chunk_size`.
+
+    `request_code` selects the Dhan DATA MODE (see
+    `SUBSCRIBE_REQUEST_CODE_QUOTE`'s own docstring for the documented
+    enum and for why this stopped being a hard-coded 15 at Checkpoint
+    64.71). It is a parameter rather than a constant purely so tests
+    can prove both modes encode correctly."""
     messages: list[str] = []
     for start in range(0, len(instruments), chunk_size):
         batch = instruments[start : start + chunk_size]
         messages.append(
             json.dumps(
                 {
-                    "RequestCode": _SUBSCRIBE_REQUEST_CODE,
+                    "RequestCode": request_code,
                     "InstrumentCount": len(batch),
                     "InstrumentList": [
                         {"ExchangeSegment": i.exchange_segment, "SecurityId": str(i.security_id)}
@@ -157,6 +232,81 @@ def _build_subscribe_messages(
             )
         )
     return messages
+
+
+def _build_unsubscribe_messages(
+    instruments: tuple[DhanInstrument, ...],
+    chunk_size: int = _MAX_INSTRUMENTS_PER_SUBSCRIBE_MESSAGE,
+) -> list[str]:
+    """Checkpoint 64.78: the same batching, the same transport, the same
+    payload shape - only the request code differs (18 instead of 17).
+
+    Implemented by DELEGATING to `_build_subscribe_messages()` rather
+    than by copying its body, so the batching rule can never drift
+    between subscribe and unsubscribe. Needed now because an option
+    universe is churn-prone in a way the equity one is not: contracts
+    expire, and rolling to the next expiry means dropping the old
+    subscriptions explicitly rather than leaking them until the socket
+    is torn down."""
+    return _build_subscribe_messages(
+        instruments, chunk_size=chunk_size, request_code=UNSUBSCRIBE_REQUEST_CODE_QUOTE
+    )
+
+
+def _install_stop_signal_handlers(
+    stop_event: asyncio.Event, *, report: Callable[[str], object] | None = None
+) -> tuple[str, ...]:
+    """Checkpoint 64.71: makes a standard stop signal SET `stop_event`,
+    which is what actually unwinds the `--provider dhan` worker (see
+    `run_worker_against_websocket()` / `run_worker_with_reconnect()`).
+    Checkpoint 64.70 had to resort to `taskkill /T /F` because nothing
+    here existed - an unconditional kill that gave the worker no chance
+    to close the WebSocket, flush pending quotes, or record a final
+    STOPPED runtime status.
+
+    Returns the signal names successfully installed, so a caller (and a
+    test) can see what protection is actually in effect rather than
+    assuming.
+
+    CROSS-PLATFORM REALITY, verified rather than assumed: this project
+    runs on Windows, where asyncio's `loop.add_signal_handler()` is not
+    implemented at all (the Proactor loop raises `NotImplementedError`)
+    and `SIGTERM` does not exist as a deliverable signal. So the
+    preferred loop-native path is tried first (it is the only one that
+    is genuinely safe with asyncio, since it wakes the loop directly),
+    and `signal.signal()` is the documented fallback. `Event.set()` is
+    not itself thread-safe with respect to the loop, but the fallback
+    handler runs in the main thread between bytecode instructions on
+    the SAME thread the loop runs on, which is the standard, accepted
+    pattern for this case.
+
+    Best-effort by design: a context where NO handler can be installed
+    (a non-main thread, an embedded loop) returns an empty tuple rather
+    than raising - failing to install a convenience shutdown hook must
+    never prevent the worker from running at all.
+    """
+    installed: list[str] = []
+    loop = asyncio.get_running_loop()
+    candidates = [getattr(signal, name, None) for name in ("SIGINT", "SIGTERM")]
+
+    for sig in candidates:
+        if sig is None:
+            continue
+        try:
+            loop.add_signal_handler(sig, stop_event.set)
+        except (NotImplementedError, RuntimeError, ValueError, AttributeError, OSError):
+            try:
+                signal.signal(sig, lambda _s, _f: stop_event.set())
+            except (ValueError, OSError, RuntimeError):
+                continue
+        installed.append(sig.name)
+
+    if report is not None:
+        report(
+            f"  stop signals armed: {', '.join(installed) or 'none (best-effort)'} "
+            "- worker will shut down cleanly on request."
+        )
+    return tuple(installed)
 
 
 _HEADER_STRUCT = struct.Struct("<BHBi")
@@ -777,6 +927,17 @@ class Command(BaseCommand):
         aggregate_now()`), genuinely live-reconfigurable without a
         reconnect."""
         health_tracker = WorkerHealthTracker()
+        timestamp_diagnostics = TimestampDiagnosticCollector(
+            enabled=os.environ.get(_TIMESTAMP_DIAGNOSTICS_ENV_VAR) == "1"
+        )
+        if timestamp_diagnostics.enabled:
+            self.stdout.write(
+                self.style.WARNING(
+                    f"  timestamp diagnostics ENABLED ({_TIMESTAMP_DIAGNOSTICS_ENV_VAR}=1) - "
+                    "collecting (symbol, packet_type, source_timestamp_utc, fetched_at_utc, "
+                    "delta_seconds) samples for this session only."
+                )
+            )
         scanner_config_repository = DjangoScannerConfigurationRepository()
         desired = await sync_to_async(scanner_config_repository.get)("dhan")
 
@@ -848,6 +1009,36 @@ class Command(BaseCommand):
             strategy_execution_enabled=strategy_execution_enabled,
         )
 
+        # Checkpoint 64.71: ONE stop event, shared by the supervisor
+        # (so it stops opening new connections) and the inner worker
+        # loop (so it closes the live WebSocket promptly instead of
+        # waiting for a tick that may never come on a quiet feed).
+        stop_event = asyncio.Event()
+        # Checkpoint 64.71: OS signal handlers - KEPT, but demoted to a
+        # best-effort SECOND path (they work for an interactive
+        # foreground run and were proven not to work for a detached
+        # background one in 64.72).
+        _install_stop_signal_handlers(stop_event, report=self.stdout.write)
+
+        # Checkpoint 64.73: the PRIMARY, process-independent stop path.
+        # Any stale request from a previous run is cleared BEFORE the
+        # watcher starts, so a leftover flag can never instantly kill a
+        # freshly started worker.
+        status_repository = DjangoWorkerRuntimeStatusRepository()
+        await sync_to_async(status_repository.clear_stop_request)("dhan")
+
+        async def _poll_stop_request() -> WorkerStopRequest | None:
+            return await sync_to_async(status_repository.get_stop_request)("dhan")
+
+        stop_watcher = asyncio.create_task(
+            watch_for_stop_request(
+                stop_event,
+                provider="dhan",
+                get_stop_request=_poll_stop_request,
+                report=self.stdout.write,
+            )
+        )
+
         async def connect_and_run() -> AsyncWorkerRunResult:
             health_tracker.mark_connecting()
             uri = (
@@ -870,7 +1061,11 @@ class Command(BaseCommand):
                 for message in subscribe_messages:
                     await transport.send_json_text(message)
                 result = await run_worker_against_websocket(
-                    transport, security_id_to_symbol=security_id_to_symbol, on_quote=sink.on_quote
+                    transport,
+                    security_id_to_symbol=security_id_to_symbol,
+                    on_quote=sink.on_quote,
+                    timestamp_diagnostics=timestamp_diagnostics,
+                    stop_event=stop_event,
                 )
                 if result.final_state is WorkerState.RECONNECTING:
                     # Checkpoint 64.23: `last_close_code` (from a real
@@ -896,14 +1091,57 @@ class Command(BaseCommand):
             finally:
                 await transport.close()
 
-        supervisor_result = await run_worker_with_reconnect(
-            connect_and_run, max_attempts=max_reconnect_attempts
-        )
+        try:
+            supervisor_result = await run_worker_with_reconnect(
+                connect_and_run, max_attempts=max_reconnect_attempts, stop_event=stop_event
+            )
+        finally:
+            # The watcher must never outlive the run it belongs to, and
+            # the honoured request must never linger to kill the NEXT
+            # worker start.
+            stop_watcher.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await stop_watcher
+            await sync_to_async(status_repository.clear_stop_request)("dhan")
+
+        if supervisor_result.final_state is WorkerState.STOPPED and stop_event.is_set():
+            # Persist the clean STOPPED state, so the runtime status an
+            # operator reads after shutdown reflects reality rather than
+            # the last successful connect's RUNNING.
+            health_tracker.mark_stopped()
+            await sync_to_async(health_tracker.persist)(
+                DjangoWorkerRuntimeStatusRepository(),
+                provider="dhan",
+                now=dt.datetime.now(tz=dt.UTC),
+            )
+            self.stdout.write(self.style.WARNING("  stop requested - worker shut down cleanly."))
+
+        # Checkpoint 64.73: after the feed is closed and persistence has
+        # settled, record what this session actually archived. Read-only
+        # over already-persisted observations - it classifies, it never
+        # writes or deletes market data.
+        try:
+            now = dt.datetime.now(tz=dt.UTC)
+            assessments = await sync_to_async(
+                MarketDataArchiveService(DjangoMarketDataArchiveRepository()).refresh_for_instant
+            )(as_of=now)
+            self.stdout.write(
+                f"  archive refreshed: {len(assessments)} cell(s) for trading_date="
+                f"{trading_date_for(now).isoformat()} "
+                f"statuses={sorted({a.status.value for a in assessments})}"
+            )
+        except Exception as exc:  # pragma: no cover - never fail a shutdown on bookkeeping
+            self.stdout.write(self.style.WARNING(f"  archive refresh skipped: {exc!r}"))
         self.stdout.write(
             f"  reconnect_count={supervisor_result.reconnect_count} "
             f"attempts={supervisor_result.attempts} "
             f"last_disconnect_reason={supervisor_result.last_disconnect_reason}"
         )
+        if timestamp_diagnostics.enabled:
+            summary = timestamp_diagnostics.summary()
+            self.stdout.write(self.style.SUCCESS(f"  timestamp_diagnostics_summary={summary}"))
+            for row in timestamp_diagnostics.export_safe_rows():
+                self.stdout.write(f"  timestamp_diagnostics_sample={row}")
         return sink, AsyncWorkerRunResult(
             final_state=supervisor_result.final_state,
             quotes_processed=supervisor_result.total_quotes_processed,

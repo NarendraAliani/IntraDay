@@ -1,421 +1,240 @@
 # Task Report
 
 ## Milestone
-MILESTONE 2 — PAPER TRADING MVP (operational readiness).
+Frontend product maturity — making the platform's real decision chain visible and honestly qualified, ahead of the next live milestone (Full NSE equity session + matching reference reconciliation).
 
 ## Checkpoint
-CHECKPOINT 64.69 — Paper Trading MVP Operational Readiness: Runtime Database +
-API + Frontend Smoke Validation.
+64.80-F3 — Feature/Scanner/Strategy Correlation Experience (FRONTEND-ONLY).
 
 ## Classification
-OPERATIONAL / SMOKE-VALIDATION checkpoint. No new Paper Trading engine, no
-Gainz work, no Dhan connection, no scope expansion. This checkpoint applied
-one additive migration and independently exercised the real runtime
-database/API/persistence layer that 64.68 built. No production source file
-was modified.
+Frontend-only. Zero backend source changes, zero database/migration changes, zero live market activity. The Indian market is closed; nothing in this checkpoint contacted Dhan, started a worker, or placed an order.
 
 ## Objective
-Answer, with real evidence against the real runtime database and API layer
-(not unit-test mocks): "Can I actually operate a deterministic Paper Trading
-session through the real application, end to end?"
+Create a frontend experience that makes the REAL relationship between market data, features, scanners, strategies, signals, paper trading and outcomes visible — using only what the existing backend/API contracts actually establish, and representing every missing or unexposed relationship honestly rather than inventing it.
 
-## Market State
-Not relevant to this checkpoint's scope (offline, database/API smoke
-validation only) — no live Dhan connection was attempted or required.
+## Correlation Audit
 
----
+Phase 1 was a read-only investigation of `frontend/shared/generated_contracts/api-types.ts` (86 endpoints, 80 schemas), cross-checked against the actual Django views in `src/intraday/infrastructure/api/`, the strategy registry in `src/intraday/trading_engine/strategy_execution/`, the field registry in `src/intraday/signal_intelligence/feature_engine/field_registry.py`, and the signal→order lineage in `src/intraday/application/services/paper_signal_execution.py`.
 
-## Migration 0027
+| Source | Target | Status | Evidence | UI Exposure | Gap |
+|---|---|---|---|---|---|
+| Market Data | Features | FOUND | `GET /api/v1/config/strategy-engine/fields/` → `FieldDefinition.required_inputs` names the raw bar fields each derived feature consumes (RSI requires `close`; ATR requires `high`,`low`,`close`). `FieldDefinition.source` is `domain.market_data.contracts.Bar` for raw fields and `signal_intelligence.feature_engine` for derived ones. | Rendered as a FOUND chain link with the endpoint and field named inline. | None. |
+| Features | Scanner | NOT APPLICABLE | `ScannerConfigurationState` exposes only `timeframe`, `universe_mode`, `universe_requested_count`, `universe_subscribed_count`, `strategy_ids`, `configuration_version`, `enabled`. No scanner-condition entity exists in the API contract or anywhere in `src/` (no `ScannerCondition` class). This platform's Scanner is a scan LOOP over universe × strategies; feature evaluation happens inside a Strategy. | Rendered as NOT APPLICABLE with the explanation that the relationship does not exist by design, and a pointer to the real Features→Strategy link. | None to close. Treating this as a missing link would misdescribe the architecture. |
+| Features | Strategy | PARTIAL | `GET /api/v1/config/strategy-engine/strategies/{strategy_id}/schema/` → `ParameterDefinition.parameter_type === "FIELD_REFERENCE"` plus `field_category` publishes the field CATEGORY a parameter accepts. The chosen `field_id` lives in `StrategyConfigurationResponse.values`, typed `unknown`. The authoritative resolved list, `Strategy.required_features(config)` (`trading_engine/strategy_execution/strategy.py:30`), is exposed by NO endpoint — the string `required_features` does not appear anywhere in the generated contract. | Rendered as PARTIAL in "Other audited relationships". | Publish the resolved `required_features(config)` field_id list per active configuration. |
+| Market Data | Scanner | FOUND | `ScannerConfigurationState.timeframe` / `universe_requested_count` / `universe_subscribed_count`, plus `WorkerRuntimeStatusResponse.subscribed_instrument_count`. | Rendered as FOUND. | None. |
+| Scanner | Strategy | FOUND | `ScannerConfigurationState.strategy_ids` on `GET /api/v1/config/market-data/scanner-config/` declares exactly which strategies the scan loop runs. `ScannerProgressResponse.current_strategy` / `strategies_total` / `strategies_processed` show it in flight. | Rendered as a FOUND chain link. | None. |
+| Scanner (run) | Signal | PARTIAL | `ScannerProgressResponse.signals_found` is an aggregate COUNT only. `SignalResponse` carries no scan-run identifier, so the count cannot be decomposed into the signals it counted. | Rendered as PARTIAL. | Carry a scan-run identifier onto `SignalResponse`. |
+| Strategy | Signal | FOUND | `SignalResponse.strategy_id` on `GET /api/v1/config/signals/`; `SignalReportResponse.by_strategy` aggregates counts per strategy. | Rendered as a FOUND chain link. | None. |
+| Features | Signal | NOT AVAILABLE | `SignalResponse.evidence.fields` is a list of `{label, value}` pairs authored by the strategy in its own display order (`SignalEvidenceRecordView.fields` is a tuple of `(label, value)` strings). Labels are free-text display strings, NOT `FieldDefinition.field_id` values — `field_id` does not appear in `SignalResponse` at all. No programmatic join exists. | Rendered as NOT AVAILABLE. | Emit `field_id` alongside each evidence label. |
+| Signal | Paper Trade | PARTIAL | `PaperSessionSignal` carries `signal_id` together with `order_status` in one record, so signal→ORDER is exposed directly. `PaperOrderResponse.idempotency_key` IS the `signal_id` and `order_id` is `order-{signal_id}` for engine-generated orders (`paper_signal_execution.py:345-364`). But `PaperTradeResponse` has NO `signal_id` — only `order_ids` — so signal→TRADE is reachable only by joining through the order id. | Rendered as a PARTIAL chain link, stating exactly which half is exposed. | Expose `signal_id` on `PaperTradeResponse`. |
+| Paper Trade | Outcome | FOUND | `PaperTradeResponse.realized_pnl`; `PaperSessionTrade.realized_net_pnl`; `DailySessionReportResponse.realized_pnl_total` / `unrealized_pnl_total` / `closed_positions`. | Rendered as a FOUND chain link. | None. |
+| Paper Trade | Strategy VERSION | NOT FOUND | Searched every paper schema. `PaperTradeResponse`, `PaperOrderResponse`, `PaperPositionResponse` and `PaperSessionTrade` all carry `strategy_id` but NONE carries `specification_version`, `code_version` or `configuration_version`. `DailySessionReportResponse.configuration_version` is the SCANNER configuration version — a different concept. | Rendered as NOT FOUND. | Stamp the flattened strategy version onto paper orders and trades so P&L can be attributed to a configuration. |
+| Strategy | Backtest Outcome | FOUND | `GET /api/v1/config/backtesting/strategies/{strategy_id}/results/` is keyed on `strategy_id` and returns `BacktestResult` with its own `trust_level` and `validation`. | Rendered as FOUND. | None. |
+| Market Data | Outcome (archive-qualified) | NOT YET IMPLEMENTED | The daily archive is a MANAGEMENT COMMAND (`market_data_archive`). No archive or reconciliation schema exists in the generated contract. | Rendered as NOT YET IMPLEMENTED. | Expose archive completeness + reconciliation as a read-only API. |
 
-**PENDING → APPLIED this checkpoint.**
+Totals: **6 FOUND, 3 PARTIAL, 1 NOT FOUND, 1 NOT AVAILABLE, 1 NOT APPLICABLE, 1 NOT YET IMPLEMENTED.**
 
-`showmigrations persistence` before:
-```
- [X] 0025_signalevidencerecord
- [X] 0026_aggregatedbarobservation_volume_and_more
- [ ] 0027_papertradingsessionrecord
-```
+## Correlation Taxonomy
 
-Migration file (`0027_papertradingsessionrecord.py`) inspected before applying:
-a single `CreateModel` operation for `PaperTradingSessionRecord`, depending
-correctly on `0026_aggregatedbarobservation_volume_and_more`. No `RunPython`,
-no destructive operation, no `DropField`/`DeleteModel` — purely additive (one
-new table). Safe to apply.
+One closed vocabulary, defined once in `correlationModel.ts` and rendered verbatim as an on-screen legend:
 
-Applied via the project's normal mechanism only:
-```
-poetry run python manage.py migrate persistence 0027
-Applying persistence.0027_papertradingsessionrecord... OK
-```
-No `--fake`, no manual SQL, no schema hack.
+- **FOUND** — the API contract exposes a field that directly joins these two things. Verified against the generated contract.
+- **PARTIAL** — part of the relationship is exposed (an aggregate, a category, or an id needing an indirect join) but not the whole link.
+- **NOT FOUND** — searched for in the contract; no field establishes it. A real traceability gap, not a UI omission.
+- **NOT APPLICABLE** — the relationship does not exist in this platform's design. There is nothing for the backend to expose.
+- **NOT AVAILABLE** — the relationship exists inside the backend but no HTTP endpoint publishes it.
+- **NOT YET IMPLEMENTED** — the capability itself is not built, so no relationship can exist yet.
 
-`showmigrations persistence` after:
-```
- [X] 0026_aggregatedbarobservation_volume_and_more
- [X] 0027_papertradingsessionrecord
-```
+The UI states explicitly that availability is not correlation and correlation is not causal proof: "A FOUND status means the API exposes a join between two records. It does not claim the upstream stage caused the downstream outcome."
 
-## Runtime Database
+## Decision Pipeline
+A reusable component, `frontend/src/features/correlation/DecisionPipeline.tsx`, rendering the seven-stage chain Market Data → Features → Scanner → Strategy → Signal → Paper Trade → Outcome as a semantic `<ol>`. Each stage shows an icon, label, stage ordinal, one-sentence summary, the real GET endpoints behind it, and a navigation action. Each connector carries the audited link's status badge, its relationship sentence, its API evidence, and its gap.
 
-Identified via `settings.DATABASES['default']` (safe fields only):
-- `ENGINE`: `django.db.backends.postgresql`
-- `NAME`: `intraday`
-- `HOST`: `localhost`
-- `PORT`: `5432`
+## Market Data
+Stage 1. Bars/quotes for the subscribed universe. Backed by `market-data/bars/`, `market-data/quotes/`, `market-data/worker-status/`. Navigates to the existing Market Data screen.
 
-This is the same database used throughout the 64.62–64.68 arc (verified by
-re-querying the 64.62 forensic rows below and finding them byte-identical).
+## Features
+Stage 2. The canonical field registry — raw Bar fields plus derived EQUITY indicators (SMA, EMA, ATR, RSI, ADX, +DI, -DI, Relative Volume, MACD histogram). Backed by `strategy-engine/fields/`. The UI states plainly that no options fields exist in this registry. Navigates to Strategy Configuration, where the field registry is actually rendered.
 
-## Schema Verification
+## Scanner
+Stage 3. The scan loop over universe × timeframe × configured strategies. It holds no conditions of its own — stated explicitly, because assuming otherwise is the single most likely false correlation on this screen. Backed by `market-data/scanner-config/` and `market-data/live-paper-workbench/`. Navigates to Live Scanner.
 
-`PaperTradingSessionRecord` confirmed present and functional via a real
-create/read/update/read/cleanup cycle against this database (not a mock):
+## Strategy
+Stage 4. Registered, versioned strategies with a parameter schema and saved configuration — where entry/exit conditions actually live. Backed by `strategy-engine/strategies/`, `.../schema/`, `strategy/{id}/active/`.
 
-- Created a clearly-marked test record, `session_id="checkpoint-64-69-smoke-test"`.
-- Read it back: `status="STOPPED"` (as created).
-- Updated `status="RUNNING"`, `replay_cursor=5`, saved.
-- Re-read: `status="RUNNING"`, `replay_cursor=5` — update round-tripped
-  correctly.
-- Deleted the test record: `1` row removed. No trace remains.
+## Signal
+Stage 5. Strategy-produced signals with direction, risk decision, trade plan and strategy-authored evidence. Backed by `config/signals/` and `reports/signals/`. Navigates to Reports (Signal Report) — the application has no standalone Signals screen, so no fake deep link was created.
 
-No existing production data was touched. The 64.62 forensic rows
-(`LiveQuoteObservation` ids 65-70, `AggregatedBarObservation` ids 37-40) were
-independently re-queried after this checkpoint's work and found
-**byte-identical** to every prior verification in this project (same
-`source_timestamp` values, same `status='CLOSED'`).
+## Paper Trading
+Stage 6. Simulated execution only. Backed by `paper-trading/orders/`, `paper-trading/trades/`, `paper-trading/session/`. The stage text restates that nothing reaches a real exchange.
 
----
+## Outcome
+Stage 7. Realized/unrealized P&L and backtest results. Backed by `reports/daily-session/` and `backtesting/strategies/{id}/results/`.
 
-## API Smoke Test
+## Dashboard Integration
+`DecisionPipeline` is hosted at the foot of the existing Dashboard (`features/dashboard/DashboardPage.tsx`) as a "Decision Pipeline" section, placed after the status cards deliberately: the cards answer "what is happening now", the pipeline answers "how does this platform get from data to a decision, and which of those links are actually wired". The dashboard HOSTS the component; it does not own it — the component lives in `features/correlation/` so any other screen can reuse it.
 
-Performed with a standalone script (`django.setup()` + `django.test.Client`
-against the real dev settings/database — **not** the pytest test-database, and
-**not** the checkpoint's own self-authored test file — an independently
-written smoke script) hitting the real URL-resolved views at
-`/api/v1/config/paper-trading/session/`:
+## Drill-Down Navigation
+This project has **no React Router** — verified. `App.tsx` holds one piece of screen state and switches on it (a documented convention since Checkpoint 9). The pipeline therefore drills down through that existing mechanism: a `PipelineDestination` closed union of screen ids that already exist, passed up via `onNavigate` and mapped to `setScreen` in `App.tsx`. A node with no real screen renders no control at all rather than a dead link. Pipeline actions were named "Go to …" rather than "Open …" so they do not collide with the dashboard cards' own accessible names (a duplicate-accessible-name defect caught by the existing `AppDashboardNavigation` test).
 
-```
-configure status code: 200
-configure mode: PAPER_REPLAY status: STOPPED
-start status: RUNNING accepted: True mode: PAPER_REPLAY
-step cursor: 5
-pause status: PAUSED
-resume status: RUNNING
-GET status fields present: True
-account: {'starting_capital': '1000000.0000', 'available_capital': '1000000.0000',
-          'utilized_margin': '0.0000', 'realized_pnl': '0.0000',
-          'unrealized_pnl': '0.0000', 'total_pnl': '0.0000',
-          'equity': '1000000.0000', 'peak_equity': '1000000.0000',
-          'drawdown': '0.0000'}
-open_positions count: 0
-closed_trades count: 0
-recent_signals count: 5
-stop status: STOPPED
-reset status: STOPPED cursor: 0
-cleanup done
-```
-Every response carried `mode: "PAPER_REPLAY"`. The full lifecycle
-(configure→start→step→pause→resume→GET→stop→reset) worked against the real
-API and real database. `recent_signals count: 5` shows the strategy was
-genuinely evaluated on each of the 5 replayed bars; no crossover fired in this
-short window (0 trades) — this is a property of the deterministic replay data
-and the EMA-crossover strategy's own logic, not a defect (the full
-signal→order→fill→trade path was already independently proven in 64.68's own
-`test_full_execution_flow_produces_signals_orders_fills_positions_trades_and_pnl`,
-which I re-ran and confirmed passing during 64.68's verification).
+## Visual Identity
+Reuses 64.80-F2's cerebral identity exactly: analytical surface tokens, precision connector rules, mono/tabular metrics for endpoints and pair labels, restrained status badges. Connectors are static 2px rules coloured by link status. No flashy flowchart, no `@keyframes`, no `infinite`, no `animation:` property — the same restraint the theme quality gate enforces.
 
-## RBAC
+## Icons
+The EXISTING single icon system (`common/icons/Icon.tsx`) only. **No new icon was added and no second system created** — a test asserts neither the model nor the component contains a raw `<svg>`, and that the component imports both `Icon` and the shared `StatusBadge`. Status markers come from `StatusBadge`, which already maps tone → icon. No Unicode glyphs or emoji.
 
-Verified directly, not via the self-authored test file:
-- Anonymous `GET` → `401` (expected 401/403). ✅
-- Anonymous `POST start/` → `401`. ✅
-- Authenticated reader `GET` → `200`. ✅
-- Authenticated reader `POST configure/` → `403` (rejected, not an operator). ✅
-- Authenticated configuration operator → full lifecycle succeeded (all calls
-  above). ✅
+## Themes
+The EXISTING theme system only. **No new CSS token was introduced** — the theme quality gate requires all four themes to define an identical token set, so a new token would have been a four-theme change. Every pipeline colour is a `var()` from the 64.80-F2 token set. A test renders the pipeline under all four themes (focus, midnight, obsidian, aurora) and asserts the structure and the status WORDS survive unchanged.
 
-All test users (`smoke-operator-6469`, `smoke-reader-6469`) and the test
-session record were deleted at the end of the script — no residue left in the
-database.
+## Responsive
+Desktop: `repeat(auto-fit, minmax(260px, 1fr))` horizontal flow. Below 1100px the same markup stacks to a single column and the connector rule rotates from horizontal (2px tall) to vertical (2px wide, 24px tall), indented so it never crosses a label. One markup tree serves both layouts — asserted by a test, so nothing is duplicated or hidden per breakpoint.
 
-## Frontend Smoke Test
+## Accessibility
+The chain is an ordered list, so assistive technology receives the sequence without depending on visual position or arrows. Every relationship is announced as a full sentence ("Market Data supplies the raw bar fields that Features are computed from."), never as a glyph. Decorative icons and every connector rule are `aria-hidden`. The pipeline is a named region; every stage is a heading with its own accessible name. Every destination is a real `<button type="button">`, focusable in document order. Colour never carries state alone — the status WORD and its explanation are always rendered as text.
 
-- `npm run build` (production build) succeeds cleanly:
-  `81 modules transformed`, `dist/assets/index-*.js` produced, `built in 985ms`.
-- `PaperSessionPanel.tsx` (rendered inside the existing `PaperTradingPage.tsx`)
-  read directly: contains the banner text `"◐ PAPER TRADING — NOT LIVE
-  TRADING."` and `"LIVE TRADING — NOT AVAILABLE"`, and explicit control labels
-  `"Start Paper Trading"` / `"Stop Paper Trading"` — confirmed by direct
-  `grep`, not by trusting the report.
-- `npm test -- --run`: **183/183 frontend tests pass**, including the 7
-  `PaperSessionPanel.test.tsx` tests (one of which iterates every rendered
-  button and asserts none is a bare "Trade" and none matches
-  "place order|submit order|go live" — read directly in the 64.68
-  verification pass).
+## API Usage
+Read-only. The pipeline itself issues **no network requests at all** — it is a static, evidence-backed description of the contract, so it cannot fabricate a relationship from a runtime response. The endpoints it NAMES are the existing GET endpoints listed in the audit above; all are rendered verbatim with their HTTP verb so a reader can see they are reads.
 
-I did not launch the Vite dev server interactively (no browser available in
-this environment), so "the page visually renders in a browser" is not
-independently screenshot-verified — the evidence is the passing component
-test suite (which renders the real component tree via Testing Library) plus
-the successful production build, which is the standard and sufficient
-evidence this project's prior UI checkpoints have used.
+## Backend Limitations
+Documented as future backend/API requirements, not filled in:
+1. `PaperTradeResponse` carries no `signal_id` — signal→trade needs a client-side id join.
+2. No paper schema carries a strategy version — realized P&L cannot be attributed to a configuration.
+3. `required_features(config)` is not exposed — a feature cannot be traced to every strategy that consumes it.
+4. Signal evidence labels are free text, not `field_id` — evidence cannot be joined to the field registry.
+5. `SignalResponse` carries no scan-run id — an aggregate `signals_found` cannot be decomposed.
+6. No archive/reconciliation HTTP API exists (carried forward from 64.80-F).
 
-## Configure / Start / Step / Pause / Resume / Stop / Reset
+## Testing Level
+FULL FRONTEND REGRESSION (escalated).
 
-All seven lifecycle actions exercised against the real API in the smoke test
-above; each returned the expected status transition
-(`STOPPED→RUNNING→...→PAUSED→RUNNING→STOPPED→STOPPED`(reset)) with
-`replay_cursor` advancing/resetting correctly.
+## Tests Run
+- New: `src/features/correlation/correlationModel.test.ts` (40 tests) and `src/features/correlation/DecisionPipeline.test.tsx` (32 tests) — **72 new tests, all passing**.
+- Full frontend regression: `npx vitest run` → **350 tests across 32 files, all passing**.
+- CSS/theme quality gates: `styles.quality.test.ts` + `theme.quality.test.ts` → 20 passing.
 
-## Account / Positions / Trades / Signals / P&L / Equity / Drawdown
+`correlationModel.test.ts` is the honesty gate: it reads the checked-in generated contract as text and asserts that every field cited as evidence for a FOUND/PARTIAL link genuinely EXISTS in it, and — symmetrically — that every field claimed MISSING is genuinely ABSENT (e.g. `PaperTradeResponse` must not contain `signal_id`; the contract must not contain `required_features`). A future link asserting an unexposed correlation fails the build.
 
-All fields present and internally consistent in the real API response (see
-JSON above): `equity == available_capital + unrealized_pnl` component, no
-negative capital, `realized_pnl`/`unrealized_pnl`/`total_pnl` all `0.0000`
-consistent with zero trades executed in this short deterministic window,
-`drawdown=0.0000` consistent with equity never dropping below `peak_equity`.
-This reuses the exact canonical accounting proven end-to-end in 64.68 — no
-second P&L calculation was introduced or exercised here.
+Phase 13's required coverage is met in full: pipeline renders; FOUND/PARTIAL/NOT AVAILABLE/NOT FOUND (and NOT APPLICABLE/NOT YET IMPLEMENTED) each render correctly; no false correlation is displayed (the rendered edge set must equal the audited edge set exactly, and each card's badges must equal exactly that link's status); theme switching preserves the pipeline; icons render through the common system; keyboard navigation works; stacked layout stays readable; navigation destinations fire with the right screen id; no Gainz control appears; no NSE_FNO/OptionQuote/OI/IV/Greeks UI is introduced.
 
-## Persistence After Restart
+## Tests Skipped
+Backend pytest, mypy and lint-imports — deliberately not run, because no backend source was modified. Running them would only re-measure carried-forward 64.43–64.80-F2 state.
 
-Independently re-proven (separate from 64.68's own test, using a standalone
-script constructing two fully independent `ReplayPaperSessionService`
-instances):
-```
-instance 1 cursor: 1 status: PaperSessionStatus.RUNNING
-instance 2 (fresh) cursor: 1 status: PaperSessionStatus.RUNNING
-cursor matches across fresh instance: True
-account matches across fresh instance: True
-```
-A brand-new service/repository instance reconstructs identical session state
-from the database alone — no in-memory state is required.
+## Escalation Decision
+Escalated to full frontend regression, and it was warranted. This checkpoint modified the **dashboard shell host** (`DashboardPage.tsx`), the **application shell** (`App.tsx`), the **shared stylesheet** (`styles.css`), and consumed the **shared theme + icon + StatusBadge foundation**. That is exactly the escalation criterion. It paid for itself immediately: the regression caught a real defect the targeted tests could not — the pipeline's navigation buttons duplicated the dashboard cards' accessible names, breaking `AppDashboardNavigation.test.tsx`. That was a genuine accessibility problem (two identically-named buttons on one screen), fixed by renaming the pipeline's actions rather than by weakening a prior checkpoint's test.
 
----
+## Frontend Build
+`npm run build` — PASS. 94 modules transformed; `dist/assets/index-*.css` 48.42 kB (gzip 8.83 kB), `dist/assets/index-*.js` 366.28 kB (gzip 97.43 kB). Built in 982ms.
 
-## Paper vs Live Safety
+## Type Check
+`npx tsc --noEmit` — PASS, zero errors. (`npm run build` runs `tsc -b` first and also passed.)
 
-**Dhan**: not connected. No WebSocket, no Dhan client call, no credential
-read anywhere in this checkpoint's activity (only DB/API/frontend smoke
-testing was performed).
+## CSS Quality
+PASS. No hex/rgba literal outside `:root`; no duplicate rule blocks; responsive `@media` rule present; focus-visible preserved; no inline `style={{ }}` anywhere; no raw `<svg>` outside the icon module; no emoji. No new theme token was added, so all four themes remain token-identical.
 
-**Live Broker**: no live-broker code path exists in the new session/API/UI
-layer (re-confirmed in 64.68's verification: `grep` for
-`dhan|websocket|httpx|requests\.|socket|aiohttp` across the new backend
-modules returns only comments asserting absence).
+## Backend Changes
+**NONE.** No file under `src/`, `trading_engine/`, `application/`, `domain/`, `config/`, `signal_intelligence/` or `research/` was created, edited or deleted by this checkpoint. The backend diff visible in `git status` is entirely carried-forward, uncommitted 64.43–64.80-F2 work that pre-existed this session.
 
-**Gainz**: DISABLED, unchanged. `build_default_registry()` still registers
-exactly `EmaCrossoverStrategy`, `SmaTrendFilterStrategy`,
-`AtrVolatilityBreakoutStrategy` — re-verified by direct `grep` this
-checkpoint.
+## Database Changes
+**NONE.** No migration created, no model touched, no query executed.
 
-Every API response in the smoke test carried `mode: "PAPER_REPLAY"`.
+## Live Market Activity
+**NONE.** Dhan was not contacted. No worker was started. No credentials were read or modified. No order was placed. The Indian market is closed. The new component performs no network I/O whatsoever.
 
----
+## Research Readiness
+Unchanged — **NOT READY**. Still gated on full NSE session validation, independent candle authority, and reconciliation evidence. This checkpoint did not touch the research-readiness gate and did not claim progress on it.
 
-## Known MVP Limitations
-Unchanged from 64.68, not addressed in this checkpoint per its explicit scope
-restriction (§11): single-instrument replay, no automatic playback ticker, no
-EOD square-off of open positions, stop-loss/target/partial-exit not exercised
-by the replay path, one session at a time (`DEFAULT_SESSION_ID="default"`),
-synthetic (not real historical) replay data.
+## Gainz Status
+**DISABLED / future scope, unchanged.** No Gainz activation control was added. The pipeline contains no Gainz node and no Gainz text at all — asserted by two tests.
 
-## REAL NSE SESSION #2 Status
-**Still pending.** Not attempted this checkpoint (explicitly out of scope,
-per §12). Remains gated on an open NSE market session and a valid Dhan
-credential, as established in checkpoints 64.65–64.67.
+## BacktestTrustLevel
+Unchanged. No backtest code, cost model, validation path or trust-level computation was touched.
 
----
-
-## Tests
-
-- 64.68 backend checkpoint tests: `tests/unit/application/services/test_checkpoint_64_68_replay_paper_session.py` +
-  `tests/unit/infrastructure/api/test_checkpoint_64_68_paper_session_api.py`
-  — re-run this checkpoint: **48/48 passed**.
-- 64.68 frontend checkpoint tests: `PaperSessionPanel.test.tsx` — included in
-  the full `183/183 passed` frontend run.
-- No production source code was changed this checkpoint (only a migration was
-  applied and independent smoke scripts were run and cleaned up), so per §15
-  a full backend/frontend regression was not re-run from scratch this
-  checkpoint — however, the full backend suite (`tests/`, 2299 tests) and full
-  frontend suite (183 tests) were both independently re-confirmed passing
-  during this same verification pass (carried over from the adjacent 64.68
-  verification, run against the now-migrated database), so the numbers below
-  are genuinely current, not stale.
-
-## Regression
-Full backend suite: **2299 passed, 0 failed** (`tests/`, ~7.5 min). Full
-frontend suite: **183 passed, 0 failed**. Both re-run independently against
-the post-migration-0027 state.
-
-## Security
-No credential, password, or secret was printed, logged, or exposed anywhere
-in this checkpoint's database-identity report (`ENGINE`/`NAME`/`HOST`/`PORT`
-only) or in any smoke-test output. RBAC independently proven correct (401 for
-anonymous, 403 for non-operator mutation, 200/full-access for operator). All
-test users and test database records created during this checkpoint's smoke
-testing were deleted — no residue.
-
-## Performance
-N/A — no live workload, no performance benchmarking in scope this checkpoint.
-
----
-
-## Remaining Gaps
-None that block MVP operability. The pre-existing, honestly-documented 64.68
-limitations (single-instrument replay, no automatic ticker, no EOD
-square-off, stop-loss/target/partial-exit unexercised) remain exactly as
-documented — this checkpoint's job was to confirm operability, not to close
-those gaps, per its own explicit scope restriction.
+## Remaining Correlation Gaps
+1. Signal → Paper Trade requires a client-side id join (no `signal_id` on `PaperTradeResponse`).
+2. Realized P&L cannot be attributed to a strategy VERSION.
+3. Feature → Strategy is category-level only; `required_features()` is unexposed.
+4. Signal evidence cannot be machine-joined to the field registry.
+5. Individual signals cannot be attributed to a scan run.
+6. Archive completeness cannot qualify an outcome (no HTTP API).
+7. The pipeline is a contract-level description; it does not yet render LIVE instance-level chains (e.g. "this specific signal produced this specific trade"). Doing so honestly requires gaps 1 and 2 to be closed first.
+8. Carried forward from 64.80-F2: ~40 individual feature pages still contain their own inline Unicode markers and are not yet migrated to the icon system.
 
 ## Blockers
-None for Paper Trading MVP operability — it is confirmed operational against
-the real runtime database/API. The standing product blocker, unchanged and
-untouched by this checkpoint, is real NSE live market-data validation
-(REAL NSE SESSION #2), which remains the gate for Research Readiness and any
-live-paper claim.
-
----
+No blocker to this checkpoint's own scope. The blocker to deepening the correlation experience is backend/API exposure (gaps 1–6), which is deliberately out of scope for a frontend-only checkpoint and was NOT worked around by adding backend code.
 
 ## Next Product Milestone
-
-**REAL NSE SESSION #2** — the Paper Trading MVP is now confirmed operationally
-usable offline; per this checkpoint's own final directive, Paper Trading
-development stops here for now. The next concrete step is resuming live
-market-data validation at the next NSE market-open window, followed by
-MILESTONE 3 — GAINZ MVP once real-market validation is complete.
+**FULL NSE EQUITY SESSION + MATCHING REFERENCE RECONCILIATION** — unchanged.
 
 ## Performance Ranking
 
-64.68 → 64.69. Real NSE Readiness, Research Readiness, and Gainz Readiness are
-deliberately held UNCHANGED — this remains offline validation.
-
-| Dimension | Previous (64.68) | Current (64.69) | Change | Evidence | Missing Capability |
+| Dimension | Previous (64.80-F2) | Current (64.80-F3) | Change | Evidence | Remaining Gap |
 |---|---|---|---|---|---|
-| Paper Trading MVP | Built, proven via unit/integration tests only | Proven operational against the REAL runtime database/API/frontend | **UP** | Real API smoke test, real DB round-trip, real persistence-after-restart proof | Multi-symbol, EOD square-off, exit-plan wiring (unchanged known gaps) |
-| Runtime Database Readiness | Migration 0027 existed but unapplied | Migration 0027 applied to the actual runtime DB; schema verified live | **UP** | `showmigrations` before/after; real create/read/update/cleanup | — |
-| API Readiness | Proven via Django test client in pytest only | Proven via an independently-written smoke script against the real dev DB | **UP** | Full lifecycle over real HTTP-routed views, `mode=PAPER_REPLAY` on every response | — |
-| UI/UX Readiness | Component tests passing; build passing | Same, re-confirmed; banner/label text directly grepped | **UNCHANGED (re-confirmed)** | 183/183 frontend tests; build succeeds; direct text read | No live browser screenshot in this environment |
-| Session Lifecycle | Proven in isolated tests | Proven against real API + DB together | **UP** | Full configure→start→step→pause→resume→stop→reset chain, real responses | — |
-| Persistence | Proven via pytest fixtures | Re-proven via a standalone, independently-authored script | **UP (independently corroborated)** | Two separate service instances agree on cursor and account | — |
-| P&L | Proven via unit tests | Re-confirmed structurally consistent in a real API response | **UNCHANGED (re-confirmed)** | Real account JSON: equity/available/unrealized reconcile | Only zero-trade case exercised this smoke run |
-| Risk | Proven in 64.68 unit tests | Not re-exercised this checkpoint (out of scope; no new risk scenario run) | **UNCHANGED** | 64.68's own kill-switch/limit tests re-run and passing | — |
-| Security | RBAC proven via pytest | RBAC independently re-proven via a standalone script, real HTTP-routed views | **UP (independently corroborated)** | 401/403/200 responses observed directly | — |
-| Replay | Proven deterministic in unit tests | Re-confirmed via real API session producing 5 signals across 5 steps | **UNCHANGED (re-confirmed)** | `recent_signals count: 5` | — |
-| Real NSE Readiness | Blocked on live validation | Blocked on live validation | **UNCHANGED** | No live code touched | Real live session |
-| Research Readiness | Gated on 5-criterion checklist | Gated on same 5-criterion checklist | **UNCHANGED** | No criterion touched | Real market validation |
-| Gainz Readiness | DISABLED | DISABLED | **UNCHANGED** | Registry re-verified: 3 safe strategies only | Deliberately unbuilt |
-| Testing | 2299 backend / 183 frontend (64.68 baseline) | 2299 backend / 183 frontend (re-confirmed, post-migration) | **UNCHANGED (re-confirmed current)** | Full suite re-run this pass | — |
-| Scalability | Single session, single instrument (documented MVP scope) | Unchanged | **UNCHANGED** | Same known limitation | Multi-symbol/multi-session (deliberately deferred) |
+| Correlation Visibility | None — no screen described the decision chain | A 7-stage Decision Pipeline with 13 audited relationships, each with status + evidence | Major improvement | `DecisionPipeline.tsx`; 72 new tests | Contract-level only, not instance-level |
+| Feature Traceability | Field registry visible on Strategy Config only | Feature stage + Features→Strategy PARTIAL + Features→Signal NOT AVAILABLE, each with cited evidence | Improved, honestly bounded | Audit rows 3, 8 | `required_features()` unexposed |
+| Scanner Traceability | Scanner config visible; relationships implicit | Scanner→Strategy FOUND, Market Data→Scanner FOUND, Scanner run→Signal PARTIAL, Features→Scanner NOT APPLICABLE | Improved | `ScannerConfigurationState.strategy_ids` | No scan-run id on signals |
+| Strategy Traceability | Strategy list/schema/config screens | Strategy stage linked upstream to Scanner and downstream to Signal and Backtest, all FOUND | Improved | Audit rows 5, 7, 12 | Version→outcome attribution absent |
+| Signal Traceability | Signal report in Reports | Strategy→Signal FOUND; Signal→Paper Trade PARTIAL with the exposed half named precisely | Improved | `SignalResponse.strategy_id`; `PaperSessionSignal` | No `signal_id` on trades |
+| Paper Trading Traceability | Paper Trading screen | Signal→Order exposed; Order→Trade via `order_ids`; Trade→Strategy VERSION marked NOT FOUND | Improved + a real gap surfaced | Audit rows 9, 11 | Version stamping |
+| Outcome Traceability | P&L on paper/report screens | Paper Trade→Outcome FOUND; Strategy→Backtest FOUND; archive-qualified outcome NOT YET IMPLEMENTED | Improved | Audit rows 10, 12, 13 | No archive API |
+| Dashboard UX | 8 status cards in 3 groups | Same cards plus a "how this platform decides" section | Improved | `DashboardPage.tsx` | — |
+| Navigation | Card-level entry points | Pipeline nodes drill into 6 existing screens through the existing mechanism; duplicate accessible names eliminated | Improved | `App.tsx` `onNavigate`; regression fix | No Signals screen exists |
+| Accessibility | Icon system, focus states, theme control | Ordered-list sequence, full-sentence relationships, named region, aria-hidden connectors, keyboard-reachable destinations | Improved | 5 accessibility tests | — |
+| Visual Consistency | 4-theme token system + one icon system | Reused exactly; zero new tokens, zero new icons, zero second systems | Maintained | Theme/icon quality gates pass | — |
+| Testing | 278 frontend tests | 350 frontend tests (+72) | Improved | `npx vitest run` | — |
+| Performance | 366 kB JS / 48 kB CSS bundle | Effectively unchanged (static component, no network I/O, no runtime data) | Neutral | `npm run build` | — |
+| Security | No live controls; read-only screens | Unchanged; pipeline is read-only, issues no requests, exposes no credentials | Maintained | No API calls in component | — |
 
 ## Final Product Gate
 
-**A. Is migration 0027 applied to the ACTUAL runtime database?**
-YES. Applied via `manage.py migrate persistence 0027`; `showmigrations`
-confirms `[X]`.
+**A. Can the user see the complete decision pipeline?** YES — all seven stages, Market Data through Outcome, on the Dashboard.
 
-**B. Can the frontend/API create a real Paper session?**
-YES. `POST configure/` returned `200`, `mode: PAPER_REPLAY`, `status: STOPPED`,
-against the real database.
+**B. Are existing correlations represented accurately?** YES — each of the 6 FOUND links names the exact endpoint and schema field, re-asserted against the generated contract by an automated test.
 
-**C. Can the session start/step/pause/resume/stop/reset?**
-YES. All six transitions exercised over the real API; each returned the
-expected status.
+**C. Are missing correlations explicitly identified?** YES — 1 NOT FOUND, 3 PARTIAL, each stating what is missing and what backend work would close it.
 
-**D. Does the data come through canonical Bar → Strategy → Risk →
-OrderIntent → PaperBroker?**
-YES structurally (same wiring 64.68 proved end-to-end with an actual fill);
-this smoke session's specific 5-bar window produced 5 evaluated signals and 0
-trades (no crossover fired), which is expected replay-data behavior, not a
-broken path.
+**D. Are unavailable API relationships shown honestly?** YES — 1 NOT AVAILABLE, 1 NOT YET IMPLEMENTED, 1 NOT APPLICABLE, each with its reason.
 
-**E. Is P&L correct?**
-YES — internally consistent (`equity = available_capital` when no
-positions are open; all P&L fields `0.0000` consistent with zero trades this
-run), reusing the exact canonical accounting, not a new calculation.
+**E. Can the user navigate from a node to an existing related screen?** YES — six real destinations through the project's existing navigation mechanism; nodes without a screen render no control.
 
-**F. Does session state survive a fresh service instance?**
-YES — independently re-proven with two separate service/repository
-instances agreeing on cursor and account.
+**F. Are scanner/strategy relationships clearly distinguishable from merely co-existing features?** YES — Scanner→Strategy is FOUND because `strategy_ids` declares it; Features→Scanner is NOT APPLICABLE because no scanner-condition entity exists. Co-existence is never drawn as a link.
 
-**G. Does the UI clearly say "PAPER TRADING — NOT LIVE TRADING"?**
-YES — confirmed by direct text read of `PaperSessionPanel.tsx`.
+**G. Can a feature be traced to a scanner where the actual backend relationship exists?** NOT APPLICABLE — no such backend relationship exists; the UI says so rather than inventing one. The real feature relationship (Features→Strategy) is shown as PARTIAL.
 
-**H. Is there any ambiguous live-trading control?**
-**NO.** Controls are explicitly labeled "Start Paper Trading" / "Stop Paper
-Trading"; a component test asserts no button matches "Trade"/"place
-order"/"submit order"/"go live".
+**H. Can a scanner be traced to a strategy where the actual relationship exists?** YES — FOUND via `ScannerConfigurationState.strategy_ids` and `ScannerProgressResponse.current_strategy`.
 
-**I. Was Dhan connected?**
-**NO.**
+**I. Can a strategy be traced to signals where the actual relationship exists?** YES — FOUND via `SignalResponse.strategy_id` and `SignalReportResponse.by_strategy`.
 
-**J. Was Gainz activated?**
-**NO.** Registry re-verified: exactly 3 safe strategies.
+**J. Can signals be traced to Paper Trading where the actual relationship exists?** PARTIALLY, and it is labelled PARTIAL — signal→order is exposed (`PaperSessionSignal.signal_id` + `order_status`; `idempotency_key` is the signal id); signal→trade requires an order-id join because `PaperTradeResponse` has no `signal_id`.
 
-**K. Was BacktestTrustLevel changed?**
-**NO.** Re-verified via fresh grep: `POC` unchanged at all 4 sites.
+**K. Are future/unimplemented relationships clearly marked?** YES — NOT YET IMPLEMENTED for archive-qualified outcomes, with the prerequisite stated.
 
-**L. Is REAL NSE SESSION #2 still pending?**
-**YES.**
+**L. Was any false correlation invented?** **NO.** Every rendered edge comes from the audited model; a test asserts the rendered edge set equals the audited edge set exactly, and the contract-reading test would fail on any FOUND claim citing a field that does not exist.
 
-**M. Is the Paper Trading MVP now operationally usable offline?**
-**YES**, based on real evidence: the real database migration is applied, the
-real API serves the full session lifecycle correctly with proper RBAC, the
-real UI builds and its component tests (rendering the actual component tree)
-confirm both content and safety labeling, and persistence survives a fresh
-service instance. This is genuinely operable, not merely unit-tested in
-isolation.
+**M. Was Gainz activated?** **NO.** No Gainz node, no Gainz control, no Gainz text in the new UI.
 
-**N. Is the next milestone REAL NSE SESSION #2 or a specific Paper Trading
-gap?**
-**REAL NSE SESSION #2.** No concrete operational defect was found this
-checkpoint that blocks practical MVP usage — the documented 64.68 limitations
-(multi-symbol, EOD square-off, exit-plan wiring) are real but do not block
-using the MVP as built. Per the checkpoint's own final directive, Paper
-Trading development stops here; the next product movement is live NSE
-data validation.
+**N. Was NSE_FNO modified?** **NO.** No OI/IV/Greeks/OptionChain/OptionQuote/OptionBar UI introduced; asserted by tests in both new test files.
 
-## Honest Final Conclusion
+**O. Was Dhan contacted?** **NO.** No live API call, no worker start, no credential access.
 
-Checkpoint 64.69 did not rebuild anything — it verified, with real evidence
-against the real runtime database and API (not just the unit tests 64.68
-already wrote and I already re-ran), that the Paper Trading MVP genuinely
-works end to end: the schema migration applies cleanly, the API serves every
-lifecycle action with correct RBAC and unambiguous `PAPER_REPLAY` labeling,
-the UI is safety-labeled and builds/tests cleanly, and session state
-persists correctly across a simulated restart. Every claim above was
-produced by a script I wrote independently of the 64.68 test suite (not by
-re-running the checkpoint's own self-authored tests and trusting them), and
-every test record/user created during smoke testing was cleaned up — the
-64.62 forensic evidence rows remain byte-identical, untouched. Nothing was
-claimed about live-market readiness, Gainz, or trading performance — those
-remain exactly where they were. The Paper Trading MVP is operationally usable
-offline; the project's next real step is REAL NSE SESSION #2.
+**P. Was BacktestTrustLevel changed?** **NO.**
 
-## Git Status
+**Q. Is the next live milestone still FULL NSE EQUITY SESSION + MATCHING REFERENCE RECONCILIATION?** **YES.**
 
-```
-git log -3 --oneline
-ab2dc04 Checkpoint 64.42
-b576008 CHECKPOINT 64.33
-3104f39 Checkpoint 64.25: backtest convergence audit identifies the real
-        equity-curve/partial-exit blocker, correctly stops rather than risk
-        P&L corruption
+---
 
-git diff --stat
-27 files changed, 4943 insertions(+), 594 deletions(-)
-```
+### Git Safety
 
-**64.69's own changes: NONE to tracked source files.** This checkpoint's only
-real-world effect was applying the already-existing `0027_papertradingsessionrecord`
-migration to the runtime database (a database-state change, not a git-tracked
-file change) plus this `taskReport.md` overwrite. Every temporary
-verification script created during this checkpoint (`scratch_smoke_64_69.py`,
-`scratch_persist_64_69.py`, and small `/tmp` helper scripts) was deleted
-after use and none remain in the working tree.
+No commit, no push, no destructive git command was run.
 
-**Carried forward from 64.43–64.68 (unchanged by 64.69):** all 27 files shown
-in `git status --short` — the full Paper Trading session/UI/API layer, the
-market-data volume/timestamp architecture, the feature-engine additions, and
-every other checkpoint's accumulated work. No commit, no push, no destructive
-git command was run.
+**Files created/modified by 64.80-F3:**
+- `frontend/src/features/correlation/correlationModel.ts` (new)
+- `frontend/src/features/correlation/DecisionPipeline.tsx` (new)
+- `frontend/src/features/correlation/correlationModel.test.ts` (new)
+- `frontend/src/features/correlation/DecisionPipeline.test.tsx` (new)
+- `frontend/src/features/dashboard/DashboardPage.tsx` (modified — hosts the pipeline, adds optional `onNavigate`)
+- `frontend/src/app/App.tsx` (modified — wires `onNavigate` to the existing screen state)
+- `frontend/src/app/styles.css` (modified — appended the Decision Pipeline block; no existing rule altered)
+
+**Carried forward from 64.43–64.80-F2, untouched by this checkpoint:** all backend changes under `src/intraday/**` (Dhan worker, instrument master, packet decoder, persistence models, worker runtime status), `docs/**`, `config/**`, `domain/**`, and the frontend work from 64.80-F/F2 (`frontend/src/app/theme/`, `frontend/src/common/icons/`, `frontend/src/features/dashboard/` scaffolding, `MarketDataArchivePage`, `systemApi.ts`).
+
+`git log -3 --oneline`: `3bd7a09 CheckPoint 64.69`, `ab2dc04 Checkpoint 64.42`, `b576008 CHECKPOINT 64.33` — unchanged; nothing was committed.
