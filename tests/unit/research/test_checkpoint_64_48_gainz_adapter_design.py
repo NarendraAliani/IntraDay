@@ -554,6 +554,18 @@ def test_k_no_gainz_reference_file_exists_in_repo() -> None:
         # disabled") - a single safety-disclaimer sentence, not a
         # reference implementation. No Gainz math or module was added.
         "DAILY_MARKET_DATA_ARCHIVE_ARCHITECTURE.md",
+        # Checkpoint 64.82: the correlation query API doc's own Gainz
+        # section, which states only that Gainz remains disabled and that
+        # no Gainz-specific query path was added. 64.82 added the doc but
+        # did not allowlist it here, so this guard has been red since;
+        # 64.83 restores it. A disclaimer, not an implementation.
+        "CORRELATION_QUERY_API.md",
+        # Checkpoint 64.83: same situation, same reason - the archive
+        # query API doc records that archive-qualified outcome evidence
+        # is a PREREQUISITE for any future Gainz attribution, and that
+        # none of that evidence exists yet. No Gainz math, module or
+        # activation was added.
+        "MARKET_DATA_ARCHIVE_QUERY_API.md",
         # Checkpoint 64.76: Dhan option-capability RESEARCH. Its single
         # Gainz mention is one prose line naming "market state at a Gainz
         # signal timestamp" as a FUTURE historical-retention requirement -

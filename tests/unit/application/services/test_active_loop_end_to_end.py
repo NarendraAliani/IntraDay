@@ -533,7 +533,7 @@ def test_full_bars_to_report_chain_with_trade_plan_and_mixed_channel_delivery() 
     evidence_record = DjangoSignalEvidenceRepository().get_by_signal_id(str(signal_id))
     assert evidence_record is not None
     assert evidence_record.strategy_id == "atr_volatility_breakout"
-    evidence_labels = {label for label, _value in evidence_record.fields}
+    evidence_labels = {f.label for f in evidence_record.fields}
     assert {"ATR", "Price", "Breakout"} <= evidence_labels
 
     # --- Risk + paper order + fill + position: all real ---

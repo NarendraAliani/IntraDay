@@ -705,14 +705,60 @@ class MarketDataArchiveDay(models.Model):
     reconciliation_status = models.CharField(
         max_length=16, choices=RECONCILIATION_CHOICES, default="NOT_RECONCILED"
     )
-    """Checkpoint 64.73 MODELS independent reconciliation; it does not
-    yet PERFORM it. Every row this checkpoint writes is honestly
-    `NOT_RECONCILED` - the column exists so a future checkpoint's
-    candle-authority cross-check has somewhere truthful to record its
-    verdict, and so nothing can mistake "aggregated from our own
-    ticks" for "verified against an independent source"."""
+    """Checkpoint 64.73 MODELLED independent reconciliation; 64.84
+    PERSISTS it. The coarse, three-valued claim this row makes to every
+    existing consumer (`classify_archive_evidence`, the archive API,
+    the correlation trace), projected from the exact verdict in
+    `reconciliation_outcome` by `reconciliation.persisted_status_for`.
+
+    An archive REFRESH never touches this column: recomputing the
+    archive from our own observations must never be able to promote a
+    day to "reconciled". Only a real comparison run writes here."""
     reconciled_at = models.DateTimeField(null=True, blank=True)
+    """WHEN a comparison actually ran. Checkpoint 64.84: stays `NULL`
+    whenever the outcome is `NOT_RECONCILED`, because that outcome means
+    `reconcile_bar_series` short-circuited BEFORE comparing anything
+    (unsupported timeframe / no reference bars / no observed bars). A
+    non-null value here is therefore evidence that bars were genuinely
+    compared, never merely that a persistence API was called."""
+
+    RECONCILIATION_OUTCOME_CHOICES = [(s, s) for s in ("NOT_RECONCILED", "PASS", "PARTIAL", "FAIL")]
+    reconciliation_outcome = models.CharField(
+        max_length=16, choices=RECONCILIATION_OUTCOME_CHOICES, default="NOT_RECONCILED"
+    )
+    """Checkpoint 64.84: the EXACT verdict computed by
+    `domain.market_data.reconciliation.ReconciliationOutcome`, persisted
+    verbatim so the three-valued projection above loses nothing -
+    `PARTIAL` in particular has no distinct stored status but is fully
+    recoverable here."""
+    reconciliation_reason = models.CharField(max_length=200, blank=True, default="")
+    """The machine-readable WHY behind the outcome, e.g.
+    `"no_reference_bars_available"`, `"value_mismatches:3"`. Distinct
+    from `reason` above, which explains the ARCHIVE status."""
+    reconciliation_evidence_source = models.CharField(max_length=64, blank=True, default="")
+    """WHERE the reference series came from, e.g.
+    `"dhan_historical_candle_api"`. Empty until a reconciliation has
+    been persisted. NOTE: the only source wired up today is Dhan's
+    historical-candle REST API, which is NOT independent of Dhan's live
+    feed - a `PASS` from it is corroboration, not candle authority."""
     computed_at = models.DateTimeField(null=True, blank=True)
+
+    CAS_WINDOW_STATUS_CHOICES = [
+        (s, s) for s in ("NOT_APPLICABLE", "EXPECTED_NON_CONTINUOUS", "PROVIDER_BEHAVIOR_UNKNOWN")
+    ]
+    cas_window_status = models.CharField(
+        max_length=32, choices=CAS_WINDOW_STATUS_CHOICES, default="NOT_APPLICABLE"
+    )
+    """Checkpoint 64.88: ADDITIVE, defaulted `"NOT_APPLICABLE"` column -
+    every pre-64.88 row (and every CATEGORY_II_NON_CAS cell going
+    forward) keeps this default without rewriting. The persisted
+    projection of `domain.market_data.quality.CasWindowStatus`, kept
+    DELIBERATELY SEPARATE from `status`/`reason` above: CAS applicability
+    is not a continuous-data-completeness verdict (see that field's own
+    domain docstring for why folding the two together is exactly the
+    64.85-class mistake this checkpoint fixes). This column NEVER causes
+    `status` to become COMPLETE by itself, and never causes it to become
+    FAILED/PARTIAL by itself either."""
 
     class Meta:
         app_label = "persistence"
@@ -882,6 +928,24 @@ class PaperTradeRecord(models.Model):
     costs = models.DecimalField(max_digits=18, decimal_places=4, default=0)
     opened_at = models.DateTimeField()
     closed_at = models.DateTimeField()
+    signal_id = models.CharField(max_length=100, blank=True, default="", db_index=True)
+    """Checkpoint 64.81: the signal this completed round trip originated
+    from - closing Checkpoint 64.80-F3's gap 4 (Signal -> Paper Trade was
+    PARTIAL: `PaperOrderRecord` carried `signal_id` but `PaperTradeRecord`
+    did not, so a realised P&L row could not be traced back to the
+    decision that caused it).
+
+    NOT inferred and NOT string-matched. It is read by ID JOIN from this
+    trade's OWN `order_ids` to the already-persisted
+    `PaperOrderRecord.signal_id` of its entry order (see
+    `paper_ledger_repository.sync_trades()`), which is a real, recorded
+    relationship the ledger already maintained - this checkpoint only
+    stops throwing it away at the trade boundary.
+
+    Blank (never fabricated) when the join does not genuinely resolve:
+    a trade whose entry order was manually submitted (no signal behind
+    it - a real supported workflow), a trade whose entry order predates
+    signal recording, and every trade recorded before this checkpoint."""
 
     class Meta:
         app_label = "persistence"
@@ -1504,6 +1568,67 @@ class SignalRecord(models.Model):
     risk_status = models.CharField(max_length=16)
     risk_reason = models.CharField(max_length=1000, blank=True, default="")
     order_status = models.CharField(max_length=32, blank=True, default="")
+    strategy_version_identifier = models.CharField(max_length=320, blank=True, default="")
+    """Checkpoint 64.81: the EXACT strategy version that made this
+    decision, as the flattened
+    `"{specification_version}:{code_version}:{configuration_version}"`
+    identity - closing Checkpoint 64.80-F3's gap 5 (Paper Trade ->
+    Strategy Version was NOT FOUND).
+
+    NOT a second version scheme: this is byte-for-byte the
+    `target_identifier` that `DjangoStrategyVersionRepository.activate()`
+    already writes into `AuditLogEntry.version_identifier` (see that
+    method's own docstring), so an outcome joins straight to the
+    activation audit trail.
+
+    WHY THIS LIVES ON THE SIGNAL, NOT ON THE ORDER OR TRADE - two
+    independent reasons, both discovered by the existing test suite
+    rather than assumed:
+
+    1. The signal IS the decision. `derive_signal_id()` already hashes
+       exactly these three version components, precisely because two
+       strategy versions evaluating the identical bar are by definition
+       different signals. Recording the version alongside the signal
+       stores what the identity already depends on, in one place.
+    2. Denormalising it onto `PaperOrderRecord`/`PaperTradeRecord` would
+       have required adding a field to the `OrderIntent` DOMAIN
+       contract, which `test_l_canonical_order_intent_contract_shape_
+       is_untouched` (Checkpoint 64.31) explicitly freezes by asserting
+       its exact field set. It would also have duplicated information
+       reachable by join - the opposite of "only introduce database
+       fields where traceability cannot otherwise be reliably
+       reconstructed". Orders and trades carry `signal_id`; the version
+       is read through it.
+
+    Blank (never fabricated) for signals recorded before this
+    checkpoint. Not indexed: it is attribution payload read alongside
+    the row, never a lookup key - `signal_id` is."""
+    scan_run_id = models.CharField(max_length=64, blank=True, default="", db_index=True)
+    """Checkpoint 64.81: the `ScannerScanProgress.scan_id` of the scanner
+    execution during which this signal was produced - closing Checkpoint
+    64.80-F3's gap 3 (Scanner Run -> Signal was PARTIAL: the scanner knew
+    only an aggregate `signals_found` COUNT, with no way to ask "which
+    signals did run X produce?").
+
+    NOT a new identity: `scan_id` already existed as the canonical
+    scanner-run identifier (introduced Checkpoint 64.18, written by
+    `run_market_data_worker.aggregate_now()` as `clock.isoformat()`).
+    This column only PROPAGATES that existing value down to the signals
+    the run actually produced; no scanner-run model, lifecycle, or
+    scheduling was introduced or redesigned.
+
+    Blank (never fabricated) for every signal generated OUTSIDE a
+    scanner run - which is a real, supported workflow, not an edge case:
+    `PaperSignalExecutionService.evaluate_and_submit()` is also driven by
+    replay paper sessions and by direct service calls in tests, neither
+    of which has a scan run. Blank for every signal recorded before this
+    checkpoint, which is why no data back-fill exists: nothing stored on
+    a historical row could prove which run produced it.
+
+    Matches `PaperOrderRecord.signal_id`'s own established convention for
+    an optional cross-entity ID reference (blank-default CharField, not a
+    nullable FK) rather than introducing a second convention; the API
+    maps blank -> `null` so the wire contract is honestly nullable."""
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

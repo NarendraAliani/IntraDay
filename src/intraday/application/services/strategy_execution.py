@@ -65,6 +65,7 @@ from intraday.signal_intelligence.feature_engine.directional_movement import (
     compute_plus_directional_index,
 )
 from intraday.signal_intelligence.feature_engine.ema import compute_exponential_moving_average
+from intraday.signal_intelligence.feature_engine.field_registry import parse_feature_name
 from intraday.signal_intelligence.feature_engine.macd_histogram import compute_macd_histogram
 from intraday.signal_intelligence.feature_engine.relative_volume import compute_relative_volume
 from intraday.signal_intelligence.feature_engine.rsi import compute_relative_strength_index
@@ -98,12 +99,13 @@ def compute_feature_series(field_id: str, bars: tuple[Bar, ...]) -> tuple[Featur
     # stripped, not just a single first-`_`-partition - unlike
     # "sma_20"/"ema_9"/"atr_14"/"rsi_14"/"adx_14", which are already a
     # single-word kind.
-    parts = field_id.split("_")
-    numeric_from = len(parts)
-    while numeric_from > 0 and parts[numeric_from - 1].isdigit():
-        numeric_from -= 1
-    kind = "_".join(parts[:numeric_from])
-    params = tuple(int(p) for p in parts[numeric_from:])
+    # Checkpoint 64.81: the parse itself now lives in
+    # `feature_engine.field_registry.parse_feature_name()` - LIFTED, not
+    # duplicated, so the traceability resolver that maps a feature name
+    # back to its canonical registry field_id can never drift from this
+    # dispatcher. The algorithm is byte-for-byte the one this function
+    # has used since Checkpoint 64.49; no dispatch behaviour changes.
+    kind, params = parse_feature_name(field_id)
 
     if kind == "sma":
         return compute_simple_moving_average(SimpleMovingAverageDefinition(params[0]), bars)

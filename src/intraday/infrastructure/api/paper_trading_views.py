@@ -43,7 +43,35 @@ from intraday.infrastructure.persistence.models import (
     PaperOrderRecord,
     PaperPositionRecord,
     PaperTradeRecord,
+    SignalRecord,
 )
+
+
+class _NullableIdField(serializers.CharField):
+    """Checkpoint 64.81: renders a blank-default traceability column as
+    an honest JSON `null` rather than `""`.
+
+    This project's established convention for an optional cross-entity
+    ID reference is a blank-default `CharField` (see
+    `PaperOrderRecord.signal_id`, Checkpoint 36) rather than a nullable
+    column, and that convention is kept - but `""` on the WIRE is
+    ambiguous: a client cannot tell "no relationship exists" from "a
+    relationship exists and happens to be empty". Mapping blank to
+    `null` at the serialization boundary makes the absence explicit and
+    machine-checkable, which is the entire point of this checkpoint.
+    Nothing is ever invented to fill the gap."""
+
+    def __init__(self, **kwargs: object) -> None:
+        kwargs.setdefault("allow_null", True)
+        kwargs.setdefault("required", False)
+        super().__init__(**kwargs)  # type: ignore[arg-type]
+
+    def to_representation(self, value: str) -> str:
+        # Returns `None` for a blank value; the `str` return annotation
+        # is what DRF's own `Field.to_representation` declares and is
+        # kept for stub compatibility, while `allow_null=True` above is
+        # what makes the null genuinely valid in the generated schema.
+        return super().to_representation(value) if value else None  # type: ignore[return-value]
 
 
 class PaperOrderResponseSerializer(serializers.Serializer[dict[str, object]]):
@@ -62,6 +90,12 @@ class PaperOrderResponseSerializer(serializers.Serializer[dict[str, object]]):
     created_at = serializers.DateTimeField()
     updated_at = serializers.DateTimeField()
     state_history = serializers.ListField(child=serializers.DictField())
+    # Checkpoint 64.81: `PaperOrderRecord.signal_id` has existed since
+    # Checkpoint 36 but was never exposed on this response - that, not a
+    # missing column, was Checkpoint 64.80-F3's gap 4 for orders. No
+    # migration was needed here; this is pure exposure of an already-
+    # persisted, already-real relationship.
+    signal_id = _NullableIdField()
 
 
 class PaperTradeResponseSerializer(serializers.Serializer[dict[str, object]]):
@@ -76,6 +110,23 @@ class PaperTradeResponseSerializer(serializers.Serializer[dict[str, object]]):
     realized_pnl = serializers.DecimalField(max_digits=18, decimal_places=4)
     opened_at = serializers.DateTimeField()
     closed_at = serializers.DateTimeField()
+    # Checkpoint 64.81: the decision this realised P&L row came from,
+    # resolved by ID join from this trade's own entry order at
+    # persistence time (see `paper_ledger_repository.sync_trades()`);
+    # `null` whenever that join does not genuinely resolve - never
+    # inferred, never guessed.
+    signal_id = _NullableIdField()
+    # Checkpoint 64.81: the exact strategy version accountable for this
+    # realised P&L. NOT a stored column on this table - it is read
+    # through `signal_id` from `SignalRecord`, where the decision (and
+    # therefore the version) genuinely lives, so the two can never
+    # disagree. `null` when the trade has no signal, or the signal
+    # predates version recording. See `paper_trades()` for the single
+    # bulk lookup that fills it.
+    strategy_version_identifier = serializers.SerializerMethodField()
+
+    def get_strategy_version_identifier(self, obj: object) -> str | None:
+        return getattr(obj, "_strategy_version_identifier", None) or None
 
 
 class PaperPositionResponseSerializer(serializers.Serializer[dict[str, object]]):
@@ -130,7 +181,27 @@ def paper_orders(request: Request) -> Response:
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def paper_trades(request: Request) -> Response:
-    rows = PaperTradeRecord.objects.order_by("-closed_at")[:200]
+    rows = list(PaperTradeRecord.objects.order_by("-closed_at")[:200])
+    # Checkpoint 64.81: ONE bulk lookup resolving each trade's strategy
+    # version THROUGH its signal - never a per-row query, and never a
+    # duplicated column on the trade table that could drift from the
+    # decision record. Trades with no signal simply get nothing.
+    signal_ids = {row.signal_id for row in rows if row.signal_id}
+    versions = (
+        dict(
+            SignalRecord.objects.filter(signal_id__in=signal_ids).values_list(
+                "signal_id", "strategy_version_identifier"
+            )
+        )
+        if signal_ids
+        else {}
+    )
+    for row in rows:
+        # Attached dynamically for the serializer's method field to read;
+        # deliberately NOT a model column (see the serializer's own note).
+        row._strategy_version_identifier = versions.get(  # type: ignore[attr-defined] # noqa: SLF001
+            row.signal_id, ""
+        )
     return Response(PaperTradeResponseSerializer(rows, many=True).data)  # type: ignore[arg-type]
 
 

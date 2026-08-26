@@ -178,15 +178,33 @@ per cell; the stored row keeps the *count* so "which symbol-days have
 gaps" stays an indexed query. Duplicate bar timestamps are reported
 separately and are not double-counted toward coverage.
 
-**Reconciliation** — 64.73 **models** independent reconciliation; it
-does **not perform** it. `reconciliation_status` is honestly
-`NOT_RECONCILED` on every row this checkpoint writes, and a refresh
-deliberately **never** overwrites it: recomputing the archive from our
+**Reconciliation** — 64.73 **models** independent reconciliation; 64.79
+**computes** it; 64.84 **persists** it. A refresh deliberately **never**
+overwrites the reconciliation columns: recomputing the archive from our
 *own* observations must never be able to promote a day to "reconciled."
-The column exists so a future independent candle-authority cross-check
-has somewhere truthful to record its verdict, and so nothing can
-mistake "aggregated from our own ticks" for "verified against an
-independent source."
+They exist so an independent candle-authority cross-check has somewhere
+truthful to record its verdict, and so nothing can mistake "aggregated
+from our own ticks" for "verified against an independent source."
+
+Since 64.84 the cell carries five reconciliation columns —
+`reconciliation_status` (the coarse three-valued claim),
+`reconciliation_outcome` (the exact four-valued verdict),
+`reconciliation_reason`, `reconciliation_evidence_source` and
+`reconciled_at`. The archive cell is the **persistence boundary**: there
+is no reconciliation table, and re-running a reconciliation updates the
+same row rather than appending. `reconciled_at` stays `NULL` unless a
+bar-by-bar comparison genuinely ran, so it can never be produced merely
+by calling the persistence API. Full semantics, the outcome→status
+mapping and the archive-vs-reconciliation distinction are documented in
+`MARKET_DATA_ARCHIVE_QUERY_API.md` § *Reconciliation persistence*.
+
+**The independent reference source remains REQUIRED and unsolved.** The
+only reference pipeline wired up is Dhan's historical-candle REST API.
+It differs from the live path in transport, subsystem and table, but not
+in **vendor** — Dhan-vs-Dhan is corroboration, not candle authority.
+Even a `PASS` from it would not satisfy `TRADING_GRADE_BAR` condition 3.
+Persisting verdicts does not change this; it is a future milestone, not
+one closed by 64.84.
 
 **Retention** — `domain.market_data.archive_retention`. The active
 policy is `RETAIN_FOREVER`. **Nothing in this checkpoint deletes any
@@ -303,3 +321,50 @@ is a real modelling problem, not a mechanical extension.
 Retention is unchanged: `domain/market_data/archive_retention.py`
 remains retain-forever and non-acting, and nothing in 64.78 deletes or
 rotates any observation.
+
+## 10. Full-session live workflow (Checkpoint 64.84 — documented, NOT executed)
+
+Every step below is **already built**. What has never happened is a
+single uninterrupted run of them across one whole NSE session, which is
+research blocker (1). This section records the procedure so that run is
+a rehearsed sequence rather than an improvisation. **Nothing here was
+executed in 64.84 — the market was closed and no Dhan connection was
+made.**
+
+| # | Step | Component | Ready |
+|---|---|---|---|
+| 1 | 09:15 IST — session opens; worker already connected and subscribed | `run_market_data_worker` | Yes |
+| 2 | Live observation via Dhan WebSocket | `dhan` live provider → `LiveQuoteObservation` | Yes |
+| 3 | 1-minute bar aggregation and persistence, continuously | `aggregate_quotes_into_bars` → `AggregatedBarObservation` | Yes |
+| 4 | 15:30 IST — session closes; bars stop forming | `domain.session.calendar` | Yes |
+| 5 | Archive refresh for the trading date | `MarketDataArchiveService.refresh_trading_date` | Yes |
+| 6 | `COMPLETE` / `PARTIAL` determination per cell | `domain.market_data.archive.assess_archive_day` | Yes |
+| 7 | Independent reference fetch for the same cells | `HistoricalDataPreparationService` → `HistoricalBar` | Yes, but **not independent of Dhan** |
+| 8 | Reconciliation of archive vs. reference | `MarketDataReconciliationService` (64.79) | Yes |
+| 9 | **Persist the reconciliation verdict** | `MarketDataReconciliationPersistenceService` (64.84) | Yes — new in this checkpoint |
+| 10 | Graceful shutdown | worker shutdown path | Yes |
+| 11 | Final archive state read back | archive query API (64.83) | Yes |
+| 12 | Research Readiness re-evaluation | `TRADING_GRADE_BAR` gate | Yes |
+
+### The two things that must be true for step 7 to be meaningful
+
+1. **Coverage must overlap.** The reference fetch must request the
+   *same* symbols, the *same* timeframe (`1m`) and the *same* trading
+   date the archive holds. Today's 5,100 `HistoricalBar` rows are all
+   `5m` on different symbols, which is why every reconciliation
+   truthfully reports `no_reference_bars_available`. Fixing the fetch
+   parameters is a prerequisite for any non-`NOT_RECONCILED` verdict.
+2. **The source must be independent.** Even with perfect overlap, a
+   Dhan-REST reference checked against a Dhan-WebSocket archive yields
+   corroboration, not candle authority. This does **not** block the
+   full-session rehearsal — the rehearsal is still worth running for
+   blockers (1), (4) and (5) — but it does block `TRADING_GRADE_BAR`
+   condition 3 regardless of the outcome.
+
+### Expected result of the first full-session run
+
+If steps 1–6 succeed, one day reaches `archive_status = COMPLETE` for
+the first time. Step 9 will still persist `NOT_RECONCILED` unless step 7
+is also fixed to fetch overlapping `1m` data. `COMPLETE` +
+`NOT_RECONCILED` is the correct outcome of a successful rehearsal, and
+must not be read as a failure of the reconciliation path.

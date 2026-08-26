@@ -25,4 +25,13 @@ urlpatterns = [
     path("api/v1/auth/", include("intraday.infrastructure.api.auth_urls")),
     path("api/v1/config/", include("intraday.infrastructure.api.urls")),
     path("api/v1/audit/", include("intraday.infrastructure.api.audit_urls")),
+    # Checkpoint 64.82: the read-only correlation query surface - a read
+    # model over relationships 64.81 already persists. No new table, no
+    # write path, no second source of truth.
+    path("api/v1/correlation/", include("intraday.infrastructure.api.correlation_urls")),
+    # Checkpoint 64.83: the read-only archive + reconciliation query
+    # surface - a read model over the 64.73 archive projection and the
+    # 64.79 reconciliation comparator. No new table, no write path, no
+    # second archive and no second reconciliation engine.
+    path("api/v1/market-data/", include("intraday.infrastructure.api.market_data_archive_urls")),
 ]

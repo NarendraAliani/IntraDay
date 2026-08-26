@@ -100,6 +100,8 @@ class _FakeSignalRecorder:
         risk_status: str,
         risk_reason: str,
         order_status: str,
+        scan_run_id: str | None = None,
+        strategy_version_identifier: str | None = None,
     ) -> None:
         self.calls.append(
             _RecordedCall(

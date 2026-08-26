@@ -225,6 +225,75 @@ def get_field(field_id: str) -> FieldDefinition | None:
     return _FIELDS_BY_ID.get(field_id)
 
 
+@dataclass(frozen=True, slots=True)
+class ResolvedFeatureName:
+    """Checkpoint 64.81: the canonical decomposition of ONE resolved
+    feature name (what `Strategy.required_features(config)` actually
+    returns, e.g. `"ema_12"`, and what `FeatureValue.feature_name`
+    actually carries) into the canonical registry `field_id` it refers
+    to (`"ema"`) plus the numeric parameters that were baked into the
+    name (`(12,)`).
+
+    This exists because `required_features()`'s own docstring calls its
+    return values "field_ids (from the canonical field registry)", but
+    they are NOT registry field_ids - they are PARAMETERIZED feature
+    names. `"ema_12"` is not a key in `_FIELDS_BY_ID`; `"ema"` is. That
+    gap is exactly what blocked programmatic Feature->Strategy and
+    Feature->Signal correlation (Checkpoint 64.80-F3's gaps 1 and 2),
+    and it is closed here by RESOLVING the name through the same
+    algorithm the platform already uses, never by guessing from a
+    display label.
+
+    `field_id` is `None` when the name does not resolve to a registered
+    field - an honest absence (the same discipline
+    `build_signal_evidence()` already applies by returning `None` for an
+    unregistered strategy), never a fabricated identifier.
+    """
+
+    feature_name: str
+    field_id: str | None
+    parameters: tuple[int, ...]
+
+
+def parse_feature_name(feature_name: str) -> tuple[str, tuple[int, ...]]:
+    """Splits a resolved feature name into its `(kind, numeric params)`
+    pair - `"ema_12"` -> `("ema", (12,))`, `"macd_hist_12_26_9"` ->
+    `("macd_hist", (12, 26, 9))`, `"candle_body_ratio"` ->
+    `("candle_body_ratio", ())`.
+
+    This is the EXACT algorithm `application.services.strategy_execution.
+    compute_feature_series()` has used since Checkpoint 64.49 (strip the
+    SUFFIX of trailing all-digit segments, everything before it is the
+    kind - multi-word kinds like `"plus_di"`/`"relative_volume"` are why
+    a single first-`_`-partition is not sufficient). It is LIFTED here,
+    not copied: that function now calls this one, so exactly one parse
+    exists in the platform and the resolver below can never drift from
+    the dispatcher that actually computes the feature.
+    """
+    parts = feature_name.split("_")
+    numeric_from = len(parts)
+    while numeric_from > 0 and parts[numeric_from - 1].isdigit():
+        numeric_from -= 1
+    kind = "_".join(parts[:numeric_from])
+    return kind, tuple(int(p) for p in parts[numeric_from:])
+
+
+def resolve_feature_name(feature_name: str) -> ResolvedFeatureName:
+    """Resolves a parameterized feature name to its canonical registry
+    `field_id`. Raw OHLCV names (`"close"`) resolve to themselves (they
+    carry no parameters and ARE registry field_ids already).
+
+    NEVER guesses: the parsed kind must be a real key in the registry,
+    otherwise `field_id` is `None`.
+    """
+    kind, parameters = parse_feature_name(feature_name)
+    return ResolvedFeatureName(
+        feature_name=feature_name,
+        field_id=kind if kind in _FIELDS_BY_ID else None,
+        parameters=parameters,
+    )
+
+
 def is_parameterized_feature(field_id: str) -> bool:
     """True for fields that require a `lookback` parameter (SMA/EMA/ATR),
     false for raw OHLCV fields - used by the parameter-schema builder to

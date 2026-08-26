@@ -86,6 +86,8 @@ class SignalRecorder(Protocol):
         risk_status: str,
         risk_reason: str,
         order_status: str,
+        scan_run_id: str | None = None,
+        strategy_version_identifier: str | None = None,
     ) -> None: ...
 
 
@@ -243,6 +245,7 @@ class PaperSignalExecutionService:
         data_quality_is_stale: bool,
         already_processed_signal_ids: frozenset[str],
         already_submitted_idempotency_keys: frozenset[str],
+        scan_run_id: str | None = None,
     ) -> PaperSignalExecutionResult:
         if not bars:
             return PaperSignalExecutionResult(
@@ -387,6 +390,16 @@ class PaperSignalExecutionService:
             timeframe=signal.timeframe.value,
             signal_timestamp=signal.timestamp,
             order_result=order_result,
+            scan_run_id=scan_run_id,
+            # Checkpoint 64.81: read straight off the configuration this
+            # evaluation actually ran with - the same three components
+            # `derive_signal_id()` already hashes - never a guess, and
+            # never the merely-active version at some later read time.
+            strategy_version_identifier=(
+                f"{configuration.specification_version}:"
+                f"{configuration.code_version}:"
+                f"{configuration.configuration_version}"
+            ),
         )
         self._maybe_attach_exit_plan(
             order_result=order_result,
@@ -416,6 +429,8 @@ class PaperSignalExecutionService:
         timeframe: str,
         signal_timestamp: datetime,
         order_result: PaperOrderSubmissionResult,
+        scan_run_id: str | None = None,
+        strategy_version_identifier: str | None = None,
     ) -> None:
         """Only reached for a REAL, non-skipped, non-neutral,
         not-already-processed signal (see `evaluate_and_submit()`'s
@@ -442,6 +457,8 @@ class PaperSignalExecutionService:
             risk_status=risk_decision.outcome.value,
             risk_reason=risk_decision.explanation,
             order_status=order_status,
+            scan_run_id=scan_run_id,
+            strategy_version_identifier=strategy_version_identifier,
         )
 
     def _maybe_attach_exit_plan(

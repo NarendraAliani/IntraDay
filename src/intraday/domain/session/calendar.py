@@ -28,7 +28,13 @@ from __future__ import annotations
 from datetime import UTC, date, datetime, time
 from zoneinfo import ZoneInfo
 
-from intraday.domain.session.contracts import SessionStatus, TradingSession
+from intraday.domain.session.contracts import (
+    CasAwareSession,
+    InstrumentCategory,
+    MarketSessionState,
+    SessionStatus,
+    TradingSession,
+)
 from intraday.domain.shared_kernel.contracts import Exchange, ensure_utc
 
 INDIA_STANDARD_TIME = ZoneInfo("Asia/Kolkata")
@@ -92,7 +98,180 @@ MARKET_CLOSE_IST = time(15, 30)
 # management code consumes this yet (Checkpoint 23 forbids that) - this
 # field is populated because `TradingSession` requires it, not because
 # anything acts on it this checkpoint.
+#
+# Checkpoint 64.87 SQUARE-OFF NOTE (directive-required analysis, NOT a
+# change): 64.86 flagged that 15:20 now falls INSIDE the CAS window
+# (15:15-15:35) for CATEGORY_I_CAS instruments. This constant is RISK-
+# MANAGEMENT POLICY ("close intraday exposure with a safety buffer
+# before the exchange stops taking normal orders"), not a market-session
+# timing fact - it is deliberately expressed here as an offset from the
+# OLD uniform 15:30 close because that is the one authoritative
+# `TradingSession.market_close` every existing consumer (paper session
+# admission, risk, `TradingSession.__post_init__`'s own
+# `[market_open, square_off_deadline, market_close]` ordering
+# invariant) already depends on - `TradingSession`/`SessionStatus`
+# themselves are NOT modified by this checkpoint (see module docstring
+# below). Whether 15:20 is still the RIGHT square-off buffer for a
+# CAS-eligible instrument (continuous trading itself now ends at 15:15,
+# five minutes before this deadline) is a real open question this
+# checkpoint explicitly does NOT resolve - changing risk-management
+# trading behavior is out of scope (checkpoint directive: "DO NOT
+# silently change risk-management behavior"). Left unchanged, flagged
+# for a future risk-policy checkpoint to revisit deliberately.
 SQUARE_OFF_DEADLINE_IST = time(15, 20)
+
+# ---------------------------------------------------------------------
+# Checkpoint 64.87: CAS-aware session-timing constants and instrument
+# classification (Part A of the checkpoint). ADDITIVE ONLY - everything
+# above this line (`MARKET_OPEN_IST`, `MARKET_CLOSE_IST`,
+# `SQUARE_OFF_DEADLINE_IST`, `build_session_for`, `session_for_instant`,
+# `TradingSession`, `SessionStatus`) is UNCHANGED and continues to
+# govern every existing consumer exactly as before. This section adds a
+# NARROWER, separate query surface (`CasAwareSession`) for the new
+# "does continuous-trading apply right now, for this instrument
+# category" question 64.86 found the platform had no way to answer.
+#
+# CATEGORY_I_CAS: NSE's Closing Auction Session (CAS) circular ends
+# CONTINUOUS trading at 15:15 IST for CAS-eligible cash-equity
+# instruments, followed by a 15:15-15:35 IST closing-auction window.
+# CATEGORY_II_NON_CAS: continuous trading unchanged, through 15:30 IST
+# (identical to the existing `MARKET_CLOSE_IST`).
+CATEGORY_I_CONTINUOUS_CLOSE_IST = time(15, 15)
+CATEGORY_I_CAS_END_IST = time(15, 35)
+CATEGORY_II_CONTINUOUS_CLOSE_IST = MARKET_CLOSE_IST  # 15:30 IST, unchanged
+
+# Checkpoint 64.87: the current live observation universe (Checkpoint
+# 23's four-symbol universe - see `docs/architecture/
+# LIVE_MARKET_DATA_ARCHITECTURE.md`), classified CATEGORY_I_CAS. All
+# four (HDFCBANK, INFY, RELIANCE, TCS) are highly liquid, F&O-eligible
+# NSE large-caps and are CAS-eligible under NSE's circular. Deliberately
+# a closed, checkpoint-scoped classification list (mirrors
+# `NSE_HOLIDAYS_2026`'s own precedent) rather than a general reference-
+# data service - "independent reference data" is explicitly out of
+# scope for this checkpoint. A symbol not in this set is classified
+# CATEGORY_II_NON_CAS by default (the safe default: continuous trading
+# through 15:30, matching this codebase's PRE-64.87 uniform behavior).
+CATEGORY_I_CAS_SYMBOLS: frozenset[str] = frozenset({"HDFCBANK", "INFY", "RELIANCE", "TCS"})
+
+
+def instrument_category_for(symbol: str) -> InstrumentCategory:
+    """Classifies a bare NSE cash-equity trading symbol (e.g. `"INFY"`,
+    not an `InstrumentId`) into `InstrumentCategory`. Case-insensitive.
+    See `CATEGORY_I_CAS_SYMBOLS`'s own docstring for the classification
+    list and its documented limitation."""
+    return (
+        InstrumentCategory.CATEGORY_I_CAS
+        if symbol.upper() in CATEGORY_I_CAS_SYMBOLS
+        else InstrumentCategory.CATEGORY_II_NON_CAS
+    )
+
+
+def build_cas_aware_session_for(
+    category: InstrumentCategory, session_date: date, as_of: datetime
+) -> CasAwareSession:
+    """Computes the `CasAwareSession` for `category` on `session_date`,
+    classified against `as_of` (must be UTC). Mirrors `build_session_for`
+    exactly in shape/holiday handling, but produces the narrower
+    `MarketSessionState` state machine instead of `SessionStatus`."""
+    ensure_utc(as_of, field_name="as_of")
+
+    continuous_close_ist = (
+        CATEGORY_I_CONTINUOUS_CLOSE_IST
+        if category is InstrumentCategory.CATEGORY_I_CAS
+        else CATEGORY_II_CONTINUOUS_CLOSE_IST
+    )
+
+    market_open = datetime.combine(
+        session_date, MARKET_OPEN_IST, tzinfo=INDIA_STANDARD_TIME
+    ).astimezone(UTC)
+    continuous_close = datetime.combine(
+        session_date, continuous_close_ist, tzinfo=INDIA_STANDARD_TIME
+    ).astimezone(UTC)
+
+    cas_start: datetime | None = None
+    cas_end: datetime | None = None
+    if category is InstrumentCategory.CATEGORY_I_CAS:
+        cas_start = continuous_close
+        cas_end = datetime.combine(
+            session_date, CATEGORY_I_CAS_END_IST, tzinfo=INDIA_STANDARD_TIME
+        ).astimezone(UTC)
+
+    state = _classify_market_session_state(
+        category=category,
+        session_date=session_date,
+        market_open=market_open,
+        continuous_close=continuous_close,
+        cas_end=cas_end,
+        as_of=as_of,
+    )
+
+    return CasAwareSession(
+        instrument_category=category,
+        session_date=session_date,
+        state=state,
+        continuous_trading_open=market_open,
+        continuous_trading_close=continuous_close,
+        cas_start=cas_start,
+        cas_end=cas_end,
+    )
+
+
+def _classify_market_session_state(
+    *,
+    category: InstrumentCategory,
+    session_date: date,
+    market_open: datetime,
+    continuous_close: datetime,
+    cas_end: datetime | None,
+    as_of: datetime,
+) -> MarketSessionState:
+    if not is_trading_day(session_date):
+        return MarketSessionState.HOLIDAY
+    if as_of < market_open:
+        return MarketSessionState.PRE_OPEN
+    # Checkpoint 64.87 boundary convention: each window is a
+    # HALF-OPEN [start, end) interval - the instant a window's END is
+    # reached already belongs to the NEXT state. "Continuous Trading
+    # 09:15-15:15" therefore means CONTINUOUS_TRADING while
+    # `as_of < continuous_close` and CAS begins exactly AT 15:15:00 IST,
+    # not one instant after it; symmetrically CAS ends exactly AT
+    # 15:35:00 IST. (Deliberately NOT the older `SessionStatus`
+    # convention of an inclusive closing boundary - CAS is a genuinely
+    # NEW window that starts precisely when continuous trading's
+    # published end time is reached, per NSE's CAS circular language of
+    # "continuous trading ... up to 15:15 hours" immediately followed by
+    # CAS.)
+    if as_of < continuous_close:
+        return MarketSessionState.CONTINUOUS_TRADING
+    if category is InstrumentCategory.CATEGORY_II_NON_CAS:
+        if as_of > continuous_close:
+            return MarketSessionState.CLOSED
+        return MarketSessionState.CONTINUOUS_TRADING
+    assert cas_end is not None  # CATEGORY_I_CAS always carries a CAS window
+    if as_of < cas_end:
+        return MarketSessionState.CAS
+    # Checkpoint 64.87: everything after CAS ends, for the REST of that
+    # calendar date, is POST_CAS_TRANSITION - deliberately NOT further
+    # subdivided into a separate terminal CLOSED instant for
+    # CATEGORY_I_CAS. NSE has not published (and this checkpoint does
+    # not invent) an authoritative "genuinely closed" boundary distinct
+    # from "just past CAS" for a CAS-eligible instrument; a caller that
+    # needs "closed" semantics for a CATEGORY_I_CAS instrument should
+    # treat POST_CAS_TRANSITION as the terminal same-day state (the NEXT
+    # trading day's PRE_OPEN is computed separately, for a different
+    # `session_date`). This mirrors this module's own long-standing
+    # "closed, checkpoint-scoped, documented limitation" style rather
+    # than fabricating an unverified boundary.
+    return MarketSessionState.POST_CAS_TRANSITION
+
+
+def cas_aware_session_for_instant(category: InstrumentCategory, as_of: datetime) -> CasAwareSession:
+    """Convenience wrapper mirroring `session_for_instant`: derives the
+    correct IST calendar date for `as_of` (UTC) and builds that date's
+    `CasAwareSession` for `category`."""
+    ensure_utc(as_of, field_name="as_of")
+    ist_date = as_of.astimezone(INDIA_STANDARD_TIME).date()
+    return build_cas_aware_session_for(category, ist_date, as_of)
 
 
 def build_session_for(session_date: date, as_of: datetime) -> TradingSession:

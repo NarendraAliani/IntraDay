@@ -1593,6 +1593,203 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/correlation/runs/{scan_run_id}/signals/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Checkpoint 64.82 Phase 4: every signal RECORDED against one
+         *     scanner run, each as a full trace.
+         *
+         *     `scan_run_id` is the existing timestamp-shaped
+         *     `ScannerScanProgress.scan_id` (written by the worker as
+         *     `clock.isoformat()`), used verbatim - deliberately not redesigned
+         *     into a UUID by this checkpoint.
+         *
+         *     Query cost is FIXED (six queries as of 64.83) whether the run produced one
+         *     signal or two hundred - see the `assertNumQueries` test.
+         *
+         *     An id that matches nothing returns `signal_count: 0` rather than a
+         *     404: stored data cannot distinguish "this run produced no signals"
+         *     from "this run id never existed", and inventing that distinction
+         *     would be a fabricated fact.
+         */
+        get: operations["api_v1_correlation_runs_signals_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/correlation/signals/{signal_id}/trace/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Checkpoint 64.82 Phase 3: the complete RECORDED lineage of one
+         *     signal - strategy, exact strategy version, originating scanner run,
+         *     the evidence the strategy itself cited, every paper order and paper
+         *     trade carrying this signal's id, and the realised P&L summed over
+         *     those trades.
+         *
+         *     Fixed query cost (five queries as of 64.83) regardless of how many orders,
+         *     trades, or evidence rows exist.
+         *
+         *     Missing relationships are `null`/`[]`, never inferred: a signal with
+         *     no scanner run, no recorded version, no evidence, no order, or no
+         *     trade is a real and supported state, and this endpoint reports it as
+         *     such rather than guessing a plausible link.
+         */
+        get: operations["api_v1_correlation_signals_trace_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/correlation/strategies/{strategy_id}/configurations/{specification_version}/{code_version}/{configuration_version}/trace/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Checkpoint 64.82 Phase 6: one stored strategy configuration, the
+         *     features it REQUIRES, and every signal recorded against its exact
+         *     flattened version identity.
+         *
+         *     `required_features` reuses `strategy_configuration_views.
+         *     _resolved_required_features()` verbatim - the strategy's own
+         *     `required_features(config)` is called, never reimplemented or
+         *     second-guessed, and `null` is returned when it cannot honestly be
+         *     resolved for this stored configuration.
+         *
+         *     THE DISTINCTION THIS ENDPOINT PRESERVES: `required_features` is a
+         *     DECLARATION by the configuration. Each trace's `evidence` is what
+         *     the strategy CHOSE TO CITE for that particular signal. They are
+         *     returned as two separate lists and are never merged - a required
+         *     feature appearing here is not a claim that it caused any signal
+         *     below.
+         */
+        get: operations["api_v1_correlation_strategies_configurations_trace_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/correlation/trades/{trade_id}/trace/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Checkpoint 64.82: the REVERSE traversal - realised outcome back to
+         *     the decision that produced it, via `PaperTradeRecord.signal_id`
+         *     (recorded by 64.81 through an ID join from the trade's own
+         *     `order_ids` to its entry order, never string-matched).
+         *
+         *     A manually-submitted trade genuinely has no signal behind it. That
+         *     is reported as `signal_id: null, trace: null` and the traversal
+         *     stops - this endpoint never searches for a plausible signal by
+         *     instrument, timestamp, or price.
+         */
+        get: operations["api_v1_correlation_trades_trace_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/market-data/archive/{trading_date}/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Checkpoint 64.83 Phase 3/4: what the archive ACTUALLY holds for
+         *     one NSE trading date, optionally narrowed to one symbol and/or one
+         *     timeframe.
+         *
+         *     Reads the existing 64.73 `MarketDataArchiveDay` projection through
+         *     the existing repository - this endpoint recomputes nothing and
+         *     stores nothing.
+         *
+         *     A date with no archived cells returns `cells: []` with
+         *     `archive_status: NOT_OBSERVED` rather than a 404: "nothing was
+         *     observed on this day" is a real, reportable state, and for a weekend
+         *     or NSE holiday (`is_trading_day: false`) it is the CORRECT state,
+         *     not a gap. Distinguishing those two is exactly why `is_trading_day`
+         *     is on the wire.
+         *
+         *     Query cost is FIXED at one archive query regardless of how many
+         *     symbols the day holds - asserted by `assertNumQueries`.
+         */
+        get: operations["api_v1_market_data_archive_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/market-data/reconciliation/{trading_date}/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Checkpoint 64.83 Phase 5: the reconciliation evidence for one
+         *     trading date, produced by the EXISTING 64.79
+         *     `MarketDataReconciliationService` - not by a second comparator.
+         *
+         *     The service writes nothing, so this endpoint is read-only in the
+         *     strongest sense: calling it can never change what the archive
+         *     claims about a day.
+         *
+         *     `PASS` IS NEVER RETURNED BECAUSE THE SERVICE RAN. Against this
+         *     database today every cell returns `NOT_RECONCILED` with reason
+         *     `no_reference_bars_available`, because the only wired reference
+         *     pipeline (Dhan's historical-candle REST API) holds no bars
+         *     overlapping the archived cells. That is the honest result and it is
+         *     reported verbatim.
+         *
+         *     A FURTHER LIMITATION, stated on the wire via `evidence_source`: that
+         *     reference pipeline is Dhan, and so is the archive it would check.
+         *     Even a future `PASS` from this source would be Dhan-vs-Dhan
+         *     corroboration and would NOT satisfy TRADING_GRADE_BAR condition 3.
+         */
+        get: operations["api_v1_market_data_reconciliation_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/healthz": {
         parameters: {
             query?: never;
@@ -1672,6 +1869,51 @@ export interface components {
             details?: {
                 [key: string]: unknown;
             };
+        };
+        /**
+         * @description One archived (symbol, timeframe, data_source) cell of one trading
+         *     date - the persisted 64.73 projection, read back unchanged.
+         */
+        ArchiveCell: {
+            /** Format: date */
+            trading_date: string;
+            symbol: string;
+            timeframe: string;
+            data_source: string | null;
+            archive_status: string;
+            reason: string;
+            completeness_supported: boolean;
+            expected_bar_count: number | null;
+            closed_bar_count: number;
+            forming_bar_count: number;
+            missing_bar_count: number | null;
+            duplicate_bar_count: number;
+            quote_observation_count: number;
+            /** Format: date-time */
+            first_observation: string | null;
+            /** Format: date-time */
+            last_observation: string | null;
+            reconciliation_status: string;
+            /** Format: date-time */
+            reconciled_at: string | null;
+            /** Format: date-time */
+            computed_at: string | null;
+            reconciliation_outcome: string;
+            reconciliation_reason: string;
+            reconciliation_evidence_source: string | null;
+        };
+        /** @description The whole-day answer to "what does the archive hold for date X?". */
+        ArchiveDayResponse: {
+            /** Format: date */
+            trading_date: string;
+            exchange: string;
+            is_trading_day: boolean;
+            archive_status: string;
+            symbol_count: number;
+            cell_count: number;
+            symbol_filter: string | null;
+            timeframe_filter: string | null;
+            cells: components["schemas"]["ArchiveCell"][];
         };
         /**
          * @description Response shape for one durable audit record. Read-only by
@@ -1843,6 +2085,124 @@ export interface components {
          * @enum {string}
          */
         ConnectionStatusResponseStatusEnum: "NOT_CONFIGURED" | "CONFIGURED" | "CONNECTING" | "CONNECTED" | "DISCONNECTED" | "AUTHENTICATION_FAILED" | "TOKEN_EXPIRED" | "CONNECTION_ERROR" | "DISABLED";
+        /**
+         * @description One row the STRATEGY ITSELF chose to record as its explanation.
+         *
+         *     This is NOT a causal proof and NOT the same thing as a required
+         *     feature - see `CorrelationStrategyTraceResponseSerializer`.
+         */
+        CorrelationFeatureEvidence: {
+            label: string;
+            value: string;
+            feature_name: string | null;
+            field_id: string | null;
+        };
+        /** @description A paper order reached by EXACT `signal_id` equality. */
+        CorrelationOrder: {
+            order_id: string;
+            instrument_id: string;
+            side: string;
+            order_type: string;
+            /** Format: decimal */
+            quantity: string;
+            /** Format: decimal */
+            filled_quantity: string;
+            status: string;
+            /** Format: date-time */
+            created_at: string;
+        };
+        /**
+         * @description Same shape as
+         *     `strategy_configuration.RequiredFeatureSerializer` - reused
+         *     vocabulary, declared separately only so the correlation contract is
+         *     self-contained.
+         */
+        CorrelationRequiredFeature: {
+            feature_name: string;
+            field_id: string | null;
+            display_name: string | null;
+            parameters: number[];
+        };
+        CorrelationScanRunTraceResponse: {
+            scan_run_id: string;
+            signal_count: number;
+            signals: components["schemas"]["CorrelationTrace"][];
+            strategy_ids: string[];
+            /** Format: date-time */
+            scan_started_at: string | null;
+            timeframe: string | null;
+            status: string | null;
+            run_metadata_available: boolean;
+        };
+        CorrelationStrategyTraceResponse: {
+            strategy_id: string;
+            specification_version: string;
+            code_version: string;
+            configuration_version: string;
+            strategy_version_identifier: string;
+            required_features: components["schemas"]["CorrelationRequiredFeature"][] | null;
+            signal_count: number;
+            signals: components["schemas"]["CorrelationTrace"][];
+        };
+        /**
+         * @description The full RECORDED lineage of one signal.
+         *
+         *     This response exposes recorded relationships. It does not establish
+         *     causality beyond the relationships already represented in the
+         *     domain.
+         */
+        CorrelationTrace: {
+            signal_id: string;
+            strategy_id: string;
+            strategy_version_identifier: string | null;
+            scan_run_id: string | null;
+            instrument_id: string;
+            direction: string;
+            /** Format: decimal */
+            price: string;
+            timeframe: string;
+            /** Format: date-time */
+            signal_timestamp: string;
+            risk_status: string;
+            order_status: string | null;
+            evidence: components["schemas"]["CorrelationFeatureEvidence"][];
+            evidence_schema_version: string | null;
+            orders: components["schemas"]["CorrelationOrder"][];
+            trades: components["schemas"]["CorrelationTrade"][];
+            /** Format: decimal */
+            realized_pnl: string | null;
+            market_data_outcome_status: string;
+        };
+        /**
+         * @description A completed paper round trip reached by EXACT `signal_id`
+         *     equality.
+         */
+        CorrelationTrade: {
+            trade_id: string;
+            instrument_id: string;
+            direction: string;
+            order_ids: string[];
+            /** Format: decimal */
+            entry_price: string;
+            /** Format: decimal */
+            exit_price: string;
+            /** Format: decimal */
+            quantity: string;
+            /** Format: decimal */
+            realized_pnl: string;
+            /** Format: decimal */
+            costs: string;
+            /** Format: date-time */
+            opened_at: string;
+            /** Format: date-time */
+            closed_at: string;
+        };
+        /** @description Reverse lookup: outcome -> decision. */
+        CorrelationTradeTraceResponse: {
+            trade_id: string;
+            signal_id: string | null;
+            trace: components["schemas"]["CorrelationTrace"] | null;
+        };
         /**
          * @description * `FLAT_PERCENTAGE` - FLAT_PERCENTAGE
          *     * `INDIAN_CASH_EQUITY_INTRADAY` - INDIAN_CASH_EQUITY_INTRADAY
@@ -2239,6 +2599,7 @@ export interface components {
             state_history: {
                 [key: string]: unknown;
             }[];
+            signal_id?: string | null;
         };
         PaperOrderSubmitRequest: {
             instrument_id: string;
@@ -2401,6 +2762,8 @@ export interface components {
             opened_at: string;
             /** Format: date-time */
             closed_at: string;
+            signal_id?: string | null;
+            readonly strategy_version_identifier: string | null;
         };
         ParameterDefinition: {
             parameter_id: string;
@@ -2458,6 +2821,85 @@ export interface components {
          * @enum {string}
          */
         ReadyzResponseStatusEnum: "ready" | "not_ready";
+        /**
+         * @description The result of comparing ONE archived (date, symbol, timeframe)
+         *     cell against the independent reference series - the 64.79
+         *     `ReconciliationReport`, read out unchanged.
+         */
+        ReconciliationCell: {
+            /** Format: date */
+            trading_date: string;
+            symbol: string;
+            timeframe: string;
+            reconciliation_status: string;
+            reason: string;
+            evidence_source: string;
+            expected_bar_count: number | null;
+            observed_count: number;
+            reference_count: number;
+            matched_count: number;
+            missing_observed_count: number;
+            missing_reference_count: number;
+            duplicate_observed_count: number;
+            duplicate_reference_count: number;
+            unmatched_observed_count: number;
+            unmatched_reference_count: number;
+            ohlc_mismatch_count: number;
+            volume_compared: boolean;
+            volume_mismatch_count: number | null;
+            timestamp_tolerance_seconds: number;
+            /** Format: decimal */
+            price_tolerance: string;
+            /** Format: date-time */
+            observed_first_timestamp: string | null;
+            /** Format: date-time */
+            observed_last_timestamp: string | null;
+            /** Format: date-time */
+            reference_first_timestamp: string | null;
+            /** Format: date-time */
+            reference_last_timestamp: string | null;
+            mismatches: components["schemas"]["ReconciliationMismatch"][];
+        };
+        ReconciliationDayResponse: {
+            /** Format: date */
+            trading_date: string;
+            exchange: string;
+            timeframe: string;
+            is_trading_day: boolean;
+            reconciliation_status: string;
+            evidence_source: string;
+            cell_count: number;
+            symbol_filter: string | null;
+            cells: components["schemas"]["ReconciliationCell"][];
+        };
+        /**
+         * @description One field of one bar disagreeing beyond tolerance. Both values
+         *     are kept - "3 bars mismatched" alone would not be actionable.
+         */
+        ReconciliationMismatch: {
+            /** Format: date-time */
+            timestamp: string;
+            field_name: string;
+            /** Format: decimal */
+            observed: string;
+            /** Format: decimal */
+            reference: string;
+        };
+        /**
+         * @description Checkpoint 64.81: ONE feature a strategy configuration genuinely
+         *     requires, expressed with canonical identity - closing Checkpoint
+         *     64.80-F3's gap 1 (`required_features(config)` existed but was never
+         *     exposed, so Features -> Strategy was only PARTIAL).
+         *
+         *     `Strategy.required_features()` itself is completely unchanged; this
+         *     only RESOLVES and PRESENTS what it already returns.
+         */
+        RequiredFeature: {
+            feature_name: string;
+            field_id: string | null;
+            display_name: string | null;
+            parameters: number[];
+        };
         ResearchStatusResponse: {
             strategy_id: string;
             status: string;
@@ -2627,6 +3069,25 @@ export interface components {
             signal_id: string;
             attempts: components["schemas"]["CommunicationAttempt"][];
         };
+        SignalEvidence: {
+            schema_version: string;
+            fields: components["schemas"]["SignalEvidenceField"][];
+        };
+        /**
+         * @description Checkpoint 64.81: the explicit, typed evidence-field schema that
+         *     replaces the previous untyped `DictField` payload (Phase 7's "avoid
+         *     generic dict-of-unknown where a canonical identifier is available").
+         *
+         *     Deliberately NOT named with an attribute called `fields` anywhere -
+         *     see `SignalEvidenceSerializer` below for why that name is unusable
+         *     on a DRF `Serializer` subclass.
+         */
+        SignalEvidenceField: {
+            label: string;
+            value: string;
+            feature_name: string | null;
+            field_id: string | null;
+        };
         SignalListResponse: {
             items: components["schemas"]["SignalResponse"][];
             total_count: number;
@@ -2668,9 +3129,9 @@ export interface components {
             trade_plan: components["schemas"]["TradePlanField"] | null;
             telegram: components["schemas"]["ChannelStatus"] | null;
             discord: components["schemas"]["ChannelStatus"] | null;
-            evidence: {
-                [key: string]: unknown;
-            } | null;
+            evidence: components["schemas"]["SignalEvidence"] | null;
+            scan_run_id: string | null;
+            strategy_version_identifier: string | null;
         };
         StrategyConfigurationResponse: {
             strategy_id: string;
@@ -2681,6 +3142,7 @@ export interface components {
             /** Format: date-time */
             created_at: string;
             created_by: string;
+            required_features: components["schemas"]["RequiredFeature"][] | null;
         };
         StrategyConfigurationSaveRequest: {
             specification_version: string;
@@ -4966,6 +5428,185 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WatchlistResponse"];
+                };
+            };
+        };
+    };
+    api_v1_correlation_runs_signals_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scan_run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CorrelationScanRunTraceResponse"];
+                };
+            };
+        };
+    };
+    api_v1_correlation_signals_trace_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                signal_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CorrelationTrace"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+        };
+    };
+    api_v1_correlation_strategies_configurations_trace_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                code_version: string;
+                configuration_version: string;
+                specification_version: string;
+                strategy_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CorrelationStrategyTraceResponse"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+        };
+    };
+    api_v1_correlation_trades_trace_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                trade_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CorrelationTradeTraceResponse"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+        };
+    };
+    api_v1_market_data_archive_retrieve: {
+        parameters: {
+            query?: {
+                /** @description Restrict to one instrument symbol (e.g. `RELIANCE`), exactly as archived. Echoed back as `symbol_filter`. */
+                symbol?: string;
+                /** @description Restrict to one timeframe (e.g. `1m`). Echoed back as `timeframe_filter`. */
+                timeframe?: string;
+            };
+            header?: never;
+            path: {
+                trading_date: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArchiveDayResponse"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+        };
+    };
+    api_v1_market_data_reconciliation_retrieve: {
+        parameters: {
+            query?: {
+                /** @description Reconcile only this instrument symbol. Echoed back as `symbol_filter`. */
+                symbol?: string;
+                /** @description Timeframe to reconcile. Defaults to `1m`; the applied value is echoed. */
+                timeframe?: string;
+            };
+            header?: never;
+            path: {
+                trading_date: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReconciliationDayResponse"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
                 };
             };
         };

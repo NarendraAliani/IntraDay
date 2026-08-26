@@ -184,9 +184,15 @@ describe("PARTIAL - Signal to Paper Trade is NOT a direct join", () => {
     expect(body).toContain("order_status");
   });
 
-  it("PaperTradeResponse does NOT carry signal_id - which is why this is PARTIAL", () => {
+  // Checkpoint 64.82: this assertion previously asserted the ABSENCE of
+  // `signal_id` on `PaperTradeResponse`. Checkpoint 64.81 added that
+  // field (`PaperTradeRecord.signal_id`, populated by an ID join from
+  // the trade's own `order_ids` to its entry order - never inferred),
+  // and 64.82 regenerated the contract, so the absence is no longer
+  // true. Asserting the CURRENT contract truth rather than a stale gap.
+  it("PaperTradeResponse now carries signal_id (closed by Checkpoint 64.81)", () => {
     const body = schemaBody("PaperTradeResponse");
-    expect(body).not.toContain("signal_id");
+    expect(body).toContain("signal_id");
     expect(body).toContain("order_ids");
   });
 
@@ -204,8 +210,12 @@ describe("PARTIAL - Features to Strategy exposes category, not resolved fields",
     expect(body).not.toContain("required_features");
   });
 
-  it("no endpoint anywhere publishes required_features", () => {
-    expect(CONTRACT).not.toContain("required_features");
+  // Checkpoint 64.82: previously asserted that NO endpoint published
+  // `required_features`. Checkpoint 64.81 exposed it on the strategy
+  // configuration response, and 64.82 additionally exposes it on the
+  // correlation strategy trace. Asserting the current contract truth.
+  it("required_features is now published by the contract (closed by 64.81/64.82)", () => {
+    expect(CONTRACT).toContain("required_features");
   });
 
   it("the model reports this link as PARTIAL", () => {
@@ -219,10 +229,13 @@ describe("PARTIAL - a scan run cannot be joined to an individual signal", () => 
     expect(schemaBody("ScannerProgressResponse")).toContain("signals_found");
   });
 
-  it("SignalResponse carries no scan-run identifier", () => {
+  // Checkpoint 64.82: previously asserted that `SignalResponse` carried
+  // NO scan-run identifier. Checkpoint 64.81 added `scan_run_id` (the
+  // existing timestamp-shaped `ScannerScanProgress.scan_id`, propagated
+  // - not a new identity), and 64.82 regenerated the contract.
+  it("SignalResponse now carries scan_run_id (closed by Checkpoint 64.81)", () => {
     const body = schemaBody("SignalResponse");
-    expect(body).not.toContain("scan_id");
-    expect(body).not.toContain("scan_run");
+    expect(body).toContain("scan_run_id");
   });
 });
 

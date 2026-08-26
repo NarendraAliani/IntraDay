@@ -65,6 +65,68 @@ def _event_to_dict(event: OrderEvent) -> dict[str, object]:
     }
 
 
+def _trade_signal_id(trade: Trade) -> str:
+    """Checkpoint 64.81: resolves a completed trade's originating
+    `signal_id` by ID JOIN from the trade's OWN `order_ids` into the
+    already-persisted order ledger.
+
+    Why a join rather than a new field threaded through the broker:
+    `domain.trade.Trade` is produced by the paper broker's own
+    round-trip matching and ALREADY carries the exact order IDs that
+    opened and closed it, and those orders already store `signal_id`
+    (Checkpoint 36). Re-deriving the link from data both sides already
+    record is strictly safer than a second, independently-maintained
+    copy that could disagree - and it required no change whatsoever to
+    fill logic, matching, or P&L.
+
+    NOT string matching and NOT inference: the lookup key is exact
+    `order_id` equality on a unique column. If no listed order is found,
+    or the found orders genuinely carry no signal, the value stays
+    BLANK - a trade is never given a signal that some other trade's
+    order happened to reference.
+
+    Where several of a trade's orders carry a signal, the FIRST in
+    `order_ids` order wins - that is the entry order, the decision the
+    trade is attributable to, never an arbitrary pick.
+
+    The strategy VERSION is deliberately not resolved here: it lives on
+    `SignalRecord` and is reached through this `signal_id`, never
+    duplicated onto the trade row.
+    """
+    return _resolve_trade_signal_id(trade, _order_signal_map((trade,)))
+
+
+def _order_signal_map(trades: tuple[Trade, ...]) -> dict[str, str]:
+    """ONE query for EVERY order referenced by a whole batch of trades.
+
+    `sync_all()` runs after every broker mutation and passes the FULL
+    trade list each time, so resolving each trade with its own query
+    would be quadratic in the number of trades - measurably so: it was
+    caught by the full regression suite slowing to a crawl before this
+    batching existed. This keeps `sync_trades()` to a single indexed
+    `order_id__in` lookup, matching the "never a per-row N+1" discipline
+    the signal repository's bulk enrichment already established.
+    """
+    order_ids = {str(oid) for trade in trades for oid in trade.order_ids}
+    if not order_ids:
+        return {}
+    return {
+        row.order_id: row.signal_id
+        for row in PaperOrderRecord.objects.filter(order_id__in=order_ids).only(
+            "order_id", "signal_id"
+        )
+    }
+
+
+def _resolve_trade_signal_id(trade: Trade, order_signals: dict[str, str]) -> str:
+    """Pure resolution against an already-fetched order map - no query."""
+    for oid in trade.order_ids:
+        signal_id = order_signals.get(str(oid), "")
+        if signal_id:
+            return signal_id
+    return ""
+
+
 class DjangoPaperLedgerRepository:
     """Django ORM implementation of the paper-ledger persistence
     surface. Never mutates `PaperBroker`'s own in-memory state - reads
@@ -101,6 +163,9 @@ class DjangoPaperLedgerRepository:
 
     @transaction.atomic
     def sync_trades(self, trades: tuple[Trade, ...]) -> None:
+        # Checkpoint 64.81: ONE order lookup for the whole batch (see
+        # `_order_signal_map`) - never one query per trade.
+        order_signals = _order_signal_map(trades)
         for trade in trades:
             PaperTradeRecord.objects.update_or_create(
                 trade_id=str(trade.trade_id),
@@ -115,6 +180,12 @@ class DjangoPaperLedgerRepository:
                     "realized_pnl": trade.realized_pnl,
                     "opened_at": trade.opened_at,
                     "closed_at": trade.closed_at,
+                    # Checkpoint 64.81: resolved by ID JOIN from this
+                    # trade's OWN `order_ids` to the already-persisted
+                    # order ledger - a real recorded relationship, not
+                    # inference and not string matching. Blank whenever
+                    # the join does not genuinely resolve.
+                    "signal_id": _resolve_trade_signal_id(trade, order_signals),
                 },
             )
 

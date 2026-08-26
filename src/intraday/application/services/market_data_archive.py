@@ -34,8 +34,12 @@ from intraday.domain.market_data.archive import (
     trading_date_for,
 )
 from intraday.domain.market_data.contracts import Quote
-from intraday.domain.session.calendar import build_session_for
-from intraday.domain.session.contracts import TradingSession
+from intraday.domain.session.calendar import (
+    build_cas_aware_session_for,
+    build_session_for,
+    instrument_category_for,
+)
+from intraday.domain.session.contracts import CasAwareSession, TradingSession
 from intraday.domain.shared_kernel.contracts import Exchange, Timeframe, ensure_utc
 
 
@@ -257,7 +261,19 @@ def assess_cell(
 ) -> ArchiveDayAssessment:
     """Thin adapter onto the domain classifier - kept as a module-level
     function (not a method) so tests can exercise the exact same call
-    the service makes without constructing a repository."""
+    the service makes without constructing a repository.
+
+    Checkpoint 64.88: derives `cas_session` from `cell_symbol` via
+    `instrument_category_for` + `build_cas_aware_session_for` and passes
+    it through to `assess_archive_day`, so every symbol the archive
+    already refreshes gets the correct CAS-aware continuous-trading
+    window automatically - CATEGORY_I_CAS symbols (09:15-15:15) and
+    CATEGORY_II_NON_CAS symbols (09:15-15:30, identical to the prior
+    behavior) alike. No new call site or opt-in flag is needed."""
+    category = instrument_category_for(cell_symbol)
+    cas_session: CasAwareSession = build_cas_aware_session_for(
+        category, identity.trading_date, as_of
+    )
     return assess_archive_day(
         identity=identity,
         instrument_symbol=cell_symbol,
@@ -271,6 +287,7 @@ def assess_cell(
         last_observation_at=last_observation_at,
         as_of=as_of,
         ingestion_failed=ingestion_failed,
+        cas_session=cas_session,
     )
 
 

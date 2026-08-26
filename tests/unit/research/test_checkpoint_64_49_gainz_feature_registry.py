@@ -717,6 +717,17 @@ def test_zz_no_real_gainz_source_file_exists() -> None:
         # Gainz math, module or activation was added there or since.
         "64_76",
         "DHAN_MARKET_DATA_CAPABILITY_RESEARCH",
+        # Checkpoint 64.82: the correlation query API doc's Gainz section
+        # states only that Gainz remains disabled and that no
+        # Gainz-specific query path was added. 64.82 added the doc but
+        # did not allowlist it here, leaving this guard red; 64.83
+        # restores it. A disclaimer, not an implementation.
+        "CORRELATION_QUERY_API",
+        # Checkpoint 64.83: the archive query API doc records that
+        # archive-qualified outcome evidence is a PREREQUISITE for any
+        # future Gainz attribution, and that none of it exists yet. No
+        # Gainz math, module or activation was added.
+        "MARKET_DATA_ARCHIVE_QUERY_API",
     )
     for hit in hits:
         assert any(

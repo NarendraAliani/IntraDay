@@ -37,11 +37,13 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 
 from intraday.domain.market_data.archive import (
+    ReconciliationStatus,
     TradingSessionIdentity,
     is_completeness_supported,
+    is_continuous_completeness_supported,
 )
-from intraday.domain.market_data.quality import expected_bar_timestamps
-from intraday.domain.session.contracts import TradingSession
+from intraday.domain.market_data.quality import expected_bar_timestamps, timeframe_to_timedelta
+from intraday.domain.session.contracts import CasAwareSession, TradingSession
 from intraday.domain.shared_kernel.contracts import Timeframe, ensure_utc
 
 
@@ -227,6 +229,50 @@ class ReconciliationReport:
         return len(self.mismatches)
 
 
+def persisted_status_for(outcome: ReconciliationOutcome) -> ReconciliationStatus:
+    """Projects a computed `ReconciliationOutcome` onto the THREE-valued
+    `archive.ReconciliationStatus` the stored archive cell has carried
+    since 64.73.
+
+    Checkpoint 64.84. Two vocabularies are kept deliberately, and this
+    is the ONLY bridge between them:
+
+      * `ReconciliationOutcome` is the exact verdict of one comparison
+        run and is persisted verbatim alongside this projection - no
+        information is lost by the mapping;
+      * `ReconciliationStatus` is the coarse claim the archive row makes
+        to every existing consumer (`classify_archive_evidence`, the
+        archive API, the correlation trace). Its vocabulary is NOT
+        widened here, because a new value would silently change what
+        those consumers mean.
+
+    PARTIAL maps to NOT_RECONCILED, and that is the single judgement in
+    this function: a partially-covered comparison is not an
+    independently validated day (`is_independently_validated` says so
+    for PASS only), and it is not a disagreement either. Of the three
+    available stored values NOT_RECONCILED is the only one that claims
+    nothing false. The exact PARTIAL verdict remains readable from the
+    persisted outcome and reason."""
+    if outcome is ReconciliationOutcome.PASS:
+        return ReconciliationStatus.RECONCILED
+    if outcome is ReconciliationOutcome.FAIL:
+        return ReconciliationStatus.MISMATCH
+    return ReconciliationStatus.NOT_RECONCILED
+
+
+def was_comparison_executed(outcome: ReconciliationOutcome) -> bool:
+    """Whether an actual bar-by-bar comparison ran to produce `outcome`.
+
+    Checkpoint 64.84's persistence rule turns on exactly this question:
+    `reconciled_at` records WHEN a comparison happened, so it may only
+    be stamped when one did. `NOT_RECONCILED` is returned by
+    `reconcile_bar_series` precisely in the cases where it short-
+    circuited BEFORE comparing anything (unsupported timeframe, no
+    reference bars, no observed bars), so it is the exact complement of
+    "a comparison executed"."""
+    return outcome is not ReconciliationOutcome.NOT_RECONCILED
+
+
 def _duplicates(timestamps: Sequence[datetime]) -> tuple[datetime, ...]:
     seen: set[datetime] = set()
     duplicated: set[datetime] = set()
@@ -270,6 +316,7 @@ def reconcile_bar_series(
     reference_bars: Sequence[ReferenceBar],
     evidence_source: str,
     tolerance: ReconciliationTolerance | None = None,
+    cas_session: CasAwareSession | None = None,
 ) -> ReconciliationReport:
     """Compares one archived bar series against one independent
     reference series.
@@ -278,6 +325,21 @@ def reconcile_bar_series(
     `"dhan_historical_intraday_api"`) and is required to be non-empty:
     an unattributed reference is not evidence, and a report that could
     not say what it compared against would be unauditable.
+
+    `cas_session` (Checkpoint 64.88, OPTIONAL, defaults to `None`): when
+    given, the expected-bar series this comparison runs against is
+    `cas_session`'s own CONTINUOUS-TRADING window (09:15-15:15 IST for
+    `InstrumentCategory.CATEGORY_I_CAS`) instead of `session`'s plain
+    09:15-15:30 bounds. Without this, a CATEGORY_I_CAS instrument's
+    15:15-15:30 CAS-window bars (which the reference side, an ordinary
+    historical-candle API, may or may not even publish for that window
+    - unresolved, see the module-level provider-behavior disclaimer)
+    would be counted as MISSING on both sides and drag a fully-
+    reconciled continuous session down to PARTIAL for no real
+    disagreement. `cas_session` deliberately narrows only WHICH
+    timestamps are expected - it never fabricates or excuses an
+    observed/reference bar that genuinely disagrees within the
+    continuous window itself.
 
     Decision order (the honesty rules of this checkpoint):
       1. a timeframe with no defensible expected-bar series is
@@ -300,8 +362,16 @@ def reconcile_bar_series(
     # reach this function in the first place.
     observed_stamps = [bar.timestamp for bar in observed_bars]
     reference_stamps = [bar.timestamp for bar in reference_bars]
-    supported = is_completeness_supported(timeframe)
-    expected = expected_bar_timestamps(session, timeframe) if supported else ()
+    if cas_session is not None:
+        supported = is_continuous_completeness_supported(timeframe, cas_session)
+        expected = (
+            cas_session.expected_continuous_bar_timestamps(timeframe_to_timedelta(timeframe))
+            if supported
+            else ()
+        )
+    else:
+        supported = is_completeness_supported(timeframe)
+        expected = expected_bar_timestamps(session, timeframe) if supported else ()
 
     observed_duplicates = _duplicates(observed_stamps)
     reference_duplicates = _duplicates(reference_stamps)
@@ -444,5 +514,7 @@ __all__ = [
     "ReconciliationReport",
     "ReconciliationTolerance",
     "ReferenceBar",
+    "persisted_status_for",
     "reconcile_bar_series",
+    "was_comparison_executed",
 ]

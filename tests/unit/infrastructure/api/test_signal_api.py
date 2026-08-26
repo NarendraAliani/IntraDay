@@ -200,10 +200,14 @@ def test_signals_endpoint_shows_real_persisted_signal_evidence() -> None:
     evidence = response.json()["items"][0]["evidence"]
     assert evidence is not None
     assert evidence["schema_version"] == "1"
+    # Checkpoint 64.81: `label`/`value` keep their exact keys, values and
+    # order; `feature_name`/`field_id` are added alongside. This fixture
+    # constructs evidence fields without a feature name, so no identity
+    # is invented for them.
     assert evidence["fields"] == [
-        {"label": "Fast EMA", "value": "1234.50"},
-        {"label": "Slow EMA", "value": "1229.40"},
-        {"label": "Crossover", "value": "Bullish"},
+        {"label": "Fast EMA", "value": "1234.50", "feature_name": None, "field_id": None},
+        {"label": "Slow EMA", "value": "1229.40", "feature_name": None, "field_id": None},
+        {"label": "Crossover", "value": "Bullish", "feature_name": None, "field_id": None},
     ]
 
 

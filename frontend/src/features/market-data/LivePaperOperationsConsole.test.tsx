@@ -165,6 +165,8 @@ const EMPTY_REPORT: DailySessionReportResponse = {
 };
 
 const SAMPLE_SIGNAL: SignalResponse = {
+  scan_run_id: null,
+  strategy_version_identifier: null,
   signal_id: "sig-1",
   strategy_id: "atr_volatility_breakout",
   instrument_id: "NSE:RELIANCE",

@@ -41,10 +41,12 @@ OBSERVED_AT = dt.datetime(2026, 8, 25, 3, 50, tzinfo=dt.UTC)
 DHAN = "dhan_websocket"
 
 
-def _quote(*, symbol: str = "RELIANCE", source: str = DHAN) -> Quote:
+def _quote(
+    *, symbol: str = "RELIANCE", source: str = DHAN, timestamp: dt.datetime = OBSERVED_AT
+) -> Quote:
     return Quote(
         instrument_id=make_instrument_id(Exchange.NSE, symbol),
-        timestamp=OBSERVED_AT,
+        timestamp=timestamp,
         last_price=Decimal("1234.5000"),
         source=source,
     )
@@ -121,7 +123,19 @@ class TestProvenanceRoundTripsThroughPersistence:
     @pytest.mark.django_db
     def test_two_sources_for_one_symbol_are_summarised_separately(self) -> None:
         """The archive's evidence query must distinguish providers - this
-        is the query whose symbol-only grouping caused double attribution."""
+        is the query whose symbol-only grouping caused double attribution.
+
+        Checkpoint 64.87 Part B note: the two `dhan_websocket` quotes below
+        are given DISTINCT `source_timestamp`s (one second apart) rather
+        than sharing `OBSERVED_AT` verbatim as before 64.87. Two identical
+        `Quote`s (same instrument, same source_timestamp, same snapshot)
+        are now correctly treated as a single STALE_DUPLICATE observation
+        by `DjangoLiveQuoteRepository.save_all()` - re-persisting an
+        identical same-timestamp observation twice is exactly the 64.85
+        defect this checkpoint fixes, not a second genuine observation.
+        This test's own intent (two GENUINE dhan_websocket observations,
+        correctly attributed to their source) is unaffected by giving them
+        distinct timestamps."""
         from intraday.infrastructure.persistence.live_market_data_repositories import (
             DjangoLiveQuoteRepository,
         )
@@ -130,7 +144,11 @@ class TestProvenanceRoundTripsThroughPersistence:
         )
 
         DjangoLiveQuoteRepository().save_all(
-            (_quote(), _quote(), _quote(source="dhan_rest")),
+            (
+                _quote(),
+                _quote(timestamp=OBSERVED_AT + dt.timedelta(seconds=1)),
+                _quote(source="dhan_rest"),
+            ),
             fetched_at=OBSERVED_AT,
         )
 

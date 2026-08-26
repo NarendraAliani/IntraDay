@@ -33,7 +33,15 @@ from intraday.infrastructure.api.errors import (
 )
 from intraday.infrastructure.api.permissions import IsConfigurationOperator
 from intraday.infrastructure.persistence.repositories import DjangoStrategyConfigurationRepository
-from intraday.signal_intelligence.feature_engine.field_registry import list_fields
+from intraday.signal_intelligence.feature_engine.field_registry import (
+    get_field,
+    list_fields,
+    resolve_feature_name,
+)
+from intraday.trading_engine.strategy_execution.contracts import (
+    StrategyConfigurationValues,
+    coerce_configuration_values,
+)
 from intraday.trading_engine.strategy_execution.errors import (
     InvalidParameterValueError,
     MissingRequiredParameterError,
@@ -56,6 +64,79 @@ def _service() -> StrategyConfigurationService:
     )
 
 
+def _resolved_required_features(
+    snapshot: StrategyConfigurationSnapshot,
+) -> list[dict[str, object]] | None:
+    """Checkpoint 64.81 Phase 1: exposes `Strategy.required_features(
+    config)` with canonical field identity attached.
+
+    The calculation itself is NOT touched, reimplemented, or second-
+    guessed - the strategy's own method is called with the
+    configuration's own stored values, and its result is only resolved
+    (feature name -> registry `field_id`) and presented.
+
+    THE LIMITATION Phase 1 asks to be documented explicitly: this cannot
+    be resolved for EVERY strategy configuration, and pretending
+    otherwise would fabricate data. `required_features()` is specified
+    over a VALIDATED configuration and reads values directly (e.g.
+    `require_int(config.values, "fast_lookback")` in
+    `ema_crossover`), so it legitimately raises when a stored
+    configuration's values are missing a parameter or hold a type the
+    strategy's CURRENT schema no longer accepts - a real possibility,
+    since stored configurations are immutable while strategy code
+    continues to evolve. Rather than swallow that into a misleading
+    empty list (which would assert "needs no features") or invent
+    plausible-looking feature names, this returns `None` and the API
+    reports `required_features: null`.
+
+    `DECIMAL`-typed values are coerced first via the platform's own
+    `coerce_configuration_values()` - the SAME function
+    `StrategyConfigurationService.save_configuration()` and
+    `BacktestingService.run()` already call before validating - because
+    values round-tripped through JSON storage arrive as `str`/`float`,
+    never as `Decimal`. Reusing that function rather than re-coercing
+    locally is what keeps this read path consistent with the write path.
+    """
+    try:
+        strategy = _REGISTRY.get(snapshot.strategy_id)
+    except UnknownStrategyError:
+        return None
+
+    try:
+        values = coerce_configuration_values(
+            strategy.parameter_schema(), dict(snapshot.parameter_values)
+        )
+        config = StrategyConfigurationValues(
+            strategy_id=snapshot.strategy_id,
+            specification_version=snapshot.specification_version,
+            code_version=snapshot.code_version,
+            configuration_version=snapshot.configuration_version,
+            values=values,
+        )
+        feature_names = strategy.required_features(config)
+    except Exception:  # noqa: BLE001 - deliberate honest-absence boundary
+        # Every failure mode collapses to the same honest answer: this
+        # configuration's required features cannot be determined. The
+        # exception is deliberately not surfaced as a 500 - listing
+        # configurations must not break because one stored row no
+        # longer satisfies a strategy's current schema.
+        return None
+
+    resolved: list[dict[str, object]] = []
+    for feature_name in feature_names:
+        resolution = resolve_feature_name(feature_name)
+        definition = get_field(resolution.field_id) if resolution.field_id is not None else None
+        resolved.append(
+            {
+                "feature_name": resolution.feature_name,
+                "field_id": resolution.field_id,
+                "display_name": definition.display_name if definition is not None else None,
+                "parameters": list(resolution.parameters),
+            }
+        )
+    return resolved
+
+
 def _configuration_to_response(snapshot: StrategyConfigurationSnapshot) -> dict[str, object]:
     return {
         "strategy_id": snapshot.strategy_id,
@@ -65,6 +146,7 @@ def _configuration_to_response(snapshot: StrategyConfigurationSnapshot) -> dict[
         "values": snapshot.parameter_values,
         "created_at": snapshot.created_at,
         "created_by": snapshot.created_by,
+        "required_features": _resolved_required_features(snapshot),
     }
 
 

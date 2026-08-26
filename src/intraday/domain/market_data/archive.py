@@ -34,11 +34,13 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 
 from intraday.domain.market_data.quality import (
+    CasWindowStatus,
+    classify_cas_window_status,
     expected_bar_timestamps,
     timeframe_to_timedelta,
 )
 from intraday.domain.session.calendar import INDIA_STANDARD_TIME, is_trading_day
-from intraday.domain.session.contracts import TradingSession
+from intraday.domain.session.contracts import CasAwareSession, TradingSession
 from intraday.domain.shared_kernel.contracts import Exchange, Timeframe, ensure_utc
 
 
@@ -112,14 +114,57 @@ def is_completeness_supported(timeframe: Timeframe) -> bool:
     against the NSE cash-equity session. See the comment above for the
     arithmetic - this returns `False` (never a guess) for TICK, DAY,
     30m and 1h."""
+    return _minutes_supported(timeframe, _SESSION_MINUTES, _SESSION_OPEN_OFFSET_MINUTES)
+
+
+def _minutes_supported(timeframe: Timeframe, window_minutes: int, open_offset_minutes: int) -> bool:
+    """Shared arithmetic behind `is_completeness_supported` (the plain,
+    uniform 09:15-15:30 window) and `is_continuous_completeness_
+    supported` below (Checkpoint 64.88's narrower, category-specific
+    continuous-trading window) - the SAME "does this timeframe's bar
+    duration tile the window without straddling either edge" test,
+    parameterised by window instead of duplicated per window."""
     try:
         duration = timeframe_to_timedelta(timeframe)
     except ValueError:
         return False  # TICK has no fixed duration.
     minutes = int(duration.total_seconds() // 60)
-    if minutes <= 0 or minutes > _SESSION_MINUTES:
+    if minutes <= 0 or minutes > window_minutes:
         return False
-    return _SESSION_MINUTES % minutes == 0 and _SESSION_OPEN_OFFSET_MINUTES % minutes == 0
+    return window_minutes % minutes == 0 and open_offset_minutes % minutes == 0
+
+
+# ---------------------------------------------------------------------
+# Checkpoint 64.88: CATEGORY-I continuous-trading completeness support.
+#
+# CATEGORY_I_CAS instruments run continuous trading 09:15-15:15 IST
+# (360 minutes), not the 375-minute 09:15-15:30 window
+# `is_completeness_supported` checks against - reusing that function
+# unmodified for a CATEGORY_I_CAS instrument would silently apply the
+# WRONG window's alignment test. `CasAwareSession` already carries the
+# correct, already-computed `continuous_trading_open`/`_close` for
+# whichever category it was built for (CATEGORY_II_NON_CAS included -
+# its window is 375 minutes, identical to the plain-session case), so
+# this derives the window length/offset from the session ITSELF rather
+# than hand-duplicating the 360-vs-375 distinction as a second pair of
+# constants that could drift out of sync with `domain.session.calendar`.
+def is_continuous_completeness_supported(
+    timeframe: Timeframe, cas_session: CasAwareSession
+) -> bool:
+    """Whether a defensible expected-bar count exists for `timeframe`
+    against `cas_session`'s CONTINUOUS-TRADING window only (never CAS
+    or post-CAS) - the CAS-aware sibling of `is_completeness_supported`."""
+    window_minutes = int(
+        (cas_session.continuous_trading_close - cas_session.continuous_trading_open).total_seconds()
+        // 60
+    )
+    midnight_utc = cas_session.continuous_trading_open.replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    open_offset_minutes = int(
+        (cas_session.continuous_trading_open - midnight_utc).total_seconds() // 60
+    )
+    return _minutes_supported(timeframe, window_minutes, open_offset_minutes)
 
 
 def trading_date_for(instant: datetime) -> date:
@@ -183,6 +228,17 @@ class ArchiveDayAssessment:
     missing_bar_timestamps: tuple[datetime, ...] = field(default_factory=tuple)
     duplicate_bar_timestamps: tuple[datetime, ...] = field(default_factory=tuple)
     reconciliation_status: ReconciliationStatus = ReconciliationStatus.NOT_RECONCILED
+    cas_window_status: CasWindowStatus = CasWindowStatus.NOT_APPLICABLE
+    """Checkpoint 64.88: ADDITIVE field, `NOT_APPLICABLE` for every
+    assessment computed WITHOUT a `cas_session` (every pre-64.88 caller,
+    and every CATEGORY_II_NON_CAS instrument) - existing behavior is
+    unchanged by its mere presence. See `quality.CasWindowStatus` for
+    what each value claims and, just as importantly, does not claim.
+    Deliberately kept SEPARATE from `status`/`reason` above (continuous
+    completeness) rather than folded into them - CAS applicability is
+    not a completeness verdict (per the checkpoint directive: do not
+    mark CAS COMPLETE merely because no bars are expected, and do not
+    mark it FAILED merely because ordinary bars are absent)."""
 
     @property
     def missing_bar_count(self) -> int:
@@ -213,6 +269,7 @@ def assess_archive_day(
     last_observation_at: datetime | None,
     as_of: datetime,
     ingestion_failed: bool = False,
+    cas_session: CasAwareSession | None = None,
 ) -> ArchiveDayAssessment:
     """Classifies one archived (symbol, timeframe, day) cell.
 
@@ -221,6 +278,18 @@ def assess_archive_day(
     because that is the vocabulary `quality.expected_bar_timestamps`
     already speaks. Gap detection is delegated to that existing domain
     function; this function's own job is only the STATUS decision.
+
+    `cas_session` (Checkpoint 64.88, OPTIONAL, defaults to `None`):
+    when given, CONTINUOUS-TRADING completeness (`status`/`reason`/
+    `missing_bar_timestamps`/`expected_bar_count`) is assessed against
+    `cas_session`'s own continuous-trading window instead of `session`'s
+    plain [market_open, market_close] bounds - the fix for the 64.85-
+    class defect where a CATEGORY_I_CAS instrument's 15:15-15:35 CAS
+    quiet was indistinguishable from a real 09:15-15:30 gap.
+    `cas_window_status` (see its own field docstring) is populated from
+    it independently. Omitting `cas_session` (every pre-64.88 call site)
+    reproduces the EXACT prior behavior - this parameter is purely
+    additive.
 
     Decision order is deliberate and is the core honesty rule of this
     checkpoint:
@@ -235,8 +304,15 @@ def assess_archive_day(
     """
     ensure_utc(as_of, field_name="as_of")
 
-    supported = is_completeness_supported(timeframe)
-    expected = expected_bar_timestamps(session, timeframe) if supported else ()
+    if cas_session is not None:
+        supported = is_continuous_completeness_supported(timeframe, cas_session)
+        duration = timeframe_to_timedelta(timeframe) if supported else None
+        expected = cas_session.expected_continuous_bar_timestamps(duration) if duration else ()
+        cas_window_status = classify_cas_window_status(cas_session)
+    else:
+        supported = is_completeness_supported(timeframe)
+        expected = expected_bar_timestamps(session, timeframe) if supported else ()
+        cas_window_status = CasWindowStatus.NOT_APPLICABLE
 
     seen: set[datetime] = set()
     duplicates: list[datetime] = []
@@ -266,15 +342,27 @@ def assess_archive_day(
             last_observation_at=last_observation_at,
             missing_bar_timestamps=missing,
             duplicate_bar_timestamps=tuple(sorted(set(duplicates))),
+            cas_window_status=cas_window_status,
         )
 
+    # Checkpoint 64.88: when `cas_session` is given, CONTINUOUS-TRADING
+    # completeness is decidable as soon as the CONTINUOUS window itself
+    # closes (`continuous_trading_close`, 15:15 IST for CATEGORY_I_CAS) -
+    # not the plain session's 15:30 `market_close`. Waiting for 15:30
+    # would misreport a fully-complete 09:15-15:15 continuous series as
+    # still `IN_PROGRESS` for the entire CAS window, for no reason: CAS
+    # data availability is tracked separately by `cas_window_status`,
+    # never by delaying the continuous verdict.
+    continuous_closed_at = (
+        cas_session.continuous_trading_close if cas_session is not None else session.market_close
+    )
     if not identity.is_trading_day:
         return build(ArchiveStatus.NOT_OBSERVED, "non_trading_day")
     if ingestion_failed:
         return build(ArchiveStatus.FAILED, "ingestion_reported_failure")
     if closed_count == 0 and forming_bar_count == 0 and quote_observation_count == 0:
         return build(ArchiveStatus.NOT_OBSERVED, "no_observations_persisted")
-    if as_of < session.market_close:
+    if as_of < continuous_closed_at:
         return build(ArchiveStatus.IN_PROGRESS, "session_not_closed")
     if not supported:
         return build(
@@ -293,5 +381,6 @@ __all__ = [
     "TradingSessionIdentity",
     "assess_archive_day",
     "is_completeness_supported",
+    "is_continuous_completeness_supported",
     "trading_date_for",
 ]

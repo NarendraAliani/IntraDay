@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import datetime as _dt
+import logging
 from decimal import Decimal
 
 from intraday.application.repositories.live_market_data import (
@@ -19,6 +20,7 @@ from intraday.domain.instrument.contracts import make_instrument_id
 from intraday.domain.market_data.aggregation import AggregatedBar, BarStatus
 from intraday.domain.market_data.archive import trading_date_for
 from intraday.domain.market_data.contracts import Quote
+from intraday.domain.market_data.quality import ObservationComparison, classify_observation
 from intraday.domain.shared_kernel.contracts import Exchange, Timeframe
 from intraday.infrastructure.persistence.models import (
     AggregatedBarObservation,
@@ -26,43 +28,112 @@ from intraday.infrastructure.persistence.models import (
     MarketDataHealthStatus,
 )
 
+logger = logging.getLogger(__name__)
+
 
 class DjangoLiveQuoteRepository:
     """Django ORM implementation of `LiveQuoteRepository`."""
 
     def save_all(self, quotes: tuple[Quote, ...], *, fetched_at: _dt.datetime) -> None:
-        rows = [
-            LiveQuoteObservation(
-                instrument_symbol=_symbol_from_instrument_id(quote.instrument_id),
-                exchange=Exchange.NSE.value,
-                last_price=quote.last_price,
-                source_timestamp=quote.timestamp,
-                fetched_at=fetched_at,
-                # Checkpoint 64.64: persisted so a later `get_observations()`
-                # round-trip (e.g. `BarAggregationService.aggregate_and_
-                # persist()` reading back from the DB) still has the real
-                # cumulative reading to difference into per-bar volume -
-                # `None` unchanged for quotes that never carried one.
-                cumulative_volume=quote.cumulative_volume,
-                # Checkpoint 64.73: the trading-day identity is stamped
-                # HERE, at the single write boundary, from the quote's
-                # own SOURCE timestamp (never `fetched_at`, which is our
-                # local receive clock - a quote observed at 15:29:59 IST
-                # but written a second later must still belong to the
-                # session it was quoted in).
-                trading_date=trading_date_for(quote.timestamp),
-                # Checkpoint 64.75: provenance, stamped at the same single
-                # write boundary as `trading_date` above. `Quote.source`
-                # was previously dropped here and reconstructed as `""` on
-                # read - so a replayed observation could not say which
-                # provider/packet path produced it. Persisted VERBATIM and
-                # never defaulted to a provider name: a quote that
-                # genuinely carried no source stays `""`.
-                data_source=quote.source,
+        """Checkpoint 64.87 Part B: application-level idempotency. Before
+        this checkpoint, EVERY `Quote` handed to `save_all()` was
+        unconditionally inserted, even when it was a re-delivery of the
+        exact same provider observation (same `source_timestamp`, same
+        content) already persisted moments earlier with only `fetched_at`
+        advancing - the confirmed 64.85 defect (~600 rows/symbol/minute
+        against a ~50-60 distinct-`source_timestamp` baseline).
+
+        Fix: for each instrument present in `quotes`, the most recently
+        persisted `Quote` for that instrument (by `fetched_at`, i.e. the
+        current DB tip - `get_latest()`'s own read pattern) is looked up
+        ONCE, then `classify_observation()` (the canonical, pure
+        instrument+source_timestamp+snapshot identity rule - see
+        `domain.market_data.quality`'s own docstring) is applied to each
+        `quote` in order, updating the in-memory "most recent" pointer as
+        it goes so within-batch duplicates are caught too, not only
+        cross-batch ones.
+
+        `STALE_DUPLICATE` quotes are skipped entirely (never inserted).
+        `NEW` and `CONFLICTING_SAME_TIMESTAMP` quotes are BOTH still
+        inserted, append-only, exactly as before - `CONFLICTING_SAME_
+        TIMESTAMP` additionally logs a warning (never silently
+        discarded; this module has no way to know which of two
+        disagreeing same-timestamp readings, if either, is correct - see
+        `classify_observation()`'s own docstring). No DB schema change:
+        this is application-level idempotency only, per the checkpoint
+        directive's stated preference."""
+        if not quotes:
+            return
+
+        last_known: dict[str, Quote] = {}
+        symbols_needed = {_symbol_from_instrument_id(q.instrument_id) for q in quotes}
+        for symbol in symbols_needed:
+            row = (
+                LiveQuoteObservation.objects.filter(instrument_symbol=symbol)
+                .order_by("-fetched_at")
+                .first()
             )
-            for quote in quotes
-        ]
-        LiveQuoteObservation.objects.bulk_create(rows)
+            if row is not None:
+                last_known[symbol] = _row_to_quote(row)
+
+        rows = []
+        for quote in quotes:
+            symbol = _symbol_from_instrument_id(quote.instrument_id)
+            previous = last_known.get(symbol)
+            comparison = classify_observation(previous, quote)
+
+            if comparison is ObservationComparison.STALE_DUPLICATE:
+                # The exact 64.85 defect shape: same instrument, same
+                # source_timestamp, identical snapshot as what is already
+                # persisted - `fetched_at` advancing alone is NOT proof
+                # of a new market event. Skip; do not advance last_known
+                # (it is already this exact observation).
+                continue
+
+            if comparison is ObservationComparison.CONFLICTING_SAME_TIMESTAMP:
+                logger.warning(
+                    "market_data.observation.conflicting_same_timestamp "
+                    "instrument=%s source_timestamp=%s previous_price=%s "
+                    "candidate_price=%s",
+                    quote.instrument_id,
+                    quote.timestamp.isoformat(),
+                    previous.last_price if previous is not None else None,
+                    quote.last_price,
+                )
+
+            last_known[symbol] = quote
+            rows.append(
+                LiveQuoteObservation(
+                    instrument_symbol=symbol,
+                    exchange=Exchange.NSE.value,
+                    last_price=quote.last_price,
+                    source_timestamp=quote.timestamp,
+                    fetched_at=fetched_at,
+                    # Checkpoint 64.64: persisted so a later `get_observations()`
+                    # round-trip (e.g. `BarAggregationService.aggregate_and_
+                    # persist()` reading back from the DB) still has the real
+                    # cumulative reading to difference into per-bar volume -
+                    # `None` unchanged for quotes that never carried one.
+                    cumulative_volume=quote.cumulative_volume,
+                    # Checkpoint 64.73: the trading-day identity is stamped
+                    # HERE, at the single write boundary, from the quote's
+                    # own SOURCE timestamp (never `fetched_at`, which is our
+                    # local receive clock - a quote observed at 15:29:59 IST
+                    # but written a second later must still belong to the
+                    # session it was quoted in).
+                    trading_date=trading_date_for(quote.timestamp),
+                    # Checkpoint 64.75: provenance, stamped at the same single
+                    # write boundary as `trading_date` above. `Quote.source`
+                    # was previously dropped here and reconstructed as `""` on
+                    # read - so a replayed observation could not say which
+                    # provider/packet path produced it. Persisted VERBATIM and
+                    # never defaulted to a provider name: a quote that
+                    # genuinely carried no source stays `""`.
+                    data_source=quote.source,
+                )
+            )
+        if rows:
+            LiveQuoteObservation.objects.bulk_create(rows)
 
     def get_latest(self) -> tuple[Quote, ...]:
         symbols = (

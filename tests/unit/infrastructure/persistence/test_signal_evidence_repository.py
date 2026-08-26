@@ -40,11 +40,17 @@ def test_save_and_get_round_trips_fields_in_order() -> None:
     assert record.signal_id == "sig-1"
     assert record.strategy_id == "ema_crossover"
     assert record.schema_version == "1"
-    assert record.fields == (
+    # Checkpoint 64.81: fields are now `SignalEvidenceFieldView`s
+    # carrying canonical identity. `label`/`value` and their ORDER are
+    # asserted exactly as before - the identity is additive.
+    assert [(f.label, f.value) for f in record.fields] == [
         ("Fast EMA", "1234.50"),
         ("Slow EMA", "1229.40"),
         ("Crossover", "Bullish"),
-    )
+    ]
+    # This fixture builds fields with no `feature_name`, so no identity
+    # is invented for them.
+    assert all(f.feature_name is None and f.field_id is None for f in record.fields)
 
 
 @requires_postgres
@@ -88,4 +94,7 @@ def test_evidence_for_different_strategies_persists_independently() -> None:
     assert ema_record is not None and atr_record is not None
     assert ema_record.strategy_id == "ema_crossover"
     assert atr_record.strategy_id == "atr_volatility_breakout"
-    assert atr_record.fields == (("ATR", "12.5"), ("Breakout", "Bearish"))
+    assert [(f.label, f.value) for f in atr_record.fields] == [
+        ("ATR", "12.5"),
+        ("Breakout", "Bearish"),
+    ]

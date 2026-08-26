@@ -26,6 +26,8 @@ from intraday.domain.market_data.archive import (
     ReconciliationStatus,
 )
 from intraday.domain.market_data.contracts import Quote
+from intraday.domain.market_data.quality import CasWindowStatus
+from intraday.domain.market_data.reconciliation import ReconciliationOutcome
 from intraday.domain.shared_kernel.contracts import Exchange, Timeframe
 
 
@@ -94,6 +96,19 @@ class ArchiveDayRecord:
     reconciliation_status: ReconciliationStatus
     reconciled_at: datetime | None
     computed_at: datetime | None
+    reconciliation_outcome: ReconciliationOutcome = ReconciliationOutcome.NOT_RECONCILED
+    """Checkpoint 64.84: the EXACT persisted verdict, of which
+    `reconciliation_status` is the coarse three-valued projection.
+    Defaulted so every existing construction site (64.73-64.83 tests and
+    callers) keeps compiling and keeps meaning what it meant."""
+    reconciliation_reason: str = ""
+    reconciliation_evidence_source: str = ""
+    cas_window_status: CasWindowStatus = CasWindowStatus.NOT_APPLICABLE
+    """Checkpoint 64.88: the persisted projection of `domain.market_data.
+    archive.ArchiveDayAssessment.cas_window_status`. Defaulted so every
+    existing (64.73-64.87) construction site keeps compiling and keeps
+    meaning what it meant - `NOT_APPLICABLE` for every row computed
+    without a `CasAwareSession`."""
 
 
 class MarketDataArchiveRepository(Protocol):
@@ -112,6 +127,48 @@ class MarketDataArchiveRepository(Protocol):
         timeframe, data_source)`. Re-running an archive refresh for the
         same day MUST update the same row, never append a second one -
         this is the archive's idempotency guarantee."""
+        ...
+
+    # --- reconciliation persistence (64.84) --------------------------
+    def save_reconciliation_result(
+        self,
+        *,
+        exchange: Exchange,
+        trading_date: date,
+        instrument_symbol: str,
+        timeframe: Timeframe,
+        status: ReconciliationStatus,
+        outcome: ReconciliationOutcome,
+        reason: str,
+        evidence_source: str,
+        reconciled_at: datetime | None,
+    ) -> int:
+        """Records the verdict of ONE executed reconciliation onto the
+        EXISTING archive cell(s) for this (date, symbol, timeframe),
+        returning how many rows were updated.
+
+        Checkpoint 64.84. Three properties this contract requires of any
+        implementation:
+
+          * it NEVER creates an archive cell. A reconciliation is a
+            claim ABOUT an archived day; if no such day is archived
+            there is nothing to make a claim about, and a row conjured
+            here would assert observation that never happened. Zero
+            rows updated is a valid, reportable result.
+          * it writes ONLY the five reconciliation columns. No archive
+            status, count, or timestamp is touched - the two
+            assessments stay independent, in both directions.
+          * it is an UPDATE keyed on the existing natural key, so
+            re-running a reconciliation overwrites the same cell rather
+            than accumulating history. The archive cell IS the
+            persistence boundary; there is no reconciliation table.
+
+        The (date, symbol, timeframe) key deliberately omits
+        `data_source`: reconciliation compares this platform's archived
+        bars for the cell against an external reference, and the 64.79
+        service does not partition its observed series by source, so the
+        verdict applies to every source-variant row of that cell alike.
+        """
         ...
 
     # --- queryability (Phase 4) --------------------------------------

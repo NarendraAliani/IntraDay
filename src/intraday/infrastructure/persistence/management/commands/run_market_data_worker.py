@@ -669,6 +669,16 @@ class _QuoteSink:
                     strategy_id=strategy_id,
                     on_instrument_progress=_report_progress,
                     strategy_execution_enabled=self._strategy_execution_enabled,
+                    # Checkpoint 64.81: the SAME `clock.isoformat()`
+                    # value already written as this scan's
+                    # `ScannerScanProgress.scan_id` above - re-derived
+                    # from the same `clock`, never a second or
+                    # differently-generated identity. Only set when a
+                    # scan-progress provider genuinely exists, i.e.
+                    # when this really is a tracked scanner run.
+                    scan_run_id=(
+                        clock.isoformat() if self._scan_progress_provider is not None else None
+                    ),
                 )
                 total_promoted += pipeline_outcome.promoted_count
                 total_invocations += pipeline_outcome.active_loop_invocations

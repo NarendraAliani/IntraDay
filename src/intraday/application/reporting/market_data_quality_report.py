@@ -18,6 +18,7 @@ from enum import Enum
 
 from intraday.application.reporting.contracts import ReportMetadata, ReportStatus, ReportType
 from intraday.domain.market_data.aggregation import BarQualityGrade
+from intraday.domain.market_data.quality import CasWindowStatus
 from intraday.research.backtesting.contracts import DataQualityLabel
 
 
@@ -95,6 +96,68 @@ CONDITIONS: tuple[TradingGradeBarCondition, ...] = (
         "performed, not a full session.",
     ),
 )
+
+
+# ---------------------------------------------------------------------
+# Checkpoint 64.88: the CAS-AWARE per-timestamp data-quality vocabulary
+# this report can now express, alongside (never replacing) the
+# TRADING_GRADE_BAR six-condition checklist above. Named EXACTLY as the
+# checkpoint directive requires: `TRUE_MISSING_DATA`,
+# `EXPECTED_CAS_NON_CONTINUOUS`, `PROVIDER_DATA_PRESENT`,
+# `PROVIDER_BEHAVIOR_UNKNOWN`. Deliberately a small, closed vocabulary
+# rather than a sprawling new taxonomy - each value answers exactly one
+# question ("was a continuous-trading bar timestamp genuinely absent,
+# expected-CAS-absent, present, or genuinely unresolved") and composes
+# with `quality.CasWindowStatus` rather than re-deriving session state.
+class CasDataQualityLabel(str, Enum):
+    """One expected-continuous-trading-timestamp's data-quality verdict,
+    CAS-aware. See `classify_cas_data_quality` for how a caller derives
+    this - never assigned by hand."""
+
+    TRUE_MISSING_DATA = "TRUE_MISSING_DATA"
+    """The timestamp fell inside ordinary CONTINUOUS TRADING (or a
+    CATEGORY_II_NON_CAS session, which has no CAS at all) and no bar
+    was observed for it. A genuine gap - the ONLY value this checklist
+    ever reports as an actionable data-quality defect."""
+
+    EXPECTED_CAS_NON_CONTINUOUS = "EXPECTED_CAS_NON_CONTINUOUS"
+    """The timestamp/window falls inside `MarketSessionState.CAS`.
+    Absence of an ordinary continuous-trading bar here is EXPECTED, per
+    the checkpoint's critical principle - never reported as missing
+    data."""
+
+    PROVIDER_DATA_PRESENT = "PROVIDER_DATA_PRESENT"
+    """A continuous-trading bar (or, for a CAS-window observation,
+    SOME provider observation) was actually present for the
+    timestamp/window in question - nothing to flag."""
+
+    PROVIDER_BEHAVIOR_UNKNOWN = "PROVIDER_BEHAVIOR_UNKNOWN"
+    """The window is CAS-adjacent (`CasWindowStatus.
+    PROVIDER_BEHAVIOR_UNKNOWN` - i.e. `POST_CAS_TRANSITION`) and this
+    report deliberately does NOT claim to know whether CAS-window data
+    was complete, partial, or absent - no verified Dhan CAS-behavior
+    contract exists yet. Distinct from `TRUE_MISSING_DATA`: this value
+    is honest uncertainty, not a claimed defect."""
+
+
+def classify_cas_data_quality(
+    *, cas_window_status: CasWindowStatus, is_missing_continuous_bar: bool
+) -> CasDataQualityLabel:
+    """Derives the `CasDataQualityLabel` for one expected continuous-
+    trading bar timestamp. `cas_window_status` comes from
+    `quality.classify_cas_window_status`; `is_missing_continuous_bar`
+    comes from `quality.missing_continuous_bar_timestamps`
+    (`timestamp not in missing_continuous_bar_timestamps(...)` for
+    `PROVIDER_DATA_PRESENT`). Pure lookup, no I/O."""
+    if cas_window_status is CasWindowStatus.EXPECTED_NON_CONTINUOUS:
+        return CasDataQualityLabel.EXPECTED_CAS_NON_CONTINUOUS
+    if cas_window_status is CasWindowStatus.PROVIDER_BEHAVIOR_UNKNOWN:
+        return CasDataQualityLabel.PROVIDER_BEHAVIOR_UNKNOWN
+    return (
+        CasDataQualityLabel.TRUE_MISSING_DATA
+        if is_missing_continuous_bar
+        else CasDataQualityLabel.PROVIDER_DATA_PRESENT
+    )
 
 
 @dataclass(frozen=True, slots=True)

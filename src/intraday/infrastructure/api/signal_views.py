@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from drf_spectacular.utils import OpenApiParameter, extend_schema
+from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_field
 from rest_framework import serializers
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -57,6 +57,78 @@ class ChannelStatusSerializer(serializers.Serializer[dict[str, object]]):
     error_message = serializers.CharField(allow_blank=True)
 
 
+class SignalEvidenceFieldSerializer(serializers.Serializer[dict[str, object]]):
+    """Checkpoint 64.81: the explicit, typed evidence-field schema that
+    replaces the previous untyped `DictField` payload (Phase 7's "avoid
+    generic dict-of-unknown where a canonical identifier is available").
+
+    Deliberately NOT named with an attribute called `fields` anywhere -
+    see `SignalEvidenceSerializer` below for why that name is unusable
+    on a DRF `Serializer` subclass."""
+
+    # `type: ignore[assignment]` for the exact, already-documented
+    # reason `ReadinessCheckSerializer` records (Checkpoint 64.14): a
+    # DRF `Serializer` attribute literally named `label` collides with
+    # `Field.label` in djangorestframework-stubs, though it is entirely
+    # correct at runtime. Suppressed rather than renamed because
+    # `"label"` is the EXISTING wire key that 64.18 established and
+    # frontend code already reads - renaming it to satisfy a stubs
+    # quirk would be a gratuitous breaking change.
+    label = serializers.CharField()  # type: ignore[assignment]
+    """Free-text, human-facing, strategy-chosen. Unchanged."""
+    value = serializers.CharField()
+    """The already-computed value, rendered as a string. Unchanged."""
+    feature_name = serializers.CharField(allow_null=True)
+    """The resolved feature name the strategy itself attributed this row
+    to (e.g. `"ema_12"`), or `null` for a genuinely non-feature row such
+    as `Price` or `Direction`. Never derived from `label`."""
+    field_id = serializers.CharField(allow_null=True)
+    """The canonical `FieldDefinition.field_id` (e.g. `"ema"`) that
+    `feature_name` resolves to via the feature registry, or `null` when
+    there is no feature name or it does not resolve to a registered
+    field. This is the key that makes evidence programmatically
+    correlatable with the feature registry and with a strategy's
+    `required_features`."""
+
+
+# Checkpoint 64.81: built via `type()` rather than a normal `class`
+# statement for one specific reason - this serializer MUST declare a
+# field literally named `fields` (that is the existing wire key, set by
+# Checkpoint 64.18), and a class-body assignment of that name collides
+# with `Serializer.fields` (a `BindingDict` property) at the
+# djangorestframework-stubs level. Building the namespace dynamically
+# keeps DRF's own `SerializerMetaclass` field collection working exactly
+# as it would for a normal class, while giving the type checker nothing
+# to object to. This is used ONLY to describe the OpenAPI shape (see
+# `evidence` below); it never serializes anything at runtime, so it
+# cannot change a single response byte.
+SignalEvidenceSerializer = type(
+    "SignalEvidenceSerializer",
+    (serializers.Serializer,),
+    {
+        "schema_version": serializers.CharField(),
+        "fields": SignalEvidenceFieldSerializer(many=True),
+    },
+)
+
+
+@extend_schema_field(SignalEvidenceSerializer(allow_null=True))
+class _EvidenceField(serializers.DictField):
+    """Checkpoint 64.81: a `DictField` at RUNTIME (so the response shape
+    is byte-for-byte what 64.18 established) that documents itself as the
+    typed `SignalEvidence` schema in OpenAPI.
+
+    The annotation MUST live on the class, not on an instance. DRF
+    deep-copies declared fields when a serializer is instantiated, and
+    `Field.__deepcopy__` rebuilds the field from its recorded
+    `_args`/`_kwargs` - silently discarding any attribute set on the
+    instance, including the `_spectacular_annotation` that
+    `extend_schema_field` attaches. Decorating the class makes the
+    annotation survive that copy, which is the difference between the
+    generated contract carrying a real typed schema and falling back to
+    an opaque `additionalProperties: {}` object."""
+
+
 class SignalResponseSerializer(serializers.Serializer[dict[str, object]]):
     signal_id = serializers.CharField()
     strategy_id = serializers.CharField()
@@ -78,14 +150,33 @@ class SignalResponseSerializer(serializers.Serializer[dict[str, object]]):
     # Checkpoint 64.18: `None` (never a fabricated value) when no
     # evidence was persisted for this signal (a strategy with no
     # registered describer, or a signal predating this checkpoint).
-    # A plain `DictField`, not a nested Serializer class - a Serializer
-    # attribute literally named `fields` collides with DRF's own
-    # `Serializer.fields` (a `BindingDict` property) at the mypy/
-    # djangorestframework-stubs level (the same class of issue
-    # `ReadinessCheckSerializer` already documented for `label`,
-    # Checkpoint 64.14) - the wire shape stays exactly
-    # `{"schema_version": ..., "fields": [{"label": ..., "value": ...}]}`.
-    evidence = serializers.DictField(allow_null=True)
+    # Checkpoint 64.81: still a `DictField` at the OUTER level, for the
+    # exact reason documented since 64.18 - a DRF `Serializer` subclass
+    # cannot declare an attribute literally named `fields` without
+    # colliding with `Serializer.fields` (a `BindingDict` property) at
+    # the mypy/djangorestframework-stubs level. What DID change is that
+    # the inner field objects are now an explicit, typed, documented
+    # schema (`SignalEvidenceFieldSerializer`) instead of anonymous
+    # `{label, value}` dicts, and that schema is attached to the
+    # generated OpenAPI document via the `@extend_schema_field`-style
+    # override on the view (see `_evidence_data`'s own payload).
+    # Wire shape: `{"schema_version": str, "fields": [
+    #   {"label": str, "value": str, "feature_name": str|null,
+    #    "field_id": str|null}]}`.
+    evidence = _EvidenceField(allow_null=True)
+    # Checkpoint 64.81: the scanner run that produced this signal
+    # (`ScannerScanProgress.scan_id`), or `null` when the signal was
+    # genuinely not produced by a tracked scanner run - a real,
+    # supported workflow (replay sessions, REST-ingestion ticks, direct
+    # service calls), never a fabricated identity.
+    scan_run_id = serializers.CharField(allow_null=True)
+    # Checkpoint 64.81: the flattened
+    # `"{spec}:{code}:{config}"` identity of the strategy version that
+    # produced this signal - the SAME representation
+    # `AuditLogEntry.version_identifier` already uses, so a signal (and
+    # any paper trade reached through it) joins to the activation audit
+    # trail. `null` for signals recorded before this checkpoint.
+    strategy_version_identifier = serializers.CharField(allow_null=True)
 
 
 class SignalListResponseSerializer(serializers.Serializer[dict[str, object]]):
@@ -138,6 +229,15 @@ def _enriched_to_response_data(enriched: EnrichedSignal) -> dict[str, object]:
         "risk_reason": record.risk_reason,
         "order_status": record.order_status,
         "created_at": record.created_at,
+        # Checkpoint 64.81: blank in the database means "not produced by
+        # a tracked scanner run" - surfaced as an honest `null` on the
+        # wire rather than an empty string that a client could mistake
+        # for a real run identity.
+        "scan_run_id": record.scan_run_id or None,
+        # Checkpoint 64.81: the exact strategy version that made this
+        # decision. Blank in the database means "recorded before version
+        # tracking existed" - surfaced as `null`, never as a guess.
+        "strategy_version_identifier": record.strategy_version_identifier or None,
         "trade_plan": (
             {
                 "entry_price": plan.entry_price,
@@ -162,7 +262,19 @@ def _evidence_data(evidence: SignalEvidenceEnrichment | None) -> dict[str, objec
         return None
     return {
         "schema_version": evidence.schema_version,
-        "fields": [{"label": label, "value": value} for label, value in evidence.fields],
+        # Checkpoint 64.81: `label`/`value` keep their exact existing
+        # keys, content, and order - `feature_name`/`field_id` are added
+        # alongside them, so an existing consumer reading only the first
+        # two keys is completely unaffected.
+        "fields": [
+            {
+                "label": f.label,
+                "value": f.value,
+                "feature_name": f.feature_name,
+                "field_id": f.field_id,
+            }
+            for f in evidence.fields
+        ],
     }
 
 

@@ -93,6 +93,79 @@ def test_save_all_is_append_only_never_overwrites_a_prior_row() -> None:
 
 @requires_postgres
 @pytest.mark.django_db
+def test_save_all_skips_stale_duplicate_same_timestamp_same_snapshot() -> None:
+    # Checkpoint 64.87 Part B: the exact 64.85 defect shape - the same
+    # provider observation (same source_timestamp, same price) handed to
+    # save_all() repeatedly (as fetched_at advances) must NOT be
+    # re-persisted as if each call were a fresh market event.
+    from intraday.infrastructure.persistence.models import LiveQuoteObservation
+
+    repo = DjangoLiveQuoteRepository()
+    later_fetch = datetime(2026, 1, 5, 6, 0, 1, tzinfo=UTC)
+
+    repo.save_all((_quote("RELIANCE", "1000.00", NOW),), fetched_at=NOW)
+    repo.save_all((_quote("RELIANCE", "1000.00", NOW),), fetched_at=later_fetch)
+    repo.save_all((_quote("RELIANCE", "1000.00", NOW),), fetched_at=later_fetch)
+
+    assert LiveQuoteObservation.objects.filter(instrument_symbol="RELIANCE").count() == 1
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_save_all_persists_genuinely_new_source_timestamp() -> None:
+    from intraday.infrastructure.persistence.models import LiveQuoteObservation
+
+    repo = DjangoLiveQuoteRepository()
+    t1 = NOW
+    t2 = datetime(2026, 1, 5, 6, 0, 1, tzinfo=UTC)
+    t3 = datetime(2026, 1, 5, 6, 0, 2, tzinfo=UTC)
+
+    # Three legitimate observations, same price, three distinct
+    # source_timestamps - all must survive (price equality alone is
+    # never the dedup key).
+    repo.save_all((_quote("RELIANCE", "1000.00", t1),), fetched_at=t1)
+    repo.save_all((_quote("RELIANCE", "1000.00", t2),), fetched_at=t2)
+    repo.save_all((_quote("RELIANCE", "1000.00", t3),), fetched_at=t3)
+
+    assert LiveQuoteObservation.objects.filter(instrument_symbol="RELIANCE").count() == 3
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_save_all_persists_conflicting_same_timestamp_different_price() -> None:
+    # Different price at the same source_timestamp is an anomaly, not a
+    # duplicate - never silently discarded.
+    from intraday.infrastructure.persistence.models import LiveQuoteObservation
+
+    repo = DjangoLiveQuoteRepository()
+
+    repo.save_all((_quote("RELIANCE", "1000.00", NOW),), fetched_at=NOW)
+    repo.save_all((_quote("RELIANCE", "1005.00", NOW),), fetched_at=NOW)
+
+    assert LiveQuoteObservation.objects.filter(instrument_symbol="RELIANCE").count() == 2
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_save_all_dedup_is_per_instrument() -> None:
+    from intraday.infrastructure.persistence.models import LiveQuoteObservation
+
+    repo = DjangoLiveQuoteRepository()
+
+    repo.save_all(
+        (_quote("RELIANCE", "1000.00", NOW), _quote("TCS", "3500.00", NOW)), fetched_at=NOW
+    )
+    repo.save_all(
+        (_quote("RELIANCE", "1000.00", NOW), _quote("TCS", "3500.00", NOW)),
+        fetched_at=datetime(2026, 1, 5, 6, 0, 1, tzinfo=UTC),
+    )
+
+    assert LiveQuoteObservation.objects.filter(instrument_symbol="RELIANCE").count() == 1
+    assert LiveQuoteObservation.objects.filter(instrument_symbol="TCS").count() == 1
+
+
+@requires_postgres
+@pytest.mark.django_db
 def test_health_get_before_any_record_returns_unconfigured_defaults() -> None:
     repo = DjangoMarketDataHealthRepository()
 

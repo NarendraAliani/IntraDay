@@ -102,6 +102,17 @@ flattened string as-is; no code ever splits it). If a future need arises
 to parse it reliably, the fix is a stricter delimiter or a real
 structured field — not attempted speculatively here.
 
+**Checkpoint 64.81 — this format is now load-bearing beyond the audit
+row.** `PaperOrderRecord.strategy_version_identifier` and
+`PaperTradeRecord.strategy_version_identifier` store the exact same
+flattened `"{spec}:{code}:{config}"` string, deliberately reusing this
+representation rather than introducing a second version scheme, so a
+paper P&L record joins directly to the activation audit trail. The
+ambiguity caveat above therefore now applies to those columns too, with
+the same practical assessment: nothing splits the string, it is used as
+an opaque join key. See
+[`CORRELATION_TRACEABILITY.md`](CORRELATION_TRACEABILITY.md).
+
 ## Audit data model
 
 `infrastructure/persistence/models.py`'s `AuditLogEntry`:

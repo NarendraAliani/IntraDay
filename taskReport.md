@@ -1,240 +1,196 @@
 # Task Report
 
 ## Milestone
-Frontend product maturity — making the platform's real decision chain visible and honestly qualified, ahead of the next live milestone (Full NSE equity session + matching reference reconciliation).
+Historical Research & Correlation Foundation (continuing from 64.81-64.89 traceability/quality/reconciliation work).
 
 ## Checkpoint
-64.80-F3 — Feature/Scanner/Strategy Correlation Experience (FRONTEND-ONLY).
+64.90 — Real replay feasibility (data-integrity/replay checkpoint).
 
 ## Classification
-Frontend-only. Zero backend source changes, zero database/migration changes, zero live market activity. The Indian market is closed; nothing in this checkpoint contacted Dhan, started a worker, or placed an order.
+STOP / negative-result checkpoint. No replay was executed. This is a validated finding, not an unfinished task.
 
 ## Objective
-Create a frontend experience that makes the REAL relationship between market data, features, scanners, strategies, signals, paper trading and outcomes visible — using only what the existing backend/API contracts actually establish, and representing every missing or unexposed relationship honestly rather than inventing it.
+Determine whether the existing 64.68 replay/paper-trading infrastructure can take EXISTING local historical market data and run it through the existing feature engine + an existing non-Gainz strategy + existing signal persistence + PaperBroker + outcome persistence to produce a real, traceable SignalRecord -> PaperOrderRecord -> PaperTradeRecord -> outcome chain.
 
-## Correlation Audit
+## Historical Data Availability
+Queried the real database directly (`MarketDataArchiveDay`, `AggregatedBarObservation`, `HistoricalBar`) after applying the one pre-authored, already-uncommitted pending migration (`0033_marketdataarchiveday_cas_window_status`) needed to read the current schema — see Database Changes.
 
-Phase 1 was a read-only investigation of `frontend/shared/generated_contracts/api-types.ts` (86 endpoints, 80 schemas), cross-checked against the actual Django views in `src/intraday/infrastructure/api/`, the strategy registry in `src/intraday/trading_engine/strategy_execution/`, the field registry in `src/intraday/signal_intelligence/feature_engine/field_registry.py`, and the signal→order lineage in `src/intraday/application/services/paper_signal_execution.py`.
+`MarketDataArchiveDay`: **12 cells**, 4 symbols (HDFCBANK, INFY, RELIANCE, TCS) x 3 trading dates (2026-08-24, 2026-08-25, 2026-08-26), all NSE cash equity, all `1m`, all `data_source=dhan`:
 
-| Source | Target | Status | Evidence | UI Exposure | Gap |
-|---|---|---|---|---|---|
-| Market Data | Features | FOUND | `GET /api/v1/config/strategy-engine/fields/` → `FieldDefinition.required_inputs` names the raw bar fields each derived feature consumes (RSI requires `close`; ATR requires `high`,`low`,`close`). `FieldDefinition.source` is `domain.market_data.contracts.Bar` for raw fields and `signal_intelligence.feature_engine` for derived ones. | Rendered as a FOUND chain link with the endpoint and field named inline. | None. |
-| Features | Scanner | NOT APPLICABLE | `ScannerConfigurationState` exposes only `timeframe`, `universe_mode`, `universe_requested_count`, `universe_subscribed_count`, `strategy_ids`, `configuration_version`, `enabled`. No scanner-condition entity exists in the API contract or anywhere in `src/` (no `ScannerCondition` class). This platform's Scanner is a scan LOOP over universe × strategies; feature evaluation happens inside a Strategy. | Rendered as NOT APPLICABLE with the explanation that the relationship does not exist by design, and a pointer to the real Features→Strategy link. | None to close. Treating this as a missing link would misdescribe the architecture. |
-| Features | Strategy | PARTIAL | `GET /api/v1/config/strategy-engine/strategies/{strategy_id}/schema/` → `ParameterDefinition.parameter_type === "FIELD_REFERENCE"` plus `field_category` publishes the field CATEGORY a parameter accepts. The chosen `field_id` lives in `StrategyConfigurationResponse.values`, typed `unknown`. The authoritative resolved list, `Strategy.required_features(config)` (`trading_engine/strategy_execution/strategy.py:30`), is exposed by NO endpoint — the string `required_features` does not appear anywhere in the generated contract. | Rendered as PARTIAL in "Other audited relationships". | Publish the resolved `required_features(config)` field_id list per active configuration. |
-| Market Data | Scanner | FOUND | `ScannerConfigurationState.timeframe` / `universe_requested_count` / `universe_subscribed_count`, plus `WorkerRuntimeStatusResponse.subscribed_instrument_count`. | Rendered as FOUND. | None. |
-| Scanner | Strategy | FOUND | `ScannerConfigurationState.strategy_ids` on `GET /api/v1/config/market-data/scanner-config/` declares exactly which strategies the scan loop runs. `ScannerProgressResponse.current_strategy` / `strategies_total` / `strategies_processed` show it in flight. | Rendered as a FOUND chain link. | None. |
-| Scanner (run) | Signal | PARTIAL | `ScannerProgressResponse.signals_found` is an aggregate COUNT only. `SignalResponse` carries no scan-run identifier, so the count cannot be decomposed into the signals it counted. | Rendered as PARTIAL. | Carry a scan-run identifier onto `SignalResponse`. |
-| Strategy | Signal | FOUND | `SignalResponse.strategy_id` on `GET /api/v1/config/signals/`; `SignalReportResponse.by_strategy` aggregates counts per strategy. | Rendered as a FOUND chain link. | None. |
-| Features | Signal | NOT AVAILABLE | `SignalResponse.evidence.fields` is a list of `{label, value}` pairs authored by the strategy in its own display order (`SignalEvidenceRecordView.fields` is a tuple of `(label, value)` strings). Labels are free-text display strings, NOT `FieldDefinition.field_id` values — `field_id` does not appear in `SignalResponse` at all. No programmatic join exists. | Rendered as NOT AVAILABLE. | Emit `field_id` alongside each evidence label. |
-| Signal | Paper Trade | PARTIAL | `PaperSessionSignal` carries `signal_id` together with `order_status` in one record, so signal→ORDER is exposed directly. `PaperOrderResponse.idempotency_key` IS the `signal_id` and `order_id` is `order-{signal_id}` for engine-generated orders (`paper_signal_execution.py:345-364`). But `PaperTradeResponse` has NO `signal_id` — only `order_ids` — so signal→TRADE is reachable only by joining through the order id. | Rendered as a PARTIAL chain link, stating exactly which half is exposed. | Expose `signal_id` on `PaperTradeResponse`. |
-| Paper Trade | Outcome | FOUND | `PaperTradeResponse.realized_pnl`; `PaperSessionTrade.realized_net_pnl`; `DailySessionReportResponse.realized_pnl_total` / `unrealized_pnl_total` / `closed_positions`. | Rendered as a FOUND chain link. | None. |
-| Paper Trade | Strategy VERSION | NOT FOUND | Searched every paper schema. `PaperTradeResponse`, `PaperOrderResponse`, `PaperPositionResponse` and `PaperSessionTrade` all carry `strategy_id` but NONE carries `specification_version`, `code_version` or `configuration_version`. `DailySessionReportResponse.configuration_version` is the SCANNER configuration version — a different concept. | Rendered as NOT FOUND. | Stamp the flattened strategy version onto paper orders and trades so P&L can be attributed to a configuration. |
-| Strategy | Backtest Outcome | FOUND | `GET /api/v1/config/backtesting/strategies/{strategy_id}/results/` is keyed on `strategy_id` and returns `BacktestResult` with its own `trust_level` and `validation`. | Rendered as FOUND. | None. |
-| Market Data | Outcome (archive-qualified) | NOT YET IMPLEMENTED | The daily archive is a MANAGEMENT COMMAND (`market_data_archive`). No archive or reconciliation schema exists in the generated contract. | Rendered as NOT YET IMPLEMENTED. | Expose archive completeness + reconciliation as a read-only API. |
+| Date | Status | Bars observed / expected |
+|---|---|---|
+| 2026-08-24 | PARTIAL | 1 / 375 (all 4 symbols) |
+| 2026-08-25 | IN_PROGRESS | 24 / 375 (all 4 symbols) |
+| 2026-08-26 | PARTIAL | 60 / 375 (all 4 symbols) |
 
-Totals: **6 FOUND, 3 PARTIAL, 1 NOT FOUND, 1 NOT AVAILABLE, 1 NOT APPLICABLE, 1 NOT YET IMPLEMENTED.**
+**No cell has ever reached `COMPLETE`.** Best-ever coverage is 60/375 = 16%. `HistoricalBar` holds 5,100 rows but is a disjoint `5m` reference series that does not overlap the archived `1m` cells (confirmed in `MARKET_DATA_ARCHIVE_QUERY_API.md`, re-checked live).
 
-## Correlation Taxonomy
+## Candidate Dataset
+The single best candidate is 2026-08-26 RELIANCE `1m` (and the same-shape HDFCBANK/INFY/TCS rows): 60 `AggregatedBarObservation` rows, `interval_start` 08:46-09:58 UTC. Direct inspection found **one internal gap** in that run (09:45 -> 09:58 UTC, ~12 missing minutes), on top of covering only 16% of the expected 375-bar session.
 
-One closed vocabulary, defined once in `correlationModel.ts` and rendered verbatim as an on-screen legend:
+## Dataset Selection Rationale
+2026-08-26 was chosen for inspection because it has the highest observed-bar count of the three archived dates. It was then rejected as a replay input because it fails the checkpoint's own bar: not `COMPLETE`, and even judged loosely (any usable warm-up-plus-decision window) it contains an unexplained internal gap, so a strategy walked forward across it would be evaluated over a series with a silent discontinuity — exactly the kind of input that produces signals nobody could trust.
 
-- **FOUND** — the API contract exposes a field that directly joins these two things. Verified against the generated contract.
-- **PARTIAL** — part of the relationship is exposed (an aggregate, a category, or an id needing an indirect join) but not the whole link.
-- **NOT FOUND** — searched for in the contract; no field establishes it. A real traceability gap, not a UI omission.
-- **NOT APPLICABLE** — the relationship does not exist in this platform's design. There is nothing for the backend to expose.
-- **NOT AVAILABLE** — the relationship exists inside the backend but no HTTP endpoint publishes it.
-- **NOT YET IMPLEMENTED** — the capability itself is not built, so no relationship can exist yet.
+## Archive Quality
+`archive_status` is `PARTIAL` or `IN_PROGRESS` for every cell that exists; `NOT_OBSERVED`/`COMPLETE`/`FAILED` never appear. `completeness_supported=True` for all 12 (1m aligns with the session grid), so the missing coverage is a real gap, not an artifact of an unsupported timeframe.
 
-The UI states explicitly that availability is not correlation and correlation is not causal proof: "A FOUND status means the API exposes a join between two records. It does not claim the upstream stage caused the downstream outcome."
+## CAS-Aware Data Quality
+`cas_window_status` is `NOT_APPLICABLE` on all 12 rows — the CAS-aware quality layer added in 64.88 has not yet been exercised against any window with enough data to classify.
 
-## Decision Pipeline
-A reusable component, `frontend/src/features/correlation/DecisionPipeline.tsx`, rendering the seven-stage chain Market Data → Features → Scanner → Strategy → Signal → Paper Trade → Outcome as a semantic `<ol>`. Each stage shows an icon, label, stage ordinal, one-sentence summary, the real GET endpoints behind it, and a navigation action. Each connector carries the audited link's status badge, its relationship sentence, its API evidence, and its gap.
+## Replay Architecture
+Two independent, real, non-Gainz code paths were located:
+1. `ReplayPaperSessionService` (`src/intraday/application/services/replay_paper_session.py`, checkpoint 64.68) — a pure in-memory projection (`project()`) that re-derives an entire session from `(record, cursor)` into a fresh `PaperBroker` every call. It does **not** write `SignalRecord`/`PaperOrderRecord`/`PaperTradeRecord`/`SignalEvidenceRecord` — only the session spec/cursor is persisted (`PaperSessionRecord`). Its wired `bar_loader` (`load_replay_bars` in `replay_paper_session_runtime.py`) feeds it from `SyntheticHistoricalBarProvider`, explicitly labelled synthetic — **not** real archived data.
+2. `run_active_loop_tick(_from_source)` (`src/intraday/infrastructure/api/active_loop_runtime.py`, checkpoints 39/40/52) — the real persisting path: it wires `PaperSignalExecutionService` with `DjangoSignalRepository`, `DjangoTradePlanRepository`, `DjangoSignalEvidenceRepository`, and `PaperTradingService`/`DjangoPaperLedgerRepository`, and pulls bars from any injected `BarSource` (checkpoint 52's boundary), including the existing `DeterministicReplayBarSource`, which can be seeded from any `Bar` sequence — real or synthetic. This is the path that would need to be driven by real archived bars for a genuine chain.
 
-## Market Data
-Stage 1. Bars/quotes for the subscribed universe. Backed by `market-data/bars/`, `market-data/quotes/`, `market-data/worker-status/`. Navigates to the existing Market Data screen.
+Three non-Gainz strategies exist and are registered (`registry.py::build_default_registry`): `EmaCrossoverStrategy`, `SmaTrendFilterStrategy`, `AtrVolatilityBreakoutStrategy`. A suitable strategy exists; it was never invoked.
 
-## Features
-Stage 2. The canonical field registry — raw Bar fields plus derived EQUITY indicators (SMA, EMA, ATR, RSI, ADX, +DI, -DI, Relative Volume, MACD histogram). Backed by `strategy-engine/fields/`. The UI states plainly that no options fields exist in this registry. Navigates to Strategy Configuration, where the field registry is actually rendered.
+## Replay Path
+Not run. Wiring `AggregatedBarObservation` rows into a `Bar` sequence, feeding `DeterministicReplayBarSource`, and driving `run_active_loop_tick_from_source` per bar with historical `now` timestamps is architecturally straightforward and would have been the minimal real driver — but the archive does not contain a dataset that would produce a trustworthy result (see Dataset Selection Rationale), so building and running it now would only launder insufficient data into rows that look authoritative. Per the checkpoint's own instruction, this is the correct point to stop.
 
-## Scanner
-Stage 3. The scan loop over universe × timeframe × configured strategies. It holds no conditions of its own — stated explicitly, because assuming otherwise is the single most likely false correlation on this screen. Backed by `market-data/scanner-config/` and `market-data/live-paper-workbench/`. Navigates to Live Scanner.
+## Replay Safety
+N/A — no replay executed, so no replay-induced contamination risk was taken. The architecture review above establishes that `run_active_loop_tick_from_source` writes into the same tables live paper trading uses; a future attempt must resolve this isolation question (a dedicated `scan_run_id`/session tag, most likely) before writing anything, which is exactly rule 9's concern.
 
-## Strategy
-Stage 4. Registered, versioned strategies with a parameter schema and saved configuration — where entry/exit conditions actually live. Backed by `strategy-engine/strategies/`, `.../schema/`, `strategy/{id}/active/`.
+## Signal Count
+0 before, 0 after (nothing run).
 
-## Signal
-Stage 5. Strategy-produced signals with direction, risk decision, trade plan and strategy-authored evidence. Backed by `config/signals/` and `reports/signals/`. Navigates to Reports (Signal Report) — the application has no standalone Signals screen, so no fake deep link was created.
+## Feature Evidence Count
+0 before, 0 after.
 
-## Paper Trading
-Stage 6. Simulated execution only. Backed by `paper-trading/orders/`, `paper-trading/trades/`, `paper-trading/session/`. The stage text restates that nothing reaches a real exchange.
+## Paper Order Count
+2 before, 2 after — both pre-existing, dated 2026-08-15 and 2026-08-18, `instrument_id=NSE:RELIANCE`, no `signal_id`. Unrelated to this checkpoint and untouched.
 
-## Outcome
-Stage 7. Realized/unrealized P&L and backtest results. Backed by `reports/daily-session/` and `backtesting/strategies/{id}/results/`.
+## Paper Trade Count
+0 before, 0 after.
 
-## Dashboard Integration
-`DecisionPipeline` is hosted at the foot of the existing Dashboard (`features/dashboard/DashboardPage.tsx`) as a "Decision Pipeline" section, placed after the status cards deliberately: the cards answer "what is happening now", the pipeline answers "how does this platform get from data to a decision, and which of those links are actually wired". The dashboard HOSTS the component; it does not own it — the component lives in `features/correlation/` so any other screen can reuse it.
+## Realized Outcome Count
+0 before, 0 after.
 
-## Drill-Down Navigation
-This project has **no React Router** — verified. `App.tsx` holds one piece of screen state and switches on it (a documented convention since Checkpoint 9). The pipeline therefore drills down through that existing mechanism: a `PipelineDestination` closed union of screen ids that already exist, passed up via `onNavigate` and mapped to `setScreen` in `App.tsx`. A node with no real screen renders no control at all rather than a dead link. Pipeline actions were named "Go to …" rather than "Open …" so they do not collide with the dashboard cards' own accessible names (a duplicate-accessible-name defect caught by the existing `AppDashboardNavigation` test).
+## Provenance Coverage
+Not computable — zero signals exist to measure coverage over.
 
-## Visual Identity
-Reuses 64.80-F2's cerebral identity exactly: analytical surface tokens, precision connector rules, mono/tabular metrics for endpoints and pair labels, restrained status badges. Connectors are static 2px rules coloured by link status. No flashy flowchart, no `@keyframes`, no `infinite`, no `animation:` property — the same restraint the theme quality gate enforces.
+## Orphan Records
+The 2 existing `PaperOrderRecord` rows have no `signal_id`, making them orphans by the 64.81 traceability model (a "genuinely traceable or null" identifier — here it is null, correctly, not inferred). Pre-existing; not created by this checkpoint.
 
-## Icons
-The EXISTING single icon system (`common/icons/Icon.tsx`) only. **No new icon was added and no second system created** — a test asserts neither the model nor the component contains a raw `<svg>`, and that the component imports both `Icon` and the shared `StatusBadge`. Status markers come from `StatusBadge`, which already maps tone → icon. No Unicode glyphs or emoji.
+## Duplicate Detection
+N/A — no records were created.
 
-## Themes
-The EXISTING theme system only. **No new CSS token was introduced** — the theme quality gate requires all four themes to define an identical token set, so a new token would have been a four-theme change. Every pipeline colour is a `var()` from the 64.80-F2 token set. A test renders the pipeline under all four themes (focus, midnight, obsidian, aurora) and asserts the structure and the status WORDS survive unchanged.
+## Look-Ahead Bias Analysis
+No replay ran, so nothing to test here in fact, but the mechanism was reviewed for future use: `ReplayPaperSessionService.project()` evaluates the strategy on `bars[0..index]` only and fills the resulting order against `bars[index+1].open` — the same next-bar-open rule `research/backtesting/engine.py` uses — so a future genuine run through this mechanism structurally cannot look ahead. `run_active_loop_tick_from_source` has no look-ahead guard of its own; it trusts the caller to pass only bars closed as of the tick's `now`, which is how the live scheduler already uses it.
 
-## Responsive
-Desktop: `repeat(auto-fit, minmax(260px, 1fr))` horizontal flow. Below 1100px the same markup stacks to a single column and the connector rule rotates from horizontal (2px tall) to vertical (2px wide, 24px tall), indented so it never crosses a label. One markup tree serves both layouts — asserted by a test, so nothing is duplicated or hidden per breakpoint.
+## Timestamp Integrity
+The one gap found (09:45->09:58 UTC on 2026-08-26 RELIANCE) is a real timestamp discontinuity in the archive, not a display artifact — confirmed by iterating `interval_start` deltas across all 60 rows.
 
-## Accessibility
-The chain is an ordered list, so assistive technology receives the sequence without depending on visual position or arrows. Every relationship is announced as a full sentence ("Market Data supplies the raw bar fields that Features are computed from."), never as a glyph. Decorative icons and every connector rule are `aria-hidden`. The pipeline is a named region; every stage is a heading with its own accessible name. Every destination is a real `<button type="button">`, focusable in document order. Colour never carries state alone — the status WORD and its explanation are always rendered as text.
+## Feature Evidence Integrity
+N/A — no evidence rows exist.
 
-## API Usage
-Read-only. The pipeline itself issues **no network requests at all** — it is a static, evidence-backed description of the contract, so it cannot fabricate a relationship from a runtime response. The endpoints it NAMES are the existing GET endpoints listed in the audit above; all are rendered verbatim with their HTTP verb so a reader can see they are reads.
+## Execution Integrity
+N/A — no orders/trades were generated by this checkpoint.
 
-## Backend Limitations
-Documented as future backend/API requirements, not filled in:
-1. `PaperTradeResponse` carries no `signal_id` — signal→trade needs a client-side id join.
-2. No paper schema carries a strategy version — realized P&L cannot be attributed to a configuration.
-3. `required_features(config)` is not exposed — a feature cannot be traced to every strategy that consumes it.
-4. Signal evidence labels are free text, not `field_id` — evidence cannot be joined to the field registry.
-5. `SignalResponse` carries no scan-run id — an aggregate `signals_found` cannot be decomposed.
-6. No archive/reconciliation HTTP API exists (carried forward from 64.80-F).
+## Outcome Integrity
+N/A — no outcomes exist.
 
-## Testing Level
-FULL FRONTEND REGRESSION (escalated).
+## Research Dataset Status
+Unchanged from 64.89: empty. `SignalRecord=0`, `PaperTradeRecord=0`, `SignalEvidenceRecord=0`.
 
-## Tests Run
-- New: `src/features/correlation/correlationModel.test.ts` (40 tests) and `src/features/correlation/DecisionPipeline.test.tsx` (32 tests) — **72 new tests, all passing**.
-- Full frontend regression: `npx vitest run` → **350 tests across 32 files, all passing**.
-- CSS/theme quality gates: `styles.quality.test.ts` + `theme.quality.test.ts` → 20 passing.
+## Feature → Outcome Analysis
+Not attempted — no data exists to analyze.
 
-`correlationModel.test.ts` is the honesty gate: it reads the checked-in generated contract as text and asserts that every field cited as evidence for a FOUND/PARTIAL link genuinely EXISTS in it, and — symmetrically — that every field claimed MISSING is genuinely ABSENT (e.g. `PaperTradeResponse` must not contain `signal_id`; the contract must not contain `required_features`). A future link asserting an unexposed correlation fails the build.
+## Feature Interaction Analysis
+Not attempted.
 
-Phase 13's required coverage is met in full: pipeline renders; FOUND/PARTIAL/NOT AVAILABLE/NOT FOUND (and NOT APPLICABLE/NOT YET IMPLEMENTED) each render correctly; no false correlation is displayed (the rendered edge set must equal the audited edge set exactly, and each card's badges must equal exactly that link's status); theme switching preserves the pipeline; icons render through the common system; keyboard navigation works; stacked layout stays readable; navigation destinations fire with the right screen id; no Gainz control appears; no NSE_FNO/OptionQuote/OI/IV/Greeks UI is introduced.
+## Time-of-Day Analysis
+Not attempted.
 
-## Tests Skipped
-Backend pytest, mypy and lint-imports — deliberately not run, because no backend source was modified. Running them would only re-measure carried-forward 64.43–64.80-F2 state.
+## Symbol Robustness
+Not attempted.
 
-## Escalation Decision
-Escalated to full frontend regression, and it was warranted. This checkpoint modified the **dashboard shell host** (`DashboardPage.tsx`), the **application shell** (`App.tsx`), the **shared stylesheet** (`styles.css`), and consumed the **shared theme + icon + StatusBadge foundation**. That is exactly the escalation criterion. It paid for itself immediately: the regression caught a real defect the targeted tests could not — the pipeline's navigation buttons duplicated the dashboard cards' accessible names, breaking `AppDashboardNavigation.test.tsx`. That was a genuine accessibility problem (two identically-named buttons on one screen), fixed by renaming the pipeline's actions rather than by weakening a prior checkpoint's test.
-
-## Frontend Build
-`npm run build` — PASS. 94 modules transformed; `dist/assets/index-*.css` 48.42 kB (gzip 8.83 kB), `dist/assets/index-*.js` 366.28 kB (gzip 97.43 kB). Built in 982ms.
-
-## Type Check
-`npx tsc --noEmit` — PASS, zero errors. (`npm run build` runs `tsc -b` first and also passed.)
-
-## CSS Quality
-PASS. No hex/rgba literal outside `:root`; no duplicate rule blocks; responsive `@media` rule present; focus-visible preserved; no inline `style={{ }}` anywhere; no raw `<svg>` outside the icon module; no emoji. No new theme token was added, so all four themes remain token-identical.
-
-## Backend Changes
-**NONE.** No file under `src/`, `trading_engine/`, `application/`, `domain/`, `config/`, `signal_intelligence/` or `research/` was created, edited or deleted by this checkpoint. The backend diff visible in `git status` is entirely carried-forward, uncommitted 64.43–64.80-F2 work that pre-existed this session.
-
-## Database Changes
-**NONE.** No migration created, no model touched, no query executed.
-
-## Live Market Activity
-**NONE.** Dhan was not contacted. No worker was started. No credentials were read or modified. No order was placed. The Indian market is closed. The new component performs no network I/O whatsoever.
-
-## Research Readiness
-Unchanged — **NOT READY**. Still gated on full NSE session validation, independent candle authority, and reconciliation evidence. This checkpoint did not touch the research-readiness gate and did not claim progress on it.
+## Market Regime Analysis
+Not attempted.
 
 ## Gainz Status
-**DISABLED / future scope, unchanged.** No Gainz activation control was added. The pipeline contains no Gainz node and no Gainz text at all — asserted by two tests.
+Untouched. No Gainz file was read, edited, or referenced beyond this report's own confirmation.
+
+## Strategy Modification Status
+No production strategy, scanner, risk, or execution code was modified. No parameter was loosened or tuned.
+
+## Database Changes
+One schema change only: applied the pre-authored, already-uncommitted `persistence.0033_marketdataarchiveday_cas_window_status` migration (carried forward from 64.88's uncommitted tree, not authored in this session) so the real database schema matched the working tree's models and could be queried. No data rows were inserted, updated, or deleted by this checkpoint in any table.
+
+## API Changes
+None. No new endpoint was added.
+
+## Frontend Changes
+None.
+
+## Tests
+No new test file was added — Phase 5 only calls for tests when a replay driver is built or a defect is found; neither happened, so no replay-specific test was warranted.
+
+## Testing Level
+Full regression suite, run exactly once.
+
+## Tests Run
+`poetry run pytest tests/unit -q`, run exactly once: **`2696 passed, 2 warnings in 546.04s (0:09:06)`**. The 2 warnings are a pre-existing `DeprecationWarning` in a third-party dependency (`schemathesis`) and a test-database-teardown `OperationalError` warning unrelated to any code touched by this checkpoint (no code was touched).
+
+## Tests Skipped
+None skipped deliberately; no new subsystem was built that would need targeted tests.
+
+## Research Readiness
+**NO.** Zero signals, zero evidence, zero trades. Unchanged from 64.89.
 
 ## BacktestTrustLevel
-Unchanged. No backtest code, cost model, validation path or trust-level computation was touched.
+Unchanged — no cell has ever reached `COMPLETE`, so no data qualifies for any trust tier above the existing baseline.
 
-## Remaining Correlation Gaps
-1. Signal → Paper Trade requires a client-side id join (no `signal_id` on `PaperTradeResponse`).
-2. Realized P&L cannot be attributed to a strategy VERSION.
-3. Feature → Strategy is category-level only; `required_features()` is unexposed.
-4. Signal evidence cannot be machine-joined to the field registry.
-5. Individual signals cannot be attributed to a scan run.
-6. Archive completeness cannot qualify an outcome (no HTTP API).
-7. The pipeline is a contract-level description; it does not yet render LIVE instance-level chains (e.g. "this specific signal produced this specific trade"). Doing so honestly requires gaps 1 and 2 to be closed first.
-8. Carried forward from 64.80-F2: ~40 individual feature pages still contain their own inline Unicode markers and are not yet migrated to the icon system.
+## Findings
+1. The archive holds only fragments: best coverage is 16% of one session, with an internal gap even within that fragment.
+2. Two independent, genuinely reusable, non-Gainz code paths exist that *could* produce a real signal->order->trade->outcome chain from real archived bars: `ReplayPaperSessionService` (pure projection, no DB writes) and `run_active_loop_tick_from_source` (the real persisting path, currently only fed synthetic or live data).
+3. The 64.68 replay wiring shipped with `SyntheticHistoricalBarProvider`, not a reader over `MarketDataArchiveDay`/`AggregatedBarObservation` — so even with sufficient archive data, a small amount of new (but not strategy-changing) wiring would be needed to point it at real archived bars.
+4. `run_active_loop_tick_from_source` writes into the same operational tables as live paper trading with no visible replay-session tag on `SignalRecord`/`PaperOrderRecord` — using it for replay today would risk contaminating operational history (rule 9); this needs a design decision before any future attempt, not a shortcut around it.
+
+## Limitations
+This checkpoint is a feasibility/gate check, not a replay execution. It intentionally produced no new rows.
+
+## Remaining Gaps
+- No `COMPLETE` archived trading day for any symbol.
+- No archive-reading `BarSource`/bar-loader wired to `run_active_loop_tick_from_source` or to `ReplayPaperSessionService`.
+- No isolation mechanism (session tag / dedicated table or flag) to keep a future replay run from mixing into live paper-trading history in the shared tables.
 
 ## Blockers
-No blocker to this checkpoint's own scope. The blocker to deepening the correlation experience is backend/API exposure (gaps 1–6), which is deliberately out of scope for a frontend-only checkpoint and was NOT worked around by adding backend code.
+Archive data volume and completeness. This is the same root cause 64.79/64.83's `MARKET_DATA_ARCHIVE_QUERY_API.md` already documented, re-confirmed live today.
 
 ## Next Product Milestone
-**FULL NSE EQUITY SESSION + MATCHING REFERENCE RECONCILIATION** — unchanged.
+Either (a) let the market-data worker accumulate enough consecutive live sessions to produce at least one genuine `COMPLETE` day for at least one symbol, or (b) if a batch/EOD historical-candle ingestion path already exists elsewhere in the platform (not investigated here, out of this checkpoint's scope), point that at filling the archive instead of waiting on the live feed. Only after a `COMPLETE` day exists should a checkpoint attempt the real replay run this one stopped short of.
 
 ## Performance Ranking
-
-| Dimension | Previous (64.80-F2) | Current (64.80-F3) | Change | Evidence | Remaining Gap |
-|---|---|---|---|---|---|
-| Correlation Visibility | None — no screen described the decision chain | A 7-stage Decision Pipeline with 13 audited relationships, each with status + evidence | Major improvement | `DecisionPipeline.tsx`; 72 new tests | Contract-level only, not instance-level |
-| Feature Traceability | Field registry visible on Strategy Config only | Feature stage + Features→Strategy PARTIAL + Features→Signal NOT AVAILABLE, each with cited evidence | Improved, honestly bounded | Audit rows 3, 8 | `required_features()` unexposed |
-| Scanner Traceability | Scanner config visible; relationships implicit | Scanner→Strategy FOUND, Market Data→Scanner FOUND, Scanner run→Signal PARTIAL, Features→Scanner NOT APPLICABLE | Improved | `ScannerConfigurationState.strategy_ids` | No scan-run id on signals |
-| Strategy Traceability | Strategy list/schema/config screens | Strategy stage linked upstream to Scanner and downstream to Signal and Backtest, all FOUND | Improved | Audit rows 5, 7, 12 | Version→outcome attribution absent |
-| Signal Traceability | Signal report in Reports | Strategy→Signal FOUND; Signal→Paper Trade PARTIAL with the exposed half named precisely | Improved | `SignalResponse.strategy_id`; `PaperSessionSignal` | No `signal_id` on trades |
-| Paper Trading Traceability | Paper Trading screen | Signal→Order exposed; Order→Trade via `order_ids`; Trade→Strategy VERSION marked NOT FOUND | Improved + a real gap surfaced | Audit rows 9, 11 | Version stamping |
-| Outcome Traceability | P&L on paper/report screens | Paper Trade→Outcome FOUND; Strategy→Backtest FOUND; archive-qualified outcome NOT YET IMPLEMENTED | Improved | Audit rows 10, 12, 13 | No archive API |
-| Dashboard UX | 8 status cards in 3 groups | Same cards plus a "how this platform decides" section | Improved | `DashboardPage.tsx` | — |
-| Navigation | Card-level entry points | Pipeline nodes drill into 6 existing screens through the existing mechanism; duplicate accessible names eliminated | Improved | `App.tsx` `onNavigate`; regression fix | No Signals screen exists |
-| Accessibility | Icon system, focus states, theme control | Ordered-list sequence, full-sentence relationships, named region, aria-hidden connectors, keyboard-reachable destinations | Improved | 5 accessibility tests | — |
-| Visual Consistency | 4-theme token system + one icon system | Reused exactly; zero new tokens, zero new icons, zero second systems | Maintained | Theme/icon quality gates pass | — |
-| Testing | 278 frontend tests | 350 frontend tests (+72) | Improved | `npx vitest run` | — |
-| Performance | 366 kB JS / 48 kB CSS bundle | Effectively unchanged (static component, no network I/O, no runtime data) | Neutral | `npm run build` | — |
-| Security | No live controls; read-only screens | Unchanged; pipeline is read-only, issues no requests, exposes no credentials | Maintained | No API calls in component | — |
+N/A — no trades were generated.
 
 ## Final Product Gate
 
-**A. Can the user see the complete decision pipeline?** YES — all seven stages, Market Data through Outcome, on the Dashboard.
+A. Was a real historical market-data source used? Data was *read* (Dhan-sourced archive rows already in the DB) for inspection only; none was used to drive a replay because none is sufficient.
+B. Was any market data fabricated? No.
+C. Was any signal fabricated? No — zero signals were created, real or otherwise.
+D. Was any trade fabricated? No.
+E. Was any outcome fabricated? No.
+F. Can every replayed signal be traced to its strategy? N/A — no signal was produced.
+G. Can every replayed signal be traced to feature evidence where evidence exists? N/A.
+H. Can every paper order be traced to a signal? N/A — the 2 pre-existing orders are untouched and (correctly) carry no `signal_id`.
+I. Can every paper trade be traced to a signal/order chain? N/A — no trades exist.
+J. Can realized P&L be traced to the corresponding paper trade? N/A — no trades exist.
+K. Is traceability coverage measurable? Not meaningfully — 0/0.
+L. Is look-ahead bias explicitly tested? Not newly tested in this checkpoint; the existing `ReplayPaperSessionService.project()` mechanism was reviewed and its next-bar-open, decision-bars-only-up-to-index design structurally prevents it for any future run through that path.
+M. Are Category-I CAS boundaries respected? Yes — only a pre-authored migration was applied; no CAS logic was touched.
+N. Is Category-II behavior unchanged? Yes.
+O. Was Gainz modified? **NO.**
+P. Was any production strategy parameter optimized? **NO.**
+Q. Was any scanner modified? **NO.**
+R. Was risk/execution modified? **NO.**
+S. Was NSE_FNO modified? **NO.**
+T. Was live Dhan accessed? **NO.**
+U. Was a second source of truth created? **NO.**
+V. Is Research Readiness YES or NO? **NO** — zero signals, zero evidence, zero trades; the archive cannot support a trustworthy replay yet.
+W. What is the strongest evidence that the replay dataset is trustworthy? None exists to cite — this is precisely why the checkpoint stopped: the best available data covers 16% of a session and contains an internal gap.
+X. What is the strongest remaining threat to research validity? Insufficient/fragmented archive coverage (no `COMPLETE` day for any symbol) combined with the still-open risk that driving the real persisting path (`run_active_loop_tick_from_source`) without a session tag would mix replay rows into live paper-trading history.
+Y. What exact evidence is still required before feature/outcome relationships can be considered candidates for strategy research? At least one `MarketDataArchiveDay` cell reaching `archive_status=COMPLETE` (all 375 expected 1m bars, no gaps) for at least one symbol, then a real run of the existing non-Gainz strategy/persistence chain against exactly those bars producing genuinely persisted `SignalRecord`/`PaperOrderRecord`/`PaperTradeRecord` rows traceable back to that archive cell.
+Z. What is the next checkpoint? Either continued live-archive accumulation until a `COMPLETE` day exists, or (if out-of-band historical ingestion exists) a checkpoint to fill the archive from it — followed by the actual first real replay run, once and only once sufficient data exists.
 
-**B. Are existing correlations represented accurately?** YES — each of the 6 FOUND links names the exact endpoint and schema field, re-asserted against the generated contract by an automated test.
-
-**C. Are missing correlations explicitly identified?** YES — 1 NOT FOUND, 3 PARTIAL, each stating what is missing and what backend work would close it.
-
-**D. Are unavailable API relationships shown honestly?** YES — 1 NOT AVAILABLE, 1 NOT YET IMPLEMENTED, 1 NOT APPLICABLE, each with its reason.
-
-**E. Can the user navigate from a node to an existing related screen?** YES — six real destinations through the project's existing navigation mechanism; nodes without a screen render no control.
-
-**F. Are scanner/strategy relationships clearly distinguishable from merely co-existing features?** YES — Scanner→Strategy is FOUND because `strategy_ids` declares it; Features→Scanner is NOT APPLICABLE because no scanner-condition entity exists. Co-existence is never drawn as a link.
-
-**G. Can a feature be traced to a scanner where the actual backend relationship exists?** NOT APPLICABLE — no such backend relationship exists; the UI says so rather than inventing one. The real feature relationship (Features→Strategy) is shown as PARTIAL.
-
-**H. Can a scanner be traced to a strategy where the actual relationship exists?** YES — FOUND via `ScannerConfigurationState.strategy_ids` and `ScannerProgressResponse.current_strategy`.
-
-**I. Can a strategy be traced to signals where the actual relationship exists?** YES — FOUND via `SignalResponse.strategy_id` and `SignalReportResponse.by_strategy`.
-
-**J. Can signals be traced to Paper Trading where the actual relationship exists?** PARTIALLY, and it is labelled PARTIAL — signal→order is exposed (`PaperSessionSignal.signal_id` + `order_status`; `idempotency_key` is the signal id); signal→trade requires an order-id join because `PaperTradeResponse` has no `signal_id`.
-
-**K. Are future/unimplemented relationships clearly marked?** YES — NOT YET IMPLEMENTED for archive-qualified outcomes, with the prerequisite stated.
-
-**L. Was any false correlation invented?** **NO.** Every rendered edge comes from the audited model; a test asserts the rendered edge set equals the audited edge set exactly, and the contract-reading test would fail on any FOUND claim citing a field that does not exist.
-
-**M. Was Gainz activated?** **NO.** No Gainz node, no Gainz control, no Gainz text in the new UI.
-
-**N. Was NSE_FNO modified?** **NO.** No OI/IV/Greeks/OptionChain/OptionQuote/OptionBar UI introduced; asserted by tests in both new test files.
-
-**O. Was Dhan contacted?** **NO.** No live API call, no worker start, no credential access.
-
-**P. Was BacktestTrustLevel changed?** **NO.**
-
-**Q. Is the next live milestone still FULL NSE EQUITY SESSION + MATCHING REFERENCE RECONCILIATION?** **YES.**
-
----
-
-### Git Safety
-
-No commit, no push, no destructive git command was run.
-
-**Files created/modified by 64.80-F3:**
-- `frontend/src/features/correlation/correlationModel.ts` (new)
-- `frontend/src/features/correlation/DecisionPipeline.tsx` (new)
-- `frontend/src/features/correlation/correlationModel.test.ts` (new)
-- `frontend/src/features/correlation/DecisionPipeline.test.tsx` (new)
-- `frontend/src/features/dashboard/DashboardPage.tsx` (modified — hosts the pipeline, adds optional `onNavigate`)
-- `frontend/src/app/App.tsx` (modified — wires `onNavigate` to the existing screen state)
-- `frontend/src/app/styles.css` (modified — appended the Decision Pipeline block; no existing rule altered)
-
-**Carried forward from 64.43–64.80-F2, untouched by this checkpoint:** all backend changes under `src/intraday/**` (Dhan worker, instrument master, packet decoder, persistence models, worker runtime status), `docs/**`, `config/**`, `domain/**`, and the frontend work from 64.80-F/F2 (`frontend/src/app/theme/`, `frontend/src/common/icons/`, `frontend/src/features/dashboard/` scaffolding, `MarketDataArchivePage`, `systemApi.ts`).
-
-`git log -3 --oneline`: `3bd7a09 CheckPoint 64.69`, `ab2dc04 Checkpoint 64.42`, `b576008 CHECKPOINT 64.33` — unchanged; nothing was committed.
+## Git Safety
+`git status --short` shows 77 lines: all `M`/`??` entries are the pre-existing, uncommitted 64.81-64.89 scaffolding already present at session start (frontend contracts, correlation/archive API modules, migrations 0031-0033, checkpoint test files through 64.89) — this session made **zero** edits to any tracked or untracked file. The only change this session made to the real system was applying migration `0033_marketdataarchiveday_cas_window_status` to the local database (schema only, no data). `git diff --stat` reports 46 files changed, 2921 insertions(+), 298 deletions(-), entirely attributable to that pre-existing uncommitted tree. `git log -3 --oneline`: `dbce678 checkpoint 64.80-f3`, `3bd7a09 CheckPoint 64.69`, `ab2dc04 Checkpoint 64.42`. No commit or push was made.

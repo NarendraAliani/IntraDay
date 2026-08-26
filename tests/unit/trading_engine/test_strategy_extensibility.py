@@ -245,7 +245,7 @@ def test_full_pipeline_signal_evidence_risk_paper_communication_report() -> None
     evidence_record = DjangoSignalEvidenceRepository().get_by_signal_id(str(signal_id))
     assert evidence_record is not None
     assert evidence_record.strategy_id == "test_momentum"
-    evidence_labels = {label for label, _value in evidence_record.fields}
+    evidence_labels = {f.label for f in evidence_record.fields}
     assert {"EMA", "Price", "Momentum"} <= evidence_labels
 
     # --- Communication: real, generic - Telegram/Discord both fired,

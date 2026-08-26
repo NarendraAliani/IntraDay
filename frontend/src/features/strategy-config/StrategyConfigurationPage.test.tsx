@@ -227,6 +227,7 @@ describe("StrategyConfigurationPage", () => {
 
   it("lists saved configurations and never renders order/broker language", async () => {
     const saved: StrategyConfigurationResponse = {
+      required_features: null,
       strategy_id: "ema_crossover",
       specification_version: "v1",
       code_version: "v1",

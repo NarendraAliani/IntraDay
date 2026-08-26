@@ -82,6 +82,7 @@ def promote_bars_and_trigger_signals(
     quantity: Decimal = DEFAULT_QUANTITY,
     on_instrument_progress: Callable[[str, int, int], None] | None = None,
     strategy_execution_enabled: bool = True,
+    scan_run_id: str | None = None,
 ) -> SignalPipelineOutcome:
     """For every newly-CLOSED bar, per instrument, in chronological
     order: run the REAL `evaluate_bar_promotion()` gate (never skipped,
@@ -155,6 +156,11 @@ def promote_bars_and_trigger_signals(
                 bars=tuple(b.to_bar() for b in preceding),
                 quantity=quantity,
                 now=clock,
+                # Checkpoint 64.81: the scanner run this evaluation
+                # belongs to, forwarded verbatim from the caller.
+                # `None` for the REST-ingestion path, which is
+                # genuinely not a scanner run - never fabricated.
+                scan_run_id=scan_run_id,
             )
             active_loop_invocations += 1
 

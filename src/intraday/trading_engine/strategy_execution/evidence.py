@@ -28,6 +28,32 @@ older record always stays readable even after this changes."""
 class SignalEvidenceField:
     label: str
     value: str
+    feature_name: str | None = None
+    """Checkpoint 64.81: the RESOLVED feature name (`FeatureValue.
+    feature_name`, e.g. `"ema_12"`) this evidence row was read from -
+    supplied verbatim by the describer from the signal's OWN already-
+    computed `FeatureValue`, NEVER parsed or guessed from `label`.
+    That is the whole point: `label` is free text ("Fast EMA") chosen
+    for humans and can never be programmatically correlated with a
+    canonical `FieldDefinition.field_id`, whereas this field is the
+    strategy's own identifier for the exact value shown.
+
+    `None` for a row that is genuinely NOT a feature reading - `Price`
+    (the signal's own `price`), `Crossover`/`Direction`/`Momentum` (the
+    signal's own `direction`), and `Distance %` (a presentational
+    arithmetic combination of two values, not a registered feature).
+    Those are honest absences, never fabricated identities.
+
+    The canonical registry `field_id` is deliberately NOT stored here:
+    `.importlinter` contract 4 forbids `intraday.trading_engine` from
+    importing `intraday.signal_intelligence` (where the field registry
+    lives) at all - the same constraint this package's `contracts.py`
+    header already documents at length for `StrategyDirection`. The
+    resolution `feature_name -> field_id` therefore happens at the
+    infrastructure/API boundary (`signal_views.py`), which is
+    architecturally permitted to import both, via
+    `field_registry.resolve_feature_name()`. Defaulted to `None` so
+    every existing construction of this dataclass keeps working."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,14 +75,20 @@ def describe_ema_crossover_evidence(signal: StrategySignal) -> SignalEvidence:
     """`signal.evidence` is `(fast, slow)` in that exact order (see
     `EmaCrossoverStrategy.evaluate()`'s own `evidence=(fast, slow)`) -
     read positionally, never recomputed."""
-    fast_value = signal.evidence[0].value if len(signal.evidence) > 0 else None
-    slow_value = signal.evidence[1].value if len(signal.evidence) > 1 else None
+    fast = signal.evidence[0] if len(signal.evidence) > 0 else None
+    slow = signal.evidence[1] if len(signal.evidence) > 1 else None
+    fast_value = fast.value if fast is not None else None
+    slow_value = slow.value if slow is not None else None
     fields = (
         SignalEvidenceField(
-            label="Fast EMA", value=f"{fast_value}" if fast_value is not None else "Not provided"
+            label="Fast EMA",
+            value=f"{fast_value}" if fast_value is not None else "Not provided",
+            feature_name=fast.feature_name if fast is not None else None,
         ),
         SignalEvidenceField(
-            label="Slow EMA", value=f"{slow_value}" if slow_value is not None else "Not provided"
+            label="Slow EMA",
+            value=f"{slow_value}" if slow_value is not None else "Not provided",
+            feature_name=slow.feature_name if slow is not None else None,
         ),
         SignalEvidenceField(label="Price", value=f"{signal.price}"),
         SignalEvidenceField(label="Crossover", value=_direction_label(signal.direction)),
@@ -73,14 +105,17 @@ def describe_sma_trend_filter_evidence(signal: StrategySignal) -> SignalEvidence
     values (price, sma) - not a new strategy decision, matching §9's
     "no recomputation of the decision" (the DIRECTION itself is read
     verbatim from `signal.direction`, never re-derived here)."""
-    sma_value = signal.evidence[0].value if signal.evidence else None
+    sma = signal.evidence[0] if signal.evidence else None
+    sma_value = sma.value if sma is not None else None
     distance_label = "Not provided"
     if sma_value is not None and sma_value != 0:
         distance_percent = (signal.price - sma_value) / sma_value * 100
         distance_label = f"{distance_percent:.2f}%"
     fields = (
         SignalEvidenceField(
-            label="SMA", value=f"{sma_value}" if sma_value is not None else "Not provided"
+            label="SMA",
+            value=f"{sma_value}" if sma_value is not None else "Not provided",
+            feature_name=sma.feature_name if sma is not None else None,
         ),
         SignalEvidenceField(label="Price", value=f"{signal.price}"),
         SignalEvidenceField(label="Distance %", value=distance_label),
@@ -94,10 +129,13 @@ def describe_sma_trend_filter_evidence(signal: StrategySignal) -> SignalEvidence
 def describe_atr_volatility_breakout_evidence(signal: StrategySignal) -> SignalEvidence:
     """`signal.evidence` is `(atr,)` (see `AtrVolatilityBreakoutStrategy.
     evaluate()`'s own `evidence=(atr,)`)."""
-    atr_value = signal.evidence[0].value if signal.evidence else None
+    atr = signal.evidence[0] if signal.evidence else None
+    atr_value = atr.value if atr is not None else None
     fields = (
         SignalEvidenceField(
-            label="ATR", value=f"{atr_value}" if atr_value is not None else "Not provided"
+            label="ATR",
+            value=f"{atr_value}" if atr_value is not None else "Not provided",
+            feature_name=atr.feature_name if atr is not None else None,
         ),
         SignalEvidenceField(label="Price", value=f"{signal.price}"),
         SignalEvidenceField(label="Breakout", value=_direction_label(signal.direction)),
@@ -114,10 +152,13 @@ def describe_test_momentum_evidence(signal: StrategySignal) -> SignalEvidence:
     Exists to prove that adding evidence support for a NEW strategy is
     exactly ONE registration entry below, never a change to
     `build_signal_evidence()`'s own dispatch logic."""
-    ema_value = signal.evidence[0].value if signal.evidence else None
+    ema = signal.evidence[0] if signal.evidence else None
+    ema_value = ema.value if ema is not None else None
     fields = (
         SignalEvidenceField(
-            label="EMA", value=f"{ema_value}" if ema_value is not None else "Not provided"
+            label="EMA",
+            value=f"{ema_value}" if ema_value is not None else "Not provided",
+            feature_name=ema.feature_name if ema is not None else None,
         ),
         SignalEvidenceField(label="Price", value=f"{signal.price}"),
         SignalEvidenceField(label="Momentum", value=_direction_label(signal.direction)),

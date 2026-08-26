@@ -28,7 +28,11 @@ from intraday.domain.market_data.reconciliation import (
     ReconciliationTolerance,
     reconcile_bar_series,
 )
-from intraday.domain.session.calendar import build_session_for
+from intraday.domain.session.calendar import (
+    build_cas_aware_session_for,
+    build_session_for,
+    instrument_category_for,
+)
 from intraday.domain.shared_kernel.contracts import Exchange, Timeframe, ensure_utc
 
 
@@ -63,6 +67,15 @@ class MarketDataReconciliationService:
         ensure_utc(as_of, field_name="as_of")
         identity = TradingSessionIdentity(exchange=self._exchange, trading_date=trading_date)
         session = build_session_for(trading_date, as_of)
+        # Checkpoint 64.88: derives the CAS-aware continuous-trading
+        # window for `instrument_symbol` so a CATEGORY_I_CAS instrument
+        # is never reconciled against the old, incorrect 09:15-15:30
+        # continuous-trading expectation. CATEGORY_II_NON_CAS symbols
+        # get an identical window to `session` here, so this changes
+        # nothing for them.
+        cas_session = build_cas_aware_session_for(
+            instrument_category_for(instrument_symbol), trading_date, as_of
+        )
 
         archived = self._archive.list_bars(
             exchange=self._exchange,
@@ -97,6 +110,7 @@ class MarketDataReconciliationService:
             reference_bars=reference,
             evidence_source=self._reference.describe_source(),
             tolerance=self._tolerance,
+            cas_session=cas_session,
         )
 
     def reconcile_trading_date(

@@ -105,6 +105,8 @@ const EMA_STRATEGY: StrategySummary = {
 const EMPTY_SIGNALS: SignalListResponse = { items: [], total_count: 0, page: 1, page_size: 10 };
 
 const RELIANCE_SIGNAL: SignalResponse = {
+  scan_run_id: null,
+  strategy_version_identifier: null,
   signal_id: "sig-1",
   strategy_id: "ema_crossover",
   instrument_id: "NSE:RELIANCE",
@@ -280,9 +282,12 @@ describe("LiveMarketDataMonitor (Active Signal Monitor)", () => {
       evidence: {
         schema_version: "1",
         fields: [
-          { label: "Fast EMA", value: "1234.50" },
-          { label: "Slow EMA", value: "1229.40" },
-          { label: "Crossover", value: "Bullish" },
+          // Checkpoint 64.81: canonical field identity. The two EMA rows
+          // are real feature readings; "Crossover" is the signal's own
+          // direction, so it honestly carries no field identity.
+          { label: "Fast EMA", value: "1234.50", feature_name: "ema_12", field_id: "ema" },
+          { label: "Slow EMA", value: "1229.40", feature_name: "ema_26", field_id: "ema" },
+          { label: "Crossover", value: "Bullish", feature_name: null, field_id: null },
         ],
       },
     };

@@ -150,10 +150,14 @@ def test_partial_session_is_archived_as_partial_not_complete() -> None:
 
     (assessment,) = service.refresh_trading_date(trading_date=TRADING_DAY, as_of=AFTER_CLOSE)
 
+    # Checkpoint 64.88: RELIANCE is a CATEGORY_I_CAS symbol, so the
+    # correct continuous-trading expectation is 09:15-15:15 IST (360
+    # one-minute bars), not the old uniform 09:15-15:30 (375) - the
+    # exact fix this checkpoint makes. See `CATEGORY_I_CAS_SYMBOLS`.
     assert assessment.status is ArchiveStatus.PARTIAL
     assert assessment.closed_bar_count == 20
-    assert assessment.expected_bar_count == 375
-    assert assessment.missing_bar_count == 355
+    assert assessment.expected_bar_count == 360
+    assert assessment.missing_bar_count == 340
 
     summary = service.describe_trading_date(trading_date=TRADING_DAY)
     assert summary.status is ArchiveStatus.PARTIAL

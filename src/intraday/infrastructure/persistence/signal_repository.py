@@ -20,12 +20,16 @@ import datetime as dt
 from dataclasses import dataclass
 from decimal import Decimal
 
+from intraday.application.repositories.signal_evidence import SignalEvidenceFieldView
 from intraday.domain.shared_kernel.contracts import InstrumentId, SignalId
 from intraday.infrastructure.persistence.models import (
     CommunicationLedgerRecord,
     SignalEvidenceRecord,
     SignalRecord,
     TradePlanRecord,
+)
+from intraday.infrastructure.persistence.signal_evidence_repository import (
+    evidence_field_to_view,
 )
 
 _SORT_FIELDS = {
@@ -65,12 +69,17 @@ class ChannelStatus:
 @dataclass(frozen=True, slots=True)
 class SignalEvidenceEnrichment:
     """Checkpoint 64.18 §12: the operator-facing shape - `fields` is a
-    tuple of `(label, value)` pairs, in the strategy's own order,
-    matching `SignalEvidence.fields` exactly (never re-sorted/re-keyed
-    here)."""
+    tuple of fields in the strategy's own order, matching
+    `SignalEvidence.fields` exactly (never re-sorted/re-keyed here).
+
+    Checkpoint 64.81: each entry is now a `SignalEvidenceFieldView`
+    carrying `feature_name`/`field_id` alongside the original
+    `label`/`value`, instead of a bare `(label, value)` 2-tuple.
+    `label`/`value` content and ordering are unchanged - the identity
+    is purely additive."""
 
     schema_version: str
-    fields: tuple[tuple[str, str], ...]
+    fields: tuple[SignalEvidenceFieldView, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,25 +148,43 @@ class DjangoSignalRepository:
         risk_status: str,
         risk_reason: str,
         order_status: str,
+        scan_run_id: str | None = None,
+        strategy_version_identifier: str | None = None,
     ) -> None:
         # `signal_id` is deterministic (same strategy+config+instrument
         # +timeframe+bar-timestamp always derives the same ID,
         # `derive_signal_id()` in `paper_signal_execution.py`) - a
         # duplicate `record_signal()` call for the identical signal
         # (e.g. a scheduler retry) must never create a second row.
+        # Checkpoint 64.81: `scan_run_id` is added to `defaults` ONLY
+        # when the caller genuinely supplied one. This matters because
+        # `update_or_create` overwrites every key it is given: a later
+        # re-record of the SAME deterministic signal from a non-scanner
+        # caller (a replay session, a manual re-evaluation) passes
+        # `None`, and blanking the run that really did produce the
+        # signal would destroy true provenance. Omitting the key leaves
+        # the stored value untouched, so the correlation is write-once
+        # in practice and re-recording stays idempotent - it never
+        # creates a second row (deterministic `signal_id`) and never
+        # rewrites a real run id with an empty one.
+        defaults: dict[str, object] = {
+            "strategy_id": strategy_id,
+            "instrument_id": str(instrument_id),
+            "direction": direction,
+            "price": price,
+            "timeframe": timeframe,
+            "signal_timestamp": signal_timestamp,
+            "risk_status": risk_status,
+            "risk_reason": risk_reason,
+            "order_status": order_status,
+        }
+        if scan_run_id is not None:
+            defaults["scan_run_id"] = scan_run_id
+        if strategy_version_identifier is not None:
+            defaults["strategy_version_identifier"] = strategy_version_identifier
         SignalRecord.objects.update_or_create(
             signal_id=str(signal_id),
-            defaults={
-                "strategy_id": strategy_id,
-                "instrument_id": str(instrument_id),
-                "direction": direction,
-                "price": price,
-                "timeframe": timeframe,
-                "signal_timestamp": signal_timestamp,
-                "risk_status": risk_status,
-                "risk_reason": risk_reason,
-                "order_status": order_status,
-            },
+            defaults=defaults,
         )
 
     def list_signals(
@@ -260,8 +287,14 @@ class DjangoSignalRepository:
                 evidence=(
                     SignalEvidenceEnrichment(
                         schema_version=evidence_rows[record.signal_id].schema_version,
+                        # Checkpoint 64.81: the SAME decoder the evidence
+                        # repository uses - one parse handling both
+                        # persisted shapes (legacy 2-element pairs and
+                        # new 3-element entries), never a second local
+                        # copy of that logic here.
                         fields=tuple(
-                            (pair[0], pair[1]) for pair in evidence_rows[record.signal_id].fields
+                            evidence_field_to_view(entry)
+                            for entry in evidence_rows[record.signal_id].fields
                         ),
                     )
                     if record.signal_id in evidence_rows

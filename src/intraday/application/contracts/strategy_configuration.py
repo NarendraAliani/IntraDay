@@ -70,6 +70,35 @@ class StrategyConfigurationSaveRequestSerializer(serializers.Serializer[None]):
     values = serializers.JSONField()
 
 
+class RequiredFeatureSerializer(serializers.Serializer[None]):
+    """Checkpoint 64.81: ONE feature a strategy configuration genuinely
+    requires, expressed with canonical identity - closing Checkpoint
+    64.80-F3's gap 1 (`required_features(config)` existed but was never
+    exposed, so Features -> Strategy was only PARTIAL).
+
+    `Strategy.required_features()` itself is completely unchanged; this
+    only RESOLVES and PRESENTS what it already returns."""
+
+    feature_name = serializers.CharField()
+    """Exactly what `required_features(config)` returned, verbatim
+    (e.g. `"ema_12"`). Note this is a PARAMETERIZED feature name, not a
+    registry `field_id` - the distinction that made programmatic
+    correlation impossible before this checkpoint."""
+    field_id = serializers.CharField(allow_null=True)
+    """The canonical `FieldDefinition.field_id` (e.g. `"ema"`) that
+    `feature_name` resolves to, or `null` when it does not resolve to a
+    registered field. Resolved by the platform's own feature-name parse,
+    never guessed from a display label."""
+    display_name = serializers.CharField(allow_null=True)
+    """The registered field's `display_name` (e.g. `"Exponential Moving
+    Average"`), or `null` when `field_id` is `null`. Presentation only -
+    never an identifier."""
+    parameters = serializers.ListField(child=serializers.IntegerField())
+    """The numeric parameters baked into `feature_name` (e.g. `[12]` for
+    `"ema_12"`, `[12, 26, 9]` for `"macd_hist_12_26_9"`, `[]` for a
+    parameterless feature)."""
+
+
 class StrategyConfigurationResponseSerializer(serializers.Serializer[None]):
     strategy_id = serializers.CharField()
     specification_version = serializers.CharField()
@@ -78,3 +107,19 @@ class StrategyConfigurationResponseSerializer(serializers.Serializer[None]):
     values = serializers.JSONField()
     created_at = serializers.DateTimeField()
     created_by = serializers.CharField()
+    required_features = RequiredFeatureSerializer(many=True, allow_null=True)
+    """Checkpoint 64.81: the features THIS configuration's own stored
+    values actually require, resolved by calling the strategy's own
+    `required_features(config)`.
+
+    `null` - never a fabricated or empty list - when the resolution
+    cannot honestly be performed for this configuration. That is a real
+    case, not a theoretical one: `required_features()` is defined over a
+    VALIDATED configuration and reads its values directly (e.g.
+    `require_int(config.values, "fast_lookback")`), so a stored
+    configuration whose values are incomplete or no longer satisfy the
+    strategy's current schema raises rather than returning a list. An
+    empty list would falsely assert "this strategy needs no features";
+    `null` honestly says "this could not be resolved". See
+    `_resolved_required_features()` in `strategy_configuration_views.py`
+    for the exact boundary."""

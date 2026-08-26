@@ -25,6 +25,8 @@ from intraday.domain.market_data.archive import (
     ReconciliationStatus,
 )
 from intraday.domain.market_data.contracts import Quote
+from intraday.domain.market_data.quality import CasWindowStatus
+from intraday.domain.market_data.reconciliation import ReconciliationOutcome
 from intraday.domain.shared_kernel.contracts import Exchange, Timeframe
 from intraday.infrastructure.persistence.live_market_data_repositories import (
     _row_to_aggregated_bar,
@@ -124,12 +126,54 @@ class DjangoMarketDataArchiveRepository:
                 "quote_observation_count": assessment.quote_observation_count,
                 "first_observation_at": assessment.first_observation_at,
                 "last_observation_at": assessment.last_observation_at,
+                # Checkpoint 64.88: additive - see `ArchiveDayAssessment.
+                # cas_window_status`'s own docstring for why this is kept
+                # separate from `status`/`reason` here too.
+                "cas_window_status": assessment.cas_window_status.value,
                 # Never overwritten by a refresh: reconciliation is an
                 # INDEPENDENT verdict, and recomputing the archive from
                 # our own observations must never be able to promote a
                 # day to "reconciled".
                 "computed_at": computed_at,
             },
+        )
+
+    # --- reconciliation persistence (64.84) ---------------------------
+    def save_reconciliation_result(
+        self,
+        *,
+        exchange: Exchange,
+        trading_date: date,
+        instrument_symbol: str,
+        timeframe: Timeframe,
+        status: ReconciliationStatus,
+        outcome: ReconciliationOutcome,
+        reason: str,
+        evidence_source: str,
+        reconciled_at: datetime | None,
+    ) -> int:
+        """A bounded `UPDATE ... WHERE` on the existing cell(s) - never
+        an `update_or_create`.
+
+        `.update()` rather than fetch-mutate-save is the deliberate
+        choice: it is ONE atomic statement, it cannot resurrect a row
+        deleted concurrently, and it physically cannot write a column
+        not named here, which is how "does not touch archive status"
+        becomes a property of the query rather than a promise in a
+        docstring. The returned count is the number of archive cells
+        that actually existed - zero when nothing is archived for this
+        cell, which the caller reports rather than silently creating."""
+        return MarketDataArchiveDay.objects.filter(
+            exchange=exchange.value,
+            trading_date=trading_date,
+            instrument_symbol=instrument_symbol,
+            timeframe=timeframe.value,
+        ).update(
+            reconciliation_status=status.value,
+            reconciliation_outcome=outcome.value,
+            reconciliation_reason=reason,
+            reconciliation_evidence_source=evidence_source,
+            reconciled_at=reconciled_at,
         )
 
     # --- queryability -------------------------------------------------
@@ -224,6 +268,10 @@ def _row_to_archive_day(row: MarketDataArchiveDay) -> ArchiveDayRecord:
         reconciliation_status=ReconciliationStatus(row.reconciliation_status),
         reconciled_at=_as_utc(row.reconciled_at),
         computed_at=_as_utc(row.computed_at),
+        reconciliation_outcome=ReconciliationOutcome(row.reconciliation_outcome),
+        reconciliation_reason=row.reconciliation_reason,
+        reconciliation_evidence_source=row.reconciliation_evidence_source,
+        cas_window_status=CasWindowStatus(row.cas_window_status),
     )
 
 

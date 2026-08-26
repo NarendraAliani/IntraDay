@@ -82,6 +82,7 @@ def run_active_loop_tick(
     quantity: Decimal = DEFAULT_QUANTITY,
     data_quality_is_stale: bool = False,
     now: dt.datetime | None = None,
+    scan_run_id: str | None = None,
 ) -> ActiveLoopTickOutcome:
     """The ONE function a scheduler calls repeatedly. Session-gates
     itself (Checkpoint 40 Part 13 - "the worker must not start trading
@@ -137,6 +138,10 @@ def run_active_loop_tick(
         data_quality_is_stale=data_quality_is_stale,
         already_processed_signal_ids=already_processed,
         already_submitted_idempotency_keys=frozenset(),
+        # Checkpoint 64.81: pure traceability metadata. `None` for every
+        # caller that is not a scanner run (the REST ingestion tick,
+        # replay sessions, direct test calls) - never fabricated.
+        scan_run_id=scan_run_id,
     )
 
     return ActiveLoopTickOutcome(ran=True, skipped_reason=None, session_status=session.status)
@@ -152,6 +157,7 @@ def run_active_loop_tick_from_source(
     quantity: Decimal = DEFAULT_QUANTITY,
     data_quality_is_stale: bool = False,
     now: dt.datetime | None = None,
+    scan_run_id: str | None = None,
 ) -> ActiveLoopTickOutcome:
     """Checkpoint 52: the scheduler-shaped entry point that no longer
     requires the CALLER to manually slice/assemble `bars` on every
@@ -175,4 +181,5 @@ def run_active_loop_tick_from_source(
         quantity=quantity,
         data_quality_is_stale=data_quality_is_stale,
         now=clock,
+        scan_run_id=scan_run_id,
     )
