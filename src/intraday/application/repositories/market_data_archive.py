@@ -24,6 +24,7 @@ from intraday.domain.market_data.archive import (
     ArchiveDayAssessment,
     ArchiveStatus,
     ReconciliationStatus,
+    SessionPurpose,
 )
 from intraday.domain.market_data.contracts import Quote
 from intraday.domain.market_data.quality import CasWindowStatus
@@ -109,6 +110,11 @@ class ArchiveDayRecord:
     existing (64.73-64.87) construction site keeps compiling and keeps
     meaning what it meant - `NOT_APPLICABLE` for every row computed
     without a `CasAwareSession`."""
+    session_purpose: SessionPurpose = SessionPurpose.UNKNOWN
+    """Checkpoint 64.92: the persisted projection of `domain.market_data.
+    archive.ArchiveDayAssessment.session_purpose`. Defaulted so every
+    pre-64.92 construction site keeps compiling - `UNKNOWN` for every row
+    computed without an explicit purpose."""
 
 
 class MarketDataArchiveRepository(Protocol):

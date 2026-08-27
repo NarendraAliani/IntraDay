@@ -137,6 +137,10 @@ def _cell_data(record: ArchiveDayRecord) -> dict[str, object]:
         # is a different claim from "reconciled against an unnamed
         # source". Same null rule as the counts above.
         "reconciliation_evidence_source": record.reconciliation_evidence_source or None,
+        # Checkpoint 64.92: LIVE/REPLAY/UNKNOWN - see `SessionPurpose`'s
+        # own docstring. Deliberately separate from `data_source` above:
+        # which provider produced this evidence vs. why it was captured.
+        "session_purpose": record.session_purpose.value,
     }
 
 

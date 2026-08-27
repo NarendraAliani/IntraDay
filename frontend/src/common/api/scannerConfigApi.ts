@@ -15,6 +15,9 @@ export type ScannerConfigurationState = components["schemas"]["ScannerConfigurat
 export type ScannerConfigurationResponse = components["schemas"]["ScannerConfigurationResponse"];
 export type ScannerConfigurationUpdateRequest =
   components["schemas"]["ScannerConfigurationUpdateRequest"];
+// Checkpoint 64.93: the notification-channel registry row - reused
+// verbatim from the generated contract, never a hand-written shape.
+export type NotificationChannel = components["schemas"]["NotificationChannel"];
 
 export function getScannerConfiguration(): Promise<ScannerConfigurationResponse> {
   return apiGet<ScannerConfigurationResponse>("/api/v1/config/market-data/scanner-config/");
@@ -27,4 +30,11 @@ export function updateScannerConfiguration(
     "/api/v1/config/market-data/scanner-config/update/",
     body,
   );
+}
+
+// Checkpoint 64.93 Part D: the registry-driven notification-channel
+// list - the multi-select renders from this, never a hardcoded
+// Telegram/Discord pair.
+export function listNotificationChannels(): Promise<NotificationChannel[]> {
+  return apiGet<NotificationChannel[]>("/api/v1/config/notifications/channels/");
 }

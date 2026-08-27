@@ -210,6 +210,47 @@ _FIELDS: tuple[FieldDefinition, ...] = (
         "signal_intelligence.feature_engine.candle_body_ratio. Standard convention - NOT "
         "verified against a Gainz reference (none exists).",
     ),
+    # -------------------------------------------------------------------
+    # Checkpoint 64.97 additions - generic engulfing-pattern and N-bar
+    # price-delta features. Both are GENERIC, standard candlestick/price
+    # concepts, structurally similar to columns in the user-supplied
+    # research/rebuild reference file
+    # (docs/research/gainz_signal_engine_reference.py, read-only) but NOT
+    # claimed to be verified authentic GainzAlgo mathematics - see
+    # docs/research/GAINZ_SIGNAL_ENGINE_AUDIT.md for the classification.
+    # -------------------------------------------------------------------
+    _derived(
+        "bullish_engulfing",
+        "Bullish Engulfing",
+        ("open", "close"),
+        "Two-candle bullish engulfing pattern (prior bearish, current bullish, current close > "
+        "prior open, current open <= prior close), via "
+        "signal_intelligence.feature_engine.bullish_engulfing. Encoded as Decimal 1/0 "
+        "(true/false) - FeatureValue.value has no boolean variant. GENERIC candlestick "
+        "definition - NOT verified against a Gainz reference (none exists).",
+    ),
+    _derived(
+        "bearish_engulfing",
+        "Bearish Engulfing",
+        ("open", "close"),
+        "Two-candle bearish engulfing pattern (prior bullish, current bearish, current close < "
+        "prior open, current open >= prior close), via "
+        "signal_intelligence.feature_engine.bearish_engulfing. Encoded as Decimal 1/0 "
+        "(true/false) - FeatureValue.value has no boolean variant. GENERIC candlestick "
+        "definition - NOT verified against a Gainz reference (none exists).",
+    ),
+    _derived(
+        "price_delta",
+        "Price Delta (N-bar)",
+        ("close",),
+        "Signed N-bar close-to-close delta: close[t] - close[t-N], via "
+        "signal_intelligence.feature_engine.price_delta. Signed-numeric representation chosen "
+        "over the reference file's two-boolean-column shape (price_up_delta/price_down_delta) "
+        "as the smallest canonical representation a consumer can threshold either way. GENERIC "
+        "price feature - NOT verified against a Gainz reference (none exists). Default N=10 is "
+        "a REFERENCE-ARTIFACT DEFAULT only (see price_delta.REFERENCE_ARTIFACT_DEFAULT_LOOKBACK), "
+        "never a verified Gainz parameter.",
+    ),
 )
 
 _FIELDS_BY_ID: dict[str, FieldDefinition] = {f.field_id: f for f in _FIELDS}

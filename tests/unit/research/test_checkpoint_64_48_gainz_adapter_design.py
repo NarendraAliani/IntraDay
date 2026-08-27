@@ -354,6 +354,14 @@ def test_e_feature_registry_reuse_opportunities_identified() -> None:
     # original + rsi/adx/plus_di/minus_di/relative_volume/macd_hist/
     # candle_body_ratio) - see field_registry.py's own Checkpoint 64.49
     # section and test_checkpoint_64_49_gainz_feature_registry.py.
+    # Updated again at Checkpoint 64.97: +3 GENERIC canonical features
+    # (bullish_engulfing/bearish_engulfing/price_delta), 18 total - see
+    # field_registry.py's own Checkpoint 64.97 section and
+    # test_checkpoint_64_97_engulfing_and_price_delta.py. `price_delta`
+    # is intentionally a DIFFERENT id than the naive "delta" match below
+    # expects, so GAINZ_FEATURE_MAPPING's own `("delta", False, False)`
+    # entry is left unchanged - it still accurately reflects that no
+    # field literally named "delta" exists.
     assert real_field_ids == {
         "open",
         "high",
@@ -370,6 +378,9 @@ def test_e_feature_registry_reuse_opportunities_identified() -> None:
         "relative_volume",
         "macd_hist",
         "candle_body_ratio",
+        "bullish_engulfing",
+        "bearish_engulfing",
+        "price_delta",
     }
 
     # "+DI/-DI" is one directive-prose concept mapping onto TWO real
@@ -573,6 +584,23 @@ def test_k_no_gainz_reference_file_exists_in_repo() -> None:
         # Gainz math, module or activation was added there or since.
         "test_checkpoint_64_76_dhan_option_capability.py",
         "DHAN_MARKET_DATA_CAPABILITY_RESEARCH.md",
+        # Checkpoint 64.96: the user-supplied Gainz research/rebuild
+        # reference file itself (read-only, immutable research material -
+        # never executed/imported by production code) and its companion
+        # audit doc, which confirms it is RESEARCH/REBUILD material, not
+        # verified authentic GainzAlgo source.
+        "gainz_signal_engine_reference.py",
+        "GAINZ_SIGNAL_ENGINE_AUDIT.md",
+        # Checkpoint 64.97: canonical feature-engine extension - generic
+        # engulfing-pattern and N-bar price-delta features. Each new
+        # module mentions "Gainz" only to honestly disclaim that it is a
+        # GENERIC feature structurally similar to (but not verified
+        # against) the read-only reference file above - never to port
+        # authentic Gainz math. Includes this checkpoint's own test file.
+        "bullish_engulfing.py",
+        "bearish_engulfing.py",
+        "price_delta.py",
+        "test_checkpoint_64_97_engulfing_and_price_delta.py",
     }
     for path in hits:
         assert path.name in allowed_names, (

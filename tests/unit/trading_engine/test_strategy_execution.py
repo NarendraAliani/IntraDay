@@ -184,6 +184,10 @@ def test_field_registry_every_field_has_a_real_dispatchable_implementation() -> 
             concrete_field_id = "candle_body_ratio"
         elif field_def.field_id == "macd_hist":
             concrete_field_id = "macd_hist_12_26_9"
+        elif field_def.field_id in ("bullish_engulfing", "bearish_engulfing"):
+            concrete_field_id = field_def.field_id
+        elif field_def.field_id == "price_delta":
+            concrete_field_id = "price_delta_10"
         else:
             assert field_def.field_id in lookback_by_kind, (
                 f"{field_def.field_id!r} is registered but this test has no "

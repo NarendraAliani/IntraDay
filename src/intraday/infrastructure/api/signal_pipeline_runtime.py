@@ -51,6 +51,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from decimal import Decimal
 
+from intraday.communication.contracts.signal_communication import CommunicationChannel
 from intraday.domain.market_data.aggregation import (
     AggregatedBar,
     BarAggregationResult,
@@ -83,6 +84,7 @@ def promote_bars_and_trigger_signals(
     on_instrument_progress: Callable[[str, int, int], None] | None = None,
     strategy_execution_enabled: bool = True,
     scan_run_id: str | None = None,
+    selected_notification_channels: frozenset[CommunicationChannel] | None = None,
 ) -> SignalPipelineOutcome:
     """For every newly-CLOSED bar, per instrument, in chronological
     order: run the REAL `evaluate_bar_promotion()` gate (never skipped,
@@ -161,6 +163,7 @@ def promote_bars_and_trigger_signals(
                 # `None` for the REST-ingestion path, which is
                 # genuinely not a scanner run - never fabricated.
                 scan_run_id=scan_run_id,
+                selected_notification_channels=selected_notification_channels,
             )
             active_loop_invocations += 1
 

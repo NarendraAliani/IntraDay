@@ -34,6 +34,7 @@ def _to_record(row: ScannerConfiguration) -> ScannerConfigurationRecord:
         requested_at=row.requested_at,
         session_started_at=row.session_started_at,
         session_stopped_at=row.session_stopped_at,
+        selected_notification_channels=tuple(row.selected_notification_channels),
     )
 
 
@@ -74,6 +75,7 @@ class DjangoScannerConfigurationRepository:
         request_id: str,
         action: str = _ACTION,
         session_transition: str | None = None,
+        selected_notification_channels: list[str] | None = None,
     ) -> ScannerConfigurationRecord:
         """Checkpoint 64.14 §10: `action` defaults to the ORIGINAL
         Checkpoint 64.4 label (`"scanner_configuration.update"`) - every
@@ -94,6 +96,7 @@ class DjangoScannerConfigurationRepository:
             "selected_instrument_ids": selected_instrument_ids,
             "selected_watchlist_name": selected_watchlist_name,
             "selected_strategy_ids": selected_strategy_ids,
+            "selected_notification_channels": selected_notification_channels or [],
         }
         with transaction.atomic():
             row, _created = ScannerConfiguration.objects.select_for_update().get_or_create(

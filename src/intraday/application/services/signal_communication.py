@@ -107,6 +107,20 @@ class NotificationRouter:
     max_attempts: int = 3
     backoff_seconds: Callable[[int], float] = field(default=_default_backoff_seconds)
     sleep: Callable[[float], None] = field(default=time.sleep)
+    # Checkpoint 64.94: the EFFECTIVE per-scanner channel selection
+    # (`ScannerConfiguration.selected_notification_channels`, filtered
+    # to channels that are also globally configured/enabled - computed
+    # once by the caller, e.g. `run_market_data_worker.py`, never
+    # re-derived here). `None` (the default) means "no scanner
+    # selection applies to this call" - every PRE-EXISTING caller
+    # (REST-ingestion tick, replay sessions, direct tests) passes
+    # nothing and keeps EXACTLY its prior behavior: every configured
+    # provider is sent to. When a `frozenset` is supplied, a provider
+    # whose `channel` is NOT in it is never sent to - instead a single
+    # `SKIPPED_NOT_SELECTED` `DeliveryAttempt` is recorded so the
+    # existing correlation/ledger/reporting surfaces can show
+    # "intentionally not selected," never "FAILED."
+    selected_channels: frozenset[CommunicationChannel] | None = None
 
     def dispatch(self, event: SignalCommunicationEvent) -> tuple[DeliveryAttempt, ...]:
         if not self.providers:
@@ -114,8 +128,41 @@ class NotificationRouter:
         text = render_message(event.template_id, event.context)
         attempts: list[DeliveryAttempt] = []
         for provider in self.providers:
+            selection = self.selected_channels
+            not_selected = selection is not None and provider.channel not in selection
+            if not_selected:
+                attempts.append(self._skip_not_selected(event, provider))
+                continue
             attempts.append(self._dispatch_one(event, provider, text))
         return tuple(attempts)
+
+    def _skip_not_selected(
+        self, event: SignalCommunicationEvent, provider: CommunicationProvider
+    ) -> DeliveryAttempt:
+        """No send is ever attempted for an unselected channel - never
+        counted toward `max_attempts`, never eligible for retry
+        (Checkpoint 64.94 Phase 6)."""
+        attempt = DeliveryAttempt(
+            communication_id=str(uuid.uuid4()),
+            signal_id=event.signal_id,
+            event_id=event.event_id,
+            channel=provider.channel,
+            provider=provider.provider_name,
+            destination_masked=provider.destination_masked,
+            template_id=event.template_id,
+            template_version=event.template_version,
+            created_at=datetime.now(UTC),
+            attempted_at=None,
+            delivery_status=DeliveryStatus.SKIPPED_NOT_SELECTED,
+            provider_message_id=None,
+            error_code=None,
+            error_message=None,
+            retry_count=0,
+            correlation_id=event.correlation_id,
+        )
+        if self.ledger is not None:
+            self.ledger.record_attempt(attempt)
+        return attempt
 
     def _dispatch_one(
         self,

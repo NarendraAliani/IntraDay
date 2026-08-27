@@ -760,6 +760,35 @@ class MarketDataArchiveDay(models.Model):
     `status` to become COMPLETE by itself, and never causes it to become
     FAILED/PARTIAL by itself either."""
 
+    SESSION_PURPOSE_CHOICES = [(s, s) for s in ("UNKNOWN", "LIVE", "REPLAY")]
+    session_purpose = models.CharField(
+        max_length=16, choices=SESSION_PURPOSE_CHOICES, default="UNKNOWN"
+    )
+    """Checkpoint 64.92: ADDITIVE, defaulted `"UNKNOWN"` column - every
+    pre-64.92 row keeps this default without rewriting. The persisted
+    projection of `domain.market_data.archive.SessionPurpose` - see that
+    enum's own docstring for the full contract, and in particular for
+    why this is DELIBERATELY SEPARATE from `data_source` above:
+    `data_source` is which provider/transport produced the observation;
+    this is whether the capture was a genuine live operational session
+    or a replay of historical data. Never inferred from `data_source`.
+
+    Kept OUT of `unique_archive_day_cell` below on purpose: as of 64.92
+    no writer produces REPLAY rows for this table at all (the only
+    replay component in the codebase,
+    `infrastructure.market_data_providers.replay.
+    DeterministicReplayBarSource`, feeds the separate paper-session
+    replay loop and never touches `MarketDataArchiveDay` /
+    `AggregatedBarObservation` / `LiveQuoteObservation`), so there is no
+    existing LIVE-vs-REPLAY collision for the natural key to guard
+    against yet. When a replay writer for THIS table is introduced, the
+    natural key must be revisited to include `session_purpose` (and the
+    two raw observation tables will need their own additive
+    `session_purpose` column) BEFORE that writer is allowed to run - see
+    docs/architecture note in `market_data_archive.py`'s module
+    docstring for the full replay-isolation contract this is step one
+    of."""
+
     class Meta:
         app_label = "persistence"
         constraints = [
@@ -1458,6 +1487,16 @@ class ScannerConfiguration(models.Model):
     selected_instrument_ids = models.JSONField(default=list)
     selected_watchlist_name = models.CharField(max_length=200, blank=True, default="")
     selected_strategy_ids = models.JSONField(default=list)
+    # Checkpoint 64.93: the operator's DESIRED notification-channel
+    # selection for this scanner ("telegram", "discord", ...) - the
+    # same "list of registry ids" shape `selected_strategy_ids` already
+    # uses, never a duplicated per-channel boolean-field schema. Actual
+    # delivery still runs through the existing global Telegram/Discord
+    # settings (`TelegramSettingsService`/`DiscordSettingsService`) -
+    # this field is what the API validates a channel selection against
+    # (a channel must be configured+enabled there to be a valid
+    # selection here), not a second, competing delivery mechanism.
+    selected_notification_channels = models.JSONField(default=list)
     configuration_version = models.PositiveIntegerField(default=1)
     requested_by = models.CharField(max_length=150, blank=True, default="")
     requested_at = models.DateTimeField(auto_now=True)

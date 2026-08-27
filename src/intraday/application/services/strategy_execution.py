@@ -46,6 +46,14 @@ from intraday.domain.feature.contracts import FeatureValue
 from intraday.domain.market_data.contracts import Bar
 from intraday.domain.shared_kernel.contracts import InstrumentId, Timeframe
 from intraday.signal_intelligence.feature_engine.atr import compute_average_true_range
+from intraday.signal_intelligence.feature_engine.bearish_engulfing import (
+    BEARISH_ENGULFING_FIELD_ID,
+    compute_bearish_engulfing,
+)
+from intraday.signal_intelligence.feature_engine.bullish_engulfing import (
+    BULLISH_ENGULFING_FIELD_ID,
+    compute_bullish_engulfing,
+)
 from intraday.signal_intelligence.feature_engine.candle_body_ratio import (
     CANDLE_BODY_RATIO_FIELD_ID,
     compute_candle_body_ratio,
@@ -55,6 +63,7 @@ from intraday.signal_intelligence.feature_engine.definitions import (
     DirectionalMovementDefinition,
     ExponentialMovingAverageDefinition,
     MacdHistogramDefinition,
+    PriceDeltaDefinition,
     RelativeStrengthIndexDefinition,
     RelativeVolumeDefinition,
     SimpleMovingAverageDefinition,
@@ -67,6 +76,7 @@ from intraday.signal_intelligence.feature_engine.directional_movement import (
 from intraday.signal_intelligence.feature_engine.ema import compute_exponential_moving_average
 from intraday.signal_intelligence.feature_engine.field_registry import parse_feature_name
 from intraday.signal_intelligence.feature_engine.macd_histogram import compute_macd_histogram
+from intraday.signal_intelligence.feature_engine.price_delta import compute_price_delta
 from intraday.signal_intelligence.feature_engine.relative_volume import compute_relative_volume
 from intraday.signal_intelligence.feature_engine.rsi import compute_relative_strength_index
 from intraday.signal_intelligence.feature_engine.sma import compute_simple_moving_average
@@ -93,6 +103,10 @@ def compute_feature_series(field_id: str, bars: tuple[Bar, ...]) -> tuple[Featur
     already established - no second dispatch mechanism introduced."""
     if field_id == CANDLE_BODY_RATIO_FIELD_ID:
         return compute_candle_body_ratio(bars)
+    if field_id == BULLISH_ENGULFING_FIELD_ID:
+        return compute_bullish_engulfing(bars)
+    if field_id == BEARISH_ENGULFING_FIELD_ID:
+        return compute_bearish_engulfing(bars)
 
     # Multi-word kinds ("plus_di", "minus_di", "relative_volume",
     # "macd_hist") need the SUFFIX of trailing integer parameters
@@ -127,6 +141,8 @@ def compute_feature_series(field_id: str, bars: tuple[Bar, ...]) -> tuple[Featur
         return compute_relative_volume(RelativeVolumeDefinition(params[0]), bars)
     if kind == "macd_hist":
         return compute_macd_histogram(MacdHistogramDefinition(*params), bars)
+    if kind == "price_delta":
+        return compute_price_delta(PriceDeltaDefinition(params[0]), bars)
     raise ValueError(f"unrecognized computed field_id {field_id!r}")
 
 

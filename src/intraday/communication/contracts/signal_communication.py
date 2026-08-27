@@ -122,6 +122,15 @@ class DeliveryStatus(enum.Enum):
     FAILED = "FAILED"
     SKIPPED_NOT_CONFIGURED = "SKIPPED_NOT_CONFIGURED"
     SKIPPED_DUPLICATE = "SKIPPED_DUPLICATE"
+    SKIPPED_NOT_SELECTED = "SKIPPED_NOT_SELECTED"
+    """Checkpoint 64.94: the channel is globally configured/enabled, but
+    the EFFECTIVE scanner configuration for this signal's scan run did
+    not select it. Deliberately distinct from FAILED (no delivery was
+    ever attempted - this is not a failure, it is an intentional
+    exclusion) and from SKIPPED_NOT_CONFIGURED (which means the channel
+    itself has no usable credentials/settings, an unrelated condition).
+    Never produced when a caller passes no channel-selection filter at
+    all (e.g. non-scanner callers) - see `NotificationRouter.dispatch`."""
 
 
 @dataclass(frozen=True, slots=True)

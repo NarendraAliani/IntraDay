@@ -26,6 +26,7 @@ class ScannerConfigurationRecord:
     requested_at: datetime | None
     session_started_at: datetime | None = None
     session_stopped_at: datetime | None = None
+    selected_notification_channels: tuple[str, ...] = ()
 
 
 class ScannerConfigurationRepository(Protocol):
@@ -46,6 +47,7 @@ class ScannerConfigurationRepository(Protocol):
         request_id: str,
         action: str = "scanner_configuration.update",
         session_transition: str | None = None,
+        selected_notification_channels: list[str] | None = None,
     ) -> ScannerConfigurationRecord:
         """Persists a NEW desired configuration - always bumps
         `configuration_version` (the caller never sets it directly),

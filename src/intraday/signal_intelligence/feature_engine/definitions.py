@@ -249,3 +249,35 @@ class MacdHistogramDefinition:
     @property
     def feature_version(self) -> Version:
         return FEATURE_ENGINE_VERSION
+
+
+# ---------------------------------------------------------------------------
+# Checkpoint 64.97 addition - Price Delta. Same one-off-dataclass-per-
+# identity pattern as every definition above. `lookback` here means the
+# N-bar close-to-close offset (`price_delta_N = close[t] - close[t-N]`),
+# see `signal_intelligence.feature_engine.price_delta` for the full
+# formula/warm-up/representation-choice documentation.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class PriceDeltaDefinition:
+    """Identifies one parameterized N-bar price delta -
+    `feature_name` "price_delta_10" for `PriceDeltaDefinition(10)`. N=10
+    is used ONLY as a REFERENCE-ARTIFACT DEFAULT (see
+    `price_delta.REFERENCE_ARTIFACT_DEFAULT_LOOKBACK`'s own docstring) -
+    it is NOT a verified Gainz parameter and is not defaulted here; every
+    caller must supply `lookback` explicitly."""
+
+    lookback: int
+
+    def __post_init__(self) -> None:
+        _validate_lookback(self.lookback, owner="PriceDeltaDefinition")
+
+    @property
+    def feature_name(self) -> str:
+        return f"price_delta_{self.lookback}"
+
+    @property
+    def feature_version(self) -> Version:
+        return FEATURE_ENGINE_VERSION

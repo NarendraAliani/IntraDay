@@ -44,6 +44,43 @@ from intraday.domain.session.contracts import CasAwareSession, TradingSession
 from intraday.domain.shared_kernel.contracts import Exchange, Timeframe, ensure_utc
 
 
+class SessionPurpose(enum.StrEnum):
+    """Checkpoint 64.92: WHY this archive cell's underlying observations
+    were captured - deliberately SEPARATE from `data_source` above.
+    `data_source` answers "which provider/transport produced this
+    quote/bar" (e.g. `"dhan"`, `"dhan_websocket"`); this answers "was
+    that capture a genuine live operational session, or a later replay
+    of historical data" - two independent questions. Conflating them
+    (e.g. inferring LIVE from `data_source == "dhan"`) is exactly the
+    64.92 checkpoint directive's named mistake to avoid, because a
+    future replay path could easily reuse the same provider label.
+
+    UNKNOWN is the safe default for every assessment computed without
+    an explicit purpose (every pre-64.92 call site, and any future call
+    site that genuinely cannot determine one) - never silently promoted
+    to LIVE or REPLAY by inference from unrelated fields."""
+
+    UNKNOWN = "UNKNOWN"
+    LIVE = "LIVE"
+    """A genuine live operational capture - the underlying quotes/bars
+    were observed from a real, currently-connected market-data feed
+    (today: exclusively the Dhan worker path). As of 64.92, this is the
+    ONLY capture path that writes into `LiveQuoteObservation` /
+    `AggregatedBarObservation` - no replay writer targets those tables
+    (`infrastructure.market_data_providers.replay.
+    DeterministicReplayBarSource` feeds the separate paper-session
+    replay loop and never touches these tables). That is what makes it
+    honest to stamp LIVE at refresh time rather than merely defaulting
+    to it."""
+    REPLAY = "REPLAY"
+    """A deliberate replay of previously-captured or externally-sourced
+    historical data. No code path writes this today (checkpoint 64.92
+    is offline-only and introduces no replay writer for these tables) -
+    the value exists so a FUTURE replay path has somewhere honest to
+    say so, per the 64.92 replay-isolation contract. Never assigned to
+    a row unless the writer genuinely is a replay path."""
+
+
 class ArchiveStatus(enum.StrEnum):
     """How much of one trading day this archive actually holds for one
     (symbol, timeframe, source). Deliberately FIVE distinct values -
@@ -229,6 +266,12 @@ class ArchiveDayAssessment:
     duplicate_bar_timestamps: tuple[datetime, ...] = field(default_factory=tuple)
     reconciliation_status: ReconciliationStatus = ReconciliationStatus.NOT_RECONCILED
     cas_window_status: CasWindowStatus = CasWindowStatus.NOT_APPLICABLE
+    session_purpose: SessionPurpose = SessionPurpose.UNKNOWN
+    """Checkpoint 64.92: ADDITIVE field - see `SessionPurpose`'s own
+    docstring for the full LIVE/REPLAY/UNKNOWN contract. Defaults to
+    UNKNOWN for every assessment computed without an explicit
+    `session_purpose` argument, so every pre-64.92 call site keeps
+    compiling and keeps meaning what it meant."""
     """Checkpoint 64.88: ADDITIVE field, `NOT_APPLICABLE` for every
     assessment computed WITHOUT a `cas_session` (every pre-64.88 caller,
     and every CATEGORY_II_NON_CAS instrument) - existing behavior is
@@ -270,6 +313,7 @@ def assess_archive_day(
     as_of: datetime,
     ingestion_failed: bool = False,
     cas_session: CasAwareSession | None = None,
+    session_purpose: SessionPurpose = SessionPurpose.UNKNOWN,
 ) -> ArchiveDayAssessment:
     """Classifies one archived (symbol, timeframe, day) cell.
 
@@ -343,6 +387,7 @@ def assess_archive_day(
             missing_bar_timestamps=missing,
             duplicate_bar_timestamps=tuple(sorted(set(duplicates))),
             cas_window_status=cas_window_status,
+            session_purpose=session_purpose,
         )
 
     # Checkpoint 64.88: when `cas_session` is given, CONTINUOUS-TRADING
@@ -378,6 +423,7 @@ __all__ = [
     "ArchiveDayAssessment",
     "ArchiveStatus",
     "ReconciliationStatus",
+    "SessionPurpose",
     "TradingSessionIdentity",
     "assess_archive_day",
     "is_completeness_supported",

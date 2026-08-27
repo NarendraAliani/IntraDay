@@ -23,6 +23,7 @@ from intraday.domain.market_data.archive import (
     ArchiveDayAssessment,
     ArchiveStatus,
     ReconciliationStatus,
+    SessionPurpose,
 )
 from intraday.domain.market_data.contracts import Quote
 from intraday.domain.market_data.quality import CasWindowStatus
@@ -130,6 +131,10 @@ class DjangoMarketDataArchiveRepository:
                 # cas_window_status`'s own docstring for why this is kept
                 # separate from `status`/`reason` here too.
                 "cas_window_status": assessment.cas_window_status.value,
+                # Checkpoint 64.92: additive - see `MarketDataArchiveDay.
+                # session_purpose`'s own docstring for why this is kept
+                # separate from `data_source` above.
+                "session_purpose": assessment.session_purpose.value,
                 # Never overwritten by a refresh: reconciliation is an
                 # INDEPENDENT verdict, and recomputing the archive from
                 # our own observations must never be able to promote a
@@ -272,6 +277,7 @@ def _row_to_archive_day(row: MarketDataArchiveDay) -> ArchiveDayRecord:
         reconciliation_reason=row.reconciliation_reason,
         reconciliation_evidence_source=row.reconciliation_evidence_source,
         cas_window_status=CasWindowStatus(row.cas_window_status),
+        session_purpose=SessionPurpose(row.session_purpose),
     )
 
 

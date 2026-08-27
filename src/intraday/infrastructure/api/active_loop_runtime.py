@@ -39,6 +39,7 @@ from intraday.application.services.paper_signal_execution import PaperSignalExec
 from intraday.application.services.paper_trading import PaperTradingService
 from intraday.application.services.signal_communication import SignalCommunicationService
 from intraday.application.services.strategy_execution import build_coordinator
+from intraday.communication.contracts.signal_communication import CommunicationChannel
 from intraday.domain.market_data.contracts import Bar
 from intraday.domain.session.calendar import session_for_instant
 from intraday.domain.session.contracts import SessionStatus
@@ -83,6 +84,7 @@ def run_active_loop_tick(
     data_quality_is_stale: bool = False,
     now: dt.datetime | None = None,
     scan_run_id: str | None = None,
+    selected_notification_channels: frozenset[CommunicationChannel] | None = None,
 ) -> ActiveLoopTickOutcome:
     """The ONE function a scheduler calls repeatedly. Session-gates
     itself (Checkpoint 40 Part 13 - "the worker must not start trading
@@ -110,7 +112,15 @@ def run_active_loop_tick(
 
     ledger = DjangoPaperLedgerRepository()
     trading_service: PaperTradingService = get_paper_trading_service()
-    communication: SignalCommunicationService = get_signal_communication_service()
+    # Checkpoint 64.94: `selected_notification_channels` is the caller's
+    # already-computed EFFECTIVE per-scanner channel selection (desired
+    # selection intersected with real global configured/enabled state -
+    # see `run_market_data_worker.py::aggregate_now()`), never re-derived
+    # here. `None` for every non-scanner caller (REST-ingestion tick,
+    # replay, direct tests) - unchanged prior behavior.
+    communication: SignalCommunicationService = get_signal_communication_service(
+        selected_channels=selected_notification_channels
+    )
 
     registry = build_default_registry()
     registry.activate(strategy_id)
@@ -158,6 +168,7 @@ def run_active_loop_tick_from_source(
     data_quality_is_stale: bool = False,
     now: dt.datetime | None = None,
     scan_run_id: str | None = None,
+    selected_notification_channels: frozenset[CommunicationChannel] | None = None,
 ) -> ActiveLoopTickOutcome:
     """Checkpoint 52: the scheduler-shaped entry point that no longer
     requires the CALLER to manually slice/assemble `bars` on every
@@ -182,4 +193,5 @@ def run_active_loop_tick_from_source(
         data_quality_is_stale=data_quality_is_stale,
         now=clock,
         scan_run_id=scan_run_id,
+        selected_notification_channels=selected_notification_channels,
     )

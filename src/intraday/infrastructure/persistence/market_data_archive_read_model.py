@@ -30,6 +30,7 @@ from intraday.application.repositories.market_data_archive import ArchiveDayReco
 from intraday.domain.market_data.archive import (
     ArchiveStatus,
     ReconciliationStatus,
+    SessionPurpose,
     trading_date_for,
 )
 from intraday.domain.market_data.quality import CasWindowStatus
@@ -226,6 +227,12 @@ def archive_row_to_record(row: MarketDataArchiveDay) -> ArchiveDayRecord:
         # `market_data_archive_repository._row_to_archive_day`'s own
         # mapping of the same column.
         cas_window_status=CasWindowStatus(row.cas_window_status),
+        # Checkpoint 64.92: additive field, kept in sync with
+        # `market_data_archive_repository._row_to_archive_day`'s own
+        # mapping of the same column - lets correlation/trace consumers
+        # see WHY a cell's evidence exists (LIVE/REPLAY/UNKNOWN) without
+        # a second query.
+        session_purpose=SessionPurpose(row.session_purpose),
     )
 
 

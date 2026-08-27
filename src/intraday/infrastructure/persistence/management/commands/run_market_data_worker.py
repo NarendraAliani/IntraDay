@@ -70,6 +70,7 @@ from intraday.application.services.token_lifecycle import (
     evaluate_dhan_token_lifecycle,
 )
 from intraday.application.services.worker_stop_request import watch_for_stop_request
+from intraday.communication.contracts.signal_communication import CommunicationChannel
 from intraday.domain.market_data.aggregation import BarStatus
 from intraday.domain.market_data.archive import trading_date_for
 from intraday.domain.market_data.contracts import Quote
@@ -77,6 +78,9 @@ from intraday.domain.session.calendar import session_for_instant
 from intraday.domain.shared_kernel.contracts import Timeframe
 from intraday.infrastructure.api.signal_pipeline_runtime import (
     DEFAULT_STRATEGY_ID as SIGNAL_STRATEGY_ID,
+)
+from intraday.infrastructure.api.scanner_configuration_views import (
+    effective_notification_channel_ids,
 )
 from intraday.infrastructure.api.signal_pipeline_runtime import promote_bars_and_trigger_signals
 from intraday.infrastructure.market_data_providers.dhan.async_worker import (
@@ -476,6 +480,16 @@ class _QuoteSink:
         timeframe = Timeframe.ONE_MINUTE
         enabled = True
         configuration_version = 0
+        # Checkpoint 64.94: EFFECTIVE per-scanner notification-channel
+        # selection - `None` means "no scanner configuration governs
+        # this run" (the fake/fake-ws providers with no
+        # `scanner_config_provider`), which keeps the pre-64.94 global
+        # behavior. When a scanner configuration genuinely exists, this
+        # is recomputed every cycle from the FRESHLY-read `desired` row
+        # (never cached), exactly like `strategy_ids`/`timeframe` above -
+        # so a channel selection change becomes effective on the very
+        # next `aggregate_now()` cycle, with no process restart.
+        selected_notification_channels: frozenset[CommunicationChannel] | None = None
         if self._scanner_config_provider is not None:
             desired = await sync_to_async(self._scanner_config_repository.get)(
                 self._scanner_config_provider
@@ -490,6 +504,27 @@ class _QuoteSink:
                     "keeping the previous effective timeframe"
                 )
             strategy_ids = desired.selected_strategy_ids or (self._strategy_id,)
+            # Checkpoint 64.94 fix: `effective_notification_channel_ids()`
+            # reads the real Telegram/Discord settings (a synchronous
+            # Django ORM call, via `TelegramSettingsService`/
+            # `DiscordSettingsService`) - it MUST be wrapped in
+            # `sync_to_async` exactly like every other DB access in this
+            # async method (`self._scanner_config_repository.get`,
+            # `self._bar_service.aggregate_and_persist`, etc. below), or
+            # it raises `django.core.exceptions.SynchronousOnlyOperation`
+            # the instant this code path actually runs under a real event
+            # loop - caught by the full backend regression
+            # (`test_checkpoint_64_64_market_data_contract.py`), never
+            # caught by the (synchronous, `pytest.mark.django_db`)
+            # notification-routing unit tests alone.
+            effective_channel_ids = await sync_to_async(effective_notification_channel_ids)(
+                desired.selected_notification_channels
+            )
+            selected_notification_channels = frozenset(
+                CommunicationChannel(channel_id.upper())
+                for channel_id in effective_channel_ids
+                if channel_id.upper() in CommunicationChannel.__members__
+            )
 
         aggregation = await sync_to_async(self._bar_service.aggregate_and_persist)(
             as_of=clock, timeframe=timeframe
@@ -578,6 +613,7 @@ class _QuoteSink:
                 connection_is_healthy=connection_is_healthy,
                 strategy_id=self._strategy_id,
                 strategy_execution_enabled=False,
+                selected_notification_channels=selected_notification_channels,
             )
             self._stdout(
                 "  scanner disabled (desired configuration) - signal pipeline skipped, "
@@ -679,6 +715,7 @@ class _QuoteSink:
                     scan_run_id=(
                         clock.isoformat() if self._scan_progress_provider is not None else None
                     ),
+                    selected_notification_channels=selected_notification_channels,
                 )
                 total_promoted += pipeline_outcome.promoted_count
                 total_invocations += pipeline_outcome.active_loop_invocations

@@ -728,6 +728,19 @@ def test_zz_no_real_gainz_source_file_exists() -> None:
         # future Gainz attribution, and that none of it exists yet. No
         # Gainz math, module or activation was added.
         "MARKET_DATA_ARCHIVE_QUERY_API",
+        # Checkpoint 64.97: canonical feature-engine extension - generic
+        # engulfing-pattern and N-bar price-delta features. Each new
+        # module mentions "Gainz" only to honestly disclaim that it is a
+        # GENERIC feature structurally similar to (but not verified
+        # against) the read-only research/rebuild reference file - never
+        # to port authentic Gainz math. Includes this checkpoint's own
+        # test file, taskReport.md content, and the audit doc.
+        "64_97",
+        "bullish_engulfing.py",
+        "bearish_engulfing.py",
+        "price_delta.py",
+        "GAINZ_SIGNAL_ENGINE_AUDIT.md",
+        "gainz_signal_engine_reference.py",
     )
     for hit in hits:
         assert any(

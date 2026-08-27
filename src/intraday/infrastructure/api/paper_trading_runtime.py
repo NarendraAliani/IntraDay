@@ -48,6 +48,7 @@ from intraday.application.services.signal_communication import (
     NotificationRouter,
     SignalCommunicationService,
 )
+from intraday.communication.contracts.signal_communication import CommunicationChannel
 from intraday.domain.risk.contracts import RiskLimits, TradingHaltStatus
 from intraday.infrastructure.brokers.paper.broker import PaperBroker
 from intraday.infrastructure.communication.providers import (
@@ -181,7 +182,9 @@ def expire_end_of_session() -> tuple[str, ...]:
     return tuple(affected)
 
 
-def get_signal_communication_service() -> SignalCommunicationService:
+def get_signal_communication_service(
+    *, selected_channels: frozenset[CommunicationChannel] | None = None
+) -> SignalCommunicationService:
     """Checkpoint 37 Part 3/7: composes the REAL communication engine -
     one `CommunicationProvider` per configured AND enabled channel
     (Telegram/Discord), reading credentials the exact same way
@@ -216,7 +219,17 @@ def get_signal_communication_service() -> SignalCommunicationService:
             providers.append(DiscordCommunicationProvider(webhook_url))
 
     router = NotificationRouter(
-        providers=tuple(providers), ledger=DjangoCommunicationLedgerRepository()
+        providers=tuple(providers),
+        ledger=DjangoCommunicationLedgerRepository(),
+        # Checkpoint 64.94: `None` (the default, every pre-existing
+        # caller) means EXACTLY the prior behavior - every globally
+        # configured/enabled provider is sent to. A caller that knows
+        # the EFFECTIVE per-scanner channel selection (currently only
+        # `run_active_loop_tick`, forwarded from
+        # `run_market_data_worker.py`'s scanner reconciliation cycle)
+        # passes it here so unselected channels are recorded
+        # `SKIPPED_NOT_SELECTED` instead of being sent to.
+        selected_channels=selected_channels,
     )
     return SignalCommunicationService(router=router)
 

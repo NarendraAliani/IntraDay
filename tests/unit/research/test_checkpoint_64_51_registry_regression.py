@@ -95,13 +95,16 @@ def _bars_with_volume(count: int) -> tuple[Bar, ...]:
 def test_a_canonical_registry_field_count_is_the_current_15_not_the_stale_8() -> None:
     """Documents, with an explicit assertion (not just a comment), the
     CURRENT canonical field count following 64.49's intentional
-    expansion. This is a deliberate architectural assertion (Part 3's
-    permitted exception: "unless that is genuinely the correct
-    architectural assertion") - the count is pinned so a future
-    accidental field removal/addition is caught, exactly the class of
-    regression this checkpoint exists to prevent recurring."""
+    expansion, and 64.97's further addition of bullish_engulfing/
+    bearish_engulfing/price_delta (18 total). This is a deliberate
+    architectural assertion (Part 3's permitted exception: "unless that
+    is genuinely the correct architectural assertion") - the count is
+    pinned so a future accidental field removal/addition is caught,
+    exactly the class of regression this checkpoint exists to prevent
+    recurring. (Test name kept historically accurate to 64.49/64.51 - the
+    count itself is the current, up-to-date 18.)"""
     field_ids = {f.field_id for f in list_fields()}
-    assert len(field_ids) == 15
+    assert len(field_ids) == 18
     assert field_ids == {
         "open",
         "high",
@@ -118,6 +121,9 @@ def test_a_canonical_registry_field_count_is_the_current_15_not_the_stale_8() ->
         "relative_volume",
         "macd_hist",
         "candle_body_ratio",
+        "bullish_engulfing",
+        "bearish_engulfing",
+        "price_delta",
     }
 
 
@@ -144,6 +150,10 @@ def test_b_every_registered_field_is_dispatchable_through_the_real_dispatcher() 
             concrete = "candle_body_ratio"
         elif field_def.field_id == "macd_hist":
             concrete = "macd_hist_12_26_9"
+        elif field_def.field_id in ("bullish_engulfing", "bearish_engulfing"):
+            concrete = field_def.field_id
+        elif field_def.field_id == "price_delta":
+            concrete = "price_delta_10"
         else:
             concrete = f"{field_def.field_id}_{lookback_by_kind[field_def.field_id]}"
         values = compute_feature_series(concrete, bars)

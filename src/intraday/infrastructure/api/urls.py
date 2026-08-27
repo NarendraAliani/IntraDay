@@ -317,6 +317,12 @@ urlpatterns = [
         scanner_configuration_views.update_scanner_configuration,
         name="scanner-config-update",
     ),
+    # --- Checkpoint 64.93: notification-channel registry -------------------
+    path(
+        "notifications/channels/",
+        scanner_configuration_views.list_notification_channels,
+        name="notification-channels-list",
+    ),
     # --- Checkpoint 27: research watchlists -------------------------------
     path("watchlists/", watchlist_views.list_watchlists, name="watchlists-list"),
     path("watchlists/save/", watchlist_views.save_watchlist, name="watchlists-save"),

@@ -52,9 +52,10 @@ const STOPPED_CONFIG: ScannerConfigurationResponse = {
     universe_mode: "ALL_CONFIGURED",
     universe_requested_count: 0,
     universe_subscribed_count: 0,
-    strategy_ids: [],
+    strategy_ids: ["ema_crossover"],
     configuration_version: 1,
     enabled: false,
+    notification_channels: [],
   },
   effective: {
     timeframe: "",
@@ -62,10 +63,49 @@ const STOPPED_CONFIG: ScannerConfigurationResponse = {
     universe_subscribed_count: 0,
     strategy_ids: [],
     configuration_version: 0,
+    notification_channels: [],
   },
   status: "STOPPED",
   requested_by: "",
   requested_at: null,
+};
+
+const NOTIFICATION_CHANNELS: components["schemas"]["NotificationChannel"][] = [
+  { channel_id: "telegram", display_name: "Telegram", configured: true, enabled: true },
+  { channel_id: "discord", display_name: "Discord", configured: true, enabled: true },
+];
+
+const EMPTY_WORKBENCH: components["schemas"]["LivePaperWorkbenchResponse"] = {
+  readiness: {
+    state: "READY_FOR_PAPER",
+    provider: "dhan",
+    credential_state: "VALID",
+    credential_expiry: null,
+    provider_state: "HEALTHY",
+    watchdog_state: "HEALTHY",
+    market_state: "OPEN",
+    paper_execution_state: "ENABLED",
+    real_trading_state: "DISABLED",
+    can_start: true,
+    safe_reason: "All readiness checks passed.",
+    remediation: null,
+  },
+  checklist: [],
+  session_state: "STOPPED",
+  effective_session_configuration: {
+    desired_configuration_version: 1,
+    desired_universe_mode: "ALL_CONFIGURED",
+    desired_timeframe: "1m",
+    desired_strategy_ids: [],
+    desired_requested_by: "",
+    effective_configuration_version: 0,
+    effective_timeframe: "",
+    effective_strategy_ids: [],
+    effective_stock_count: 0,
+    effective_requested_stock_count: 0,
+    drift: false,
+  },
+  scanner_progress: null,
 };
 
 const EMA_STRATEGY: StrategySummary = {
@@ -137,10 +177,16 @@ function stubEndpoints(
       );
     }
     if (url.includes("/live-paper-readiness/")) return Promise.resolve(jsonResponse(readiness));
+    if (url.includes("/live-paper-workbench/"))
+      return Promise.resolve(
+        jsonResponse({ ...EMPTY_WORKBENCH, readiness, session_state: config.desired.enabled ? "RUNNING" : "STOPPED" }),
+      );
     if (url.includes("/worker-status/")) return Promise.resolve(jsonResponse(workerStatus));
     if (url.includes("/scanner-config/update/")) return Promise.resolve(jsonResponse(config));
     if (url.includes("/scanner-config/")) return Promise.resolve(jsonResponse(config));
     if (url.includes("/strategy-engine/strategies/")) return Promise.resolve(jsonResponse(strategies));
+    if (url.includes("/notifications/channels/")) return Promise.resolve(jsonResponse(NOTIFICATION_CHANNELS));
+    if (url.includes("/config/signals/")) return Promise.resolve(jsonResponse({ items: [], total_count: 0, page: 1, page_size: 15 }));
     if (url.includes("/watchlists/")) return Promise.resolve(jsonResponse([]));
     return Promise.resolve(jsonResponse({}));
   });
@@ -180,12 +226,14 @@ describe("LiveScannerConsole", () => {
     expect(screen.getByText(/87 instrument\(s\) requested but not subscribed/)).toBeInTheDocument();
   });
 
-  it("never fabricates live-activity fields the backend does not provide", async () => {
+  it("never fabricates scanner-runtime fields the backend does not provide", async () => {
     stubEndpoints({});
 
     renderWithAuth(<LiveScannerConsole />);
 
-    await waitFor(() => expect(screen.getByText("Live Activity")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Scanner Runtime")).toBeInTheDocument());
+    // EMPTY_WORKBENCH.scanner_progress is null (no scan has ever run) - every
+    // field is honestly "Not provided", never a fabricated 0/placeholder.
     const notProvided = screen.getAllByText("Not provided by the current backend");
     expect(notProvided.length).toBeGreaterThanOrEqual(4);
   });
@@ -195,7 +243,7 @@ describe("LiveScannerConsole", () => {
 
     renderWithAuth(<LiveScannerConsole />);
 
-    await waitFor(() => expect(screen.getByText("● BLOCKED")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("● NOT READY")).toBeInTheDocument());
     const startButton = screen.getByRole("button", { name: "START LIVE PAPER SESSION" });
     expect(startButton).toBeDisabled();
     expect(screen.getByText("Dhan access token has expired.")).toBeInTheDocument();
@@ -206,7 +254,7 @@ describe("LiveScannerConsole", () => {
 
     renderWithAuth(<LiveScannerConsole />);
 
-    await waitFor(() => expect(screen.getByText("● READY")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("● READY TO SCAN")).toBeInTheDocument());
     const startButton = screen.getByRole("button", { name: "START LIVE PAPER SESSION" });
     expect(startButton).not.toBeDisabled();
 

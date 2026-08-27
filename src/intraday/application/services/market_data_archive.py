@@ -29,10 +29,12 @@ from intraday.domain.market_data.aggregation import AggregatedBar
 from intraday.domain.market_data.archive import (
     ArchiveDayAssessment,
     ArchiveStatus,
+    SessionPurpose,
     TradingSessionIdentity,
     assess_archive_day,
     trading_date_for,
 )
+from intraday.application.services.bar_aggregation import DHAN_DATA_SOURCE
 from intraday.domain.market_data.contracts import Quote
 from intraday.domain.session.calendar import (
     build_cas_aware_session_for,
@@ -80,6 +82,21 @@ def _rollup_status(statuses: tuple[ArchiveStatus, ...]) -> ArchiveStatus:
         if candidate in statuses:
             return candidate
     return ArchiveStatus.NOT_OBSERVED
+
+
+# Checkpoint 64.92: today's ONLY writer of `refresh_trading_date` /
+# `refresh_for_instant` is the live Dhan worker
+# (`run_market_data_worker.py`, at graceful shutdown) and the
+# operator-invoked `market_data_archive` management command re-running
+# the SAME recompute over already-persisted rows - neither is a replay
+# path (see `models.MarketDataArchiveDay.session_purpose`'s own
+# docstring for why: no replay component targets these tables). So it
+# is honest, not an inference from `data_source`, to stamp every
+# assessment this service computes as LIVE. A future replay path MUST
+# NOT call this service without first plumbing its own
+# `SessionPurpose.REPLAY` through - see Part B of the 64.92 checkpoint
+# report for the full contract.
+_LIVE_REFRESH_SESSION_PURPOSE = SessionPurpose.LIVE
 
 
 class MarketDataArchiveService:
@@ -131,6 +148,7 @@ class MarketDataArchiveService:
                 first_observation_at=summary.first_observation_at if summary else None,
                 last_observation_at=summary.last_observation_at if summary else None,
                 ingestion_failed=ingestion_failed,
+                session_purpose=_LIVE_REFRESH_SESSION_PURPOSE,
             )
             self._repository.save_assessment(assessment, computed_at=as_of)
             assessments.append(assessment)
@@ -231,7 +249,34 @@ def _summary_for_cell(
        honest reading of "we did not record where this came from", and
        it is exactly the behaviour that existed before this checkpoint.
 
-    A cell with neither match gets `None` (0 observations), unchanged.
+    3. Checkpoint 64.92 FIX (the root cause behind 64.91's NULL/0
+       observability fields despite genuinely persisted bars): every bar
+       this service ever aggregates is stamped with the single coarse
+       label `bar_aggregation.DHAN_DATA_SOURCE == "dhan"`
+       (`BarAggregationService.aggregate_and_persist` applies ONE label
+       to a whole aggregation run - it does not, and by its documented
+       design cannot, carry each underlying quote's own finer-grained
+       `Quote.source` through per-bar). The live Dhan WebSocket path
+       records its raw quotes with the FINER label
+       `packet_to_quote.DHAN_WEBSOCKET_SOURCE == "dhan_websocket"`
+       (`LiveQuoteObservation.data_source`). Rule 1 (exact match) and
+       rule 2 (`""` fallback) both miss this combination - `"dhan"` !=
+       `"dhan_websocket"` and neither is `""` - so 64.91's real,
+       persisted `dhan_websocket` quotes were silently attributed to
+       NO bar cell, leaving `quote_observation_count`/
+       `first_observation_at`/`last_observation_at` at their 0/NULL
+       defaults despite genuine observations existing. This rule
+       recognises the SAME-PROVIDER-FAMILY relationship explicitly: a
+       cell aggregated under the generic `"dhan"` label may be attributed
+       the quote evidence of any `"dhan"`-prefixed finer-grained source
+       for the same symbol (today only `"dhan_websocket"`; a future
+       `"dhan_rest"` label would match the same way) - never a source
+       from an unrelated provider. This is read-only evidence
+       attribution, not a data rewrite: no `LiveQuoteObservation` or
+       `AggregatedBarObservation` row is touched.
+
+    A cell with no match under any of the three rules gets `None` (0
+    observations), unchanged.
     """
     for summary in summaries:
         if summary.instrument_symbol == cell.instrument_symbol and (
@@ -241,6 +286,13 @@ def _summary_for_cell(
     for summary in summaries:
         if summary.instrument_symbol == cell.instrument_symbol and summary.data_source == "":
             return summary
+    if cell.data_source == DHAN_DATA_SOURCE:
+        for summary in summaries:
+            if (
+                summary.instrument_symbol == cell.instrument_symbol
+                and summary.data_source.startswith(DHAN_DATA_SOURCE)
+            ):
+                return summary
     return None
 
 
@@ -258,6 +310,7 @@ def assess_cell(
     first_observation_at: datetime | None,
     last_observation_at: datetime | None,
     ingestion_failed: bool,
+    session_purpose: SessionPurpose = SessionPurpose.UNKNOWN,
 ) -> ArchiveDayAssessment:
     """Thin adapter onto the domain classifier - kept as a module-level
     function (not a method) so tests can exercise the exact same call
@@ -288,6 +341,7 @@ def assess_cell(
         as_of=as_of,
         ingestion_failed=ingestion_failed,
         cas_session=cas_session,
+        session_purpose=session_purpose,
     )
 
 

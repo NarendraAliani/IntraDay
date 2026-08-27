@@ -631,6 +631,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/config/notifications/channels/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Checkpoint 64.93 Part D: the notification-channel registry the
+         *     frontend renders its multi-select from - never a hardcoded
+         *     Telegram/Discord pair in markup. Adding a future channel here (and
+         *     to `_notification_channel_registry()` above) is the only change a
+         *     new channel would require on the backend side.
+         */
+        get: operations["api_v1_config_notifications_channels_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/config/paper-trading/expire-session/": {
         parameters: {
             query?: never;
@@ -1587,6 +1610,37 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["api_v1_config_watchlists_save_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/correlation/research/report/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Checkpoint 64.89: the read-only historical RESEARCH report -
+         *     traceability coverage, feature/outcome analysis, feature interaction,
+         *     symbol robustness, and time-of-day - computed entirely from the
+         *     EXISTING `DjangoCorrelationRepository` traceability read model (no
+         *     new persistence, no second source of truth for signals/trades/
+         *     outcomes/feature values).
+         *
+         *     Every result carries `observation_count` and `status`
+         *     (`OK`/`INSUFFICIENT_SAMPLE`/`NO_DATA`); no mean/win-rate/expectancy
+         *     field is populated below `MIN_SAMPLE_SIZE` observations. This is
+         *     DESCRIPTIVE evidence only - see `research_correlation.py`'s module
+         *     docstring. It is never a causal claim, and no result here is, or
+         *     should be treated as, a production strategy parameter.
+         */
+        get: operations["api_v1_correlation_research_report_retrieve"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2550,6 +2604,23 @@ export interface components {
             end_date: string;
         };
         /**
+         * @description Checkpoint 64.93 Part D: ONE row of the notification-channel
+         *     registry - reuses the EXISTING `TelegramSettingsService`/
+         *     `DiscordSettingsService` truth (Checkpoint 22), never a duplicated
+         *     channel-configuration model. `configured` and `enabled` are kept
+         *     distinct on the wire exactly as the checkpoint brief requires: a
+         *     channel can be `configured=True, enabled=False` (credentials saved,
+         *     delivery switched off) or, honestly, `configured=False` regardless
+         *     of `enabled` (a channel is never "operational" without credentials,
+         *     no matter what its enabled flag says).
+         */
+        NotificationChannel: {
+            channel_id: string;
+            display_name: string;
+            configured: boolean;
+            enabled: boolean;
+        };
+        /**
          * @description * `MARKET` - MARKET
          *     * `LIMIT` - LIMIT
          *     * `SL` - SL
@@ -2900,6 +2971,44 @@ export interface components {
             display_name: string | null;
             parameters: number[];
         };
+        ResearchFeatureInteraction: {
+            field_id_a: string;
+            field_id_b: string;
+            observation_count: number;
+            status: string;
+            /** Format: decimal */
+            mean_outcome: string | null;
+        };
+        ResearchFeatureOutcome: {
+            field_id: string;
+            observation_count: number;
+            status: string;
+            /** Format: decimal */
+            mean_outcome: string | null;
+            /** Format: decimal */
+            median_outcome: string | null;
+            /** Format: double */
+            win_rate: number | null;
+            /** Format: double */
+            loss_rate: number | null;
+            /** Format: decimal */
+            expectancy: string | null;
+            /** Format: double */
+            profit_factor: number | null;
+        };
+        /**
+         * @description The full research report. Descriptive only - see the module
+         *     docstring on `research_correlation.py`. Nothing in this response is a
+         *     causal claim, a strategy parameter, or a production threshold.
+         */
+        ResearchReport: {
+            min_sample_size: number;
+            traceability_coverage: components["schemas"]["ResearchTraceabilityCoverage"];
+            feature_outcome: components["schemas"]["ResearchFeatureOutcome"][];
+            feature_interaction: components["schemas"]["ResearchFeatureInteraction"][];
+            symbol_robustness: components["schemas"]["ResearchSymbolOutcome"][];
+            time_of_day: components["schemas"]["ResearchTimeOfDay"][];
+        };
         ResearchStatusResponse: {
             strategy_id: string;
             status: string;
@@ -2914,6 +3023,39 @@ export interface components {
          * @enum {string}
          */
         ResearchStatusUpdateRequestStatusEnum: "RESEARCH_ACTIVE" | "RESEARCH_PAUSED" | "DISABLED";
+        ResearchSymbolOutcome: {
+            instrument_id: string;
+            observation_count: number;
+            status: string;
+            /** Format: decimal */
+            mean_outcome: string | null;
+            /** Format: double */
+            win_rate: number | null;
+        };
+        ResearchTimeOfDay: {
+            bucket: string;
+            observation_count: number;
+            status: string;
+            /** Format: decimal */
+            mean_outcome: string | null;
+            /** Format: double */
+            win_rate: number | null;
+        };
+        ResearchTraceabilityCoverage: {
+            total_signals: number;
+            signals_with_evidence: number;
+            signals_with_orders: number;
+            signals_with_trades: number;
+            signals_with_realized_outcome: number;
+            /** Format: double */
+            evidence_coverage_pct: number | null;
+            /** Format: double */
+            order_coverage_pct: number | null;
+            /** Format: double */
+            trade_coverage_pct: number | null;
+            /** Format: double */
+            outcome_coverage_pct: number | null;
+        };
         /**
          * @description Response shape for a risk-configuration version. `is_active` is
          *     computed by the view (by comparing against the service's
@@ -2997,6 +3139,7 @@ export interface components {
             strategy_ids: string[];
             configuration_version: number;
             enabled?: boolean;
+            notification_channels?: string[];
         };
         ScannerConfigurationUpdateRequest: {
             enabled: boolean;
@@ -3006,6 +3149,7 @@ export interface components {
             /** @default  */
             selected_watchlist_name: string;
             selected_strategy_ids?: string[];
+            selected_notification_channels?: string[];
         };
         /**
          * @description Checkpoint 64.18 §6: reuses the existing workbench endpoint
@@ -4063,6 +4207,25 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkerRuntimeStatusResponse"];
+                };
+            };
+        };
+    };
+    api_v1_config_notifications_channels_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationChannel"][];
                 };
             };
         };
@@ -5428,6 +5591,25 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WatchlistResponse"];
+                };
+            };
+        };
+    };
+    api_v1_correlation_research_report_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchReport"];
                 };
             };
         };
