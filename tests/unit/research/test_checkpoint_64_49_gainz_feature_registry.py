@@ -741,6 +741,10 @@ def test_zz_no_real_gainz_source_file_exists() -> None:
         "price_delta.py",
         "GAINZ_SIGNAL_ENGINE_AUDIT.md",
         "gainz_signal_engine_reference.py",
+        # Checkpoint 64.99: the first real Gainz Research Adapter
+        # (profile "alpha" only) and its dedicated test file - see that
+        # module's own "HONESTY NOTICE" header.
+        "64_99",
     )
     for hit in hits:
         assert any(

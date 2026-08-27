@@ -527,7 +527,13 @@ def test_j_gainz_strategy_runs_through_real_coordinator_against_db_bars() -> Non
         StrategyDirection.BEARISH,
         StrategyDirection.NEUTRAL,
     )
-    assert len(signal.evidence) == 7  # rsi, adx, +di, -di, rvol, macd_hist, body_ratio
+    # Checkpoint 64.99: evidence is now the 13 real, non-`atr` canonical
+    # FeatureValues the expanded Alpha condition set consumes (EMA
+    # fast/slow/trend, RSI, price_delta, ADX/+DI/-DI, relative volume,
+    # MACD histogram, candle body ratio, bullish/bearish engulfing),
+    # PLUS the adapter-owned `setup_quality_score` (not a canonical
+    # feature - see that strategy module's own "SCORING" header).
+    assert len(signal.evidence) == 14
     assert all(ev is not None for ev in signal.evidence)  # real, non-fabricated evidence values
 
     # On this deliberately accelerating uptrend, the strategy's own
@@ -537,13 +543,22 @@ def test_j_gainz_strategy_runs_through_real_coordinator_against_db_bars() -> Non
     assert signal.direction is StrategyDirection.BULLISH
 
     strategy = GainzCompatibleResearchStrategy()
-    feature_values = dict(zip(strategy.required_features(config), signal.evidence, strict=True))
+    # Checkpoint 64.99: `atr_14` was added to `required_features()`
+    # itself (TradePlan-only - see that strategy's own `evaluate()`
+    # comment), so the coordinator already supplied it above; a real
+    # TradePlan is expected here, not `None`.
+    # Rebuild the exact feature_values dict the coordinator itself used
+    # (required_features() order includes `atr_14`, which is not part
+    # of `signal.evidence` - re-fetch it the same way the coordinator
+    # does, via the real dispatcher, rather than fabricating it).
+    from intraday.application.services.strategy_execution import compute_feature_series
+
+    feature_values = {ev.feature_name: ev for ev in signal.evidence}
+    atr_series = compute_feature_series("atr_14", bars)
+    feature_values["atr_14"] = next(fv for fv in atr_series if fv.timestamp == bars[-1].timestamp)
     trade_plan = strategy.build_trade_plan(bars[-1], feature_values, config, signal)
-    # ATR is not among required_features(), so a TradePlan is correctly
-    # None here unless separately supplied -- this proves the strategy's
-    # own documented "never fabricate a plan from missing data" contract,
-    # not a defect.
-    assert trade_plan is None
+    assert trade_plan is not None
+    assert trade_plan.entry_price == signal.price
 
 
 # ---------------------------------------------------------------------------

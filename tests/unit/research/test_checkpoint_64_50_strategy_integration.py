@@ -100,6 +100,36 @@ def _strong_uptrend_bars(n: int, *, high_volume: bool = True) -> tuple[Bar, ...]
     return tuple(bars)
 
 
+def _flat_then_breakout_bars(n: int, *, flat: int = 60) -> tuple[Bar, ...]:
+    """Checkpoint 64.99: a flat consolidation (lets RSI/EMA/ADX warm up
+    away from an immediately-pinned extreme) followed by a steady,
+    volume-expanding breakout leg - unlike `_strong_uptrend_bars`
+    (monotonic acceleration from bar 1), this reliably produces a
+    BULLISH signal under the EXPANDED 64.99 Alpha condition set, whose
+    RSI gate requires RSI < 80 (a pure monotonic ramp pins RSI at ~100
+    almost immediately and never satisfies it)."""
+    bars = []
+    price = Decimal("100")
+    for i in range(flat):
+        move = Decimal("0.1") if i % 2 == 0 else Decimal("-0.1")
+        o = price
+        c = price + move
+        h = max(o, c) + Decimal("0.05")
+        lo = min(o, c) - Decimal("0.05")
+        bars.append(_bar(i, str(o), str(h), str(lo), str(c), "1000"))
+        price = c
+    for j in range(max(n - flat, 0)):
+        i = flat + j
+        o = price
+        c = price + Decimal("1")
+        h = c + Decimal("0.1")
+        lo = o - Decimal("0.1")
+        v = Decimal("1000") + Decimal(j) * Decimal("100")
+        bars.append(_bar(i, str(o), str(h), str(lo), str(c), str(v)))
+        price = c
+    return tuple(bars)
+
+
 def _random_bars(n: int, seed: int = 42) -> tuple[Bar, ...]:
     """A non-monotonic, mixed up/down bar series (unlike
     `_strong_uptrend_bars`, which is deliberately one-directional and
@@ -178,14 +208,28 @@ def test_b1_required_features_uses_canonical_field_ids() -> None:
     strategy = GainzCompatibleResearchStrategy()
     config = _default_config()
     required = strategy.required_features(config)
+    # Checkpoint 64.99: this strategy's Alpha-profile condition set was
+    # expanded to reuse the 64.97 canonical engulfing/price_delta
+    # features and the reference-artifact EMA stack, alongside the
+    # pre-existing RSI/ADX/DI/RVOL/MACD/body-ratio set - see that
+    # checkpoint's module header for the full condition-by-condition
+    # provenance and its two documented unavailable-feature blockers
+    # (breakout, RSI momentum).
     assert required == (
+        "ema_9",
+        "ema_21",
+        "ema_50",
         "rsi_14",
+        "price_delta_10",
         "adx_14",
         "plus_di_14",
         "minus_di_14",
         "relative_volume_20",
         "macd_hist_12_26_9",
         "candle_body_ratio",
+        "bullish_engulfing",
+        "bearish_engulfing",
+        "atr_14",
     )
     # Every declared field_id must actually be a real, registered
     # canonical field -- proves no ad-hoc/private field naming exists.
@@ -287,7 +331,7 @@ def test_efgh_real_coordinator_produces_real_signal_with_real_evidence() -> None
     coordinator = build_coordinator(registry)  # REAL coordinator, REAL dispatcher
     assert isinstance(coordinator, StrategyExecutionCoordinator)
 
-    bars = _strong_uptrend_bars(60)  # >= 34-bar MACD warmup, plenty of margin
+    bars = _flat_then_breakout_bars(90)  # Checkpoint 64.99: see that generator's own docstring
     config = _default_config()
 
     result = coordinator.run(bars, {STRATEGY_ID: config})
@@ -302,11 +346,17 @@ def test_efgh_real_coordinator_produces_real_signal_with_real_evidence() -> None
     assert signal.timestamp == bars[-1].timestamp
     assert signal.price == bars[-1].close
 
-    # Real canonical feature consumption: evidence must be the 7 REAL
-    # FeatureValues, matching the field_ids declared by
-    # required_features(), sourced from the real dispatcher.
+    # Real canonical feature consumption: evidence must be the REAL
+    # FeatureValues for every required_features() field_id EXCEPT
+    # `atr_14` (TradePlan-only, never a signal condition - see
+    # `evaluate()`'s own comment), PLUS the adapter-owned
+    # `setup_quality_score` (Checkpoint 64.99 - not a canonical feature,
+    # carried in `evidence` as the documented extension point; see
+    # `gainz_compatible_research.py`'s own "SCORING" header section).
     evidence_names = {fv.feature_name for fv in signal.evidence}
-    assert evidence_names == set(strategy.required_features(config))
+    expected_names = set(strategy.required_features(config)) - {"atr_14"}
+    expected_names.add("gainz_alpha_setup_quality_score")
+    assert evidence_names == expected_names
     for fv in signal.evidence:
         assert isinstance(fv, FeatureValue)
         assert fv.instrument_id == IID
@@ -327,39 +377,20 @@ def test_p_trade_plan_reuses_existing_tradeplan_contract() -> None:
     registry.activate(STRATEGY_ID)
     coordinator = build_coordinator(registry)
 
-    bars = _strong_uptrend_bars(60)
-    # Supply atr_14 too so build_trade_plan's advisory ATR lookup succeeds -
-    # exercised by directly calling build_trade_plan with a manually
-    # augmented feature_values dict fed by the SAME real dispatcher.
-    strategy = GainzCompatibleResearchStrategy()
+    bars = _flat_then_breakout_bars(90)  # Checkpoint 64.99: see that generator's own docstring
     config = _default_config()
     result = coordinator.run(bars, {STRATEGY_ID: config})
     assert len(result.trade_plans) == 1
-    # Coordinator did not supply atr_14 (not in required_features), so
-    # advisory plan is None -- proven NOT fabricated.
-    assert result.trade_plans[0] is None
-
-    # Now prove build_trade_plan DOES produce a real, existing-contract
-    # TradePlan when ATR is available (advisory metadata path).
-    from intraday.signal_intelligence.feature_engine.atr import compute_average_true_range
-    from intraday.signal_intelligence.feature_engine.definitions import (
-        AverageTrueRangeDefinition,
-    )
-
-    atr_series = compute_average_true_range(AverageTrueRangeDefinition(14), bars)
-    atr_latest = next(fv for fv in atr_series if fv.timestamp == bars[-1].timestamp)
-    feature_values = {
-        fid: next(
-            fv for fv in compute_feature_series(fid, bars) if fv.timestamp == bars[-1].timestamp
-        )
-        for fid in strategy.required_features(config)
-    }
-    feature_values["atr_14"] = atr_latest
-    signal = strategy.evaluate(bars[-1], feature_values, config)
-    assert signal is not None
-    plan = strategy.build_trade_plan(bars[-1], feature_values, config, signal)
+    # Checkpoint 64.99: `atr_14` was added to `required_features()`
+    # itself (TradePlan-only - never a signal condition, see
+    # `evaluate()`'s own comment) specifically so the coordinator
+    # supplies it through the SAME shared-feature-computation path every
+    # other strategy uses - a real, existing-contract TradePlan is now
+    # produced directly by the coordinator, never fabricated.
+    plan = result.trade_plans[0]
     assert plan is not None
     assert type(plan) is TradePlan  # exact contract type, not a subclass
+    signal = result.signals[0]
     assert plan.entry_price == signal.price
     assert plan.stop_loss is not None
     assert plan.target_1 is not None

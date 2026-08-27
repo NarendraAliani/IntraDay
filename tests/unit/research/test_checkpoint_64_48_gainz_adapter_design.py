@@ -560,6 +560,15 @@ def test_k_no_gainz_reference_file_exists_in_repo() -> None:
         # already-allowed `gainz_compatible_research.py` artifact, no
         # new Gainz-named module was added.
         "test_checkpoint_64_52_database_first_backtest.py",
+        # Checkpoint 64.99: the first REAL Gainz Research Adapter
+        # (profile "alpha") - a research-only strategy honestly labeled
+        # throughout as NOT authentic GainzAlgo (see its own module
+        # header). Reuses the already-allowed `gainz_compatible_
+        # research.py` module name above; this adds its dedicated test
+        # file and the read-only reference artifact its module header
+        # discusses (never imported/modified - see that header's
+        # "HONESTY NOTICE").
+        "test_checkpoint_64_99_gainz_research_adapter.py",
         # Checkpoint 64.73: the daily-archive architecture doc's own
         # Phase 11 requirement ("explicit statement that Gainz remains
         # disabled") - a single safety-disclaimer sentence, not a
