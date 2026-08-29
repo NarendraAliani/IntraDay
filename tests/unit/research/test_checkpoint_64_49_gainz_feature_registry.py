@@ -745,6 +745,29 @@ def test_zz_no_real_gainz_source_file_exists() -> None:
         # (profile "alpha" only) and its dedicated test file - see that
         # module's own "HONESTY NOTICE" header.
         "64_99",
+        # Checkpoint 65.03/65.04/65.05: Market Context Intelligence
+        # feature modules (price_vs_ma_pct, rebound_candidate,
+        # ma_divergence) and their dedicated test files. Each mentions
+        # "Gainz" only to honestly disclaim "GENERIC feature, NOT
+        # Gainz-specific" / "NOT verified against a Gainz reference" -
+        # never to port Gainz math or connect to Gainz. See each
+        # module's own docstring and MARKET_CONTEXT_INTELLIGENCE.md.
+        "65_03",
+        "65_04",
+        "65_05",
+        "rebound_candidate.py",
+        "ma_divergence.py",
+        "MARKET_CONTEXT_INTELLIGENCE.md",
+        # Checkpoint 65.07/65.08: the categorical-feature-value contract
+        # and the market_regime feature it enables. Each mentions "Gainz"
+        # only to honestly disclaim "NOT Gainz-specific" / to note the
+        # pre-existing gainz_signal_engine_reference.py `regime` label is
+        # non-authoritative prior art - never to port Gainz math or
+        # connect market_regime to Gainz. See each module's own docstring
+        # and MARKET_CONTEXT_INTELLIGENCE.md.
+        "65_07",
+        "65_08",
+        "market_regime.py",
     )
     for hit in hits:
         assert any(

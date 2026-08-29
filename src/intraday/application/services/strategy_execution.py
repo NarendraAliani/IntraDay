@@ -42,7 +42,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from intraday.application.services.market_data import HistoricalMarketDataService
-from intraday.domain.feature.contracts import FeatureValue
+from intraday.domain.feature.contracts import AnyFeatureValue, FeatureValue
 from intraday.domain.market_data.contracts import Bar
 from intraday.domain.shared_kernel.contracts import InstrumentId, Timeframe
 from intraday.signal_intelligence.feature_engine.atr import compute_average_true_range
@@ -63,7 +63,13 @@ from intraday.signal_intelligence.feature_engine.definitions import (
     DirectionalMovementDefinition,
     ExponentialMovingAverageDefinition,
     MacdHistogramDefinition,
+    MaDivergenceEmaDefinition,
+    MaDivergenceSmaDefinition,
+    MarketRegimeDefinition,
     PriceDeltaDefinition,
+    PriceVsMaPctEmaDefinition,
+    PriceVsMaPctSmaDefinition,
+    ReboundCandidateDefinition,
     RelativeStrengthIndexDefinition,
     RelativeVolumeDefinition,
     SimpleMovingAverageDefinition,
@@ -76,7 +82,19 @@ from intraday.signal_intelligence.feature_engine.directional_movement import (
 from intraday.signal_intelligence.feature_engine.ema import compute_exponential_moving_average
 from intraday.signal_intelligence.feature_engine.field_registry import parse_feature_name
 from intraday.signal_intelligence.feature_engine.macd_histogram import compute_macd_histogram
+from intraday.signal_intelligence.feature_engine.ma_divergence import (
+    compute_ma_divergence_ema,
+    compute_ma_divergence_sma,
+)
+from intraday.signal_intelligence.feature_engine.market_regime import compute_market_regime
 from intraday.signal_intelligence.feature_engine.price_delta import compute_price_delta
+from intraday.signal_intelligence.feature_engine.price_vs_ma_pct import (
+    compute_price_vs_ma_pct_ema,
+    compute_price_vs_ma_pct_sma,
+)
+from intraday.signal_intelligence.feature_engine.rebound_candidate import (
+    compute_rebound_candidate,
+)
 from intraday.signal_intelligence.feature_engine.relative_volume import compute_relative_volume
 from intraday.signal_intelligence.feature_engine.rsi import compute_relative_strength_index
 from intraday.signal_intelligence.feature_engine.sma import compute_simple_moving_average
@@ -88,19 +106,28 @@ from intraday.trading_engine.strategy_execution.coordinator import (
 from intraday.trading_engine.strategy_execution.registry import StrategyRegistry
 
 
-def compute_feature_series(field_id: str, bars: tuple[Bar, ...]) -> tuple[FeatureValue, ...]:
+def compute_feature_series(field_id: str, bars: tuple[Bar, ...]) -> tuple[AnyFeatureValue, ...]:
     """Dispatches one "sma_20"/"ema_9"/"atr_14"/"rsi_14"/"adx_14"/
     "plus_di_14"/"minus_di_14"/"relative_volume_20"/
-    "macd_hist_12_26_9"/"candle_body_ratio"-shaped field_id to the
-    matching existing compute function. Raises ValueError for anything
-    else - callers only ever pass field_ids strategies themselves
-    declared via `required_features()` (raw OHLCV fields are read
-    straight off `Bar`, never computed).
+    "macd_hist_12_26_9"/"candle_body_ratio"/"market_regime_20_9_20"-shaped
+    field_id to the matching existing compute function. Raises ValueError
+    for anything else - callers only ever pass field_ids strategies
+    themselves declared via `required_features()` (raw OHLCV fields are
+    read straight off `Bar`, never computed).
 
     Checkpoint 64.49 adds RSI/ADX/+DI/-DI/Relative Volume/MACD Histogram/
     Candle Body Ratio dispatch, following the exact same parse-then-
     construct-a-Definition-then-call-the-pure-function shape SMA/EMA/ATR
-    already established - no second dispatch mechanism introduced."""
+    already established - no second dispatch mechanism introduced.
+
+    Checkpoint 65.08: return type widened from `tuple[FeatureValue, ...]`
+    to `tuple[AnyFeatureValue, ...]` (a minimal, generic typing correction
+    - the union type itself was already introduced by 65.07 for exactly
+    this seam) so the new `market_regime` branch can return
+    `tuple[CategoricalFeatureValue, ...]`. Every existing numeric branch
+    below is completely unchanged - each still returns its own
+    `tuple[FeatureValue, ...]`, which `AnyFeatureValue` accepts without
+    any behavioural change."""
     if field_id == CANDLE_BODY_RATIO_FIELD_ID:
         return compute_candle_body_ratio(bars)
     if field_id == BULLISH_ENGULFING_FIELD_ID:
@@ -143,6 +170,18 @@ def compute_feature_series(field_id: str, bars: tuple[Bar, ...]) -> tuple[Featur
         return compute_macd_histogram(MacdHistogramDefinition(*params), bars)
     if kind == "price_delta":
         return compute_price_delta(PriceDeltaDefinition(params[0]), bars)
+    if kind == "price_vs_ma_pct_sma":
+        return compute_price_vs_ma_pct_sma(PriceVsMaPctSmaDefinition(params[0]), bars)
+    if kind == "price_vs_ma_pct_ema":
+        return compute_price_vs_ma_pct_ema(PriceVsMaPctEmaDefinition(params[0]), bars)
+    if kind == "rebound_candidate":
+        return compute_rebound_candidate(ReboundCandidateDefinition(*params), bars)
+    if kind == "ma_divergence_sma":
+        return compute_ma_divergence_sma(MaDivergenceSmaDefinition(*params), bars)
+    if kind == "ma_divergence_ema":
+        return compute_ma_divergence_ema(MaDivergenceEmaDefinition(*params), bars)
+    if kind == "market_regime":
+        return compute_market_regime(MarketRegimeDefinition(*params), bars)
     raise ValueError(f"unrecognized computed field_id {field_id!r}")
 
 

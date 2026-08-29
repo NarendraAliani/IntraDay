@@ -35,7 +35,11 @@ from intraday.signal_intelligence.feature_engine.definitions import (
     ExponentialMovingAverageDefinition,
     SimpleMovingAverageDefinition,
 )
+from intraday.signal_intelligence.feature_engine.definitions import PriceVsMaPctSmaDefinition
 from intraday.signal_intelligence.feature_engine.ema import compute_exponential_moving_average
+from intraday.signal_intelligence.feature_engine.price_vs_ma_pct import (
+    compute_price_vs_ma_pct_sma,
+)
 from intraday.signal_intelligence.feature_engine.sma import compute_simple_moving_average
 
 INSTRUMENT = "NSE:TESTCO"
@@ -43,6 +47,12 @@ BASE = datetime(2026, 1, 5, 3, 45, tzinfo=UTC)
 
 
 def _compute(field_id: str, bars: tuple[Bar, ...]):
+    # Checkpoint 65.10: sma_trend_filter now requires price_vs_ma_pct_sma_N
+    # instead of sma_N - handle the multi-word kind before the generic
+    # single-word partition below.
+    if field_id.startswith("price_vs_ma_pct_sma_"):
+        lookback = int(field_id[len("price_vs_ma_pct_sma_") :])
+        return compute_price_vs_ma_pct_sma(PriceVsMaPctSmaDefinition(lookback), bars)
     kind, _, raw = field_id.partition("_")
     lookback = int(raw)
     if kind == "sma":

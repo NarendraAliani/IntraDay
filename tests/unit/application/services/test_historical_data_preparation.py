@@ -41,7 +41,9 @@ class _FakeWriteRepository:
         self._read = read_repository
         self.upsert_calls = 0
 
-    def bulk_upsert(self, bars: tuple[Bar, ...], *, source: str) -> int:  # noqa: ARG002
+    def bulk_upsert(  # noqa: ARG002
+        self, bars: tuple[Bar, ...], *, source: str, provenance: str = "UNKNOWN"
+    ) -> int:
         self.upsert_calls += 1
         for bar in bars:
             self._read.timestamps.add(bar.timestamp)

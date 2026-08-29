@@ -281,3 +281,314 @@ class PriceDeltaDefinition:
     @property
     def feature_version(self) -> Version:
         return FEATURE_ENGINE_VERSION
+
+
+# ---------------------------------------------------------------------------
+# Checkpoint 65.03 additions - Price vs Moving Average Percentage. Two
+# identities (SMA-backed, EMA-backed), same one-off-dataclass-per-
+# identity pattern as every definition above. See
+# `signal_intelligence.feature_engine.price_vs_ma_pct` module docstring
+# for the full formula/warm-up/design-decision documentation, in
+# particular why MA type is folded into the identity's KIND rather than
+# a numeric parameter (the existing `parse_feature_name()` convention
+# only strips a trailing run of INTEGER params).
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class PriceVsMaPctSmaDefinition:
+    """Identifies one parameterized `price_vs_ma_pct` computed against the
+    canonical SMA - `feature_name` "price_vs_ma_pct_sma_20" for
+    `PriceVsMaPctSmaDefinition(20)`. Delegates its actual moving average
+    to `SimpleMovingAverageDefinition(lookback)` (via `sma_definition`) -
+    no second moving-average engine, no duplicated warm-up rule."""
+
+    lookback: int
+
+    def __post_init__(self) -> None:
+        _validate_lookback(self.lookback, owner="PriceVsMaPctSmaDefinition")
+
+    @property
+    def sma_definition(self) -> SimpleMovingAverageDefinition:
+        return SimpleMovingAverageDefinition(self.lookback)
+
+    @property
+    def feature_name(self) -> str:
+        return f"price_vs_ma_pct_sma_{self.lookback}"
+
+    @property
+    def feature_version(self) -> Version:
+        return FEATURE_ENGINE_VERSION
+
+
+@dataclass(frozen=True, slots=True)
+class PriceVsMaPctEmaDefinition:
+    """Identifies one parameterized `price_vs_ma_pct` computed against the
+    canonical EMA - `feature_name` "price_vs_ma_pct_ema_20" for
+    `PriceVsMaPctEmaDefinition(20)`. Delegates its actual moving average
+    to `ExponentialMovingAverageDefinition(lookback)` (via
+    `ema_definition`) - no second moving-average engine, no duplicated
+    warm-up rule."""
+
+    lookback: int
+
+    def __post_init__(self) -> None:
+        _validate_lookback(self.lookback, owner="PriceVsMaPctEmaDefinition")
+
+    @property
+    def ema_definition(self) -> ExponentialMovingAverageDefinition:
+        return ExponentialMovingAverageDefinition(self.lookback)
+
+    @property
+    def feature_name(self) -> str:
+        return f"price_vs_ma_pct_ema_{self.lookback}"
+
+    @property
+    def feature_version(self) -> Version:
+        return FEATURE_ENGINE_VERSION
+
+
+# ---------------------------------------------------------------------------
+# Checkpoint 65.04 addition - Short-Term Rebound Candidate. A generic
+# MARKET CONTEXT feature (NOT a strategy, NOT a BUY/SELL signal) that
+# composes THREE already-existing canonical features
+# (`price_delta`, `rsi`, `bullish_engulfing`) rather than recalculating
+# any of their mathematics - see
+# `signal_intelligence.feature_engine.rebound_candidate` module docstring
+# for the full rule/rationale, and
+# `docs/research/MARKET_CONTEXT_INTELLIGENCE.md`'s Short-Term Rebound
+# section for the research-level documentation.
+#
+# All three parameters are numeric, so this identity fits the EXISTING
+# `parse_feature_name()` trailing-integer-suffix convention exactly like
+# `macd_hist_12_26_9` - no categorical-parameter problem like MA-type
+# arises here (unlike `price_vs_ma_pct`), so only ONE field identity is
+# needed, not two.
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Checkpoint 65.05 additions - Moving Average Divergence. Two identities
+# (SMA-vs-SMA, EMA-vs-EMA) - same "categorical MA-type folded into the
+# KIND, numeric lookbacks stay as trailing parameters" pattern 65.03
+# established for `price_vs_ma_pct`. See
+# `signal_intelligence.feature_engine.ma_divergence` module docstring for
+# the full formula/warm-up/MA-type-support-decision documentation - in
+# particular why mixed SMA/EMA pairs are NOT added as a third/fourth
+# identity this checkpoint.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class MaDivergenceSmaDefinition:
+    """Identifies one parameterized `ma_divergence` computed between two
+    canonical SMAs - `feature_name` "ma_divergence_sma_9_20" for
+    `MaDivergenceSmaDefinition(fast_lookback=9, slow_lookback=20)`.
+    Delegates both moving averages to `SimpleMovingAverageDefinition` (via
+    `fast_sma_definition`/`slow_sma_definition`) - no second moving-average
+    engine, no duplicated warm-up rule.
+
+    `fast_lookback` must be strictly less than `slow_lookback` - fast and
+    slow are never silently swapped."""
+
+    fast_lookback: int
+    slow_lookback: int
+
+    def __post_init__(self) -> None:
+        _validate_lookback(self.fast_lookback, owner="MaDivergenceSmaDefinition.fast_lookback")
+        _validate_lookback(self.slow_lookback, owner="MaDivergenceSmaDefinition.slow_lookback")
+        if self.fast_lookback >= self.slow_lookback:
+            raise InvalidLookbackError(
+                "MaDivergenceSmaDefinition.fast_lookback must be strictly less than "
+                f"slow_lookback, got fast={self.fast_lookback} slow={self.slow_lookback}"
+            )
+
+    @property
+    def fast_sma_definition(self) -> SimpleMovingAverageDefinition:
+        return SimpleMovingAverageDefinition(self.fast_lookback)
+
+    @property
+    def slow_sma_definition(self) -> SimpleMovingAverageDefinition:
+        return SimpleMovingAverageDefinition(self.slow_lookback)
+
+    @property
+    def feature_name(self) -> str:
+        return f"ma_divergence_sma_{self.fast_lookback}_{self.slow_lookback}"
+
+    @property
+    def feature_version(self) -> Version:
+        return FEATURE_ENGINE_VERSION
+
+
+@dataclass(frozen=True, slots=True)
+class MaDivergenceEmaDefinition:
+    """Identifies one parameterized `ma_divergence` computed between two
+    canonical EMAs - `feature_name` "ma_divergence_ema_9_20" for
+    `MaDivergenceEmaDefinition(fast_lookback=9, slow_lookback=20)`.
+    Delegates both moving averages to `ExponentialMovingAverageDefinition`
+    (via `fast_ema_definition`/`slow_ema_definition`) - no second moving-
+    average engine, no duplicated warm-up rule.
+
+    `fast_lookback` must be strictly less than `slow_lookback` - fast and
+    slow are never silently swapped."""
+
+    fast_lookback: int
+    slow_lookback: int
+
+    def __post_init__(self) -> None:
+        _validate_lookback(self.fast_lookback, owner="MaDivergenceEmaDefinition.fast_lookback")
+        _validate_lookback(self.slow_lookback, owner="MaDivergenceEmaDefinition.slow_lookback")
+        if self.fast_lookback >= self.slow_lookback:
+            raise InvalidLookbackError(
+                "MaDivergenceEmaDefinition.fast_lookback must be strictly less than "
+                f"slow_lookback, got fast={self.fast_lookback} slow={self.slow_lookback}"
+            )
+
+    @property
+    def fast_ema_definition(self) -> ExponentialMovingAverageDefinition:
+        return ExponentialMovingAverageDefinition(self.fast_lookback)
+
+    @property
+    def slow_ema_definition(self) -> ExponentialMovingAverageDefinition:
+        return ExponentialMovingAverageDefinition(self.slow_lookback)
+
+    @property
+    def feature_name(self) -> str:
+        return f"ma_divergence_ema_{self.fast_lookback}_{self.slow_lookback}"
+
+    @property
+    def feature_version(self) -> Version:
+        return FEATURE_ENGINE_VERSION
+
+
+@dataclass(frozen=True, slots=True)
+class ReboundCandidateDefinition:
+    """Identifies one parameterized `rebound_candidate` -
+    `feature_name` "rebound_candidate_10_14_30" for
+    `ReboundCandidateDefinition(delta_lookback=10, rsi_lookback=14,
+    rsi_oversold_threshold=30)`. Delegates its three dependency
+    calculations to `PriceDeltaDefinition(delta_lookback)`,
+    `RelativeStrengthIndexDefinition(rsi_lookback)`, and the existing
+    `compute_bullish_engulfing` (no parameters of its own) - no
+    duplicated math, no second warm-up rule.
+
+    `rsi_oversold_threshold` is a plain integer in [0, 100] (RSI's own
+    native range) compared against the RSI dependency's raw output - it
+    is a CONDITION parameter, not a Gainz weight or an optimized
+    threshold (none of this checkpoint's default values were tuned
+    against any performance data - see the feature module's own
+    docstring for the RESEARCH DEFAULT classification)."""
+
+    delta_lookback: int
+    rsi_lookback: int
+    rsi_oversold_threshold: int
+
+    def __post_init__(self) -> None:
+        _validate_lookback(self.delta_lookback, owner="ReboundCandidateDefinition.delta_lookback")
+        _validate_lookback(self.rsi_lookback, owner="ReboundCandidateDefinition.rsi_lookback")
+        if isinstance(self.rsi_oversold_threshold, bool) or not isinstance(
+            self.rsi_oversold_threshold, int
+        ):
+            raise InvalidLookbackError(
+                "ReboundCandidateDefinition.rsi_oversold_threshold must be an int, "
+                f"got {self.rsi_oversold_threshold!r}"
+            )
+        if not (0 <= self.rsi_oversold_threshold <= 100):
+            raise InvalidLookbackError(
+                "ReboundCandidateDefinition.rsi_oversold_threshold must be in [0, 100], "
+                f"got {self.rsi_oversold_threshold}"
+            )
+
+    @property
+    def price_delta_definition(self) -> PriceDeltaDefinition:
+        return PriceDeltaDefinition(self.delta_lookback)
+
+    @property
+    def rsi_definition(self) -> RelativeStrengthIndexDefinition:
+        return RelativeStrengthIndexDefinition(self.rsi_lookback)
+
+    @property
+    def feature_name(self) -> str:
+        return (
+            f"rebound_candidate_{self.delta_lookback}_{self.rsi_lookback}_"
+            f"{self.rsi_oversold_threshold}"
+        )
+
+    @property
+    def feature_version(self) -> Version:
+        return FEATURE_ENGINE_VERSION
+
+
+# ---------------------------------------------------------------------------
+# Checkpoint 65.08 addition - Market Regime. The first PRODUCTION
+# CATEGORICAL feature identity, using the `CategoricalFeatureValue`/
+# `FieldDataType.CATEGORICAL` seam Checkpoint 65.07 built. Implements the
+# rule already DESIGNED (not re-derived) in 65.06 - see
+# `signal_intelligence.feature_engine.market_regime` module docstring for
+# the full rule/warm-up/no-lookahead/edge-case documentation, and
+# `docs/research/MARKET_CONTEXT_INTELLIGENCE.md` section 7&8.
+#
+# THREE numeric parameters (`adx_min`, `ema_fast_lookback`,
+# `ema_slow_lookback`) fit the existing `parse_feature_name()` trailing-
+# integer-suffix convention exactly like `rebound_candidate`'s three
+# parameters - no categorical-parameter problem arises (unlike
+# `price_vs_ma_pct`'s MA-type slot), so only ONE field identity is needed.
+# The canonical ADX/+DI/-DI smoothing period is FIXED at 14 (not a
+# parameter of this definition) - see the feature module's own docstring
+# for why.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class MarketRegimeDefinition:
+    """Identifies one parameterized `market_regime` - `feature_name`
+    "market_regime_20_9_20" for `MarketRegimeDefinition(adx_min=20,
+    ema_fast_lookback=9, ema_slow_lookback=20)`. Delegates its EMA legs to
+    `ExponentialMovingAverageDefinition` and its ADX/+DI/-DI dependency to
+    `DirectionalMovementDefinition(14)` (fixed - see
+    `market_regime.CANONICAL_ADX_DI_LOOKBACK`) - no second moving-average
+    or directional-movement engine, no duplicated warm-up rule.
+
+    `adx_min` is a RESEARCH DEFAULT THRESHOLD supplied explicitly by every
+    caller - never auto-applied, never optimized against any performance
+    data by this checkpoint (see the feature module's own docstring).
+    `ema_fast_lookback` must be strictly less than `ema_slow_lookback` -
+    fast and slow are never silently swapped."""
+
+    adx_min: int
+    ema_fast_lookback: int
+    ema_slow_lookback: int
+
+    def __post_init__(self) -> None:
+        if isinstance(self.adx_min, bool) or not isinstance(self.adx_min, int):
+            raise InvalidLookbackError(
+                f"MarketRegimeDefinition.adx_min must be an int, got {self.adx_min!r}"
+            )
+        if self.adx_min <= 0:
+            raise InvalidLookbackError(
+                f"MarketRegimeDefinition.adx_min must be positive, got {self.adx_min}"
+            )
+        _validate_lookback(self.ema_fast_lookback, owner="MarketRegimeDefinition.ema_fast_lookback")
+        _validate_lookback(self.ema_slow_lookback, owner="MarketRegimeDefinition.ema_slow_lookback")
+        if self.ema_fast_lookback >= self.ema_slow_lookback:
+            raise InvalidLookbackError(
+                "MarketRegimeDefinition.ema_fast_lookback must be strictly less than "
+                f"ema_slow_lookback, got fast={self.ema_fast_lookback} "
+                f"slow={self.ema_slow_lookback}"
+            )
+
+    @property
+    def ema_fast_definition(self) -> ExponentialMovingAverageDefinition:
+        return ExponentialMovingAverageDefinition(self.ema_fast_lookback)
+
+    @property
+    def ema_slow_definition(self) -> ExponentialMovingAverageDefinition:
+        return ExponentialMovingAverageDefinition(self.ema_slow_lookback)
+
+    @property
+    def feature_name(self) -> str:
+        return f"market_regime_{self.adx_min}_{self.ema_fast_lookback}_{self.ema_slow_lookback}"
+
+    @property
+    def feature_version(self) -> Version:
+        return FEATURE_ENGINE_VERSION

@@ -95,7 +95,24 @@ def _prepare_if_needed(config: BacktestConfiguration) -> None:
     instrument panel - the same coverage-check/fetch-missing/persist/
     verify sequence, just for one instrument inline instead of a
     polled background run, since this view is deliberately still
-    synchronous (Checkpoint 27's original design)."""
+    synchronous (Checkpoint 27's original design).
+
+    Checkpoint 65.12 note (65.01's root-cause bug #2): this still
+    unconditionally constructs `SyntheticHistoricalBarProvider()` for
+    every non-fixture instrument, because NO real Dhan historical-
+    candle adapter exists in this codebase yet — there is nothing else
+    to select between (Part F: building one is out of this
+    checkpoint's offline, data-foundation scope). What 65.12 fixes is
+    the SILENT part of the bug: `SyntheticHistoricalBarProvider` now
+    declares `provenance = PROVENANCE_SYNTHETIC_TEST`
+    (`domain.market_data.provenance`) and
+    `HistoricalDataPreparationService` stamps every bar it writes with
+    that label honestly, instead of the previous undifferentiated
+    `source="API_FETCH"` that looked identical to genuine data. The
+    day a real adapter exists, selecting it here (mirroring the
+    `SYNTHETIC_INSTRUMENT_ID` branch in `_service()` above) is the
+    smallest remaining change — no repository, service, or backtest
+    code needs to change again."""
     if config.instrument_id == SYNTHETIC_INSTRUMENT_ID:
         return
     bar_repository = DjangoHistoricalBarRepository()

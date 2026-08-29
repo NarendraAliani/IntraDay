@@ -92,6 +92,17 @@ def _fake_compute(field_id: str, bars: tuple[Bar, ...]):
     )
     from intraday.signal_intelligence.feature_engine.sma import compute_simple_moving_average
 
+    if field_id.startswith("price_vs_ma_pct_sma_"):
+        from intraday.signal_intelligence.feature_engine.definitions import (
+            PriceVsMaPctSmaDefinition,
+        )
+        from intraday.signal_intelligence.feature_engine.price_vs_ma_pct import (
+            compute_price_vs_ma_pct_sma,
+        )
+
+        lookback = int(field_id[len("price_vs_ma_pct_sma_") :])
+        return compute_price_vs_ma_pct_sma(PriceVsMaPctSmaDefinition(lookback), bars)
+
     kind, _, raw_lookback = field_id.partition("_")
     lookback = int(raw_lookback)
     if kind == "sma":
@@ -167,6 +178,8 @@ def test_field_registry_every_field_has_a_real_dispatchable_implementation() -> 
         "plus_di": "14",
         "minus_di": "14",
         "relative_volume": "20",
+        "price_vs_ma_pct_sma": "20",
+        "price_vs_ma_pct_ema": "20",
     }
 
     fields = list_fields()
@@ -188,6 +201,14 @@ def test_field_registry_every_field_has_a_real_dispatchable_implementation() -> 
             concrete_field_id = field_def.field_id
         elif field_def.field_id == "price_delta":
             concrete_field_id = "price_delta_10"
+        elif field_def.field_id == "rebound_candidate":
+            concrete_field_id = "rebound_candidate_10_10_40"
+        elif field_def.field_id == "ma_divergence_sma":
+            concrete_field_id = "ma_divergence_sma_2_5"
+        elif field_def.field_id == "ma_divergence_ema":
+            concrete_field_id = "ma_divergence_ema_2_5"
+        elif field_def.field_id == "market_regime":
+            concrete_field_id = "market_regime_20_9_20"
         else:
             assert field_def.field_id in lookback_by_kind, (
                 f"{field_def.field_id!r} is registered but this test has no "
@@ -484,14 +505,78 @@ def test_sma_trend_filter_neutral_within_band() -> None:
     )
     bars = _flat_bars(10)
     from intraday.signal_intelligence.feature_engine.definitions import (
-        SimpleMovingAverageDefinition,
+        PriceVsMaPctSmaDefinition,
     )
-    from intraday.signal_intelligence.feature_engine.sma import compute_simple_moving_average
+    from intraday.signal_intelligence.feature_engine.price_vs_ma_pct import (
+        compute_price_vs_ma_pct_sma,
+    )
 
-    sma = compute_simple_moving_average(SimpleMovingAverageDefinition(5), bars)
-    signal = strategy.evaluate(bars[-1], {"sma_5": sma[-1]}, config)
+    price_vs_ma_pct = compute_price_vs_ma_pct_sma(PriceVsMaPctSmaDefinition(5), bars)
+    signal = strategy.evaluate(bars[-1], {"price_vs_ma_pct_sma_5": price_vs_ma_pct[-1]}, config)
     assert signal is not None
     assert signal.direction == StrategyDirection.NEUTRAL
+
+
+def test_sma_trend_filter_returns_none_when_context_feature_missing() -> None:
+    """Checkpoint 65.10 Part H: unavailable price_vs_ma_pct_sma must
+    behave exactly as unavailable sma_N did before - no signal, no
+    silent neutral/0 default."""
+    strategy = SmaTrendFilterStrategy()
+    config = StrategyConfigurationValues(
+        "sma_trend_filter", "v1", "v1", "v1", {"lookback": 5, "band_percent": Decimal("5")}
+    )
+    bars = _flat_bars(10)
+    signal = strategy.evaluate(bars[-1], {}, config)
+    assert signal is None
+
+
+def test_sma_trend_filter_bullish_and_bearish_from_context_feature() -> None:
+    """Checkpoint 65.10: proves the strategy's direction is genuinely
+    driven by the canonical price_vs_ma_pct_sma value (fraction units),
+    not a hardcoded/coincidental result, for both directions."""
+    from decimal import Decimal as D
+
+    from intraday.signal_intelligence.feature_engine.definitions import (
+        PriceVsMaPctSmaDefinition,
+    )
+
+    strategy = SmaTrendFilterStrategy()
+    config = StrategyConfigurationValues(
+        "sma_trend_filter", "v1", "v1", "v1", {"lookback": 5, "band_percent": Decimal("1")}
+    )
+    bars = _flat_bars(10)
+    definition = PriceVsMaPctSmaDefinition(5)
+
+    from intraday.domain.feature.contracts import FeatureValue
+
+    bullish_feature = FeatureValue(
+        feature_name=definition.feature_name,
+        feature_version=definition.feature_version,
+        instrument_id=bars[-1].instrument_id,
+        timeframe=bars[-1].timeframe,
+        timestamp=bars[-1].timestamp,
+        value=D("0.02"),  # 2% above SMA, well past the 1% band
+    )
+    bearish_feature = FeatureValue(
+        feature_name=definition.feature_name,
+        feature_version=definition.feature_version,
+        instrument_id=bars[-1].instrument_id,
+        timeframe=bars[-1].timeframe,
+        timestamp=bars[-1].timestamp,
+        value=D("-0.02"),
+    )
+
+    bullish_signal = strategy.evaluate(
+        bars[-1], {"price_vs_ma_pct_sma_5": bullish_feature}, config
+    )
+    bearish_signal = strategy.evaluate(
+        bars[-1], {"price_vs_ma_pct_sma_5": bearish_feature}, config
+    )
+
+    assert bullish_signal is not None and bullish_signal.direction == StrategyDirection.BULLISH
+    assert bearish_signal is not None and bearish_signal.direction == StrategyDirection.BEARISH
+    assert bullish_signal.evidence == (bullish_feature,)
+    assert bearish_signal.evidence == (bearish_feature,)
 
 
 def test_atr_volatility_breakout_bullish_on_large_upward_move() -> None:
@@ -711,7 +796,10 @@ def test_three_strategies_have_distinct_required_features() -> None:
     assert len(sma_features) == 1  # single-feature-vs-price shape
     assert len(atr_features) == 1  # volatility-threshold shape
     assert {f[:3] for f in ema_features} == {"ema"}
-    assert sma_features[0].startswith("sma")
+    # Checkpoint 65.10: sma_trend_filter now depends on the canonical
+    # price_vs_ma_pct_sma Market Context feature rather than a raw sma_N
+    # feature - see sma_trend_filter.py module docstring.
+    assert sma_features[0].startswith("price_vs_ma_pct_sma")
     assert atr_features[0].startswith("atr")
 
 
@@ -851,7 +939,9 @@ def test_coordinator_scenario_c_shared_feature_computed_once() -> None:
     }
     result = coordinator.run(_rising_bars(20), configs)
 
-    assert call_log.count("sma_5") == 1  # computed once, reused for both strategies
+    # Checkpoint 65.10: sma_trend_filter now requires price_vs_ma_pct_sma_5
+    # instead of sma_5.
+    assert call_log.count("price_vs_ma_pct_sma_5") == 1  # computed once, reused for both
     assert len(result.signals) == 2
 
 
@@ -870,7 +960,9 @@ def test_coordinator_scenario_d_only_required_features_are_computed() -> None:
     coordinator.run(_rising_bars(20), configs)
 
     assert set(call_log) == {"ema_3", "ema_6", "atr_5"}
-    assert "sma_5" not in call_log  # sma_trend_filter was never activated
+    # Checkpoint 65.10: sma_trend_filter's required feature is now
+    # price_vs_ma_pct_sma_5 instead of sma_5.
+    assert "price_vs_ma_pct_sma_5" not in call_log  # sma_trend_filter was never activated
 
 
 def test_coordinator_returns_no_signals_for_empty_bars() -> None:

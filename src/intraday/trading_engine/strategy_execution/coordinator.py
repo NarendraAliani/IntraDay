@@ -26,7 +26,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from intraday.domain.feature.contracts import FeatureValue
+from intraday.domain.feature.contracts import AnyFeatureValue, FeatureValue
 from intraday.domain.market_data.contracts import Bar
 from intraday.trading_engine.strategy_execution.contracts import (
     StrategyConfigurationValues,
@@ -35,7 +35,18 @@ from intraday.trading_engine.strategy_execution.contracts import (
 )
 from intraday.trading_engine.strategy_execution.registry import StrategyRegistry
 
-FeatureSeriesComputer = Callable[[str, tuple[Bar, ...]], tuple[FeatureValue, ...]]
+# Checkpoint 65.07: widened from `tuple[FeatureValue, ...]` to
+# `tuple[AnyFeatureValue, ...]` (`FeatureValue | CategoricalFeatureValue`)
+# so an injected dispatcher CAN return categorical feature series in a
+# future checkpoint without this seam needing another change. This
+# coordinator never reads `.value`/`.category` itself (it only threads
+# whatever the dispatcher returns through to `Strategy.evaluate()`), so
+# widening this type alias does not weaken any existing numeric-only
+# caller - `compute_feature_series()` in `application.services.
+# strategy_execution` still returns exactly `tuple[FeatureValue, ...]`
+# this checkpoint (a valid narrower member of the union), and no
+# categorical dispatch branch is added here or there.
+FeatureSeriesComputer = Callable[[str, tuple[Bar, ...]], tuple[AnyFeatureValue, ...]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,7 +91,7 @@ class StrategyExecutionCoordinator:
 
         # Compute the union of required feature field_ids across all
         # active strategies exactly once each (shared-feature reuse).
-        feature_series_cache: dict[str, tuple[FeatureValue, ...]] = {}
+        feature_series_cache: dict[str, tuple[AnyFeatureValue, ...]] = {}
         for strategy in active:
             config = configurations.get(strategy.strategy_id)
             if config is None:
@@ -89,6 +100,14 @@ class StrategyExecutionCoordinator:
                 if field_id not in feature_series_cache:
                     feature_series_cache[field_id] = self._compute_feature_series(field_id, bars)
 
+        # Checkpoint 65.07: deliberately kept `dict[str, FeatureValue]`, NOT
+        # widened to `AnyFeatureValue` - no strategy consumes a categorical
+        # feature this checkpoint (`Strategy.evaluate()`'s own signature is
+        # untouched, per the directive's "do not modify strategy behavior"
+        # constraint), so the numeric-only boundary at the strategy
+        # interface is left exactly as it was. Only the dispatcher-facing
+        # seam above (`feature_series_cache`/`FeatureSeriesComputer`) is
+        # widened.
         latest_bar = bars[-1]
         latest_features: dict[str, FeatureValue] = {}
         for field_id, series in feature_series_cache.items():

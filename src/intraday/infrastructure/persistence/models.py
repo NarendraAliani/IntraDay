@@ -1228,6 +1228,15 @@ class HistoricalBar(models.Model):
     historical-candle integration."""
     ingested_at = models.DateTimeField(auto_now_add=True)
 
+    provenance = models.CharField(max_length=16, default="UNKNOWN")
+    """Checkpoint 65.12 (migration 0036): explicit, per-row REAL_DHAN /
+    SYNTHETIC_TEST / UNKNOWN classification — see
+    `domain.market_data.provenance` for the vocabulary and why this is
+    a SEPARATE field from `source` above rather than a repurposing of
+    it. Defaults to `"UNKNOWN"`; nothing may assign `"REAL_DHAN"`
+    without positive evidence, and no existing row was relabeled by the
+    migration that added this column — see that migration's docstring."""
+
     class Meta:
         app_label = "persistence"
         constraints = [
@@ -1236,7 +1245,10 @@ class HistoricalBar(models.Model):
                 name="uq_historical_bar_identity",
             )
         ]
-        indexes = [models.Index(fields=["instrument_id", "timeframe", "bar_timestamp"])]
+        indexes = [
+            models.Index(fields=["instrument_id", "timeframe", "bar_timestamp"]),
+            models.Index(fields=["provenance"]),
+        ]
         ordering = ["bar_timestamp"]
 
 

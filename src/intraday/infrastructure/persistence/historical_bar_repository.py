@@ -62,7 +62,9 @@ class DjangoHistoricalBarRepository:
         ).values_list("bar_timestamp", flat=True)
         return frozenset(rows)
 
-    def bulk_upsert(self, bars: tuple[Bar, ...], *, source: str) -> int:
+    def bulk_upsert(
+        self, bars: tuple[Bar, ...], *, source: str, provenance: str = "UNKNOWN"
+    ) -> int:
         if not bars:
             return 0
         records = []
@@ -81,6 +83,7 @@ class DjangoHistoricalBarRepository:
                     close_price=bar.close,
                     volume=bar.volume,
                     source=source,
+                    provenance=provenance,
                 )
             )
         HistoricalBar.objects.bulk_create(
@@ -94,6 +97,7 @@ class DjangoHistoricalBarRepository:
                 "close_price",
                 "volume",
                 "source",
+                "provenance",
             ],
         )
         return len(records)

@@ -39,10 +39,19 @@ class HistoricalBarReadRepository(Protocol):
 
 
 class HistoricalBarWriteRepository(Protocol):
-    def bulk_upsert(self, bars: tuple[Bar, ...], *, source: str) -> int:
+    def bulk_upsert(
+        self, bars: tuple[Bar, ...], *, source: str, provenance: str = "UNKNOWN"
+    ) -> int:
         """Persists `bars`, upserting by the
         `(instrument_id, timeframe, bar_timestamp)` identity (Phase 2's
         uniqueness rule) — re-persisting an already-cached bar is a safe
         no-op, never a duplicate row. Returns the number of bars actually
-        written (inserted or updated)."""
+        written (inserted or updated).
+
+        `provenance` (Checkpoint 65.12) is the explicit REAL_DHAN /
+        SYNTHETIC_TEST / UNKNOWN classification
+        (`domain.market_data.provenance`), orthogonal to `source`
+        (which pipeline stage wrote the row). Defaults to `"UNKNOWN"` —
+        a caller that does not know what kind of data it is fetching
+        must never guess `"REAL_DHAN"`."""
         ...

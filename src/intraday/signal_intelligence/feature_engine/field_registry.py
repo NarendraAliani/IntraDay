@@ -64,6 +64,15 @@ class FieldCategory(str, Enum):
 
 class FieldDataType(str, Enum):
     DECIMAL = "DECIMAL"
+    # Checkpoint 65.07: the categorical sibling to DECIMAL, backing a
+    # future `FieldDefinition` whose values are
+    # `domain.feature.contracts.CategoricalFeatureValue.category` strings
+    # rather than `FeatureValue.value` Decimals - see that module's
+    # Checkpoint 65.07 comment for the full rationale. No categorical
+    # field is registered in `_FIELDS` this checkpoint (see
+    # `market_regime` status in taskReport.md) - this enum member only
+    # proves the registry CAN identify a categorical field's data type.
+    CATEGORICAL = "CATEGORICAL"
 
 
 class FieldAvailability(str, Enum):
@@ -122,6 +131,28 @@ def _derived(
         display_name=display_name,
         category=FieldCategory.DERIVED_FEATURE,
         data_type=FieldDataType.DECIMAL,
+        source="signal_intelligence.feature_engine",
+        timeframe_support="any",
+        required_inputs=required_inputs,
+        availability=FieldAvailability.HISTORICAL_AND_SAMPLE,
+        version="v1",
+        description=description,
+    )
+
+
+def _derived_categorical(
+    field_id: str, display_name: str, required_inputs: tuple[str, ...], description: str
+) -> FieldDefinition:
+    """Checkpoint 65.08: the categorical sibling of `_derived` - identical
+    in every field EXCEPT `data_type`, which is `FieldDataType.CATEGORICAL`
+    (its values are `CategoricalFeatureValue.category` strings, never
+    `FeatureValue.value` Decimals). First real user of the `CATEGORICAL`
+    enum member Checkpoint 65.07 added."""
+    return FieldDefinition(
+        field_id=field_id,
+        display_name=display_name,
+        category=FieldCategory.DERIVED_FEATURE,
+        data_type=FieldDataType.CATEGORICAL,
         source="signal_intelligence.feature_engine",
         timeframe_support="any",
         required_inputs=required_inputs,
@@ -250,6 +281,129 @@ _FIELDS: tuple[FieldDefinition, ...] = (
         "price feature - NOT verified against a Gainz reference (none exists). Default N=10 is "
         "a REFERENCE-ARTIFACT DEFAULT only (see price_delta.REFERENCE_ARTIFACT_DEFAULT_LOOKBACK), "
         "never a verified Gainz parameter.",
+    ),
+    # -------------------------------------------------------------------
+    # Checkpoint 65.03 addition - Market Context Intelligence's first
+    # implemented concept (carried forward from 65.02's audit,
+    # docs/research/MARKET_CONTEXT_INTELLIGENCE.md). Signed price-vs-MA
+    # divergence - GENERIC, not Gainz-specific, not connected to Gainz
+    # this checkpoint. Two field identities (SMA-backed, EMA-backed)
+    # because the existing parse_feature_name() convention only strips a
+    # trailing run of INTEGER parameters - MA type is categorical, so it
+    # is folded into the KIND instead of a parameter (see
+    # signal_intelligence.feature_engine.price_vs_ma_pct module docstring
+    # for the full design-decision rationale). Both delegate to the SAME
+    # canonical SMA/EMA compute functions - no second moving-average
+    # engine.
+    # -------------------------------------------------------------------
+    _derived(
+        "price_vs_ma_pct_sma",
+        "Price vs SMA (%)",
+        ("close",),
+        "Signed (close - SMA(lookback)) / SMA(lookback), via "
+        "signal_intelligence.feature_engine.price_vs_ma_pct.compute_price_vs_ma_pct_sma, "
+        "reusing the canonical SMA implementation. >0 = price above the MA, <0 = below, "
+        "=0 = equal - never a boolean. Zero-MA outputs are skipped (never divides by zero). "
+        "GENERIC feature, NOT Gainz-specific.",
+    ),
+    _derived(
+        "price_vs_ma_pct_ema",
+        "Price vs EMA (%)",
+        ("close",),
+        "Signed (close - EMA(lookback)) / EMA(lookback), via "
+        "signal_intelligence.feature_engine.price_vs_ma_pct.compute_price_vs_ma_pct_ema, "
+        "reusing the canonical EMA implementation. >0 = price above the MA, <0 = below, "
+        "=0 = equal - never a boolean. Zero-MA outputs are skipped (never divides by zero). "
+        "GENERIC feature, NOT Gainz-specific.",
+    ),
+    # -------------------------------------------------------------------
+    # Checkpoint 65.04 addition - Short-Term Rebound Candidate. A generic
+    # MARKET CONTEXT feature (NOT a strategy, NOT a BUY/SELL signal,
+    # NOT Gainz-specific, NOT performance-validated). Composes THREE
+    # already-existing canonical features (price_delta, rsi,
+    # bullish_engulfing) by timestamp - see
+    # signal_intelligence.feature_engine.rebound_candidate module
+    # docstring for the full rule/inclusion-exclusion rationale, and
+    # docs/research/MARKET_CONTEXT_INTELLIGENCE.md's Short-Term Rebound
+    # section.
+    # -------------------------------------------------------------------
+    # -------------------------------------------------------------------
+    # Checkpoint 65.05 addition - Moving Average Divergence. A generic
+    # MARKET CONTEXT feature (NOT a trading signal, NOT a crossover
+    # event, NOT Gainz-specific, NOT performance-validated) measuring the
+    # normalized relationship between a FAST and a SLOW moving average:
+    # (fast_ma - slow_ma) / slow_ma. Two field identities (SMA-vs-SMA,
+    # EMA-vs-EMA) - same categorical-MA-type-folded-into-KIND pattern
+    # 65.03's `price_vs_ma_pct` established; mixed SMA/EMA pairs are
+    # deliberately NOT added - see
+    # signal_intelligence.feature_engine.ma_divergence module docstring
+    # Part A for the full MA-type-combination-support rationale. Both
+    # delegate to the SAME canonical SMA/EMA compute functions - no
+    # second moving-average engine. Distinct from the `ema_crossover`
+    # STRATEGY - this is purely numeric, no BUY/SELL/HOLD, no crossover-
+    # state logic.
+    # -------------------------------------------------------------------
+    _derived(
+        "ma_divergence_sma",
+        "Moving Average Divergence (SMA)",
+        ("close",),
+        "Signed (fast_SMA(fast_lookback) - slow_SMA(slow_lookback)) / slow_SMA(slow_lookback), "
+        "via signal_intelligence.feature_engine.ma_divergence.compute_ma_divergence_sma, "
+        "reusing the canonical SMA implementation for both legs. fast_lookback must be "
+        "strictly less than slow_lookback (validated, never silently swapped). >0 = fast SMA "
+        "above slow SMA, <0 = below, =0 = equal - never a boolean, never a crossover-state "
+        "value. Zero slow-SMA outputs are skipped (never divides by zero). GENERIC feature, "
+        "NOT Gainz-specific, NOT performance-validated, NOT the ema_crossover strategy.",
+    ),
+    _derived(
+        "ma_divergence_ema",
+        "Moving Average Divergence (EMA)",
+        ("close",),
+        "Signed (fast_EMA(fast_lookback) - slow_EMA(slow_lookback)) / slow_EMA(slow_lookback), "
+        "via signal_intelligence.feature_engine.ma_divergence.compute_ma_divergence_ema, "
+        "reusing the canonical EMA implementation for both legs. fast_lookback must be "
+        "strictly less than slow_lookback (validated, never silently swapped). >0 = fast EMA "
+        "above slow EMA, <0 = below, =0 = equal - never a boolean, never a crossover-state "
+        "value. Zero slow-EMA outputs are skipped (never divides by zero). GENERIC feature, "
+        "NOT Gainz-specific, NOT performance-validated, NOT the ema_crossover strategy.",
+    ),
+    _derived(
+        "rebound_candidate",
+        "Short-Term Rebound Candidate",
+        ("close", "open"),
+        "1 if price_delta_N(t) < 0 AND rsi_M(t) < rsi_oversold_threshold AND "
+        "bullish_engulfing(t) == 1, else 0 - unavailable (no output) if any dependency has "
+        "no value at t, via signal_intelligence.feature_engine.rebound_candidate."
+        "compute_rebound_candidate. Encoded as Decimal 1/0 (true/false) - a CONTEXT "
+        "condition, NEVER a BUY/SELL/HOLD signal. GENERIC feature, NOT Gainz-specific, NOT "
+        "performance-validated - see docs/research/MARKET_CONTEXT_INTELLIGENCE.md.",
+    ),
+    # -------------------------------------------------------------------
+    # Checkpoint 65.08 addition - Market Regime. The first PRODUCTION
+    # categorical Market Context feature (`FieldDataType.CATEGORICAL`,
+    # `CategoricalFeatureValue` output, NOT `FeatureValue`/Decimal). One
+    # field identity - exactly one category value per timestamp, never
+    # split into market_regime_bull/bear/sideways/transition. NOT a
+    # trading signal, NOT Gainz-specific, NOT performance-validated, NOT
+    # breadth/sentiment/index-based, NOT a Fire Sale detector. See
+    # signal_intelligence.feature_engine.market_regime module docstring
+    # for the full rule/warm-up/edge-case documentation and
+    # docs/research/MARKET_CONTEXT_INTELLIGENCE.md section 7&8.
+    # -------------------------------------------------------------------
+    _derived_categorical(
+        "market_regime",
+        "Market Regime",
+        ("high", "low", "close"),
+        "Deterministic BULL/BEAR/SIDEWAYS/TRANSITION classification via "
+        "signal_intelligence.feature_engine.market_regime.compute_market_regime. "
+        "trend_strength_ok = adx_14 >= ADX_MIN; bull_direction = plus_di_14 > minus_di_14 AND "
+        "ema_fast > ema_slow; bear_direction = minus_di_14 > plus_di_14 AND ema_fast < "
+        "ema_slow. BULL if trend_strength_ok AND bull_direction; BEAR if trend_strength_ok "
+        "AND bear_direction; SIDEWAYS if NOT trend_strength_ok; TRANSITION otherwise. No "
+        "output (never a fabricated state) if any of adx_14/plus_di_14/minus_di_14/ema_fast/ "
+        "ema_slow is unavailable at a timestamp. ADX_MIN is a RESEARCH DEFAULT parameter, NOT "
+        "optimized. GENERIC feature, NOT Gainz-specific, NOT performance-validated, NOT a Fire "
+        "Sale detector - see docs/research/MARKET_CONTEXT_INTELLIGENCE.md.",
     ),
 )
 

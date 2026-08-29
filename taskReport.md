@@ -1,338 +1,262 @@
 # Task Report
 
 ## Milestone
-Gainz Research Adapter Program - equity/OHLCV research track (paper-trading-only platform; no live order placement, no Dhan orders).
+Real NSE session capture readiness (historical-data foundation track).
 
 ## Checkpoint
-64.99 - GAINZ RESEARCH ADAPTER IMPLEMENTATION: SINGLE PROFILE / NO CONSENSUS / EQUITY RESEARCH ONLY. First REAL Gainz implementation checkpoint. OFFLINE (market closed). RESEARCH ONLY, not production.
+65.13 — REAL NSE SESSION CAPTURE READINESS: LIVE-DATA PREPARATION / NO STRATEGY CHANGES / NO BACKTEST CHANGES.
 
 ## Classification
-Implementation checkpoint (transition from 64.98's AUDIT to IMPLEMENTATION), scoped to exactly one strategy identity and one profile.
+OFFLINE, READ-ONLY AUDIT + DOCUMENTATION. Market was closed throughout. No live connection, no worker start, no scanner start, no notifications, no orders, no new tables, no data insertion/relabeling.
 
 ## Objective
-Implement `GainzCompatibleResearchStrategy` (`strategy_id = "gainz_compatible_research"`, profile `alpha` only) reusing the existing `StrategyRegistry`/`Strategy` Protocol/`StrategySignal`/`TradePlan` architecture and the canonical feature engine exclusively, with no consensus, no other profiles, no parallel engines, and no live-scanner exposure.
+Prepare (audit + document) the existing live market-data/archive pipeline so the *next* real NSE trading session can be captured as a genuine, auditable, COMPLETE historical session — without performing that capture now.
 
-## 64.98 Findings Carried Forward
-- `TradePlan` already supports `entry_price`/`stop_loss`/`target_1`/`target_2`/`target_3`/`trailing_stop_loss` - no schema change needed (confirmed unchanged this checkpoint).
-- Canonical backtest fills at NEXT-BAR-OPEN after a signal is evaluated on a CLOSED bar; the reference file's same-candle close is an entry candidate only.
-- `candle_body_ratio`/`bullish_engulfing`/`bearish_engulfing`/`price_delta` are EXACT MATCHES against the reference; `EMA`/`RSI`/`ATR`/`ADX`/`+DI`/`-DI`/`Relative Volume`/`MACD Histogram` DIFFER by design (Wilder-SMA-seeded vs pandas-ewm-seeded) - accepted, permanent divergence, not reproduced.
-- `breakout` and `regime` features: REQUIRED BUT UNAVAILABLE - reconfirmed this checkpoint (see Blockers).
-- Consensus: DEFERRED (frozen 64.98 decision) - not implemented.
-- Gainz: DISABLED throughout - remains disabled; no scanner change.
+## 65.12 Findings Carried Forward
+- `HistoricalBar.provenance` (migration `0036`) added: `REAL_DHAN` / `SYNTHETIC_TEST` / `UNKNOWN`.
+- All 5,100 pre-65.12 `HistoricalBar` rows left `UNKNOWN` (not relabeled, not inferred).
+- No genuine Dhan historical-candle ingestion path exists; only `SyntheticHistoricalBarProvider` is wired into `HistoricalDataPreparationService`/`backtesting_views.py`.
+- 0 `MarketDataArchiveDay` cells are `COMPLETE` (as of 65.12's audit: 4 `IN_PROGRESS`, 16 `PARTIAL`).
+- `is_research_eligible()` returns `True` only for `REAL_DHAN`; not wired into any backtest default path.
 
-## Adapter Architecture
-Canonical Market Data -> Canonical Feature Engine -> `GainzCompatibleResearchStrategy.evaluate()`/`.build_trade_plan()` -> `StrategySignal`/`TradePlan` -> (existing, unmodified) `OrderIntent` -> `RiskDecision` -> Existing Backtest/Paper Execution. No new signal engine, indicator engine, risk engine, execution engine, backtest engine, or correlation engine was created. The class conforms to the existing `Strategy` Protocol (`trading_engine/strategy_execution/strategy.py`) exactly as `ema_crossover`/`sma_trend_filter`/`atr_volatility_breakout` do.
+## Live Ingestion Architecture
+Audited (read-only) end to end: `domain/market_data/archive.py` (`ArchiveStatus`, `assess_archive_day`, `TradingSessionIdentity`, `trading_date_for`), `domain/market_data/quality.py` (duplicate/out-of-order rejection, `expected_bar_timestamps`, `missing_bar_timestamps`, CAS-aware siblings), `application/services/market_data_archive.py` (`MarketDataArchiveService.refresh_trading_date`/`describe_trading_date`, worst-status day rollup), `application/services/market_data_reconciliation.py` and `..._persistence.py`, `infrastructure/persistence/live_market_data_repositories.py`, `infrastructure/persistence/management/commands/run_market_data_worker.py` (1195 lines), and the existing docs `docs/architecture/DAILY_MARKET_DATA_ARCHIVE_ARCHITECTURE.md` and `MARKET_DATA_ARCHIVE_QUERY_API.md`. No prior behavior was assumed without reading source.
 
-## Strategy Identity
-Exactly one: `gainz_compatible_research` (`STRATEGY_ID` in `src/intraday/trading_engine/strategy_execution/strategies/gainz_compatible_research.py`). No `gainz_alpha`/`gainz_trend`/`gainz_breakout`/`gainz_scalp`/`gainz_hybrid`/`gainz_consensus` module or identity exists anywhere in the repository.
+## Dhan Boundary
+Confirmed: Dhan connectivity lives exclusively in `infrastructure/market_data_providers/dhan/*` and is invoked only from `run_market_data_worker.py`. `MarketDataArchiveService` and `MarketDataReconciliationService` never call Dhan directly — they read persisted `LiveQuoteObservation`/`AggregatedBarObservation` rows. The only currently-wired "independent" reference fetch (`HistoricalDataPreparationService`) is itself Dhan-REST, which the existing docs already flag as *not independent* (Dhan-vs-Dhan is corroboration, not candle authority) — this is a pre-existing, already-documented limitation, not a new finding.
 
-## Profile
-Exactly one implemented: `alpha` (`PROFILE_ALPHA = "alpha"`). The `profile` parameter is `ParameterType.ENUM` with `allowed_values=("alpha",)` - a single-element tuple, not a placeholder list of six.
+## Observation Flow
+Confirmed path: Dhan WebSocket quote → `LiveQuoteObservation` (append-only, stamped with `trading_date_for()` at the single write boundary) → `aggregate_quotes_into_bars` → `AggregatedBarObservation` (upsert by `(symbol, timeframe, interval_start)`) → `MarketDataArchiveService.refresh_trading_date()` reads both tables → `assess_archive_day()` (pure domain function) → `ArchiveDayAssessment` → upserted into `MarketDataArchiveDay` (a recomputable projection, not a second source of truth).
 
-## Strategy Parameter Schema
-19 parameters, all via the existing `ParameterDefinition`/`StrategyParameterSchema` mechanism (no ad-hoc config): `profile` (ENUM, alpha-only), `ema_fast_lookback`/`ema_slow_lookback`/`ema_trend_lookback` (9/21/50, reference-artifact defaults), `rsi_lookback` (14), `rsi_alpha_threshold` (80), `price_delta_lookback` (10), `adx_lookback` (14), `adx_minimum` (20), `relative_volume_lookback` (20), `relative_volume_minimum` (0.80), `candle_body_ratio_minimum` (0.70), `macd_fast`/`macd_slow`/`macd_signal` (12/26/9), and 5 research-only TradePlan ATR multipliers. Every default is labeled a reference-artifact/conservative-research default, never a verified Gainz parameter. No weight/threshold was optimized.
+## Aggregation
+One-minute bucket boundaries anchor at the UTC epoch (09:15 IST = 03:45 UTC = offset 225 minutes); `domain/market_data/archive.py::_minutes_supported` verifies a timeframe's duration tiles the session window without straddling an edge. 1m/3m/5m/15m are supported; 30m/1h/DAY/TICK are explicitly unsupported (never silently mis-measured). `quality.py` rejects duplicate and out-of-order bars as input rather than silently reordering/dropping.
 
-## Canonical Feature Inputs
-`required_features()` returns exactly: `ema_{fast}`, `ema_{slow}`, `ema_{trend}`, `rsi_{N}`, `price_delta_{N}`, `adx_{N}`, `plus_di_{N}`, `minus_di_{N}`, `relative_volume_{N}`, `macd_hist_{fast}_{slow}_{signal}`, `candle_body_ratio`, `bullish_engulfing`, `bearish_engulfing`, and `atr_{N}` (TradePlan-only, not a signal condition - see Alpha Signal Logic). All 14 are canonical field_ids dispatched through the existing `compute_feature_series`/field registry - none is computed inside this strategy, and none calls the reference file's private `_ema`/`_rsi`/`_atr`/`_adx` functions.
+## Archive Status
+Five-value vocabulary confirmed unchanged: `NOT_OBSERVED`, `IN_PROGRESS`, `PARTIAL`, `COMPLETE`, `FAILED`. Decision order in `assess_archive_day` (non-trading day → failed-ingestion → no-data → session-not-closed → unsupported-timeframe → missing-bars → COMPLETE) read in full; no loosening proposed or made.
 
-## Feature Evidence
-Every non-NEUTRAL `StrategySignal.evidence` tuple carries the 13 real canonical `FeatureValue`s consumed by the 8 scoring conditions (EMA fast/slow/trend, RSI, price_delta, ADX, +DI, -DI, relative volume, MACD histogram, candle body ratio, bullish_engulfing, bearish_engulfing) plus one adapter-owned `FeatureValue` named `gainz_alpha_setup_quality_score` (see Setup Quality). `atr_{N}` is fetched by the coordinator (it is in `required_features()`) but deliberately excluded from `evaluate()`'s evidence tuple - it is TradePlan-only, never a scoring input.
+## Target Next Session
+1–3 liquid NSE cash-equity symbols already present in the operator's configured watchlist (the worker resolves its subscription set from `DjangoWatchlistRepository` — no hardcoded symbol list in code), one full 09:15–15:30 IST session. This is the smallest run that exercises every already-built, already-tested mechanism without added load or scope creep into options/index/sector.
 
-## Alpha Signal Logic
-The reference file's `_score_row()` "alpha" profile branch is literally `pass` - Alpha relies entirely on the SHARED base scoring block above it. This adapter reimplements that shared block condition-by-condition using only canonical features (see Signal Conditions), and documents three items it could NOT reproduce without fabricating semantics (see Blockers).
+## Symbols
+1–3 liquid NSE cash-equity symbols (exact tickers to be chosen by the operator from the existing watchlist at go-ahead time — not fixed in this checkpoint, since the market is closed and no watchlist read was needed to audit the mechanism).
 
-## Signal Conditions
-Implemented (equal-weight, PROJECT RESEARCH PARAMETER scoring - see Setup Quality):
-1. `bullish_engulfing`/`bearish_engulfing` == 1 (canonical, exact match per 64.98).
-2. `stable_candle`: `candle_body_ratio >= candle_body_ratio_minimum` (canonical, exact match; shared by both sides, as in the reference).
-3. RSI "not extremely exhausted" gate: bull `rsi < rsi_alpha_threshold`, bear `rsi > 100 - rsi_alpha_threshold` (canonical Wilder RSI - numerically differs from reference by design, accepted).
-4. `price_delta_{N}` gate: bull `price_delta < 0`, bear `price_delta > 0` (canonical `price_delta_N`; `< 0` / `> 0` is the documented equivalence to the reference's `price_down_delta`/`price_up_delta`).
-5. Trend confirmation: bull `close > ema_trend and ema_fast > ema_slow and ema_slow > ema_trend`; bear symmetric (canonical EMA, differs numerically by design).
-6. MACD Histogram sign (canonical, differs numerically by design).
-7. Relative-volume + candle-direction confirmation: `relative_volume >= relative_volume_minimum` and `bar.close > bar.open` (bull) / `< bar.open` (bear) (canonical RVOL + raw `Bar` fields already available, no new feature).
-8. ADX-direction confirmation: `adx >= adx_minimum` and `+DI > -DI` (bull) / `-DI > +DI` (bear) (canonical, differs numerically by design).
+## Timeframe
+`ONE_MINUTE` only — completeness-supported, and the finest granularity the archive already proves against.
 
-Deliberately omitted, documented as blockers, never fabricated:
-- 20-bar breakout/breakdown (Blocker A).
-- RSI momentum vs the PRIOR bar's RSI (Blocker B - newly discovered this checkpoint, beyond breakout/regime).
-- `regime` labeling (Blocker C - informational-only in the reference, not a scoring input either there or here).
+## Session Window
+09:15–15:30 IST continuous session (or 09:15–15:15 IST continuous window for a CATEGORY_I_CAS symbol, via `CasAwareSession`/`is_continuous_completeness_supported` — the CAS-aware sibling, not the plain 375-minute path).
 
-## Direction
-BULLISH when the count of true bull-conditions exceeds the count of true bear-conditions and is > 0; BEARISH symmetrically; NEUTRAL otherwise (including a tie, or when any required feature is unavailable - `evaluate()` returns `None`, never a fabricated signal).
+## Session Boundary
+Uses the existing, validated `domain/session/calendar.py` (weekend/holiday-aware `is_trading_day`, `market_open`/`market_close`) — no new exchange-rule logic invented. Verified `IN_PROGRESS` can never become `COMPLETE`/`PARTIAL` while `as_of < continuous_closed_at`.
 
-## Setup Quality
-`setup_quality_score` = `(winning_side_condition_count / 8) * 100`, carried as `FeatureValue(feature_name="gainz_alpha_setup_quality_score", ...)` inside `StrategySignal.evidence` - `StrategySignal` itself (a frozen, shared, multi-strategy contract since Checkpoint 26) was NOT modified; reusing its existing `evidence` tuple is the only extension point that respects that freeze. Explicitly documented in the module header and asserted by test item 11/12: NOT a probability, NOT a probability of profit, NOT a calibrated confidence estimate - a plain 0-100 count of agreeing conditions. Equal per-condition weighting is an adapter-owned, independently-chosen PROJECT RESEARCH PARAMETER (`_TOTAL_ALPHA_CONDITIONS = 8`), explicitly NOT the reference's 25/15/12/10/8/7 point scale, and not optimized/tuned this checkpoint.
+## CAS Handling
+`CasAwareSession`, `classify_cas_window_status`, `is_continuous_completeness_supported`, and the CAS-window-status field on `ArchiveDayAssessment` were read. Completeness for a CATEGORY_I_CAS instrument is correctly assessed against its 09:15–15:15 continuous window, not the 375-minute plain window — confirmed by the passing `test_checkpoint_64_88_cas_aware_quality.py` suite. **No CAS defect was found in this audit.** No CAS semantics were modified.
 
-## TradePlan
-Produced by `build_trade_plan()`, reusing the existing `TradePlan` dataclass unmodified. Returns `None` for NEUTRAL signals or missing ATR (never fabricated). ATR-multiplier ladder mirrors `atr_volatility_breakout.py`'s existing precedent, explicitly NOT the reference's `rr1`/`rr2`/`rr3` ported as verified Gainz risk:reward math (the reference's own `min_rr` was previously found dead configuration - not resurrected here).
+## Completeness
+`COMPLETE` requires: trading day, session closed (continuous close, CAS-aware where applicable), timeframe completeness-supported, and the set difference between expected and observed closed-bar-close timestamps is empty. The gate was read, not weakened, not modified.
 
-## Entry Candidate
-`TradePlan.entry_price = signal.price` (signal-time close), documented in `calculation_method` as "an ENTRY CANDIDATE/REFERENCE PRICE ONLY" - never treated as a fill price anywhere in this checkpoint.
+## Gap Detection
+`missing_bar_timestamps()` (and the CAS-aware sibling) computes exact missing bar-close instants against `expected_bar_timestamps()`; `ArchiveDayAssessment.missing_bar_count`/`missing_bar_timestamps` expose them per cell. No auto-fill, no interpolation, no fabrication anywhere in the read path.
 
-## Stop Loss
-`entry - sign * trade_plan_stop_loss_atr_multiplier * ATR` (default multiplier 1.0x ATR); direction-consistent (below entry for BULLISH, above for BEARISH) - verified by tests 15/16/17.
+## Duplicate Detection
+`quality.py`'s bar-sequence validator rejects a duplicate bar timestamp as an input error rather than silently dropping/reordering it; `assess_archive_day` separately records `duplicate_bar_timestamps` (deduplicated) and explicitly does not double-count duplicates toward `closed_bar_count` coverage.
 
-## TP1
-`entry + sign * trade_plan_target_1_atr_multiplier * ATR` (default 1.0x ATR).
+## Timestamp Integrity
+Quotes are stamped from `Quote.timestamp` (source instant), never `fetched_at` (local receive clock); bars are stamped from `interval_end`. `trading_date_for()` uses `instant.astimezone(Asia/Kolkata).date()`, not a naive `.date()` — this is the single canonical derivation, asserted by test, and is the fix that prevents the entire 09:15–11:00 IST opening range from being misfiled under the previous UTC day.
 
-## TP2
-`entry + sign * trade_plan_target_2_atr_multiplier * ATR` (default 2.0x ATR), strictly beyond TP1 in the trade direction.
+## Recovery
+`LiveQuoteObservation`/`AggregatedBarObservation` writes are append-only/per-observation, so a worker restart mid-session does not lose already-persisted data. `MarketDataArchiveDay` is a pure, recomputable projection (§5 of the architecture doc) — refreshing after a restart reproduces the correct state from whatever was genuinely observed. `WorkerRuntimeStatus` (Checkpoint 22/64.63, `worker_stop_request.py`) provides the existing process-independent stop/restart-state mechanism. No new distributed scheduler or infrastructure was built or is proposed.
 
-## TP3
-`entry + sign * trade_plan_target_3_atr_multiplier * ATR` (default 3.0x ATR), strictly beyond TP2.
-
-## Trailing Stop
-Not populated (`trailing_stop_loss` left `None`) - the reference's Alpha branch does not produce a trailing level distinct from its fixed SL/TP ladder, and this checkpoint does not fabricate one. `TradePlan.trailing_stop_loss` remains available, unused, for future work.
-
-## Risk Boundary
-The adapter never computes position size, quantity, margin, or portfolio exposure anywhere. Confirmed by test 13 (`hasattr` checks against the strategy class and every produced `TradePlan`) and by test 14 (`run_stateful_backtest()` end-to-end, which drives the REAL `evaluate_order_risk()`). The chain remains `StrategySignal -> OrderIntent -> RiskDecision -> Existing Execution`, RiskDecision authoritative, never bypassed.
-
-## Position Sizing Boundary
-The reference's `risk_per_trade`/`max_position_value_pct`/`position_size`/`qty` fields are not read, not ported, and have no analog in this module. No production quantity is returned from `evaluate()` or `build_trade_plan()`.
-
-## Execution Semantics
-Closed-candle evaluation is treated as an architectural execution rule (every `Bar` handed to `evaluate()` is already closed, by the existing coordinator/backtest contract), not reinvented as a per-strategy `require_confirmed_bar` switch (the reference's own switch is not ported). No local `last_signal`/position-state variable exists anywhere in the class - `evaluate()` is a pure function of its arguments (verified by determinism tests 5/20).
-
-## Next-Bar-Open Fill
-Verified via `run_stateful_backtest()` (the existing, unmodified backtest engine) in test 18: entries are recorded through the real orchestration, whose own module docstring documents the entry filling at the following bar's open, never the signal bar's own close. `TradePlan.entry_price` remains a reference price only (see Entry Candidate).
-
-## Correlation
-Every `StrategySignal` carries `strategy_id`/`specification_version`/`code_version`/`configuration_version`/`instrument_id`/`timeframe`/`timestamp`, and every evidence `FeatureValue` is independently pinned to the same instrument/timeframe/timestamp (`StrategySignal.__post_init__` already enforces this; re-asserted by test 19). No correlation is inferred from symbol+timestamp alone anywhere in this checkpoint.
+## Reconciliation
+`MarketDataReconciliationService` (64.79) computes; `MarketDataReconciliationPersistenceService` (64.84) persists — five columns on the archive cell (`reconciliation_status`, `reconciliation_outcome`, `reconciliation_reason`, `reconciliation_evidence_source`, `reconciled_at`). A refresh never overwrites reconciliation columns, so recomputing the archive from its own observations can never self-promote to "reconciled." The only wired reference fetch is Dhan-REST (not independent) — this is a pre-existing, already-documented gap, unchanged by 65.13. No reconciliation was executed in 65.13 (no session to reconcile).
 
 ## Provenance
-Feature evidence -> signal -> strategy/version -> (test-local) scan/backtest run -> trade -> outcome chain is preserved unchanged; no new provenance mechanism was introduced.
+Verified but not exercised: no `REAL_DHAN` row exists or was created. `is_research_eligible()` unchanged. No relabeling performed.
 
-## Backtest Integration
-Consumable by the existing engine (`research.backtesting.execution.compute_signals`, `tradeplan_execution.compute_trade_plans`, `historical_execution.run_stateful_backtest`) with zero new backtest code. No `GainzBacktestEngine`/`GainzExecutionEngine`/`GainzTradeSimulator` was created.
+## REAL_DHAN Path
+Confirmed the *intended* future path: COMPLETE `MarketDataArchiveDay` cell → (future checkpoint) archive-to-`HistoricalBar` projector or a genuine Dhan-historical-candle-backed `HistoricalBarProvider` → stamps `PROVENANCE_REAL_DHAN`. This projector does not exist yet and was **not built** in 65.13 (explicitly out of scope, Part K).
 
-## Research-Only Boundary
-`GainzCompatibleResearchStrategy` is deliberately NEVER registered in `registry.build_default_registry()`. Direct inspection this checkpoint confirmed `build_default_registry()` is the exact same function both `infrastructure/api/scanner_configuration_views.py` (`_registry = build_default_registry()`) and `infrastructure/api/backtesting_views.py` (`_REGISTRY = build_default_registry()`) construct their module-level registries from - there is no research-only vs. live-eligible distinction anywhere in `StrategyRegistry` (`registry.py` has no such flag/method). Per the directive, that gap was documented as a blocker rather than patched by weakening the registry (see Blockers). The only reachable-from-nowhere-live guarantee available today is to never call `.register()` on this class inside `build_default_registry()` - exactly mirroring the precedent `test_checkpoint_64_47_strategy_registry.py`'s own `TestStrategy` already established ("never registered into `build_default_registry()`... so this proof-of-concept never pollutes the real strategy suite"). `test_checkpoint_64_99_gainz_research_adapter.py` registers the class only into LOCAL `StrategyRegistry()` instances it constructs itself.
+## UNKNOWN Handling
+Unchanged. All pre-65.12 rows remain `UNKNOWN`; no inference or backfill was performed.
 
-## Scanner Boundary
-Live scanner code (`scanner_configuration_views.py`) was not modified. Test 22a asserts `gainz_compatible_research` is absent from `build_default_registry().list()`; test 22b parses (via `ast`) both `scanner_configuration_views.py` and `backtesting_views.py` and asserts each imports `build_default_registry` from `registry.py`, proving (not merely asserting) both endpoints share the one registry Gainz is absent from.
+## SYNTHETIC Handling
+Unchanged. `SyntheticHistoricalBarProvider` remains the only wired `HistoricalBarProvider`, honestly labelled `SYNTHETIC_TEST`.
 
-## Gainz Authenticity Status
-Unchanged: NOT authentic GainzAlgo, NOT verified Gainz V2, NOT a proprietary Gainz implementation. Module header and class docstring both restate this "HONESTY NOTICE." The reference file remains a third-party research/rebuild artifact, not authoritative Gainz source.
+## HistoricalBar Projection Status
+No archive→HistoricalBar projection exists. This remains a named future checkpoint, not built or scaffolded in 65.13.
 
-## Gainz Reference Comparison
-Documented per-condition in the module header and this report's "Signal Conditions" section: canonical behavior chosen (Wilder-seeded RSI/ADX/EMA, standard MACD, generic engulfing/body-ratio/price-delta) vs. reference behavior observed (pandas-ewm-seeded equivalents) vs. implication (numeric divergence accepted by design per 64.98, canonical features NOT changed to match the reference). Deterministic fixtures exercising every implemented condition live in `test_checkpoint_64_99_gainz_research_adapter.py` (tests 4, 8, 9, 11) and `test_checkpoint_64_50_strategy_integration.py`/`test_checkpoint_64_52_database_first_backtest.py` (updated this checkpoint - see Tests).
+## Backtest Relationship
+Confirmed and preserved: Dhan live ingestion → archive → (future) verified historical repository → backtest, never backtest → Dhan live API. `BacktestingService`, `HistoricalMarketDataService`, `run_backtest`, `TradePlan`, `OrderIntent`, `RiskDecision`, execution, accounting — **not touched**.
+
+## Market Context Relationship
+`price_vs_ma_pct`, `rebound_candidate`, `ma_divergence`, `market_regime` — **not touched** in this checkpoint (these files show as modified/untracked in `git status` only because they are carried-forward uncommitted work from 65.03–65.11, prior to this checkpoint's session — see Git Safety below).
+
+## Gainz Relationship
+Gainz reference/adapter/Alpha/profiles/scoring/consensus — **not touched** in this checkpoint.
 
 ## Database Changes
-None. No new Gainz-specific table/migration was created; existing persistence contracts (unused by this checkpoint's tests, which are pure unit/integration) were left untouched.
+None made or proposed in 65.13. No new table, no migration executed, no data inserted, no data relabeled.
 
 ## API Changes
 None.
 
 ## Frontend Changes
-None. Gainz was not added to the live Scanner selector or exposed as live-ready anywhere in frontend code.
+None.
 
 ## Tests
-New file: `tests/unit/research/test_checkpoint_64_99_gainz_research_adapter.py` - 26 tests covering all 22 directive-required items (some items split across 2 tests for clarity: 3/3b, 10/10b, 15-17 combined + 15b, plus explicit regression guards for reference-file-non-import and no-consensus). All 26 pass.
-
-Updated (pre-existing, checkpoint-caused adjustments - see Testing Level):
-- `tests/unit/research/test_checkpoint_64_50_strategy_integration.py`: `required_features()` expectation, evidence-shape expectation, and bar fixtures updated for the expanded Alpha condition set (adds a `_flat_then_breakout_bars()` generator, since a purely monotonic ramp pins RSI at 100 and never satisfies the new RSI-alpha gate).
-- `tests/unit/research/test_checkpoint_64_52_database_first_backtest.py`: evidence-count and TradePlan-availability assertions updated for the same reason (`atr_14` is now in `required_features()`, so a TradePlan is now produced directly by the coordinator rather than requiring manual augmentation).
-- `tests/unit/research/test_checkpoint_64_48_gainz_adapter_design.py` / `test_checkpoint_64_49_gainz_feature_registry.py`: honesty-guard allowlists extended with this checkpoint's own new test file (both guards scan the whole repo for the literal string "gainz" and previously had no entry for a checkpoint-64.99-named file).
 
 ## Testing Level
-Targeted (new adapter test file) -> affected subsystem (`tests/unit/research/`, `tests/unit/trading_engine/`, `tests/unit/infrastructure/api/test_checkpoint_64_68_paper_session_api.py`) -> quality gates -> exactly ONE final full regression, in that order, per the directive's Full Regression Policy.
+REDUCED, TARGETED ONLY — no full regression run, per Part R.
 
 ## Tests Run
-- `test_checkpoint_64_99_gainz_research_adapter.py`: 26 passed.
-- `tests/unit/research/`: 996 passed (includes the 4 pre-existing files updated above, plus the new file).
-- `tests/unit/trading_engine/`: 95 passed.
-- `tests/unit/infrastructure/api/test_checkpoint_64_68_paper_session_api.py` + `test_checkpoint_64_51_registry_regression.py`: 27 passed.
-- Combined affected-subsystem run (`research` + `trading_engine` + the paper-session API file): 1105 passed.
-- **Final authoritative full regression** (`poetry run pytest tests/unit -q`), run exactly once, after all fixes and quality gates: **2793 passed, 0 failed**, in 555.68s (0:09:15), exit code 0.
+```
+tests/unit/domain/test_market_data_quality.py
+tests/unit/domain/test_checkpoint_64_88_cas_aware_quality.py
+tests/unit/domain/test_market_data_aggregation.py
+tests/unit/research/test_checkpoint_64_73_market_data_archive.py
+tests/unit/research/test_checkpoint_64_75_observation_provenance.py
+tests/unit/research/test_checkpoint_64_79_equity_reconciliation.py
+tests/unit/research/test_checkpoint_64_79_reconciliation_service.py
+tests/unit/research/test_checkpoint_64_84_reconciliation_persistence.py
+tests/unit/research/test_checkpoint_65_12_provenance.py
+tests/unit/infrastructure/persistence/test_market_data_archive_repository.py
+tests/unit/infrastructure/persistence/test_checkpoint_64_84_reconciliation_persistence_db.py
+tests/unit/infrastructure/persistence/test_checkpoint_64_92_archive_observability_and_lineage.py
+tests/unit/infrastructure/api/test_checkpoint_64_83_archive_api.py
+tests/unit/infrastructure/api/test_checkpoint_64_84_archive_reconciliation_fields.py
+```
+Result: **207 passed, 0 failed**, 1 unrelated deprecation warning (schemathesis/jsonschema library warning, not project code).
 
 ## Tests Skipped
-None deliberately skipped. Postgres-backed tests (`@requires_postgres`/`@pytest.mark.django_db`, e.g. `test_checkpoint_64_52_database_first_backtest.py::test_j_...`) ran against the locally available Postgres instance rather than being skipped.
+Full platform regression — not run, per Part R (no production source file was changed in 65.13, so there is no shared-contract change requiring it). Strategy/Gainz/MarketContext/backtest/frontend test suites — out of scope, not run.
 
 ## Escalation Decision
-Not triggered. The final full regression passed cleanly on its one permitted run - no second full-suite run was needed, so no STOP-and-report escalation was required.
+No escalation required. No defect found that would require deviating from the directive's constraints (see CAS Handling / Completeness above — none found). No tiny migration was needed (none proposed).
 
-## Quality Gates
-- `ruff check` (adapter module + all touched/new test files): All checks passed (after fixing 2 duplicate-set-item lint errors in my own edits, 1 unused-variable, 1 import-order issue, and 2 line-length issues - all self-introduced this checkpoint, all fixed).
-- `ruff format --check`: all files formatted; the new test file needed one `ruff format` pass, now clean.
-- `mypy` (project-configured scope, `packages = ["intraday"]`, i.e. `src/` only - tests are outside the configured mypy scope): 5 pre-existing errors remain, in 4 files this checkpoint never touched (`scanner_configuration_views.py`, `run_market_data_worker.py`, `research_correlation.py`, `correlation_views.py`) - confirmed unrelated to 64.99 and left as-is per "fix only issues this checkpoint caused." `gainz_compatible_research.py` alone: "Success: no issues found in 1 source file."
-- `lint-imports`: 6 kept, 0 broken (449 files, 2213 dependencies analyzed) - the `trading_engine`/`signal_intelligence` bounded-context-independence contract and every other contract remain intact; this adapter introduces no new cross-context import.
+## Gainz Status
+Unchanged from 65.12.
+
+## NSE_FNO Status
+Not implemented. Unchanged.
 
 ## BacktestTrustLevel
-Unchanged. The adapter's deterministic research output is recorded above (see Testing/Reference Comparison) but does not promote the global trust gate - no code in this checkpoint touches trust-level configuration.
+Unchanged; untouched by 65.13.
 
 ## Research Readiness
-Remains NO. This checkpoint establishes architecture-level integration only, not research validity, profitability, or predictive value.
+Still **NO** — unchanged. This checkpoint adds no new evidence toward the 5-criterion gate; it only prepares the capture path.
+
+## Next-Session Capture Checklist
+1. Confirm trading day via `domain.session.calendar.is_trading_day`.
+2. Start `run_market_data_worker` (Dhan provider) scoped to 1–3 chosen watchlist symbols only.
+3. Let it run untouched 09:15–15:30 IST; monitor `WorkerRuntimeStatus` only.
+4. At/after session close, run `market_data_archive --date <date> --refresh` for those symbols and `ONE_MINUTE`.
+5. Read back `describe_trading_date()`; record `ArchiveStatus` per cell.
+6. Record reconciliation outcome (expect `NOT_RECONCILED` unless an independent source is separately fetched).
+7. Do not proceed to any archive→HistoricalBar projection or REAL_DHAN stamping in that same session — that is a future checkpoint.
 
 ## Remaining Gaps
-- RSI-momentum condition (Blocker B) requires a per-bar feature-history channel `Strategy.evaluate()` does not currently expose - a real architectural gap, not merely a missing feature computation.
-- Breakout/regime features (Blockers A/C) remain unimplemented per explicit scope.
-- No trailing-stop level is produced.
-- No duplicate-alert/repeat-signal suppression exists (explicitly deferred to the scanner/signal lifecycle, per directive).
-- `StrategyRegistry` still has no formal research-only vs. live-eligible flag - the only available guarantee is "not registered in `build_default_registry()`," a convention, not an enforced architectural invariant.
+- No genuine Dhan-historical-candle-backed `HistoricalBarProvider` exists (carried forward from 65.12).
+- No archive-to-HistoricalBar projection path exists.
+- No independent (non-Dhan) reconciliation reference source exists — `TRADING_GRADE_BAR` condition 3 remains unmet.
+- 0 `MarketDataArchiveDay` cells are currently `COMPLETE` (unchanged by 65.13 — no capture was performed).
 
 ## Blockers
-- **Blocker A (breakout)**: 20-bar prior-high/-low breakout/breakdown - REQUIRED BUT UNAVAILABLE (no canonical `breakout` feature exists; explicitly out of scope this checkpoint). Omitted, not fabricated.
-- **Blocker B (RSI momentum)**: "RSI > 50 and rising vs. the PRIOR bar's RSI" - REQUIRED BUT UNAVAILABLE. `Strategy.evaluate()`/`StrategyExecutionCoordinator.run()` only ever supply the CURRENT bar's single `FeatureValue` per field_id; there is no previous-bar-feature channel. Newly discovered this checkpoint (beyond the pre-identified breakout/regime pair). Omitted, not fabricated (dropping only the "rising" half and keeping "RSI > 50" was explicitly rejected as inventing different semantics).
-- **Blocker C (regime)**: ADX-threshold-bucketed regime label - REQUIRED BUT UNAVAILABLE per 64.98. Not a scoring input in the reference's own `_score_row()` either, so its absence changes no signal decision; omitted entirely, no `regime` field/feature produced anywhere.
-- **Registry research-only flag**: `StrategyRegistry` has no research-only/live-eligible distinction; documented above under Research-Only Boundary, mitigated by never registering into `build_default_registry()`, not by weakening the registry.
+Same root blocker as 65.12: no genuine independent historical-candle source, and no capture has yet been run end-to-end across one full real NSE session. 65.13 removes zero blockers by design (audit/readiness only); it prepares the procedure to remove the "no full session ever captured" blocker at the next market open.
 
 ## Next Product Milestone
-65.00 - Gainz Backtest Validation (explicitly NOT started this checkpoint - see Final Directive).
+Execute the rehearsed procedure above at the next real NSE market open (explicit human go-ahead required), producing the first genuinely `COMPLETE` `MarketDataArchiveDay` cell for 1–3 symbols. That is the concrete prerequisite for the archive→HistoricalBar/REAL_DHAN projection checkpoint that follows.
 
 ## Performance Ranking
-(Compare 64.98 -> 64.99.)
-
-**Adapter Architecture** - Previous: audited only, no adapter existed. Current: one real adapter class implemented, conforming exactly to the existing `Strategy` Protocol. Change: Improved (audit -> working implementation). Evidence: `gainz_compatible_research.py`, `Strategy` Protocol conformance verified by registration into a local `StrategyRegistry()` (test 1). Remaining Gap: none for this scope.
-
-**Canonical Feature Reuse** - Previous: contracts frozen, feature parity classified. Current: adapter consumes 13 canonical feature_ids + 1 TradePlan-only ATR, zero private reference functions imported. Change: Improved. Evidence: test 4 (dispatches every required_features() id through the real `compute_feature_series`), test 21b (AST-verified no reference import). Remaining Gap: none.
-
-**Alpha Signal Correctness** - Previous: N/A (no implementation). Current: 8 of the reference's shared-base conditions implemented and condition-by-condition documented; 3 blockers (breakout, RSI momentum, regime) explicitly omitted rather than fabricated. Change: New capability, partial by design. Evidence: module header "CONDITIONS IMPLEMENTED"/"CONDITIONS DELIBERATELY OMITTED"; tests 8/9. Remaining Gap: Blockers A/B/C (see above).
-
-**Determinism** - Previous: N/A. Current: `evaluate()` is a pure function, no mutable state. Change: New capability, verified. Evidence: tests 5, 20 (repeated evaluation/backtest reproducibility). Remaining Gap: none.
-
-**No-Lookahead** - Previous: N/A. Current: truncated-series parity proven. Change: New capability, verified. Evidence: test 7. Remaining Gap: none.
-
-**TradePlan Mapping** - Previous: N/A. Current: existing `TradePlan` contract reused unmodified; `entry_price` documented as candidate-only. Change: New capability, verified. Evidence: tests 15-17. Remaining Gap: no trailing-stop value produced.
-
-**TP1/TP2/TP3** - Previous: N/A. Current: full 3-target ladder, direction-consistent, ATR-multiplier-based. Change: New capability, verified. Evidence: test 15-17 (target ordering assertions both directions). Remaining Gap: none.
-
-**Risk Separation** - Previous: N/A. Current: zero sizing/quantity/margin logic anywhere in the adapter; RiskDecision remains authoritative. Change: New capability, verified. Evidence: tests 13, 14. Remaining Gap: none.
-
-**Execution Compatibility** - Previous: N/A. Current: runs end-to-end through the unmodified `run_stateful_backtest()`, fills recorded next-bar-open. Change: New capability, verified. Evidence: test 18. Remaining Gap: none.
-
-**Correlation** - Previous: N/A. Current: full strategy/version/instrument/timeframe/timestamp provenance on every signal and every evidence value. Change: New capability, verified. Evidence: test 19. Remaining Gap: none.
-
-**Backtest Integration** - Previous: N/A. Current: consumed by the existing engine with zero new backtest code. Change: New capability, verified. Evidence: tests 14, 18. Remaining Gap: none.
-
-**Research-Only Isolation** - Previous: N/A (no adapter to isolate). Current: never registered in the shared `build_default_registry()`; mechanism independently verified by AST-parsing both live-scanner and backtest API modules. Change: New capability, verified by inspection not assertion. Evidence: tests 22a, 22b. Remaining Gap: `StrategyRegistry` itself still has no formal research-only flag - isolation is a registration convention, not an enforced invariant.
-
-**Scanner Isolation** - Previous: Gainz absent (nothing existed to expose). Current: still absent from the live scanner's registry; scanner code untouched. Change: Maintained. Evidence: test 22a/22b; `git diff --name-only` shows no `infrastructure/api/scanner_configuration_views.py` change. Remaining Gap: none.
-
-**Testing** - Previous: 64.98 was audit-only (no new adapter tests; carried forward the unresolved 64.97 "2 failed -> corrected -> 11 passed -> full suite never rerun" history). Current: 26 new adapter tests + 4 pre-existing files updated for the behavior change, full research subsystem green (996 passed), full regression run exactly once and green (2793 passed, 0 failed). Change: Improved, and the 64.97 unresolved-history question is answered for 64.99's own baseline (see Escalation Decision / AE below) even though it remains historically true for 64.97 itself. Evidence: this report's Tests Run section. Remaining Gap: none for 64.99; 64.97's own historical gap is a permanent record, not something 64.99 can retroactively close.
-
-**Maintainability** - Previous: N/A. Current: every non-obvious decision (blockers, scoring provenance, registry isolation mechanism) documented inline in the module header, not just in this report. Change: New capability. Evidence: `gainz_compatible_research.py` module docstring. Remaining Gap: none.
-
-**Performance** - Previous: N/A. Current: adapter adds one linear pass over 8 boolean conditions per bar - negligible relative to existing feature computation cost; no measurable regression observed (full suite runtime dominated by pre-existing Postgres-backed tests). Change: Neutral. Evidence: full regression wall-clock (555.68s) consistent with prior checkpoints' order of magnitude. Remaining Gap: no dedicated performance benchmark was run (not required this checkpoint).
-
-**Security** - Previous: N/A. Current: no new external I/O, no new persistence, no live network/broker call anywhere in the adapter or its tests. Change: Neutral/Maintained. Evidence: `git diff --name-only` (no infrastructure/persistence/API files touched by the adapter itself); manual confirmation no Dhan/market-worker/scanner/Telegram/Discord call was made this session. Remaining Gap: none.
+(65.12 → 65.13)
+- Capture Readiness: improved (procedure now explicit and documented; was implicit before)
+- Session Integrity: unchanged (mechanisms already sound, re-verified)
+- Completeness: unchanged (gate re-verified, not weakened)
+- Provenance: unchanged (no rows touched)
+- Dhan Boundary: unchanged, re-confirmed clean
+- Archive Reliability: unchanged (re-verified via passing targeted tests)
+- Recovery: unchanged (existing mechanism documented, not extended)
+- Reconciliation: unchanged
+- Testing: unchanged in scope (207 targeted tests, all passing, same reduced-testing discipline as 65.12)
+- Performance: N/A — no runtime code changed
+- Maintainability: slightly improved (capture procedure now written down, reducing future improvisation risk)
+- Safety: unchanged — no live call, no data mutation, no code touched
 
 ## Final Product Gate
 
-**A. Is exactly ONE Gainz research strategy identity implemented?** YES - `gainz_compatible_research` only; no other Gainz-named strategy module exists.
+A. Is the existing live-ingestion path completely understood? **YES** — audited end to end (Dhan provider → `LiveQuoteObservation`/`AggregatedBarObservation` → `MarketDataArchiveService` → `MarketDataArchiveDay`).
 
-**B. Is profile=alpha the ONLY implemented profile?** YES - `allowed_values=("alpha",)`; no Trend/Breakout/Mean-Reversion/Hybrid/Scalp logic branch exists in the class.
+B. Is the next-session capture target explicitly defined? **YES** — 1–3 liquid NSE cash-equity symbols from the existing watchlist, `ONE_MINUTE`, 09:15–15:30 IST.
 
-**C. Are unsupported profiles unavailable?** YES - rejected at both the schema-validation layer (`validate_configuration` raises `InvalidParameterValueError` for any non-"alpha" value, since it is outside `allowed_values`) and defensively inside `evaluate()`'s own `_profile()` guard (tests 3, 3b).
+C. Is the target limited to a small initial symbol set? **YES** — 1–3 symbols, not the full NSE universe.
 
-**D. Does the adapter use ONLY canonical features?** YES - all 14 `required_features()` field_ids are canonical, dispatched through the existing `compute_feature_series`; `evaluate()` performs no indicator math itself beyond boolean condition composition and the adapter-owned setup-quality arithmetic.
+D. Is one-minute aggregation understood and validated? **YES** — bucket-alignment logic read; existing aggregation/quality tests re-run and passing.
 
-**E. Were canonical EMA/RSI/ATR/ADX/RVOL/MACD implementations modified?** NO (as expected) - `git diff --name-only` shows zero changes under `signal_intelligence/feature_engine/`.
+E. Are 09:15–15:30 session boundaries explicit? **YES** — via the existing `domain/session/calendar.py`, reused unmodified (with the CAS-aware 09:15–15:15 sibling for CATEGORY_I_CAS symbols).
 
-**F. Does the adapter use the new canonical engulfing/price_delta features?** YES - `bullish_engulfing`, `bearish_engulfing`, and `price_delta_{N}` are all in `required_features()` and used as scoring conditions.
+F. Is CAS handling preserved? **YES** — read, not modified; no defect found.
 
-**G. Does the adapter remain deterministic?** YES - verified by test 5 (repeated `compute_signals`) and test 20 (repeated full pipeline including TradePlan).
+G. Is COMPLETE defined and not weakened? **YES** — completeness gate read verbatim from `assess_archive_day`; nothing loosened.
 
-**H. Is closed-candle evaluation guaranteed?** YES - by the existing architecture (every `Bar` passed to `evaluate()` is already closed); verified indirectly by test 6 (signal timestamp always equals the evaluated bar's own timestamp, never a future one).
+H. Can gaps and duplicates be detected? **YES** — `missing_bar_timestamps`/`duplicate_bar_timestamps`, confirmed by passing tests.
 
-**I. Is no-lookahead guaranteed?** YES - verified by test 7 (truncating the bar series does not change an earlier-bar signal).
+I. Can forming sessions remain IN_PROGRESS? **YES** — `as_of < continuous_closed_at` guard confirmed; can never be COMPLETE/PARTIAL while forming.
 
-**J. Is every signal backed by feature evidence?** YES - verified by tests 8, 9, 19; every non-NEUTRAL signal's `evidence` tuple is non-empty and pinned to the signal's own instrument/timeframe/timestamp.
+J. Can a future complete session produce REAL_DHAN provenance? **YES, in principle, via a projector that does not yet exist** — the mechanism (`HistoricalBarProvider.provenance` attribute, `is_research_eligible`) is in place from 65.12; the actual Dhan-historical-candle-backed provider/projector is a future checkpoint, not built here.
 
-**K. Is setup_quality_score clearly distinct from probability?** YES - documented in the module header's "SCORING" section and this report's "Setup Quality" section; no field named `probability` exists anywhere on `StrategySignal` or its evidence (test 12).
+K. Is Dhan kept outside the backtest execution layer? **YES** — confirmed unchanged; `BacktestingService` etc. not touched, no Dhan call added to that layer.
 
-**L. Is position sizing excluded from the signal path?** YES - no quantity/position_size/margin attribute or method exists on the strategy class or any produced `TradePlan` (test 13).
+L. Was any live Dhan call made during this checkpoint? **NO**
 
-**M. Does RiskDecision remain authoritative?** YES - `run_stateful_backtest()` (unmodified) drives the real `evaluate_order_risk()` for every entry attempt; the adapter never bypasses it (test 14).
+M. Was the live worker started? **NO**
 
-**N. Does TradePlan support TP1/TP2/TP3 without schema changes?** YES - `git diff --name-only` shows `trading_engine/strategy_execution/contracts.py` (where `TradePlan` is defined) was NOT touched this checkpoint; `target_1`/`target_2`/`target_3` are populated using the pre-existing fields (tests 15-17).
+N. Was the scanner started? **NO**
 
-**O. Is the reference same-candle close treated only as an entry candidate?** YES - `TradePlan.entry_price = signal.price` is explicitly documented in `calculation_method` as "an ENTRY CANDIDATE/REFERENCE PRICE ONLY."
+O. Were notifications sent? **NO**
 
-**P. Are actual backtest fills still next-bar-open?** YES - verified via the unmodified `run_stateful_backtest()` orchestration (test 18), whose own module docstring documents the next-bar-open fill rule; this checkpoint introduces no alternate fill path.
+P. Were orders placed? **NO**
 
-**Q. Is consensus NOT implemented?** YES (correctly not implemented) - verified by an explicit regression guard (`test_no_consensus_logic_anywhere_in_the_adapter_module`) scanning the module source for "consensus"/"min_votes"/"consensus_signal" - none found.
+Q. Was existing historical data deleted? **NO**
 
-**R. Are unverified reference weights NOT presented as official Gainz weights?** YES - the adapter uses its own equal-weight (`_TOTAL_ALPHA_CONDITIONS = 8`) scheme, explicitly documented as a PROJECT RESEARCH PARAMETER, distinct from and never equal to the reference's 25/15/12/10/8/7 point scale.
+R. Was existing historical data relabeled? **NO**
 
-**S. Is Gainz still NOT claimed authentic?** YES - the module header's "HONESTY NOTICE" and class docstring both restate this explicitly.
+S. Was synthetic data generated? **NO**
 
-**T. Is the adapter equity/OHLCV only?** YES - no strike/expiry/CE/PE/premium/lot-size/OI/IV/Greeks concept appears anywhere in the module.
+T. Was synthetic data inserted into the database? **NO**
 
-**U. Is NSE_FNO untouched?** YES - `git diff --name-only` shows no file under any FNO/OptionChain/OptionBar/OI/IV/Greeks module.
+U. Was REAL_DHAN assigned to any existing row? **NO**
 
-**V. Is the scanner unchanged?** YES - `git diff --name-only` shows no change to `infrastructure/api/scanner_configuration_views.py` or any frontend file.
+V. Was Gainz modified? **NO**
 
-**W. Is Gainz unavailable to live scanning?** YES - `gainz_compatible_research` is absent from `build_default_registry().list()` (test 22a), and both the scanner and backtest API modules are proven (by AST parse, not assertion) to construct their registries from that same function (test 22b).
+W. Was Market Context modified? **NO**
 
-**X. Was BacktestTrustLevel unchanged?** YES - no trust-level configuration file was touched.
+X. Was Backtest modified? **NO**
 
-**Y. Is Research Readiness still NO?** YES - explicitly restated; nothing in this checkpoint establishes profitability or predictive validity.
+Y. Was Scanner modified? **NO**
 
-**Z. Were no live Dhan calls made?** YES - no Dhan client/API module was imported or invoked at any point this session; all bar data in tests is synthetic, in-memory, or from the local test database.
+Z. Was NSE_FNO modified? **NO**
 
-**AA. Were no live orders placed?** YES - all order/fill activity this session ran through `HistoricalExecutionSimulator`/`run_stateful_backtest()` (paper/backtest simulation), never a live broker gateway.
+AA. Was frontend modified? **NO**
 
-**AB. Does the adapter preserve Signal -> OrderIntent -> RiskDecision -> Backtest/Paper Execution?** YES - confirmed end-to-end by test 14/18 against the unmodified `run_stateful_backtest()` pipeline.
+AB. Was a new table created? **NO**
 
-**AC. Is the adapter traceable through the correlation model?** YES - see Correlation/Provenance sections and test 19.
+AC. Was full regression run? **NO** — reduced, targeted tests only (207 passed).
 
-**AD. Did the final full regression pass? Report the exact result.** YES - `poetry run pytest tests/unit -q`, run exactly once: **2793 passed, 0 failed**, in 555.68s (0:09:15), exit code 0.
+AD. What exact commands/procedures should be executed at the next NSE market open? Confirm trading day → start `run_market_data_worker` (Dhan provider) scoped to the 1–3 chosen watchlist symbols → let it run untouched 09:15–15:30 IST → at/after close run `python manage.py market_data_archive --date <trading_date> --refresh` (or `MarketDataArchiveService.refresh_trading_date()`) for those symbols/`ONE_MINUTE` → read back `describe_trading_date()`.
 
-**AE. Were all 64.97 baseline testing issues resolved or explicitly carried forward?** Carried forward, explicitly: 64.97's own historical run ("2765 passed, 2 failed -> corrected -> only the affected file re-verified (11 passed) -> full suite never rerun clean") remains an unresolved, permanent historical record for that checkpoint specifically - 64.99 cannot retroactively rerun 64.97's own suite under 64.97's own code state. What 64.99 DOES report, as required: its own final, current-codebase full regression is clean (2793 passed, 0 failed), which is the strongest evidence available today that whatever caused 64.97's 2 failures is not presently reproducing across the full suite - but this is NOT the same claim as "64.97's specific 2 failures were individually re-diagnosed and fixed," which was never attempted or claimed.
+AE. What must be verified immediately at 15:30/after session close? Observation count, expected vs. closed bar count, first/last observation timestamps, `missing_bar_timestamps`, `duplicate_bar_timestamps`, resulting `ArchiveStatus` per cell and day rollup, `reconciliation_status` (expect `NOT_RECONCILED` absent an independent source).
 
-**AF. What are the THREE most important limitations of this first Gainz adapter?**
-1. Three genuine condition gaps versus the reference's shared-base Alpha logic (20-bar breakout, RSI-vs-prior-bar momentum, regime labeling) are structurally unavailable given the current feature engine and `Strategy.evaluate()` interface - not just missing features but, for RSI momentum, a missing per-bar-history channel in the architecture itself.
-2. Every numerically-differing canonical feature (EMA/RSI/ATR/ADX/+DI/-DI/RVOL/MACD) means Alpha's condition-truth-values will genuinely diverge from the reference artifact's on the same input bars, by design - this adapter reproduces the reference's STRUCTURE, not its exact numeric behavior.
-3. No outcome evidence of any kind exists yet - zero backtests have been run to evaluate this strategy's actual trade performance; `setup_quality_score`'s "8 agreeing conditions" heuristic has no empirical calibration against realized P&L.
+AF. What exact condition will allow the archive cell to become COMPLETE? Continuous session closed (CAS-aware where applicable) AND timeframe completeness-supported (`ONE_MINUTE` qualifies) AND the set difference between `expected_bar_timestamps()`/`expected_continuous_bar_timestamps()` and observed closed-bar timestamps is empty.
 
-**AG. What exact evidence is required before Alpha can be considered research-valid?**
-A dedicated backtest-validation checkpoint (65.00) running `gainz_compatible_research`/alpha through the existing backtest engine over a substantial, realistic historical dataset, producing: win rate, average R-multiple, drawdown, and trade count by market regime; a documented decision on whether the 3 blocked conditions materially change outcomes when later implemented; and explicit non-claims about profitability until that evidence exists (Research Readiness stays NO until then).
+AG. What exact condition will allow the resulting bars to become REAL_DHAN? Not achievable today — requires a future checkpoint to build a genuine Dhan-historical-candle-backed `HistoricalBarProvider` (or an archive-to-HistoricalBar projector) that declares `PROVENANCE_REAL_DHAN` and is deliberately selected in place of `SyntheticHistoricalBarProvider`; that provider/projector does not exist as of 65.13.
 
-**AH. What is the next checkpoint?**
-65.00 - Gainz Backtest Validation (not started; this checkpoint stops here per the Final Directive).
+AH. What is the smallest next checkpoint after the next complete session is captured? Build the archive→HistoricalBar projection (or genuine Dhan-historical-candle provider) that turns a COMPLETE `MarketDataArchiveDay` cell into `HistoricalBar` rows honestly stamped `REAL_DHAN` — strictly scoped to that projection, no backtest/strategy/Gainz/MarketContext changes bundled in.
 
 ## Git Safety
-`git status --short`:
-```
- M src/intraday/trading_engine/strategy_execution/strategies/gainz_compatible_research.py
- M taskReport.md
- M tests/unit/research/test_checkpoint_64_48_gainz_adapter_design.py
- M tests/unit/research/test_checkpoint_64_49_gainz_feature_registry.py
- M tests/unit/research/test_checkpoint_64_50_strategy_integration.py
- M tests/unit/research/test_checkpoint_64_52_database_first_backtest.py
-?? tests/unit/research/test_checkpoint_64_99_gainz_research_adapter.py
-```
-
-`git diff --stat`:
-```
- .../strategies/gainz_compatible_research.py        | 602 ++++++++++++-----
- taskReport.md                                      | 727 +++++++++------------
- .../test_checkpoint_64_48_gainz_adapter_design.py  |   9 +
- .../test_checkpoint_64_49_gainz_feature_registry.py|   4 +
- .../test_checkpoint_64_50_strategy_integration.py  |  97 ++-
- .../test_checkpoint_64_52_database_first_backtest.py| 29 +-
- 6 files changed, 870 insertions(+), 598 deletions(-)
-```
-
-`git diff --name-only`:
-```
-src/intraday/trading_engine/strategy_execution/strategies/gainz_compatible_research.py
-taskReport.md
-tests/unit/research/test_checkpoint_64_48_gainz_adapter_design.py
-tests/unit/research/test_checkpoint_64_49_gainz_feature_registry.py
-tests/unit/research/test_checkpoint_64_50_strategy_integration.py
-tests/unit/research/test_checkpoint_64_52_database_first_backtest.py
-```
-(plus the new, untracked `tests/unit/research/test_checkpoint_64_99_gainz_research_adapter.py`)
+`git status --short` shows a working tree with substantial **carried-forward, uncommitted work from checkpoints 65.03–65.12** (feature-engine files `price_vs_ma_pct.py`, `rebound_candidate.py`, `ma_divergence.py`, `market_regime.py`, `docs/research/MARKET_CONTEXT_INTELLIGENCE.md`, `domain/market_data/provenance.py`, migration `0036_historicalbar_provenance.py`, and modifications to `historical_bars.py`, `historical_data_preparation.py`, `strategy_execution.py`, `contracts.py`, `backtesting_views.py`, `synthetic_historical.py`, `historical_bar_repository.py`, `models.py`, `definitions.py`, `field_registry.py`, `coordinator.py`, `sma_trend_filter.py`, and associated test files) — **none of these were created, modified, or touched by 65.13**. 65.13's own changes are exactly two files: `docs/architecture/DAILY_MARKET_DATA_ARCHIVE_ARCHITECTURE.md` (Part T addition, the "Checkpoint 65.13" section appended) and `D:\IntraDay\taskReport.md` (this file, overwritten). No commit or push was performed. No prior work was deleted or cleaned.
 
 `git log -3 --oneline`:
 ```
+01b5f14 checkpoint 64.99
 7356ebf checkPoint 64.97
 49ed106 checkpoint 64.90
-dbce678 checkpoint 64.80-f3
 ```
-
-All six modified files (plus the one new file) are 64.99's OWN changes - none are carried-forward, uncommitted 64.92-64.98 changes (the repo was clean at 64.97's commit before this session started, per the pre-session `git status: clean` note). NOTHING WAS COMMITTED OR PUSHED this session, per instruction.
-
-## Final Directive Compliance
-64.99 is the FIRST REAL GAINZ IMPLEMENTATION CHECKPOINT, RESEARCH ONLY. It built one clean adapter (`gainz_compatible_research`, profile `alpha`) proving the reference concepts enter the existing canonical strategy architecture without duplicating the feature/risk/execution/backtest/correlation engines. Six profiles were not implemented. Consensus was not implemented. Weights were not optimized. Breakout/regime were not implemented. Gainz was not activated. Gainz was not wired into the scanner. Live trading was not touched. STOPPING HERE per the Final Directive - awaiting review before 65.00.

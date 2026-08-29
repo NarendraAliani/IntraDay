@@ -27,6 +27,7 @@ from intraday.application.services.historical_data_coverage import (
     HistoricalDataCoverageService,
 )
 from intraday.domain.market_data.contracts import Bar
+from intraday.domain.market_data.provenance import PROVENANCE_UNKNOWN
 from intraday.domain.market_data.quality import (
     DuplicateBarTimestampError,
     OutOfOrderBarError,
@@ -36,6 +37,12 @@ from intraday.domain.shared_kernel.contracts import InstrumentId, Timeframe
 
 MAX_FETCH_ATTEMPTS = 3
 PROVENANCE_API_FETCH = "API_FETCH"
+"""`HistoricalBar.source` value — WHICH PIPELINE STAGE wrote the row.
+Not to be confused with `HistoricalBar.provenance`
+(`domain.market_data.provenance`), which is WHAT KIND of data it is.
+This constant's meaning is unchanged from 63.x; see that field's own
+docstring in `infrastructure.persistence.models` for the distinction
+65.12 introduced."""
 
 
 class HistoricalBarProvider(Protocol):
@@ -44,7 +51,18 @@ class HistoricalBarProvider(Protocol):
     tomorrow) is interchangeable here without this service or anything
     above it changing — see `synthetic_historical.py`'s own disclosure
     for what "the historical API" concretely means in this codebase
-    right now."""
+    right now.
+
+    `provenance` (Checkpoint 65.12): each concrete provider MUST
+    declare what kind of data it produces
+    (`domain.market_data.provenance.PROVENANCE_REAL_DHAN` /
+    `PROVENANCE_SYNTHETIC_TEST`) so this service can stamp
+    `HistoricalBar.provenance` correctly per-provider instead of
+    (65.01's root-cause bug #1) writing the same label regardless of
+    which provider actually ran. A provider that does not declare one
+    is treated as `PROVENANCE_UNKNOWN` — never silently upgraded."""
+
+    provenance: str
 
     def fetch(
         self,
@@ -174,7 +192,10 @@ class HistoricalDataPreparationService:
                 )
 
             bars_fetched += len(validated)
-            bars_persisted += self.writer.bulk_upsert(validated, source=PROVENANCE_API_FETCH)
+            provider_provenance = getattr(self.provider, "provenance", PROVENANCE_UNKNOWN)
+            bars_persisted += self.writer.bulk_upsert(
+                validated, source=PROVENANCE_API_FETCH, provenance=provider_provenance
+            )
 
         # STORE -> VERIFY PERSISTENCE (Phase 5's final step): re-check
         # coverage against the DB itself, never assume the write

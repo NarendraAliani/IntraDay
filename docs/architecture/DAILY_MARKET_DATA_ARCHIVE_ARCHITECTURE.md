@@ -368,3 +368,195 @@ the first time. Step 9 will still persist `NOT_RECONCILED` unless step 7
 is also fixed to fetch overlapping `1m` data. `COMPLETE` +
 `NOT_RECONCILED` is the correct outcome of a successful rehearsal, and
 must not be read as a failure of the reconciliation path.
+
+---
+
+## Checkpoint 65.12 — `HistoricalBar.provenance`: separating "which
+stage wrote this row" from "what kind of data is it"
+
+65.00/65.01's audit found the concrete ambiguity this section closes:
+`HistoricalBar.source` (Checkpoint 63.x) has only ever meant *which
+pipeline stage wrote the row* — every single one of the 5,100 rows in
+this table carries `source="API_FETCH"`, whether the row came from
+`SyntheticHistoricalBarProvider` (a deterministic, hash-seeded
+generator — see that module's own docstring) or from anything else.
+Formula-replay in 65.00/65.01 reproduced roughly 3,900 of those 5,100
+rows exactly from the synthetic generator; the remaining ~1,200 have
+no corroborating evidence either way (some fall outside the
+generator's fixed 100–999 price range, proving they were **not**
+produced by that path, but that alone does not prove they are real
+NSE data).
+
+### The new field
+
+`HistoricalBar.provenance` (migration `0036_historicalbar_provenance`,
+pure `ADD COLUMN` with a fixed default — see that migration's own
+docstring for the full safety note) is a **second, explicit** per-row
+field, orthogonal to `source`:
+
+| Field | Question it answers | Values |
+|---|---|---|
+| `source` | Which pipeline stage wrote this row? | `"API_FETCH"` (unchanged since 63.x) |
+| `provenance` | What kind of data is it? | `REAL_DHAN` / `SYNTHETIC_TEST` / `UNKNOWN` (`domain.market_data.provenance`, new in 65.12) |
+
+All 5,100 pre-65.12 rows were left `provenance="UNKNOWN"` by the
+migration — **not** relabeled, **not** inferred, **not** upgraded from
+the 65.00/65.01 formula-replay finding. That finding is real evidence,
+but applying it is a deliberate, reviewed backfill decision, not
+something a schema migration should do silently; it remains available
+as future work (§ Remaining Gaps in the 65.12 task report) if the
+project chooses to run it.
+
+### Where it gets stamped
+
+`HistoricalBarProvider` (the Protocol in
+`application.services.historical_data_preparation`) now declares a
+`provenance` attribute. `SyntheticHistoricalBarProvider` declares
+`PROVENANCE_SYNTHETIC_TEST`; a provider that declares nothing is
+treated as `PROVENANCE_UNKNOWN` by
+`HistoricalDataPreparationService`, never silently upgraded. This
+fixes 65.01's root-cause bug #1 (the preparation service used to write
+one hardcoded label regardless of which provider ran) for every future
+fetch; it does **not** retroactively fix the 5,100 existing rows,
+which is why the migration leaves them `UNKNOWN` rather than
+back-dating this stamping logic onto them.
+
+`infrastructure/api/backtesting_views.py`'s `_prepare_if_needed` still
+unconditionally constructs `SyntheticHistoricalBarProvider()` for
+every non-fixture instrument (65.01 root-cause bug #2) — this is now
+**honestly labelled** (every bar it writes is stamped
+`SYNTHETIC_TEST`) rather than fixed by selecting a different provider,
+because no real Dhan historical-candle adapter exists yet to select.
+See that function's own 65.12 docstring for the exact one-line change
+required the day one does.
+
+### Research eligibility
+
+`domain.market_data.provenance.is_research_eligible(provenance)`
+returns `True` only for `PROVENANCE_REAL_DHAN`. This is the smallest
+possible answer to "can this bar be used for research?" (Part B) — it
+is a pure function callers can apply, **not** a change to
+`BacktestingService`, `HistoricalMarketDataService`, or any repository
+read path's default behavior, all of which remain untouched. Wiring
+this gate into the canonical backtest's default (research) execution
+path — so a `RESEARCH` run rejects non-`REAL_DHAN` bars instead of
+merely being *able* to check them — is explicitly **not done** in
+65.12: that is a backtest-execution-layer change, out of this
+checkpoint's data-foundation scope, and is named as the concrete next
+step in the 65.12 task report.
+
+### What this does not change
+
+`AggregatedBarObservation` and `MarketDataArchiveDay` are unmodified
+by 65.12 — `MarketDataArchiveDay` still shows 0 `COMPLETE` cells (4
+`IN_PROGRESS`, 16 `PARTIAL` as of 65.12's audit), and the completeness
+vocabulary and derivation in `domain.market_data.archive` (§7 above)
+is unchanged. No `HistoricalBar` row was deleted, no synthetic data
+was generated, and no row was relabeled `REAL_DHAN`.
+
+## Checkpoint 65.13 — next real NSE session capture procedure (READINESS ONLY, NOT EXECUTED)
+
+65.13 is an offline audit. The market was closed throughout; no Dhan
+connection was made, no worker was started, and nothing in this
+section was executed. It records the exact procedure so the next real
+capture is a rehearsed sequence, not an improvisation — the same
+discipline as §10's 64.84 full-session-workflow table above, updated
+with a deliberately small first target.
+
+### Selected target (smallest defensible)
+
+- **Symbols:** 1–3 liquid NSE cash-equity symbols already present in
+  the operator's configured watchlist (`run_market_data_worker.py`
+  resolves its subscription set from `DjangoWatchlistRepository` —
+  the worker does not hardcode a symbol list). Do not widen to the
+  full NSE universe for the first capture.
+- **Timeframe:** `ONE_MINUTE` only — the finest-grained
+  completeness-supported timeframe (§7) and the one
+  `expected_bar_timestamps()`/`is_completeness_supported()` are
+  already proven against.
+- **Session window:** 09:15–15:30 IST, the existing
+  `domain.session.calendar` continuous session (or the CAS-aware
+  09:15–15:15 continuous window for a CATEGORY_I_CAS symbol, via
+  `build_cas_aware_session_for` / `is_continuous_completeness_supported`
+  — do not use the plain 375-minute window for a CAS instrument).
+- **Reason:** every mechanism this target exercises (ingestion →
+  aggregation → archive refresh → completeness) is already built and
+  targeted-tested (§ below); a 1–3 symbol / 1m / one-session capture is
+  the smallest run that can turn a `MarketDataArchiveDay` cell
+  `COMPLETE` without adding load, without touching option/index/sector
+  ingestion, and without exercising any code path not already covered
+  by existing tests.
+
+### Procedure at next market open
+
+1. Confirm the date is a trading day (`domain.session.calendar.is_trading_day`).
+2. Start `run_market_data_worker` for the Dhan provider only, scoped to
+   the chosen 1–3 symbol watchlist. Do not start it in 65.13.
+3. Let it run untouched 09:15–15:30 IST. No manual intervention unless
+   `WorkerRuntimeStatus` reports a failure.
+4. At/after 15:30 IST, run `python manage.py market_data_archive --date
+   <trading_date> --refresh` (or call
+   `MarketDataArchiveService.refresh_trading_date()` directly) for the
+   captured symbols and `ONE_MINUTE`.
+5. Read back `describe_trading_date()` / the archive query API and
+   record the resulting `ArchiveStatus` per cell.
+6. Do **not** run reconciliation against Dhan-REST as a substitute for
+   an independent source (§9) — persist `NOT_RECONCILED` if no
+   independent reference is fetched; this is the correct, honest
+   outcome per the 64.84 precedent, not a failure.
+
+### Completeness expectation
+
+Per §7, the cell becomes `COMPLETE` only when: the continuous session
+has closed, `ONE_MINUTE` is completeness-supported (it is), and the set
+difference between `expected_bar_timestamps()`/
+`expected_continuous_bar_timestamps()` and the observed closed-bar
+timestamps is empty, with duplicates reported separately and never
+counted toward coverage. No loosening of this gate is proposed or
+made.
+
+### Provenance expectation
+
+`HistoricalBar.provenance=REAL_DHAN` is **not** produced by this
+capture directly — capturing a COMPLETE `MarketDataArchiveDay` cell
+populates the live-observation/archive tables only.
+`HistoricalBar.provenance` (65.12) is stamped by a *separate*
+projection path (`HistoricalBarProvider` → `HistoricalDataPreparationService`)
+that, as of 65.12/65.13, has no genuine Dhan-historical-candle provider
+implementation — only `SyntheticHistoricalBarProvider`
+(`PROVENANCE_SYNTHETIC_TEST`) exists today. A future checkpoint must
+add a real Dhan-historical-candle-backed `HistoricalBarProvider` (or a
+COMPLETE-archive-to-HistoricalBar projector) that declares
+`PROVENANCE_REAL_DHAN` before any row can honestly carry that value.
+65.13 does not build this projector — see `PART K` of its directive.
+
+### Reconciliation checklist after session close
+
+- Observation count for the trading date/symbol/timeframe.
+- Expected bar count vs. closed bar count (`expected_bar_count`,
+  `closed_bar_count`, `missing_bar_count`).
+- First/last observation timestamps.
+- Gaps (`missing_bar_timestamps`) and duplicates
+  (`duplicate_bar_timestamps`).
+- Resulting `ArchiveStatus` per cell and the day-level rollup
+  (worst-status-wins, §"Query model"/`_rollup_status`).
+- `reconciliation_status` — expected `NOT_RECONCILED` unless a genuine
+  independent-source comparison was also run.
+
+### Failure handling
+
+- A worker crash/restart mid-session: `LiveQuoteObservation`/
+  `AggregatedBarObservation` writes are append-only and already
+  persisted per-observation, so a restart resumes ingestion without
+  losing already-written data; `MarketDataArchiveDay` is a recomputable
+  projection (§5) so refreshing after a restart reproduces the correct
+  state from whatever was actually observed — no distributed
+  scheduler or new recovery infrastructure is required for this first
+  capture. `WorkerRuntimeStatus` (Checkpoint 22/64.63) is read to
+  confirm the process's own view of RUNNING/STOPPED/FAILED.
+- A genuinely failed ingestion run should be recorded as
+  `ingestion_failed=True` at refresh time so the cell is honestly
+  `FAILED`, never inferred from a low row count (§7).
+- No missing bar is ever auto-filled, interpolated, or fabricated —
+  gaps stay gaps in `missing_bar_timestamps` until a genuine future
+  observation or reconciliation resolves them.

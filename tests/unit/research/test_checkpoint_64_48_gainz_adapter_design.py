@@ -362,6 +362,24 @@ def test_e_feature_registry_reuse_opportunities_identified() -> None:
     # expects, so GAINZ_FEATURE_MAPPING's own `("delta", False, False)`
     # entry is left unchanged - it still accurately reflects that no
     # field literally named "delta" exists.
+    #
+    # Updated at Checkpoint 65.05R: 65.03/65.04/65.05 added 5 more GENERIC
+    # Market Context Intelligence canonical features (NOT Gainz-specific,
+    # NOT verified against a Gainz reference) - price_vs_ma_pct_sma/
+    # price_vs_ma_pct_ema (65.03), rebound_candidate (65.04),
+    # ma_divergence_sma/ma_divergence_ema (65.05) - see price_vs_ma_pct.py,
+    # rebound_candidate.py, ma_divergence.py and their dedicated test
+    # files. None of these correspond to a GAINZ_FEATURE_MAPPING concept
+    # above (the directive prose this table is derived from never named a
+    # "price vs MA %", "rebound candidate", or "MA divergence" concept),
+    # so GAINZ_FEATURE_MAPPING itself is unchanged - only this set of real
+    # registry ids, which is a fact about the registry, not a Gainz claim.
+    #
+    # Updated at Checkpoint 65.08: `market_regime` (the first PRODUCTION
+    # categorical Market Context feature - see market_regime.py) added to
+    # the registry. Same situation as 65.03/65.04/65.05 above: GENERIC,
+    # NOT Gainz-specific, no corresponding GAINZ_FEATURE_MAPPING concept,
+    # so GAINZ_FEATURE_MAPPING itself remains unchanged.
     assert real_field_ids == {
         "open",
         "high",
@@ -381,6 +399,12 @@ def test_e_feature_registry_reuse_opportunities_identified() -> None:
         "bullish_engulfing",
         "bearish_engulfing",
         "price_delta",
+        "price_vs_ma_pct_sma",
+        "price_vs_ma_pct_ema",
+        "rebound_candidate",
+        "ma_divergence_sma",
+        "ma_divergence_ema",
+        "market_regime",
     }
 
     # "+DI/-DI" is one directive-prose concept mapping onto TWO real
@@ -610,6 +634,23 @@ def test_k_no_gainz_reference_file_exists_in_repo() -> None:
         "bearish_engulfing.py",
         "price_delta.py",
         "test_checkpoint_64_97_engulfing_and_price_delta.py",
+        # Checkpoint 65.03/65.04/65.05: Market Context Intelligence
+        # feature modules and their dedicated test files. Each mentions
+        # "Gainz" only to honestly disclaim "GENERIC feature, NOT
+        # Gainz-specific" / "NOT verified against a Gainz reference" -
+        # never to port Gainz math or connect to Gainz.
+        "rebound_candidate.py",
+        "ma_divergence.py",
+        "test_checkpoint_65_04_rebound_candidate.py",
+        "test_checkpoint_65_05_ma_divergence.py",
+        "MARKET_CONTEXT_INTELLIGENCE.md",
+        # Checkpoint 65.08: market_regime, the first production categorical
+        # Market Context feature. Mentions "Gainz" only to honestly
+        # disclaim "NOT Gainz-specific" / to note the pre-existing
+        # gainz_signal_engine_reference.py `regime` label is
+        # non-authoritative prior art - never to port Gainz math or
+        # connect market_regime to Gainz.
+        "market_regime.py",
     }
     for path in hits:
         assert path.name in allowed_names, (

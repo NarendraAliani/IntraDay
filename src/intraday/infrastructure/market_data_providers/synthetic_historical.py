@@ -37,6 +37,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 from intraday.domain.market_data.contracts import Bar
+from intraday.domain.market_data.provenance import PROVENANCE_SYNTHETIC_TEST
 from intraday.domain.market_data.quality import expected_bar_timestamps
 from intraday.domain.session.calendar import build_session_for, is_trading_day
 from intraday.domain.shared_kernel.contracts import InstrumentId, Timeframe
@@ -89,6 +90,12 @@ class SyntheticHistoricalBarProvider:
 
     is_available: bool = True
     fetch_call_count: int = field(default=0, init=False)
+    provenance: str = field(default=PROVENANCE_SYNTHETIC_TEST, init=False)
+    """Checkpoint 65.12: this provider is ALWAYS `SYNTHETIC_TEST` — see
+    module docstring above. `HistoricalDataPreparationService` reads
+    this attribute to stamp `HistoricalBar.provenance` per-provider
+    (fixing 65.01's root-cause bug #1: every provider used to write the
+    same provenance label regardless of which one actually ran)."""
 
     def fetch(
         self,
