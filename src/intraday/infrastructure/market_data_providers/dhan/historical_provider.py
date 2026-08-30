@@ -8,13 +8,14 @@
 # generated fixture data.
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 
 from intraday.application.services.instrument_master import InstrumentMasterProvider
 from intraday.domain.instrument.contracts import parse_instrument_id
 from intraday.domain.market_data.contracts import Bar
+from intraday.domain.market_data.provenance import PROVENANCE_REAL_DHAN
 from intraday.domain.shared_kernel.contracts import Exchange, InstrumentId, Timeframe
 from intraday.infrastructure.market_data_providers.dhan.historical_client import (
     DhanHistoricalCandle,
@@ -79,6 +80,13 @@ class DhanHistoricalBarProvider:
     client_id: str
     access_token: str
     instrument_master: InstrumentMasterProvider
+    provenance: str = field(default=PROVENANCE_REAL_DHAN, init=False)
+    """Checkpoint 65.23: every bar this provider returns came from a
+    genuine Dhan historical REST call - see module docstring. Mirrors
+    `SyntheticHistoricalBarProvider.provenance`'s precedent exactly, so
+    `HistoricalDataPreparationService` stamps `HistoricalBar.provenance
+    = REAL_DHAN` instead of silently falling back to UNKNOWN (the exact
+    defect 65.22-R identified: this attribute was previously absent)."""
 
     def _security_id(self, exchange: Exchange, symbol: str) -> int:
         for entry in self.instrument_master.list_instruments(exchange):

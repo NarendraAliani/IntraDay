@@ -146,3 +146,15 @@ def test_a_dhan_client_error_is_wrapped_as_unavailable(monkeypatch: pytest.Monke
             datetime(2024, 1, 1, tzinfo=UTC),
             datetime(2024, 1, 2, tzinfo=UTC),
         )
+
+
+def test_provenance_is_real_dhan() -> None:
+    """Checkpoint 65.23: `HistoricalDataPreparationService` reads this
+    attribute (`getattr(self.provider, "provenance", PROVENANCE_UNKNOWN)`)
+    to stamp `HistoricalBar.provenance` - a real Dhan fetch must never
+    silently fall back to UNKNOWN just because this provider declared
+    nothing, which is exactly the defect 65.22-R found and this fixes."""
+    from intraday.domain.market_data.provenance import PROVENANCE_REAL_DHAN
+
+    provider = _provider(())
+    assert provider.provenance == PROVENANCE_REAL_DHAN

@@ -41,6 +41,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -49,6 +50,22 @@ DHAN_INTRADAY_HISTORICAL_ENDPOINT = "https://api.dhan.co/v2/charts/intraday"
 _REQUEST_TIMEOUT_SECONDS = 30.0
 _EQUITY_INSTRUMENT = "EQUITY"
 _INTRADAY_MAX_WINDOW_DAYS = 90
+_INDIA_STANDARD_TIME = ZoneInfo("Asia/Kolkata")
+# Checkpoint 65.25 diagnostic finding: Dhan's `/v2/charts/intraday`
+# `fromDate`/`toDate` fields are documented as plain "YYYY-MM-DD HH:MM:SS"
+# strings with no timezone marker - Dhan interprets that wall-clock time
+# as IST (it is an India-only broker; there is no other sensible
+# reading). This client's `from_time`/`to_time` are UTC-aware `datetime`s
+# (the domain layer's `ensure_utc` contract everywhere else); formatting
+# them with a bare `.strftime(...)` printed the raw UTC clock digits
+# with no IST conversion, silently asking Dhan for a session-start-hours
+# window instead of the intended one. Proved conclusively this
+# checkpoint by making the identical raw REST call both ways for
+# RELIANCE/2026-08-28/1m: the un-converted request returned only 45 raw
+# candles (03:45-04:29 UTC = 09:15-09:59 IST - exactly the ~44-bar
+# truncation seen in every prior ingestion batch); the IST-converted
+# request for the *same* UTC window returned 358 raw candles. Converting
+# to IST before formatting is therefore the fix, not a workaround.
 
 
 class DhanHistoricalDataError(Exception):
@@ -197,8 +214,10 @@ def fetch_intraday_candles(
             "exchangeSegment": exchange_segment,
             "instrument": _EQUITY_INSTRUMENT,
             "interval": str(interval_minutes),
-            "fromDate": window_start.strftime("%Y-%m-%d %H:%M:%S"),
-            "toDate": window_end.strftime("%Y-%m-%d %H:%M:%S"),
+            "fromDate": window_start.astimezone(_INDIA_STANDARD_TIME).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            ),
+            "toDate": window_end.astimezone(_INDIA_STANDARD_TIME).strftime("%Y-%m-%d %H:%M:%S"),
         }
         payload = _post(
             DHAN_INTRADAY_HISTORICAL_ENDPOINT,
