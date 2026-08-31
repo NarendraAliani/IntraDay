@@ -1,0 +1,57 @@
+{
+  "dataset_id": "checkpoint_66_3_nse_cash_equity_5m",
+  "created_at": "2026-08-31T00:00:00+00:00",
+  "checkpoint": "66.3",
+  "code_version_git_short_sha": "491628e",
+  "source": "Dhan historical REST API (read-only) via DhanHistoricalBarProvider + historical_client.py",
+  "exchange": "NSE",
+  "segment": "CASH_EQUITY",
+  "timeframe": "5m",
+  "provenance_policy": {
+    "written_provenance": "REAL_DHAN",
+    "research_eligibility_rule": "domain.market_data.provenance.is_research_eligible() - only REAL_DHAN rows are research-eligible; UNKNOWN and SYNTHETIC_TEST are excluded",
+    "note": "REAL_DHAN provenance is stamped on every bar this provider returns, including bars belonging to a PARTIAL session. PARTIAL sessions are real Dhan data but are excluded from the 'trusted/COMPLETE dataset' definition below - REAL_DHAN row count and 'trusted dataset' row count are two distinct numbers, see completeness_requirement."
+  },
+  "completeness_requirement": {
+    "definition": "A (symbol, date, timeframe) session is COMPLETE only when every expected bar-close timestamp computed by HistoricalDataCoverageService (application/services/historical_data_coverage.py, read-only, unmodified) is actually present in the database. Sessions with any missing expected timestamp are PARTIAL and excluded from the trusted dataset.",
+    "no_fill_policy": "No missing bar was interpolated, filled, or synthesized at any point in this checkpoint."
+  },
+  "symbols": [
+    {"symbol": "RELIANCE", "dhan_security_id": 2885, "sector": "Energy/Conglomerate"},
+    {"symbol": "TCS", "dhan_security_id": 11536, "sector": "IT Services"},
+    {"symbol": "HDFCBANK", "dhan_security_id": 1333, "sector": "Private Bank"},
+    {"symbol": "INFY", "dhan_security_id": 1594, "sector": "IT Services"},
+    {"symbol": "ICICIBANK", "dhan_security_id": 4963, "sector": "Private Bank"},
+    {"symbol": "ADANIPORTS", "dhan_security_id": 15083, "sector": "Infrastructure/Ports"},
+    {"symbol": "SBIN", "dhan_security_id": 3045, "sector": "Public Bank"},
+    {"symbol": "ITC", "dhan_security_id": 1660, "sector": "FMCG"},
+    {"symbol": "HINDUNILVR", "dhan_security_id": 1394, "sector": "FMCG"},
+    {"symbol": "AXISBANK", "dhan_security_id": 5900, "sector": "Private Bank"},
+    {"symbol": "BAJFINANCE", "dhan_security_id": 317, "sector": "NBFC"},
+    {"symbol": "KOTAKBANK", "dhan_security_id": 1922, "sector": "Private Bank"},
+    {"symbol": "LT", "dhan_security_id": 11483, "sector": "Capital Goods/Infra"},
+    {"symbol": "MARUTI", "dhan_security_id": 10999, "sector": "Auto"},
+    {"symbol": "SUNPHARMA", "dhan_security_id": 3351, "sector": "Pharma"}
+  ],
+  "requested_date_range": {"start": "2026-08-17", "end": "2026-08-28", "num_trading_sessions_requested": 10},
+  "actual_trading_dates_retrieved": [
+    "2026-08-17", "2026-08-18", "2026-08-19", "2026-08-20", "2026-08-21",
+    "2026-08-24", "2026-08-25", "2026-08-26", "2026-08-27", "2026-08-28"
+  ],
+  "session_regime_coverage": {
+    "note": "All 10 requested sessions fall on/after CAS_EFFECTIVE_DATE (2026-08-03, domain/session/calendar.py) - all new ingestion this checkpoint is CAS_ERA. Pre-existing REAL_DHAN rows (ADANIPORTS/RELIANCE 5m, 2026-07-29/07-30, from a prior checkpoint) remain the dataset's only PRE_CAS REAL_DHAN coverage.",
+    "regime_source": "domain.session.resolver.resolve_market_session_for_instant(..., is_historical=True), read-only"
+  },
+  "ingestion_method": {
+    "provider": "intraday.infrastructure.market_data_providers.dhan.historical_provider.DhanHistoricalBarProvider",
+    "persistence": "intraday.infrastructure.persistence.historical_bar_repository.DjangoHistoricalBarRepository.bulk_upsert",
+    "idempotency": "HistoricalDataCoverageService.get_coverage() checked per symbol against the full requested window before any Dhan request; only the reported missing_ranges were fetched.",
+    "api_requests_made": 148,
+    "rows_upserted": 10250
+  },
+  "known_deferred_issues": [
+    "358-vs-360-bar discrepancy (not investigated this checkpoint, per hard rule)",
+    "test_f_partial_gap_fetches_only_the_missing_range (deferred, untouched)",
+    "test_g_data_completeness_is_enforced_not_row_existence (deferred, untouched)"
+  ]
+}

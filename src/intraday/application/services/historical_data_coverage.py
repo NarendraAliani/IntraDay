@@ -26,8 +26,15 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
 from intraday.application.repositories.historical_bars import HistoricalBarReadRepository
+from intraday.domain.instrument.contracts import parse_instrument_id
 from intraday.domain.market_data.quality import expected_bar_timestamps, timeframe_to_timedelta
-from intraday.domain.session.calendar import build_session_for, is_trading_day
+from intraday.domain.session.calendar import (
+    build_cas_aware_session_for,
+    build_session_for,
+    instrument_category_for,
+    is_trading_day,
+)
+from intraday.domain.session.contracts import InstrumentCategory
 from intraday.domain.shared_kernel.contracts import InstrumentId, Timeframe, ensure_utc
 
 
@@ -55,23 +62,51 @@ class CoverageReport:
 
 
 def _expected_timestamps(
-    start: datetime, end: datetime, timeframe: Timeframe
+    start: datetime, end: datetime, timeframe: Timeframe, instrument_id: InstrumentId
 ) -> tuple[datetime, ...]:
     """Every bar-close timestamp a complete series would have across
     every trading day in `[start, end]` - built entirely from the
-    already-established, checkpoint-23 domain calendar/session
-    machinery (one `TradingSession` + `expected_bar_timestamps` call per
-    trading day), never a second, parallel calendar implementation."""
+    already-established domain calendar/session machinery, never a
+    second, parallel calendar implementation.
+
+    Checkpoint 65.27: which session machinery depends on the
+    instrument's `InstrumentCategory` (64.87/64.88's existing, reused
+    model - NOT re-derived here). CATEGORY_I_CAS instruments (RELIANCE,
+    HDFCBANK, INFY, TCS) end CONTINUOUS trading at 15:15 IST, followed
+    by a 15:15-15:35 IST closing-auction window that is NOT an ordinary
+    continuous one-minute OHLC interval - `build_cas_aware_session_for`
+    + `CasAwareSession.expected_continuous_bar_timestamps` (the same
+    CAS-aware pair `domain.market_data.archive.assess_archive_day`
+    already uses for `AggregatedBarObservation`) is used for these,
+    never the old uniform 09:15-15:30 `expected_bar_timestamps`.
+    CATEGORY_II_NON_CAS instruments keep the prior, unchanged
+    `build_session_for` + `expected_bar_timestamps` behavior - this
+    checkpoint does not alter their expected set at all."""
     ensure_utc(start, field_name="start")
     ensure_utc(end, field_name="end")
+    _, symbol = parse_instrument_id(instrument_id)
+    category = instrument_category_for(symbol)
     timestamps: list[datetime] = []
     current_date: date = start.date()
     end_date: date = end.date()
     as_of = end  # session status classification is irrelevant here; only the shape matters
     while current_date <= end_date:
         if is_trading_day(current_date):
-            session = build_session_for(current_date, as_of)
-            for ts in expected_bar_timestamps(session, timeframe):
+            if category is InstrumentCategory.CATEGORY_I_CAS:
+                cas_session = build_cas_aware_session_for(category, current_date, as_of)
+                try:
+                    bar_duration = timeframe_to_timedelta(timeframe)
+                except ValueError:
+                    bar_duration = None
+                day_timestamps = (
+                    cas_session.expected_continuous_bar_timestamps(bar_duration)
+                    if bar_duration is not None
+                    else ()
+                )
+            else:
+                session = build_session_for(current_date, as_of)
+                day_timestamps = expected_bar_timestamps(session, timeframe)
+            for ts in day_timestamps:
                 if start <= ts <= end:
                     timestamps.append(ts)
         current_date += timedelta(days=1)
@@ -118,7 +153,7 @@ class HistoricalDataCoverageService:
         start: datetime,
         end: datetime,
     ) -> CoverageReport:
-        expected = _expected_timestamps(start, end, timeframe)
+        expected = _expected_timestamps(start, end, timeframe, instrument_id)
         if not expected:
             return CoverageReport(
                 instrument_id=instrument_id,

@@ -14,6 +14,29 @@
 # Lives in `infrastructure/api/`, matching the established composition-
 # root precedent (Decision 153/173 etc.) - this module touches
 # concrete `PaperBroker`/`DjangoPaperLedgerRepository` infrastructure.
+#
+# Checkpoint 65.34 Part 2/3 - CONSERVATIVE, DOCUMENTED DECISION (no
+# behavior change this checkpoint): `domain/session/resolver.py`
+# (Checkpoint 65.33) now exposes `ResolvedSession.exit_eligible` as a
+# ready session-context source for existing-position exit decisions,
+# but it is deliberately NOT wired into `run_position_monitor_tick()`
+# or `_submit_exit_order()` here. Reason: exactly what NSE's CAS
+# execution mechanics permit or forbid for an EXISTING open position's
+# price-driven exit order (SL/T1/T2/T3/trailing) during/around the
+# 15:15 CAS boundary remains genuinely UNRESOLVED after three prior
+# research checkpoints (65.30-65.32) - primary-source fetches failed
+# twice and several sub-questions never got an authoritative answer.
+# Restricting exit submission based on an unverified assumption about
+# CAS order-matching would itself be inventing exchange behavior,
+# which the project's own standing rule forbids. The conservative,
+# already-proven-safe default - unconditionally allowing a firing
+# exit decision to submit (`market_session_is_open=True` below,
+# unchanged since Checkpoint 43) - is therefore preserved as-is.
+# `exit_eligible` remains available for a FUTURE checkpoint to wire in
+# once CAS execution semantics for existing positions are actually
+# confirmed from an authoritative source; forcing that integration now
+# without evidence was judged a bigger, riskier policy decision than
+# this checkpoint's scope justifies.
 from __future__ import annotations
 
 import uuid

@@ -21,7 +21,10 @@ from dataclasses import dataclass
 from intraday.application.repositories import BacktestResultRepository
 from intraday.application.services.errors import ResourceNotFoundError
 from intraday.application.services.market_data import HistoricalMarketDataService
+from intraday.application.services.research_data_gate import ResearchDataGateService
 from intraday.application.services.strategy_execution import compute_feature_series
+from intraday.domain.instrument.contracts import parse_instrument_id
+from intraday.domain.session.resolver import CASH_EQUITY_SEGMENT
 from intraday.research.backtesting import (
     StrategyConfigurationValues,
     StrategyRegistry,
@@ -90,6 +93,69 @@ class BacktestingService:
     market_data: HistoricalMarketDataService
     registry: StrategyRegistry
     repository: BacktestResultRepository
+    # Checkpoint 66.1: OPTIONAL research-data eligibility gate
+    # (`application.services.research_data_gate.ResearchDataGateService`).
+    # Defaults to `None` so every EXISTING caller/test that constructs
+    # `BacktestingService` with only `market_data`/`registry`/`repository`
+    # (fixture repositories, synthetic-provider engine-correctness tests,
+    # etc. — see this class's own module docstring: fixture/historical
+    # data only) keeps its EXACT prior behavior with zero code changes.
+    # When a caller DOES provide `research_gate` (wired at the real,
+    # DB-backed production construction sites —
+    # `infrastructure.api.backtesting_views._service()` and
+    # `infrastructure.api.tasks.build_historical_backtest_orchestrator()`
+    # — see those two call sites for the actual wiring), `run()` reads
+    # bars THROUGH the gate instead of directly through `market_data`,
+    # so a real backtest can only ever see TRUSTED RESEARCH DATA (Part 7)
+    # — never a raw, unvetted `HistoricalBar` row. Any future Gainz
+    # backtest entry point that goes through this same `run()` and is
+    # constructed with `research_gate` set automatically inherits the
+    # identical gate (Part 13) — no separate wiring required.
+    research_gate: ResearchDataGateService | None = None
+
+    @classmethod
+    def for_database_backed_research(
+        cls,
+        *,
+        market_data: HistoricalMarketDataService,
+        registry: StrategyRegistry,
+        repository: BacktestResultRepository,
+        research_gate: ResearchDataGateService,
+    ) -> "BacktestingService":
+        """Checkpoint 66.2 Part 1/2: the ONLY constructor a real,
+        DB-backed production call site may use — currently exactly
+        `infrastructure.api.backtesting_views._service()`'s DB branch
+        and `infrastructure.api.tasks.build_historical_backtest_orchestrator()`
+        (any future Gainz entry point included, Part 10/13). Unlike the
+        plain dataclass constructor above (kept ONLY for the
+        deterministic fixture/test engine path — see `research_gate`'s
+        own field docstring for exactly why it must stay optional
+        there), `research_gate` here is a REQUIRED, non-Optional
+        keyword argument — a caller cannot even spell a gate-less call
+        to this constructor. The explicit `is None` check below is a
+        second, structural belt-and-braces guard against a caller that
+        (incorrectly) still passes `research_gate=None` positionally
+        through legacy code — it fails LOUD, at construction time,
+        rather than allowing `run()` to silently fall back to reading
+        raw `HistoricalBar` rows. This is deliberately a NAMED factory,
+        not a runtime heuristic (Part 2's explicit prohibition on things
+        like `if symbol == "FIXTURE01"`) — which construction path a
+        caller uses is an explicit, reviewable choice made once at
+        wiring time, never inferred from a request's own data."""
+        if research_gate is None:
+            raise TypeError(
+                "BacktestingService.for_database_backed_research() requires a "
+                "non-None research_gate — a production, DB-backed backtest must "
+                "never bypass the research-eligibility gate. Use the plain "
+                "BacktestingService(...) constructor only for the deterministic "
+                "fixture/test engine path (see its module docstring)."
+            )
+        return cls(
+            market_data=market_data,
+            registry=registry,
+            repository=repository,
+            research_gate=research_gate,
+        )
 
     def run(
         self,
@@ -117,9 +183,31 @@ class BacktestingService:
             values=coerced_values,
         )
         cost_model = _build_cost_model(config, cost_model_name)
-        bars = self.market_data.get_bars(
-            config.instrument_id, config.timeframe, config.start, config.end
-        )
+        if self.research_gate is not None:
+            # Checkpoint 66.1 Part 3/4/12: bars are read THROUGH the
+            # research-eligibility gate — completeness and provenance
+            # have already been enforced by the time `bars` is bound
+            # below. `ResearchDataRejectedError` is intentionally left
+            # to propagate uncaught (not swallowed/downgraded here) —
+            # a rejected research request is a genuine configuration
+            # error for the caller to see, exactly like
+            # `InvalidBacktestConfigurationError` elsewhere in this
+            # method.
+            exchange, symbol = parse_instrument_id(config.instrument_id)
+            eligible = self.research_gate.get_research_eligible_bars(
+                config.instrument_id,
+                config.timeframe,
+                config.start,
+                config.end,
+                exchange=exchange,
+                segment=CASH_EQUITY_SEGMENT,
+                symbol=symbol,
+            )
+            bars = eligible.bars
+        else:
+            bars = self.market_data.get_bars(
+                config.instrument_id, config.timeframe, config.start, config.end
+            )
         cost_assumption = (
             TRANSACTION_COST_ASSUMPTION_INDIAN
             if cost_model_name == INDIAN_CASH_EQUITY_INTRADAY

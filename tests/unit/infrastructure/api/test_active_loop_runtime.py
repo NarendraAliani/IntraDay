@@ -33,6 +33,9 @@ from intraday.trading_engine.strategy_execution.contracts import StrategyConfigu
 pytestmark = pytest.mark.django_db
 
 RELIANCE = make_instrument_id(Exchange.NSE, "RELIANCE")
+# CATEGORY_II_NON_CAS control symbol (not in CATEGORY_I_CAS_SYMBOLS) -
+# Checkpoint 65.29's CAS-aware entry gate must NOT affect this symbol at all.
+WIPRO = make_instrument_id(Exchange.NSE, "WIPRO")
 
 # 2026-01-05 is a Monday, not an NSE_HOLIDAYS_2026 date.
 MARKET_OPEN_INSTANT = datetime(2026, 1, 5, 6, 0, tzinfo=UTC)  # ~11:30 IST, well inside OPEN
@@ -47,10 +50,10 @@ MARKET_HOLIDAY_INSTANT = datetime(2026, 1, 26, 6, 0, tzinfo=UTC)  # Republic Day
 MARKET_CLOSING_WINDOW_INSTANT = datetime(2026, 1, 5, 9, 55, tzinfo=UTC)
 
 
-def _bars(prices: list[int], base: datetime) -> tuple[Bar, ...]:
+def _bars(prices: list[int], base: datetime, instrument_id=RELIANCE) -> tuple[Bar, ...]:
     return tuple(
         Bar(
-            instrument_id=RELIANCE,
+            instrument_id=instrument_id,
             timeframe=Timeframe.ONE_MINUTE,
             timestamp=base + timedelta(minutes=i + 1),
             open=Decimal(price - 1),
@@ -63,10 +66,10 @@ def _bars(prices: list[int], base: datetime) -> tuple[Bar, ...]:
     )
 
 
-def _uptrend_bars(base: datetime) -> tuple[Bar, ...]:
+def _uptrend_bars(base: datetime, instrument_id=RELIANCE) -> tuple[Bar, ...]:
     flat = [100] * 8
     up = [101 + i for i in range(10)]
-    return _bars(flat + up, base)
+    return _bars(flat + up, base, instrument_id=instrument_id)
 
 
 def _config() -> StrategyConfigurationValues:
@@ -128,6 +131,212 @@ def test_tick_with_no_bars_is_skipped_cleanly() -> None:
     )
     assert outcome.ran is False
     assert outcome.skipped_reason == "no_bars_supplied"
+
+
+# ---------------------------------------------------------------------
+# Checkpoint 65.29: CAS-aware new-entry admission gate. All instants
+# below are deterministic session-policy boundaries (2026-01-05, a
+# Monday, not an NSE_HOLIDAYS_2026 date) - no fabricated market ticks.
+# Uniform `SessionStatus` already blocks new entries at/after 15:20 IST
+# (`SQUARE_OFF_DEADLINE_IST`) for EVERY symbol - these tests probe the
+# 15:15-15:20 IST window specifically, the exact gap 65.28 found: a
+# CATEGORY_I_CAS symbol must be rejected there even though the uniform
+# `SessionStatus` still reports `OPEN`.
+CAS_BEFORE_1515_INSTANT = datetime(2026, 1, 5, 9, 44, tzinfo=UTC)  # 15:14 IST
+CAS_AT_1515_INSTANT = datetime(2026, 1, 5, 9, 45, tzinfo=UTC)  # 15:15 IST
+CAS_AFTER_1515_INSTANT = datetime(2026, 1, 5, 9, 46, tzinfo=UTC)  # 15:16 IST
+NON_CAS_BEFORE_1530_INSTANT = datetime(2026, 1, 5, 9, 59, tzinfo=UTC)  # 15:29 IST
+NON_CAS_AT_1530_INSTANT = datetime(2026, 1, 5, 10, 0, tzinfo=UTC)  # 15:30 IST
+NON_CAS_AFTER_1530_INSTANT = datetime(2026, 1, 5, 10, 1, tzinfo=UTC)  # 15:31 IST
+
+
+def test_category_i_cas_symbol_new_entry_allowed_at_15_14() -> None:
+    trading_service = get_paper_trading_service()
+    bars = _uptrend_bars(CAS_BEFORE_1515_INSTANT, instrument_id=RELIANCE)
+    trading_service.broker.record_price(RELIANCE, bars[-1].close, CAS_BEFORE_1515_INSTANT)
+
+    outcome = run_active_loop_tick(
+        instrument_id=RELIANCE,
+        strategy_id="ema_crossover",
+        configuration=_config(),
+        bars=bars,
+        now=CAS_BEFORE_1515_INSTANT,
+    )
+
+    assert outcome.ran is True
+    assert outcome.session_status is SessionStatus.OPEN
+
+
+def test_category_i_cas_symbol_new_entry_rejected_at_15_15() -> None:
+    """15:15 IST is exactly the CAS boundary - the half-open
+    `[continuous_trading_open, continuous_trading_close)` convention
+    means CAS begins AT 15:15:00, not one instant after."""
+    outcome = run_active_loop_tick(
+        instrument_id=RELIANCE,
+        strategy_id="ema_crossover",
+        configuration=_config(),
+        bars=_uptrend_bars(CAS_AT_1515_INSTANT, instrument_id=RELIANCE),
+        now=CAS_AT_1515_INSTANT,
+    )
+
+    assert outcome.ran is False
+    assert "cas_new_entry_not_admitted" in (outcome.skipped_reason or "")
+    # The UNDERLYING SessionStatus.OPEN is unchanged - CAS is not
+    # "market closed," only "not admitting new entries for this symbol."
+    assert outcome.session_status is SessionStatus.OPEN
+    assert not PaperOrderRecord.objects.exists()
+
+
+def test_category_i_cas_symbol_new_entry_rejected_at_15_16() -> None:
+    outcome = run_active_loop_tick(
+        instrument_id=RELIANCE,
+        strategy_id="ema_crossover",
+        configuration=_config(),
+        bars=_uptrend_bars(CAS_AFTER_1515_INSTANT, instrument_id=RELIANCE),
+        now=CAS_AFTER_1515_INSTANT,
+    )
+
+    assert outcome.ran is False
+    assert "cas_new_entry_not_admitted" in (outcome.skipped_reason or "")
+    assert not PaperOrderRecord.objects.exists()
+
+
+def test_category_ii_non_cas_symbol_new_entry_unaffected_at_15_15_and_15_16() -> None:
+    """A CATEGORY_II_NON_CAS symbol (not in CATEGORY_I_CAS_SYMBOLS) must
+    NOT be affected by the CAS gate at all - continuous trading through
+    15:30 IST, exactly the pre-65.29 uniform behavior."""
+    for instant in (CAS_AT_1515_INSTANT, CAS_AFTER_1515_INSTANT):
+        reset_paper_broker_for_testing()
+        trading_service = get_paper_trading_service()
+        bars = _uptrend_bars(instant, instrument_id=WIPRO)
+        trading_service.broker.record_price(WIPRO, bars[-1].close, instant)
+
+        outcome = run_active_loop_tick(
+            instrument_id=WIPRO,
+            strategy_id="ema_crossover",
+            configuration=_config(),
+            bars=bars,
+            now=instant,
+        )
+
+        assert outcome.ran is True
+        assert outcome.session_status is SessionStatus.OPEN
+
+
+def test_category_ii_non_cas_symbol_new_entry_behavior_unchanged_at_15_29() -> None:
+    """15:29 IST already falls at/after `SQUARE_OFF_DEADLINE_IST`
+    (15:20 IST) in the PRE-EXISTING uniform `SessionStatus` gate, so a
+    CATEGORY_II_NON_CAS symbol is already rejected here - unchanged by
+    65.29 (the CAS-aware check is never reached for this category)."""
+    outcome = run_active_loop_tick(
+        instrument_id=WIPRO,
+        strategy_id="ema_crossover",
+        configuration=_config(),
+        bars=_uptrend_bars(NON_CAS_BEFORE_1530_INSTANT, instrument_id=WIPRO),
+        now=NON_CAS_BEFORE_1530_INSTANT,
+    )
+
+    assert outcome.ran is False
+    assert outcome.session_status is SessionStatus.CLOSING
+    assert "market_session_not_open" in (outcome.skipped_reason or "")
+
+
+def test_category_ii_non_cas_symbol_new_entry_allowed_well_before_15_30() -> None:
+    """Part 10 item 3: CATEGORY_II_NON_CAS new-entry behavior is
+    UNCHANGED - still admitted well before the 15:30 IST close, exactly
+    like pre-65.29."""
+    trading_service = get_paper_trading_service()
+    bars = _uptrend_bars(CAS_BEFORE_1515_INSTANT, instrument_id=WIPRO)
+    trading_service.broker.record_price(WIPRO, bars[-1].close, CAS_BEFORE_1515_INSTANT)
+
+    outcome = run_active_loop_tick(
+        instrument_id=WIPRO,
+        strategy_id="ema_crossover",
+        configuration=_config(),
+        bars=bars,
+        now=CAS_BEFORE_1515_INSTANT,
+    )
+
+    assert outcome.ran is True
+    assert outcome.session_status is SessionStatus.OPEN
+
+
+def test_category_ii_non_cas_symbol_new_entry_rejected_at_15_30_and_15_31() -> None:
+    """Pre-existing uniform `SessionStatus` behavior, UNCHANGED by
+    65.29: at 15:30 IST status is CLOSING (>= SQUARE_OFF_DEADLINE_IST
+    15:20), at 15:31 IST status is CLOSED - both already rejected new
+    entries before this checkpoint, via the ORIGINAL gate, not the new
+    CAS-aware one (the CAS-aware check is never reached for
+    CATEGORY_II_NON_CAS symbols)."""
+    for instant, expected_status in (
+        (NON_CAS_AT_1530_INSTANT, SessionStatus.CLOSING),
+        (NON_CAS_AFTER_1530_INSTANT, SessionStatus.CLOSED),
+    ):
+        outcome = run_active_loop_tick(
+            instrument_id=WIPRO,
+            strategy_id="ema_crossover",
+            configuration=_config(),
+            bars=_uptrend_bars(instant, instrument_id=WIPRO),
+            now=instant,
+        )
+
+        assert outcome.ran is False
+        assert outcome.session_status is expected_status
+        assert "market_session_not_open" in (outcome.skipped_reason or "")
+
+
+def test_cas_state_does_not_globally_close_the_market_for_a_non_cas_symbol() -> None:
+    """At the SAME instant (15:16 IST) a CATEGORY_I_CAS symbol is
+    rejected for new entries, a CATEGORY_II_NON_CAS symbol must still be
+    admitted - proves CAS is a PER-SYMBOL new-entry restriction, never a
+    global "market closed" state."""
+    trading_service = get_paper_trading_service()
+    bars = _uptrend_bars(CAS_AFTER_1515_INSTANT, instrument_id=WIPRO)
+    trading_service.broker.record_price(WIPRO, bars[-1].close, CAS_AFTER_1515_INSTANT)
+
+    reliance_outcome = run_active_loop_tick(
+        instrument_id=RELIANCE,
+        strategy_id="ema_crossover",
+        configuration=_config(),
+        bars=_uptrend_bars(CAS_AFTER_1515_INSTANT, instrument_id=RELIANCE),
+        now=CAS_AFTER_1515_INSTANT,
+    )
+    wipro_outcome = run_active_loop_tick(
+        instrument_id=WIPRO,
+        strategy_id="ema_crossover",
+        configuration=_config(),
+        bars=bars,
+        now=CAS_AFTER_1515_INSTANT,
+    )
+
+    assert reliance_outcome.ran is False
+    assert wipro_outcome.ran is True
+
+
+def test_existing_position_exit_is_unaffected_by_the_cas_entry_gate() -> None:
+    """Part 3/10 §6: existing-position handling (stop loss/target/
+    trailing stop/EOD square-off) goes through
+    `position_monitor_runtime.py`/`run_emergency_square_off()`, which
+    submit with `market_session_is_open=True` unconditionally and never
+    call `run_active_loop_tick()` at all - so this checkpoint's new-entry
+    gate cannot affect them by construction. This test proves the
+    reverse is also true: a CAS-blocked new-entry tick does not raise,
+    error, or otherwise disturb the broker/ledger state an exit would
+    depend on - it is a clean, side-effect-free skip."""
+    trading_service = get_paper_trading_service()
+    positions_before = list(trading_service.broker.get_positions())
+
+    outcome = run_active_loop_tick(
+        instrument_id=RELIANCE,
+        strategy_id="ema_crossover",
+        configuration=_config(),
+        bars=_uptrend_bars(CAS_AT_1515_INSTANT, instrument_id=RELIANCE),
+        now=CAS_AT_1515_INSTANT,
+    )
+
+    assert outcome.ran is False
+    positions_after = list(trading_service.broker.get_positions())
+    assert positions_after == positions_before
 
 
 def test_tick_during_open_session_runs_and_produces_a_persisted_order() -> None:

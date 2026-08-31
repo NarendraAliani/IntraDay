@@ -31,6 +31,7 @@ from datetime import datetime
 
 from intraday.domain.instrument.contracts import make_instrument_id
 from intraday.domain.market_data.contracts import Bar
+from intraday.domain.market_data.research_bar import ProvenancedBar
 from intraday.domain.shared_kernel.contracts import Exchange, InstrumentId, Timeframe
 from intraday.infrastructure.persistence.models import HistoricalBar
 
@@ -131,6 +132,42 @@ class DjangoHistoricalBarRepository:
                 low=row.low_price,
                 close=row.close_price,
                 volume=row.volume,
+            )
+            for row in rows
+        )
+
+    def get_bars_with_provenance(
+        self,
+        instrument_id: InstrumentId,
+        timeframe: Timeframe,
+        start: datetime,
+        end: datetime,
+    ) -> tuple[ProvenancedBar, ...]:
+        """Checkpoint 66.1: satisfies `HistoricalBarReadRepository.
+        get_bars_with_provenance` — the research/backtest boundary's
+        provenance-aware read primitive. Reads the SAME rows `get_bars()`
+        does (identical filter/ordering), additionally carrying each
+        row's persisted `provenance` value verbatim — never inferred,
+        never defaulted, never mutated."""
+        rows = HistoricalBar.objects.filter(
+            instrument_id=str(instrument_id),
+            timeframe=timeframe.value,
+            bar_timestamp__gte=start,
+            bar_timestamp__lte=end,
+        ).order_by("bar_timestamp")
+        return tuple(
+            ProvenancedBar(
+                bar=Bar(
+                    instrument_id=make_instrument_id(Exchange(row.exchange), row.symbol),
+                    timeframe=timeframe,
+                    timestamp=row.bar_timestamp,
+                    open=row.open_price,
+                    high=row.high_price,
+                    low=row.low_price,
+                    close=row.close_price,
+                    volume=row.volume,
+                ),
+                provenance=row.provenance,
             )
             for row in rows
         )

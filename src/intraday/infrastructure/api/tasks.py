@@ -35,6 +35,7 @@ from intraday.application.services.historical_data_preparation import (
 from intraday.application.services.market_data import HistoricalMarketDataService
 from intraday.application.services.market_data_sync_run import MarketDataSyncRunOrchestrator
 from intraday.application.services.provider_settings import DhanSettingsService
+from intraday.application.services.research_data_gate import ResearchDataGateService
 from intraday.domain.instrument.contracts import make_instrument_id
 from intraday.domain.market_data.contracts import Bar
 from intraday.domain.shared_kernel.contracts import Exchange, Timeframe
@@ -42,6 +43,7 @@ from intraday.infrastructure.api.active_loop_runtime import run_active_loop_tick
 from intraday.infrastructure.api.emergency_square_off_trigger import (
     check_and_trigger_automatic_square_off,
 )
+from intraday.infrastructure.api.eod_runtime import run_eod_sequence
 from intraday.infrastructure.api.market_data_ingestion_runtime import (
     run_market_data_ingestion_tick,
 )
@@ -171,6 +173,39 @@ def emergency_square_off_check_tick(*, now_override: str | None = None) -> str:
     )
 
 
+@shared_task(name="intraday.infrastructure.api.eod_sequence_tick")  # type: ignore[untyped-decorator]
+def eod_sequence_tick(*, now_override: str | None = None) -> str:
+    """Checkpoint 65.34 Part 5: the FIRST scheduled trigger for
+    `run_eod_sequence()` - previously reachable only from tests or a
+    manual call (confirmed absent from `beat_schedule` at Checkpoint
+    65.30). Safe to schedule blindly because `run_eod_sequence()` is,
+    by its own module docstring, genuinely segment/CAS-agnostic: it
+    force-closes whatever `PaperBroker` still reports OPEN at the
+    fixed later instant it runs, the same unconditional design
+    `run_emergency_square_off()` already has (Checkpoint 45/47), and
+    it is idempotent per calendar date via `DjangoEODRunRepository`'s
+    claim/complete/fail pattern (Checkpoint 51) - a call before, after,
+    or exactly at the "true" EOD instant, or more than once, produces
+    the same terminal state, never double-closes, and never guesses
+    CAS-specific order-matching behavior to do its job. Supplies NO
+    caller-side prices, matching `emergency_square_off_check_tick`'s
+    own precedent (Checkpoint 47 Part 4) - relies entirely on
+    `run_emergency_square_off()`'s fallback to `PaperBroker`'s last
+    recorded price."""
+    outcome = run_eod_sequence(
+        current_prices={}, now=datetime.fromisoformat(now_override) if now_override else None
+    )
+    if outcome.already_handled:
+        return "already_handled"
+    if outcome.square_off is None:
+        return "not_claimed"
+    return (
+        f"ran:positions_closed={outcome.square_off.positions_closed}"
+        f":zero_exposure_confirmed={outcome.zero_exposure_confirmed}"
+        f":total_realized_pnl={outcome.total_realized_pnl}"
+    )
+
+
 _HISTORICAL_RUN_REGISTRY = build_default_registry()
 
 
@@ -213,17 +248,31 @@ def build_historical_backtest_orchestrator() -> HistoricalBacktestRunOrchestrato
     docstring for which historical-data provider this actually uses and
     why."""
     bar_repository = DjangoHistoricalBarRepository()
+    coverage_service = HistoricalDataCoverageService(repository=bar_repository)
     return HistoricalBacktestRunOrchestrator(
         run_repository=DjangoBacktestRunRepository(),
         preparation=HistoricalDataPreparationService(
-            coverage=HistoricalDataCoverageService(repository=bar_repository),
+            coverage=coverage_service,
             provider=_select_historical_bar_provider(),
             writer=bar_repository,
         ),
-        backtesting=BacktestingService(
+        # Checkpoint 66.2 Part 1/2: `for_database_backed_research()` -
+        # not the plain dataclass constructor - is the only way this
+        # real, DB-backed orchestrator may build its `BacktestingService`;
+        # `research_gate` is a required keyword there, so this call site
+        # cannot silently regress to a gate-less service.
+        backtesting=BacktestingService.for_database_backed_research(
             market_data=HistoricalMarketDataService(repository=bar_repository),
             registry=_HISTORICAL_RUN_REGISTRY,
             repository=DjangoBacktestResultRepository(),
+            # Checkpoint 66.1: the multi-instrument historical-run panel
+            # now reads bars through the SAME research-eligibility gate
+            # as the single-instrument view - completeness + provenance
+            # enforced before `run_backtest()` ever sees a bar.
+            research_gate=ResearchDataGateService(
+                repository=bar_repository,
+                coverage_service=coverage_service,
+            ),
         ),
     )
 

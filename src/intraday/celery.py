@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 
 from celery import Celery
+from celery.schedules import crontab
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "intraday.settings.development")
 
@@ -58,6 +59,28 @@ app.autodiscover_tasks(["intraday.infrastructure.api"], related_name="tasks")
 # automatic_square_off()` itself is a cheap no-op whenever the kill
 # switch is not engaged, so the faster cadence costs almost nothing
 # in the common case.
+# Checkpoint 65.34 Part 5: `eod-sequence-once-daily` - the FIRST
+# scheduled trigger for `run_eod_sequence()` (previously unwired,
+# reachable only from tests/manual calls per Checkpoint 65.30's own
+# audit). Judged safe to schedule "blindly" (per this checkpoint's own
+# "only if it can be done without guessing segment-specific/CAS
+# behavior" instruction) precisely BECAUSE `run_eod_sequence()` does
+# not need to know anything CAS-specific to do its job correctly - it
+# force-closes whatever is still open at a fixed later instant and is
+# idempotent per calendar date (see `eod_sequence_tick`'s own
+# docstring, `infrastructure/api/tasks.py`). 10:15 UTC = 15:45 IST
+# (`CELERY_TIMEZONE = "UTC"`, `settings/base.py`) is chosen as a fixed
+# point comfortably AFTER both `SQUARE_OFF_DEADLINE_IST` (15:20,
+# `domain/session/calendar.py`) and the NSE/BSE cash-equity market
+# close (15:30) - so by the time this task runs, every position that
+# was ever going to be closed by price-driven exits, the existing
+# 15:20 gate, or a market-close-driven halt has already had the
+# chance; this task exists purely as the final, unconditional
+# "nothing should still be open" backstop, not a new close-earlier
+# policy. This does NOT change what "EOD" means, does NOT rename or
+# touch `SQUARE_OFF_DEADLINE_IST`, and does NOT activate 15:10 as a
+# constant - it only gives `run_eod_sequence()` an actual scheduled
+# caller, which it never had before.
 app.conf.beat_schedule = {
     "market-data-ingestion-every-minute": {
         "task": "intraday.infrastructure.api.market_data_ingestion_tick",
@@ -66,6 +89,10 @@ app.conf.beat_schedule = {
     "emergency-square-off-check-every-15-seconds": {
         "task": "intraday.infrastructure.api.emergency_square_off_check_tick",
         "schedule": 15.0,
+    },
+    "eod-sequence-once-daily": {
+        "task": "intraday.infrastructure.api.eod_sequence_tick",
+        "schedule": crontab(hour=10, minute=15),
     },
 }
 

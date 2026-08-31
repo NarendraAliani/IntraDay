@@ -20,6 +20,7 @@ from datetime import datetime
 from typing import Protocol
 
 from intraday.domain.market_data.contracts import Bar
+from intraday.domain.market_data.research_bar import ProvenancedBar
 from intraday.domain.shared_kernel.contracts import InstrumentId, Timeframe
 
 
@@ -35,6 +36,24 @@ class HistoricalBarReadRepository(Protocol):
         `instrument_id`/`timeframe` within `[start, end]` — used only for
         set-membership coverage checks, never as a bar's actual price
         data."""
+        ...
+
+    def get_bars_with_provenance(
+        self,
+        instrument_id: InstrumentId,
+        timeframe: Timeframe,
+        start: datetime,
+        end: datetime,
+    ) -> tuple[ProvenancedBar, ...]:
+        """Checkpoint 66.1: every bar for `instrument_id`/`timeframe`
+        within `[start, end]`, paired with the `HistoricalBar.provenance`
+        it was persisted with — the read primitive
+        `application.services.research_data_gate.ResearchDataGateService`
+        uses to enforce the Part 3 research-eligibility contract. Never
+        used by `HistoricalDataCoverageService` (which only needs
+        timestamps) or by the generic `HistoricalMarketDataRepository`
+        read path (which returns bare `Bar`s to every non-research
+        consumer) — scoped to the research/backtest boundary only."""
         ...
 
 

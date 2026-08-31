@@ -41,8 +41,12 @@ from intraday.application.services.signal_communication import SignalCommunicati
 from intraday.application.services.strategy_execution import build_coordinator
 from intraday.communication.contracts.signal_communication import CommunicationChannel
 from intraday.domain.market_data.contracts import Bar
-from intraday.domain.session.calendar import session_for_instant
-from intraday.domain.session.contracts import SessionStatus
+from intraday.domain.session.calendar import (
+    cas_aware_session_for_instant,
+    instrument_category_for,
+    session_for_instant,
+)
+from intraday.domain.session.contracts import InstrumentCategory, SessionStatus
 from intraday.domain.shared_kernel.contracts import InstrumentId, Timeframe
 from intraday.infrastructure.api.paper_trading_runtime import (
     get_paper_trading_service,
@@ -104,6 +108,34 @@ def run_active_loop_tick(
             skipped_reason=f"market_session_not_open:{session.status.value}",
             session_status=session.status,
         )
+
+    # Checkpoint 65.29: closes the pre-existing integration gap 65.28
+    # found - `SessionStatus.OPEN` above is the UNIFORM 15:30 gate and
+    # says nothing about NSE's Closing Auction Session (CAS), which ends
+    # CONTINUOUS trading at 15:15 IST for CAS-eligible ("Category I")
+    # instruments. This is a NEW-ENTRY-ADMISSION-ONLY check: it reuses
+    # `cas_aware_session_for_instant()`/`InstrumentCategory` verbatim
+    # (no new timing constants), applies ONLY to this function (new
+    # signal evaluation/order submission), and never touches exit
+    # handling - `position_monitor_runtime.py`'s stop-loss/target/
+    # trailing-stop exits and `run_emergency_square_off()` submit with
+    # `market_session_is_open=True` unconditionally and are completely
+    # unaffected by this check, by construction (they never call this
+    # function). A CATEGORY_II_NON_CAS instrument is entirely unaffected
+    # (`is_continuous_trading` remains `True` through 15:30, matching
+    # pre-65.29 behavior exactly).
+    symbol = str(instrument_id).partition(":")[2] or str(instrument_id)
+    category = instrument_category_for(symbol)
+    if category is InstrumentCategory.CATEGORY_I_CAS:
+        cas_session = cas_aware_session_for_instant(category, clock)
+        if not cas_session.is_continuous_trading:
+            return ActiveLoopTickOutcome(
+                ran=False,
+                skipped_reason=(
+                    f"cas_new_entry_not_admitted:{cas_session.current_session_state.value}"
+                ),
+                session_status=session.status,
+            )
 
     if not bars:
         return ActiveLoopTickOutcome(

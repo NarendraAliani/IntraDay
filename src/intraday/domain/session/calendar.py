@@ -140,6 +140,19 @@ CATEGORY_I_CONTINUOUS_CLOSE_IST = time(15, 15)
 CATEGORY_I_CAS_END_IST = time(15, 35)
 CATEGORY_II_CONTINUOUS_CLOSE_IST = MARKET_CLOSE_IST  # 15:30 IST, unchanged
 
+# Checkpoint 65.33: the calendar date NSE's CAS circular actually took
+# effect. Used ONLY by `domain.session.resolver.resolve_market_session`
+# to distinguish the `Regime.PRE_CAS` / `Regime.CAS_ERA` eras — it is
+# NOT a clock-time boundary (15:15/15:35 remain the intraday CAS
+# boundaries, unchanged above) and does not alter
+# `build_cas_aware_session_for()`'s own computation for any date: that
+# function has always computed a `CasAwareSession` for CATEGORY_I_CAS
+# instruments regardless of era, per its own long-standing documented
+# scope. `CAS_EFFECTIVE_DATE` only lets a caller ask "was CAS actually
+# running yet on this historical date," which `CasAwareSession` alone
+# cannot answer.
+CAS_EFFECTIVE_DATE = date(2026, 8, 3)
+
 # Checkpoint 64.87: the current live observation universe (Checkpoint
 # 23's four-symbol universe - see `docs/architecture/
 # LIVE_MARKET_DATA_ARCHITECTURE.md`), classified CATEGORY_I_CAS. All

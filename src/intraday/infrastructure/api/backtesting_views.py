@@ -41,6 +41,7 @@ from intraday.application.services.historical_data_preparation import (
     HistoricalDataPreparationService,
 )
 from intraday.application.services.market_data import HistoricalMarketDataService
+from intraday.application.services.research_data_gate import ResearchDataGateService
 from intraday.domain.shared_kernel.contracts import InstrumentId, Timeframe
 from intraday.infrastructure.api.errors import invalid_configuration, not_found, unknown_strategy
 from intraday.infrastructure.api.permissions import IsConfigurationOperator
@@ -77,14 +78,37 @@ def _service(instrument_id: InstrumentId) -> BacktestingService:
     repository: FixtureHistoricalMarketDataRepository | DjangoHistoricalBarRepository
     if instrument_id == SYNTHETIC_INSTRUMENT_ID:
         # The deterministic fixture flow, unchanged - still what the
-        # reproducibility/cost-model test suite exercises.
+        # reproducibility/cost-model test suite exercises. No
+        # `HistoricalBar.provenance` concept exists for this fixture
+        # repository, so no `research_gate` is wired for it - Checkpoint
+        # 66.1 scopes the eligibility gate to genuine DB-backed
+        # historical data only, never the deterministic test fixture.
         repository = FixtureHistoricalMarketDataRepository()
-    else:
-        repository = DjangoHistoricalBarRepository()
-    return BacktestingService(
-        market_data=HistoricalMarketDataService(repository=repository),
+        return BacktestingService(
+            market_data=HistoricalMarketDataService(repository=repository),
+            registry=_REGISTRY,
+            repository=DjangoBacktestResultRepository(),
+        )
+    django_repository = DjangoHistoricalBarRepository()
+    # Checkpoint 66.2 Part 1/2: `for_database_backed_research()` — not
+    # the plain dataclass constructor — is now the ONLY way this real,
+    # DB-backed branch may build a `BacktestingService`. `research_gate`
+    # is a required keyword there, so this call site can no longer
+    # silently regress to omitting it (66.1's optional field is still
+    # correct for the fixture branch above, but this branch is genuine
+    # production research data and must never bypass the gate).
+    return BacktestingService.for_database_backed_research(
+        market_data=HistoricalMarketDataService(repository=django_repository),
         registry=_REGISTRY,
         repository=DjangoBacktestResultRepository(),
+        # Checkpoint 66.1: every REAL, DB-backed single-instrument
+        # backtest now reads bars through the research-eligibility gate
+        # (Part 3/4/12) - completeness + provenance are enforced before
+        # `run_backtest()` ever sees a bar.
+        research_gate=ResearchDataGateService(
+            repository=django_repository,
+            coverage_service=HistoricalDataCoverageService(repository=django_repository),
+        ),
     )
 
 
