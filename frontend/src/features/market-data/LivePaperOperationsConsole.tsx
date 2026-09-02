@@ -48,6 +48,8 @@ import type { SignalResponse } from "../../common/api/signalApi";
 import { useAuth } from "../../common/auth/AuthContext";
 import { ErrorState } from "../../common/components/ErrorState";
 import { LoadingState } from "../../common/components/LoadingState";
+import { badgeIconName } from "../../common/components/statusIcon";
+import { Icon } from "../../common/icons/Icon";
 import { WorkerStatusCard } from "./LiveMarketDataMonitor";
 
 // Checkpoint 64.15 §15: a single documented polling interval, matching
@@ -163,7 +165,7 @@ function ReadinessCheckCard({ item }: { item: ReadinessCheckItem }): JSX.Element
     >
       <h3>{item.label}</h3>
       <span role="status" className={`badge ${CHECK_STATE_CLASS[item.state] ?? ""}`}>
-        {item.state}
+        <Icon name={badgeIconName(CHECK_STATE_CLASS[item.state])} /> {item.state}
       </span>
       <p className="signal-monitor__hint">{item.explanation}</p>
       {item.remediation && (
@@ -346,6 +348,7 @@ export function LivePaperOperationsConsole(): JSX.Element {
           <section aria-labelledby="lpc-session-state-heading" className="live-scanner__section">
             <h2 id="lpc-session-state-heading">Session State</h2>
             <span role="status" className={`badge ${SESSION_STATE_CLASS[sessionState ?? ""] ?? ""}`}>
+              <Icon name={badgeIconName(SESSION_STATE_CLASS[sessionState ?? ""])} />{" "}
               {SESSION_STATE_LABELS[sessionState ?? ""] ?? sessionState}
             </span>
 
@@ -367,7 +370,7 @@ export function LivePaperOperationsConsole(): JSX.Element {
                     }
                     aria-current={sessionState === step ? "step" : undefined}
                   >
-                    {SESSION_STATE_LABELS[step]}
+                    {sessionState === step && <Icon name="check" />} {SESSION_STATE_LABELS[step]}
                   </li>
                 ))}
               </ol>
@@ -382,7 +385,8 @@ export function LivePaperOperationsConsole(): JSX.Element {
                 role="status"
                 className={`badge ${READINESS_STATE_CLASS[readiness.state] ?? ""}`}
               >
-                {readiness.can_start ? "● READY" : "● BLOCKED"} — {readiness.state}
+                <Icon name={badgeIconName(READINESS_STATE_CLASS[readiness.state])} />{" "}
+                {readiness.can_start ? "READY" : "BLOCKED"} — {readiness.state}
               </span>
               <p className="signal-monitor__hint">{readiness.safe_reason}</p>
               {!readiness.can_start && (
@@ -478,6 +482,7 @@ export function LivePaperOperationsConsole(): JSX.Element {
                   role="status"
                   className={`badge ${effectiveConfig.drift ? "badge--pending" : "badge--active"}`}
                 >
+                  <Icon name={effectiveConfig.drift ? "warning" : "success"} />{" "}
                   {effectiveConfig.drift ? "DRIFT" : "NO DRIFT"}
                 </span>
                 <dl>
@@ -520,11 +525,12 @@ export function LivePaperOperationsConsole(): JSX.Element {
               role="status"
               className={`badge ${SCAN_STATUS_CLASS[scannerProgress.status] ?? ""}`}
             >
+              <Icon name={badgeIconName(SCAN_STATUS_CLASS[scannerProgress.status])} />{" "}
               {scannerProgress.status}
             </span>
             {scannerProgress.stale && (
               <span role="status" className="badge badge--danger">
-                STALE
+                <Icon name="warning" /> STALE
               </span>
             )}
             {scannerProgress.status === "FAILED" && (

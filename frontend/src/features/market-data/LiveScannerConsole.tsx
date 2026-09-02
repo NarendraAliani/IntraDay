@@ -67,6 +67,8 @@ import type { StrategySummary } from "../../common/api/strategyApi";
 import { useAuth } from "../../common/auth/AuthContext";
 import { ConfirmDialog } from "../../common/components/ConfirmDialog";
 import { InstrumentPickerMulti } from "../../common/components/InstrumentPicker";
+import { badgeIconName } from "../../common/components/statusIcon";
+import { Icon } from "../../common/icons/Icon";
 import { TIMEFRAME_OPTIONS, WorkerStatusCard } from "./LiveMarketDataMonitor";
 
 // Part B: exactly the three conceptual choices the checkpoint names,
@@ -688,11 +690,13 @@ export function LiveScannerConsole(): JSX.Element {
                   <span
                     className={`badge badge--inline ${channel.configured ? "badge--active" : "badge--danger"}`}
                   >
+                    <Icon name={channel.configured ? "success" : "error"} />{" "}
                     {channel.configured ? "Configured" : "Not configured"}
                   </span>
                   <span
                     className={`badge badge--inline ${channel.enabled ? "badge--active" : "badge--historical"}`}
                   >
+                    <Icon name={channel.enabled ? "success" : "info"} />{" "}
                     {channel.enabled ? "Enabled" : "Disabled"}
                   </span>
                 </label>
@@ -706,7 +710,8 @@ export function LiveScannerConsole(): JSX.Element {
         >
           <h3 id="live-scanner-readiness-heading">Readiness</h3>
           <span role="status" className={`badge ${isConfigurationReady ? "badge--active" : "badge--danger"}`}>
-            {isConfigurationReady ? "● READY TO SCAN" : "● NOT READY"}
+            <Icon name={isConfigurationReady ? "success" : "error"} />{" "}
+            {isConfigurationReady ? "READY TO SCAN" : "NOT READY"}
           </span>
           {!isConfigurationReady && (
             <ul className="live-scanner__reason-list">
@@ -816,6 +821,7 @@ export function LiveScannerConsole(): JSX.Element {
           <section aria-labelledby="live-scanner-effective-heading" className="market-data-monitor__card">
             <h2 id="live-scanner-effective-heading">Effective Configuration</h2>
             <span className={`badge ${STATUS_CLASS[config.status] ?? ""}`}>
+              <Icon name={badgeIconName(STATUS_CLASS[config.status])} />{" "}
               {STATUS_LABELS[config.status] ?? config.status}
             </span>
             {config.status !== "STOPPED" && config.status !== "EFFECTIVE" && (

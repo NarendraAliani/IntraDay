@@ -12,6 +12,7 @@ import { ErrorState } from "../../common/components/ErrorState";
 import { LoadingState } from "../../common/components/LoadingState";
 import { listResearchStatuses, setResearchStatus } from "../../common/api/backtestingApi";
 import type { ResearchStatusResponse } from "../../common/api/backtestingApi";
+import { Icon } from "../../common/icons/Icon";
 
 function describeError(error: unknown): string {
   if (error instanceof ApiRequestError || error instanceof ApiNetworkError) {
@@ -83,6 +84,15 @@ export function StrategyMonitorPage(): JSX.Element {
                         : "badge badge--danger"
                   }
                 >
+                  <Icon
+                    name={
+                      row.status === "RESEARCH_ACTIVE"
+                        ? "success"
+                        : row.status === "RESEARCH_PAUSED"
+                          ? "warning"
+                          : "error"
+                    }
+                  />{" "}
                   {row.status}
                 </span>
               </td>

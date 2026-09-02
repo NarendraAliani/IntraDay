@@ -248,7 +248,7 @@ describe("LiveScannerConsole", () => {
 
     renderWithAuth(<LiveScannerConsole />);
 
-    await waitFor(() => expect(screen.getByText("● NOT READY")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("NOT READY")).toBeInTheDocument());
     const startButton = screen.getByRole("button", { name: "START LIVE PAPER SESSION" });
     expect(startButton).toBeDisabled();
     expect(screen.getByText("Dhan access token has expired.")).toBeInTheDocument();
@@ -259,7 +259,7 @@ describe("LiveScannerConsole", () => {
 
     renderWithAuth(<LiveScannerConsole />);
 
-    await waitFor(() => expect(screen.getByText("● READY TO SCAN")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("READY TO SCAN")).toBeInTheDocument());
     const startButton = screen.getByRole("button", { name: "START LIVE PAPER SESSION" });
     expect(startButton).not.toBeDisabled();
 

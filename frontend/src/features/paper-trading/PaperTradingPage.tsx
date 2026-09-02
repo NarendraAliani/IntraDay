@@ -39,6 +39,7 @@ import type {
 import { useAuth } from "../../common/auth/AuthContext";
 import { CapabilityStatus } from "../../common/components/CapabilityStatus";
 import { ErrorState } from "../../common/components/ErrorState";
+import { badgeIconName } from "../../common/components/statusIcon";
 import { PaperSessionPanel } from "./PaperSessionPanel";
 import { LoadingState } from "../../common/components/LoadingState";
 
@@ -182,7 +183,10 @@ export function PaperTradingPage(): JSX.Element {
     <div className="paper-trading-page">
       <h1>Paper Trading</h1>
       <div className="callout callout--warn" role="note">
-        <strong>◐ PAPER MODE — simulated trading only.</strong> No fill shown anywhere on this
+        <strong>
+          <Icon name="paper-trading" /> PAPER MODE — simulated trading only.
+        </strong>{" "}
+        No fill shown anywhere on this
         page is a real broker execution. This platform has never placed a real order, and{" "}
         <strong>LIVE TRADING — NOT AVAILABLE</strong> — there is no control anywhere in this
         application that enables it.
@@ -277,7 +281,12 @@ export function PaperTradingPage(): JSX.Element {
           </section>
 
           <section className="capability-status-section" aria-labelledby="funds-heading">
-            <h2 id="funds-heading">Paper Account</h2>
+            <h2 id="funds-heading">Live Paper Trading Account</h2>
+            <p className="signal-monitor__hint">
+              Tracks all manually submitted paper orders on this platform — a standing account,
+              distinct from any single replay session&apos;s simulated account. Still paper only:
+              no order here ever reaches a real exchange.
+            </p>
             <div className="paper-trading__kpis">
               <div className="paper-trading__kpi">
                 <span>Available Capital (Paper)</span>
@@ -430,6 +439,7 @@ export function PaperTradingPage(): JSX.Element {
                         <td>{order.filled_quantity}</td>
                         <td>
                           <span className={`badge ${statusBadgeClass(order.status)}`}>
+                            <Icon name={badgeIconName(statusBadgeClass(order.status))} />{" "}
                             {order.status}
                           </span>
                         </td>

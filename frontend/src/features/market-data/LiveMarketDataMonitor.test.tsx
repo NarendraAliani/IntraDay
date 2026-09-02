@@ -358,7 +358,7 @@ describe("LiveMarketDataMonitor (Active Signal Monitor)", () => {
     await waitFor(() =>
       expect(screen.getByText("Live Paper Session Readiness")).toBeInTheDocument(),
     );
-    expect(screen.getByText("● BLOCKED")).toBeInTheDocument();
+    expect(screen.getByText("BLOCKED")).toBeInTheDocument();
     expect(screen.getByText("NOT AVAILABLE")).toBeInTheDocument();
     expect(screen.getByText("Dhan access token has expired.")).toBeInTheDocument();
     expect(screen.getByText(/renew the dhan access token/i)).toBeInTheDocument();
@@ -385,7 +385,7 @@ describe("LiveMarketDataMonitor (Active Signal Monitor)", () => {
     await waitFor(() => expect(screen.getByText(/market data health/i)).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: /market data health/i }));
 
-    await waitFor(() => expect(screen.getByText("● READY")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("READY")).toBeInTheDocument());
     expect(screen.getByText("AVAILABLE")).toBeInTheDocument();
     expect(screen.getByText("DISABLED")).toBeInTheDocument(); // Real Trading still disabled
   });

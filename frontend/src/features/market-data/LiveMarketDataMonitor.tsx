@@ -41,6 +41,9 @@ import { useAuth } from "../../common/auth/AuthContext";
 import { EmptyState } from "../../common/components/EmptyState";
 import { ErrorState } from "../../common/components/ErrorState";
 import { LoadingState } from "../../common/components/LoadingState";
+import { badgeIconName } from "../../common/components/statusIcon";
+import { Icon } from "../../common/icons/Icon";
+import type { IconName } from "../../common/icons/Icon";
 import type {
   BarResponse,
   LivePaperReadinessResponse,
@@ -71,7 +74,10 @@ type UniverseMode = "all" | "selected";
 function DataQualityBanner(): JSX.Element {
   return (
     <div className="callout callout--warn" role="note">
-      <span className="badge badge--pending">◐ SAMPLE_BAR</span> Prices shown here are built from
+      <span className="badge badge--pending">
+        <Icon name="warning" /> SAMPLE_BAR
+      </span>{" "}
+      Prices shown here are built from
       periodic point-in-time samples, not a continuous market-data stream. This is real, honest
       market data - never fabricated - but it cannot yet guarantee a true OPEN/HIGH/LOW/CLOSE the
       way continuous tick coverage or exchange-computed candles could, so it is not yet{" "}
@@ -98,13 +104,17 @@ const HEALTH_LABELS: Record<MarketDataHealthResponse["state"], string> = {
   MARKET_CLOSED: "Market Closed",
 };
 
-const HEALTH_ICONS: Record<MarketDataHealthResponse["state"], string> = {
-  CONNECTED_FRESH: "●",
-  CONNECTED_STALE: "◐",
-  DISCONNECTED: "○",
-  AUTHENTICATION_FAILED: "✕",
-  ERROR: "✕",
-  MARKET_CLOSED: "○",
+// Checkpoint FRONTEND-4: these were raw Unicode glyphs (a second,
+// competing "icon system" living right next to the real SVG one) - now
+// names in the single closed icon system, matching the tone already
+// used everywhere else (badgeIconName).
+const HEALTH_ICONS: Record<MarketDataHealthResponse["state"], IconName> = {
+  CONNECTED_FRESH: "success",
+  CONNECTED_STALE: "warning",
+  DISCONNECTED: "info",
+  AUTHENTICATION_FAILED: "error",
+  ERROR: "error",
+  MARKET_CLOSED: "info",
 };
 
 const HEALTH_CLASS: Record<MarketDataHealthResponse["state"], string> = {
@@ -166,11 +176,16 @@ const CHANNEL_STATUS_CLASS: Record<string, string> = {
 // shows an honest neutral state, never a fabricated SENT/FAILED.
 function renderChannelBadge(status: SignalResponse["telegram"]): JSX.Element {
   if (!status) {
-    return <span className="badge badge--historical">No attempt yet</span>;
+    return (
+      <span className="badge badge--historical">
+        <Icon name="info" /> No attempt yet
+      </span>
+    );
   }
+  const cls = CHANNEL_STATUS_CLASS[status.status] ?? "";
   return (
-    <span className={`badge ${CHANNEL_STATUS_CLASS[status.status] ?? ""}`} title={status.error_message || undefined}>
-      {status.status}
+    <span className={`badge ${cls}`} title={status.error_message || undefined}>
+      <Icon name={badgeIconName(cls)} /> {status.status}
     </span>
   );
 }
@@ -249,6 +264,7 @@ function SignalCommunicationPanel({ signalId }: { signalId: string }): JSX.Eleme
             <td>{attempt.channel}</td>
             <td>
               <span className={`badge ${CHANNEL_STATUS_CLASS[attempt.delivery_status] ?? ""}`}>
+                <Icon name={badgeIconName(CHANNEL_STATUS_CLASS[attempt.delivery_status])} />{" "}
                 {attempt.delivery_status}
               </span>
             </td>
@@ -303,6 +319,7 @@ export function WorkerStatusCard(): JSX.Element {
       {!error && status && status.is_configured && (
         <>
           <span className={`badge ${WATCHDOG_CLASS[status.watchdog_state] ?? ""}`}>
+            <Icon name={badgeIconName(WATCHDOG_CLASS[status.watchdog_state])} />{" "}
             {WATCHDOG_LABELS[status.watchdog_state] ?? status.watchdog_state}
           </span>
           <dl>
@@ -387,7 +404,8 @@ export function LivePaperReadinessCard(): JSX.Element {
             role="status"
             className={`badge ${READINESS_BADGE_CLASS[status.state] ?? ""}`}
           >
-            {status.can_start ? "● READY" : "● BLOCKED"}
+            <Icon name={badgeIconName(READINESS_BADGE_CLASS[status.state])} />{" "}
+            {status.can_start ? "READY" : "BLOCKED"}
           </span>
           <dl>
             <dt>Dhan Credential</dt>
@@ -858,7 +876,8 @@ export function LiveMarketDataMonitor(): JSX.Element {
               <span className="signal-monitor__summary-value">
                 {marketData.phase === "ready" ? (
                   <span className={`badge ${HEALTH_CLASS[marketData.health.state]}`}>
-                    {HEALTH_ICONS[marketData.health.state]} {HEALTH_LABELS[marketData.health.state]}
+                    <Icon name={HEALTH_ICONS[marketData.health.state]} />{" "}
+                    {HEALTH_LABELS[marketData.health.state]}
                   </span>
                 ) : (
                   "—"
@@ -937,6 +956,7 @@ export function LiveMarketDataMonitor(): JSX.Element {
                             <span
                               className={`badge ${signal.direction === "BULLISH" ? "badge--active" : "badge--danger"}`}
                             >
+                              <Icon name={signal.direction === "BULLISH" ? "success" : "error"} />{" "}
                               {signal.direction}
                             </span>
                           </td>
@@ -951,6 +971,7 @@ export function LiveMarketDataMonitor(): JSX.Element {
                             <span
                               className={`badge ${signal.risk_status === "APPROVED" ? "badge--active" : "badge--danger"}`}
                             >
+                              <Icon name={signal.risk_status === "APPROVED" ? "success" : "error"} />{" "}
                               {signal.risk_status}
                             </span>
                           </td>
@@ -1129,7 +1150,8 @@ export function LiveMarketDataMonitor(): JSX.Element {
                       <section className="market-data-monitor__card" aria-labelledby="health-heading">
                         <h2 id="health-heading">Connection Health</h2>
                         <span className={`badge ${HEALTH_CLASS[marketData.health.state]}`}>
-                          {HEALTH_ICONS[marketData.health.state]} {HEALTH_LABELS[marketData.health.state]}
+                          <Icon name={HEALTH_ICONS[marketData.health.state]} />{" "}
+                          {HEALTH_LABELS[marketData.health.state]}
                         </span>
                         <dl>
                           <dt>Last Update</dt>
@@ -1200,7 +1222,8 @@ export function LiveMarketDataMonitor(): JSX.Element {
                                   <span
                                     className={`badge ${quote.is_stale ? "badge--pending" : "badge--active"}`}
                                   >
-                                    {quote.is_stale ? "◐ Stale" : "● Fresh"}
+                                    <Icon name={quote.is_stale ? "warning" : "success"} />{" "}
+                                    {quote.is_stale ? "Stale" : "Fresh"}
                                   </span>
                                 </td>
                               </tr>
@@ -1248,7 +1271,8 @@ export function LiveMarketDataMonitor(): JSX.Element {
                                   <span
                                     className={`badge ${bar.status === "CLOSED" ? "badge--active" : "badge--pending"}`}
                                   >
-                                    {bar.status === "CLOSED" ? "● Closed" : "◐ Forming"}
+                                    <Icon name={bar.status === "CLOSED" ? "success" : "warning"} />{" "}
+                                    {bar.status === "CLOSED" ? "Closed" : "Forming"}
                                   </span>
                                 </td>
                               </tr>

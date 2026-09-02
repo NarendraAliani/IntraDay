@@ -32,6 +32,8 @@ import type { PaperSessionResponse } from "../../common/api/paperSessionApi";
 import { useAuth } from "../../common/auth/AuthContext";
 import { ErrorState } from "../../common/components/ErrorState";
 import { LoadingState } from "../../common/components/LoadingState";
+import { badgeIconName } from "../../common/components/statusIcon";
+import { Icon } from "../../common/icons/Icon";
 
 const TIMEFRAMES = ["1m", "3m", "5m", "15m", "30m"] as const;
 type SelectableTimeframe = (typeof TIMEFRAMES)[number];
@@ -163,7 +165,10 @@ export function PaperSessionPanel(): JSX.Element {
       <h2 id="paper-session-heading">Paper Trading Session (Deterministic Replay)</h2>
 
       <div className="callout callout--warn" role="note">
-        <strong>◐ PAPER TRADING — NOT LIVE TRADING.</strong> This session replays deterministic,
+        <strong>
+          <Icon name="paper-trading" /> PAPER TRADING — NOT LIVE TRADING.
+        </strong>{" "}
+        This session replays deterministic,
         pre-generated market data through the paper broker. Every fill, position and P&amp;L figure
         below is <strong>simulated</strong>. No real broker connection, no real market data and no
         real order is involved anywhere on this screen, and{" "}
@@ -175,7 +180,9 @@ export function PaperSessionPanel(): JSX.Element {
         <div className="paper-trading__kpi">
           <span>Status</span>
           <strong>
-            <span className={`badge ${STATUS_BADGE[status] ?? "badge--info"}`}>{status}</span>
+            <span className={`badge ${STATUS_BADGE[status] ?? "badge--info"}`}>
+              <Icon name={badgeIconName(STATUS_BADGE[status])} /> {status}
+            </span>
           </strong>
         </div>
         <div className="paper-trading__kpi">
@@ -202,7 +209,11 @@ export function PaperSessionPanel(): JSX.Element {
         </div>
       </div>
 
-      <h3>Paper Account</h3>
+      <h3>Replay Session Account (Simulated)</h3>
+      <p className="signal-monitor__hint">
+        Tracks only this replay session&apos;s simulated fills — not the standing Live Paper
+        Trading account used elsewhere in the app.
+      </p>
       <div className="paper-trading__kpis">
         <div className="paper-trading__kpi">
           <span>Starting Capital (Paper)</span>

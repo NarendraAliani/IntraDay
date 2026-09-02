@@ -31,6 +31,8 @@ import { useAuth } from "../../common/auth/AuthContext";
 import { ConnectionStatusBadge } from "../../common/components/ConnectionStatusBadge";
 import { ErrorState } from "../../common/components/ErrorState";
 import { LoadingState } from "../../common/components/LoadingState";
+import { Icon } from "../../common/icons/Icon";
+import type { IconName } from "../../common/icons/Icon";
 import type {
   ConnectionStatusResponse,
   DhanSettingsResponse,
@@ -81,9 +83,24 @@ function TokenStateBadge(props: {
           ? "badge"
           : "badge badge--danger";
 
+  // Checkpoint FRONTEND-4: this badge's meaning previously depended on
+  // distinguishing green/amber/red - now paired with an icon from the
+  // closed icon system so token health reads correctly under time
+  // pressure or without reliable color vision.
+  const iconName: IconName =
+    props.state === "VALID"
+      ? "success"
+      : props.state === "EXPIRING_SOON"
+        ? "warning"
+        : props.state === "UNCONFIGURED"
+          ? "info"
+          : "error";
+
   return (
     <span>
-      <strong className={badgeClass}>{labels[props.state]}</strong>
+      <strong className={badgeClass}>
+        <Icon name={iconName} /> {labels[props.state]}
+      </strong>
       {props.expiresAt && (
         <span className="strategy-config-page__help-text">
           {" "}

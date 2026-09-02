@@ -174,7 +174,7 @@ describe("LiveScannerConsole - Checkpoint 64.93", () => {
     stubEndpoints({});
     renderWithAuth(<LiveScannerConsole />);
 
-    await waitFor(() => expect(screen.getByText("● NOT READY")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("NOT READY")).toBeInTheDocument());
     expect(screen.getByText("No strategy selected.")).toBeInTheDocument();
     expect(screen.getByLabelText("All Stocks")).toBeChecked();
   });
@@ -208,7 +208,7 @@ describe("LiveScannerConsole - Checkpoint 64.93", () => {
     fireEvent.click(await waitFor(() => screen.getByLabelText("EMA Crossover")));
     fireEvent.click(await waitFor(() => screen.getByLabelText(/Telegram/)));
 
-    await waitFor(() => expect(screen.getByText("● READY TO SCAN")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("READY TO SCAN")).toBeInTheDocument());
     expect(screen.getByRole("button", { name: "START LIVE PAPER SESSION" })).not.toBeDisabled();
   });
 
