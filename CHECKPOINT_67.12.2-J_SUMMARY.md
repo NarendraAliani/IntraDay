@@ -8,7 +8,7 @@ classification_summary: { stale_test_infra: 1, genuine_regression: 0, environmen
 fixes_applied: 1
 still_failing: 1 (test_migration_67_10_execute.py::test_migration_67_7_dry_run_test_suite_still_passes_unmodified — ENVIRONMENT_DRIFT / test-isolation design flaw, deliberately not touched)
 full_sweep_result: 713 passed / 714 total (1 deliberately-deferred failure)
-commit: <filled in after commit>
+commit: 6dd16372c1c7b0726c8f3658b6251dd97d1570f8
 blockers: []
 ```
 
