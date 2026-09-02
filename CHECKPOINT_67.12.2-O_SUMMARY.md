@@ -3,7 +3,7 @@ verdict: ALL_4_RESTORED_AND_MEANINGFUL
 per_test_approach: { scenario_a: b, scenario_b: b, coverage_preview: b, decimal_param: b }
 per_test_reasoning_sound: YES
 full_sweep_result: 733/733
-commit: <filled in after commit>
+commit: 67551f99f1ea2447aa5b0bda699a5d49c65a0f3f
 blockers: []
 
 ## A. Per-test intent and chosen approach
