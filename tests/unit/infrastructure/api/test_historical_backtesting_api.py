@@ -9,17 +9,134 @@
 # terminal state, matching Scenario A/B (Phase 37) end to end.
 from __future__ import annotations
 
+from datetime import UTC, date, datetime, time, timedelta
+
 import pytest
 from django.contrib.auth.models import Group, User
 from django.test import Client
 
+from intraday.application.services.instrument_master import InstrumentMasterEntry
 from intraday.application.services.provider_settings import DhanSettingsService
+from intraday.domain.session.calendar import build_cas_aware_session_for, instrument_category_for
+from intraday.domain.session.contracts import InstrumentCategory
 from intraday.infrastructure.api.permissions import CONFIGURATION_OPERATOR_GROUP
+from intraday.infrastructure.market_data_providers.dhan import historical_provider
+from intraday.infrastructure.market_data_providers.dhan.historical_client import (
+    DhanHistoricalCandle,
+)
+from intraday.infrastructure.market_data_providers.dhan.instrument_master import (
+    DhanInstrumentMasterProvider,
+)
 from tests.postgres_utils import requires_postgres
 
 OPERATOR_USERNAME = "hist-bt-operator"  # noqa: S105
 READER_USERNAME = "hist-bt-reader"  # noqa: S105
 PASSWORD = "correct-horse-battery-staple"  # noqa: S105
+
+# Checkpoint 67.12.2-O: Checkpoint 67.1 wired `ResearchDataGateService`
+# to require, for EVERY `REAL_DHAN`-provenance row it reads,
+# `canonicalization_state == CANONICALIZED` (see `research_data_gate.py`
+# Part 4/6/13/14) - and that state is only ever stamped for the ONE
+# empirically-proven (segment, timeframe, era) triple 67.0 actually
+# tested: `(NSE_EQ, Timeframe.FIVE_MINUTE, CAS_ERA)` (see
+# `historical_provider.py::_PROVEN_INTRADAY_SCOPES`). 2026-08-17 is the
+# literal date that scope was proven against (a Monday, a genuine
+# trading day, entirely on/after `CAS_EFFECTIVE_DATE` 2026-08-03) - the
+# SAME date `test_historical_provider.py::_CAS_ERA_WINDOW` already uses
+# for the identical reason. Using any PRE-CAS date (like the old
+# 2026-01-05 fixture default) would produce REAL_DHAN rows stamped
+# `canonicalization_state=UNKNOWN`, which the gate correctly rejects
+# with `UNCANONICALIZED_TIMESTAMP` - a second, independent gate failure
+# mode, not the one this checkpoint is fixing.
+CAS_ERA_TRADING_DATE = date(2026, 8, 17)
+
+
+def _real_dhan_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Checkpoint 67.12.2-O, approach (b): substitutes the file's
+    autouse `_no_real_dhan_credentials` fixture's no-credentials stamp
+    with genuine-looking Dhan credentials PLUS a fake instrument-master
+    lookup, so `_select_historical_bar_provider()`
+    (infrastructure/api/tasks.py) genuinely selects
+    `DhanHistoricalBarProvider` - the real provider-selection/caching
+    code path - instead of bypassing it. Mirrors this file's own
+    pre-existing `test_a_run_uses_the_real_dhan_provider_when_
+    credentials_are_configured` pattern exactly, just factored out for
+    reuse by the other 3 tests that need a run to actually COMPLETE
+    (that test alone is fine leaving the fetch returning zero candles,
+    since its job is only proving WHICH provider ran)."""
+    monkeypatch.setattr(
+        DhanSettingsService, "effective_credentials", lambda self: ("client-1", "token-1")
+    )
+    monkeypatch.setattr(
+        DhanInstrumentMasterProvider,
+        "list_instruments",
+        lambda self, exchange: (
+            InstrumentMasterEntry(
+                symbol="RELIANCE", display_name="Reliance Industries", security_id=2885
+            ),
+        ),
+    )
+
+
+def _cas_era_intraday_candles(
+    *, symbol: str = "RELIANCE", day: date = CAS_ERA_TRADING_DATE, interval_minutes: int = 5
+) -> tuple[DhanHistoricalCandle, ...]:
+    """Builds a full, genuinely-shaped trading day of raw Dhan intraday
+    candles for `day` - one per expected bar-CLOSE timestamp
+    (`build_cas_aware_session_for(...).expected_continuous_bar_
+    timestamps`, the SAME session machinery `HistoricalDataCoverageService`
+    itself uses to decide what "100% coverage" means - see
+    `historical_data_coverage.py::_expected_timestamps`), each stamped
+    at `close - interval` to match Dhan's proven OPEN-of-interval raw
+    convention (`historical_provider.py`'s own
+    `_DHAN_INTRADAY_TIMESTAMP_SEMANTICS = SourceTimestampSemantics.OPEN`).
+    Returning exactly this set - not a a partial or over-wide one -
+    is what makes the resulting run/coverage genuinely 100% complete,
+    not vacuously so."""
+    category = instrument_category_for(symbol)
+    session = build_cas_aware_session_for(
+        category, day, datetime.combine(day, time.max, tzinfo=UTC)
+    )
+    interval = timedelta(minutes=interval_minutes)
+    closes = session.expected_continuous_bar_timestamps(interval)
+    return tuple(
+        DhanHistoricalCandle(
+            timestamp=close - interval,
+            open=100.0,
+            high=101.0,
+            low=99.0,
+            close=100.5,
+            volume=1000,
+        )
+        for close in closes
+    )
+
+
+def _install_fake_real_dhan_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[dict[str, object]]:
+    """Wires `_real_dhan_credentials` plus a fake
+    `fetch_intraday_candles` that returns a genuine full CAS-era trading
+    day (`_cas_era_intraday_candles`) - the test-only
+    "FakeRealDhanHistoricalBarProvider" double named in this checkpoint's
+    directive, implemented as a monkeypatch of the one real outbound
+    call site (`historical_provider.fetch_intraday_candles`) rather than
+    a whole new provider class, exactly mirroring this file's
+    pre-existing `test_a_run_uses_the_real_dhan_provider_when_
+    credentials_are_configured` pattern. Returns the `calls` list so
+    callers (Scenario B in particular) can assert the real call COUNT,
+    not just that a run reached COMPLETED."""
+    _real_dhan_credentials(monkeypatch)
+    calls: list[dict[str, object]] = []
+
+    def _fake_fetch_intraday_candles(**kwargs: object) -> tuple[DhanHistoricalCandle, ...]:
+        calls.append(kwargs)
+        return _cas_era_intraday_candles()
+
+    monkeypatch.setattr(
+        historical_provider, "fetch_intraday_candles", _fake_fetch_intraday_candles
+    )
+    return calls
 
 
 @pytest.fixture(autouse=True)
@@ -102,14 +219,25 @@ def test_create_run_returns_202_with_a_run_id() -> None:
 
 @requires_postgres
 @pytest.mark.django_db
-def test_scenario_a_empty_database_run_completes_via_real_progress_state() -> None:
+def test_scenario_a_empty_database_run_completes_via_real_progress_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Scenario A (Phase 37): empty DB -> the eager-executed task fetches,
     persists, scans, and completes - proven through the SAME progress
-    endpoint the frontend polls, not a white-box service call."""
+    endpoint the frontend polls, not a white-box service call.
+
+    Checkpoint 67.12.2-O: this test's whole point is proving the real
+    fetch/persist/scan pipeline runs on a genuinely empty DB - approach
+    (b) (a real `DhanHistoricalBarProvider` selection, fed a fake
+    `fetch_intraday_candles`) exercises that real pipeline exactly as
+    production wires it; a pre-seeded-rows approach (a) would leave
+    nothing for "fetches" (`api_requests > 0`, `cache_misses > 0`) to
+    actually prove."""
+    _install_fake_real_dhan_provider(monkeypatch)
     client = _client_as_operator()
     create_response = client.post(
         "/api/v1/config/backtesting/historical-runs/",
-        data=_run_payload(),
+        data=_run_payload(start_date="2026-08-17", end_date="2026-08-17"),
         content_type="application/json",
     )
     run_id = create_response.json()["run_id"]
@@ -132,25 +260,39 @@ def test_scenario_a_empty_database_run_completes_via_real_progress_state() -> No
 
 @requires_postgres
 @pytest.mark.django_db
-def test_scenario_b_repeat_run_makes_zero_api_requests() -> None:
+def test_scenario_b_repeat_run_makes_zero_api_requests(monkeypatch: pytest.MonkeyPatch) -> None:
     """Scenario B (Phase 37/22): the SAME configuration run twice must
     make zero further API requests the second time - the mandatory
-    cached-run optimization, proven through the real HTTP API."""
+    cached-run optimization, proven through the real HTTP API.
+
+    Checkpoint 67.12.2-O: approach (b) is the ONLY faithful choice here
+    - this test exists specifically to prove "zero real provider calls
+    on the second run", which requires the second run to genuinely go
+    through provider-selection and find the cache already warm. A
+    pre-seeded-rows approach (a) would make the fetch path unreachable
+    from the FIRST run too, so a `0` on the second run couldn't be
+    distinguished from "nothing ever called the provider path in the
+    first place". `fetch_calls` (backed by the real, unmodified
+    `HistoricalDataPreparationService.api_requests` counter surfaced
+    through the progress endpoint) is the independent, real evidence."""
+    fetch_calls = _install_fake_real_dhan_provider(monkeypatch)
     client = _client_as_operator()
     first = client.post(
         "/api/v1/config/backtesting/historical-runs/",
-        data=_run_payload(),
+        data=_run_payload(start_date="2026-08-17", end_date="2026-08-17"),
         content_type="application/json",
     )
     first_run_id = first.json()["run_id"]
     first_progress = client.get(
         f"/api/v1/config/backtesting/historical-runs/{first_run_id}/progress/"
     ).json()
+    assert first_progress["status"] == "COMPLETED"
     assert first_progress["api_requests"] > 0
+    assert len(fetch_calls) == 1, "the real provider must genuinely have been called once"
 
     second = client.post(
         "/api/v1/config/backtesting/historical-runs/",
-        data=_run_payload(),
+        data=_run_payload(start_date="2026-08-17", end_date="2026-08-17"),
         content_type="application/json",
     )
     second_run_id = second.json()["run_id"]
@@ -161,6 +303,9 @@ def test_scenario_b_repeat_run_makes_zero_api_requests() -> None:
     assert second_progress["status"] == "COMPLETED"
     assert second_progress["api_requests"] == 0
     assert second_progress["cache_hits"] > 0
+    assert len(fetch_calls) == 1, (
+        "the real provider must genuinely NOT have been called again on the repeat run"
+    )
 
 
 @requires_postgres
@@ -195,11 +340,22 @@ def test_coverage_preview_reports_zero_percent_before_any_run() -> None:
 
 @requires_postgres
 @pytest.mark.django_db
-def test_coverage_preview_reports_100_percent_after_a_completed_run() -> None:
+def test_coverage_preview_reports_100_percent_after_a_completed_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Checkpoint 67.12.2-O: approach (b), for consistency with Scenario
+    A/B's own real fetch/persist path immediately above in this file -
+    the preview endpoint itself is read-only either way (its own
+    docstring, `test_coverage_preview_reports_zero_percent_before_any_
+    run`, already proves that), so what matters is that the run it
+    reads coverage AFTER genuinely persisted real (`REAL_DHAN`,
+    `CANONICALIZED`) rows through the real orchestrator - not a vacuous
+    100% computed over rows a test inserted by hand."""
+    _install_fake_real_dhan_provider(monkeypatch)
     client = _client_as_operator()
     run_response = client.post(
         "/api/v1/config/backtesting/historical-runs/",
-        data=_run_payload(),
+        data=_run_payload(start_date="2026-08-17", end_date="2026-08-17"),
         content_type="application/json",
     )
     run_id = run_response.json()["run_id"]
@@ -211,8 +367,8 @@ def test_coverage_preview_reports_100_percent_after_a_completed_run() -> None:
         data={
             "instrument_ids": ["NSE:RELIANCE"],
             "timeframe": "5m",
-            "start_date": "2026-01-05",
-            "end_date": "2026-01-05",
+            "start_date": "2026-08-17",
+            "end_date": "2026-08-17",
         },
         content_type="application/json",
     )
@@ -340,7 +496,9 @@ def test_a_long_configuration_version_like_the_frontend_actually_sends_succeeds(
 
 @requires_postgres
 @pytest.mark.django_db
-def test_a_decimal_typed_strategy_parameter_sent_as_a_json_string_succeeds() -> None:
+def test_a_decimal_typed_strategy_parameter_sent_as_a_json_string_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """THE real bug a live report found: sma_trend_filter's band_percent
     is DECIMAL-typed, and the frontend (like any JSON API client) can
     only ever send it as a string or number - never a native Python
@@ -348,11 +506,22 @@ def test_a_decimal_typed_strategy_parameter_sent_as_a_json_string_succeeds() -> 
     historical run using this strategy failed with "parameter
     'band_percent' is not a Decimal: '0.02'" until the backend itself
     coerced it before validation. Proves the exact real payload now
-    succeeds end to end, with a real qualifying instrument/date range."""
+    succeeds end to end, with a real qualifying instrument/date range.
+
+    Checkpoint 67.12.2-O: approach (b) - this test's assertion
+    (`status == COMPLETED`) can only be genuine evidence that the
+    decimal coercion survived the FULL pipeline (validation -> real
+    fetch -> persist -> strategy execution) if the run actually runs
+    that whole pipeline; a pre-seeded-rows approach (a) would still
+    prove the decimal coercion itself, but less faithfully exercises
+    "end to end" as the test's own docstring claims."""
+    _install_fake_real_dhan_provider(monkeypatch)
     client = _client_as_operator()
     response = client.post(
         "/api/v1/config/backtesting/historical-runs/",
         data=_run_payload(
+            start_date="2026-08-17",
+            end_date="2026-08-17",
             strategy_id="sma_trend_filter",
             strategy_values={"lookback": 20, "band_percent": "0.02"},
         ),
