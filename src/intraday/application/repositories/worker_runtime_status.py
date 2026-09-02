@@ -35,9 +35,22 @@ class WorkerRuntimeStatusRecord:
     effective_strategy_ids: tuple[str, ...]
     effective_universe_requested_count: int
     effective_universe_subscribed_count: int
-    owner_pid: int | None
-    owner_process_started_at: datetime | None
-    owner_cmdline_safe: str
+    # Checkpoint 67.12.2-S: the PID-reconciliation anchor. Defaulted
+    # (unlike every other field on this record) because this dataclass
+    # is constructed directly, with keyword args and no default values
+    # of their own, by pre-existing call sites throughout the test
+    # suite (`test_live_paper_session.py`,
+    # `test_live_paper_readiness_checklist.py`) that predate this
+    # checkpoint and have no reason to know about worker-ownership
+    # tracking. Frozen dataclasses only require trailing fields to
+    # carry defaults, which these three already are - no reordering
+    # needed. Real callers (`DjangoWorkerRuntimeStatusRepository`)
+    # always pass explicit values read from the DB row; only
+    # `None`/`""` here means "not populated by an owner-agnostic
+    # caller," never a real ownership claim.
+    owner_pid: int | None = None
+    owner_process_started_at: datetime | None = None
+    owner_cmdline_safe: str = ""
 
 
 @dataclass(frozen=True, slots=True)
