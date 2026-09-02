@@ -229,6 +229,95 @@ def test_dhan_provider_refuses_to_connect_with_a_known_expired_token(
     assert expired_jwt not in out.getvalue()
 
 
+# --- Checkpoint 67.12.2-H: the stale-status regression test. Reproduces
+# TODAY's exact real-world failure mode (67.12.2-E: two live crashes, both
+# left `WorkerRuntimeStatus.worker_state` stuck at RECONNECTING forever)
+# using ONLY the existing synthetic/monkeypatch harness this file already
+# established for --provider dhan (a well-formed, non-expired JWT so the
+# command proceeds past the credential/token gates, and a patched
+# `DhanWebSocketTransport.connect` that always raises
+# `DhanWebSocketTransportError` - never a real socket, never touching the
+# network - so every reconnect-supervisor attempt reports RECONNECTING
+# until `--max-reconnect-attempts` is exhausted, exactly like today's
+# `close_code=1006` failures did in production).
+@requires_postgres
+# Deliberately NO redundant `@pytest.mark.django_db` here (unlike the two
+# tests above) - this test writes to `WorkerRuntimeStatus` from BOTH the
+# main test thread (the pre-seed below) AND the command's own
+# `sync_to_async` thread (its real second connection). An extra
+# function-level `django_db` mark conflicts with this file's module-level
+# `transaction=True` marker, silently downgrading this one test back to
+# atomic/savepoint (rollback) mode - which leaves the pre-seed's own
+# transaction open (never truly committed) for the rest of the test, so
+# the async thread's separate connection blocks forever trying to lock
+# the same row. Reproduced and confirmed as a genuine deadlock during
+# this checkpoint (two Postgres backends: one "idle in transaction" at
+# "RELEASE SAVEPOINT", one "active" hung on the INSERT) - fixed by
+# relying on the module-level marker alone, exactly like this file's
+# other `transaction=True`-dependent tests above (Checkpoint 58/59/62).
+def test_reconnect_exhaustion_persists_a_terminal_failed_status_not_a_stale_reconnecting_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import base64
+    import json
+    from datetime import UTC, datetime, timedelta
+
+    from intraday.infrastructure.market_data_providers.dhan.websocket_transport import (
+        DhanWebSocketTransport,
+        DhanWebSocketTransportError,
+    )
+    from intraday.infrastructure.persistence.models import WorkerRuntimeStatus
+
+    valid_until = datetime.now(tz=UTC) + timedelta(hours=1)
+    header = base64.urlsafe_b64encode(b'{"alg":"HS512","typ":"JWT"}').rstrip(b"=").decode()
+    payload = (
+        base64.urlsafe_b64encode(json.dumps({"exp": valid_until.timestamp()}).encode())
+        .rstrip(b"=")
+        .decode()
+    )
+    valid_jwt = f"{header}.{payload}.fake-signature-not-verified"
+
+    monkeypatch.setattr(
+        DhanSettingsService,
+        "effective_credentials",
+        lambda self: ("fake-client-id", valid_jwt),
+    )
+
+    async def _always_fails_to_connect(self: object) -> None:
+        raise DhanWebSocketTransportError("simulated connect failure - no real socket opened")
+
+    monkeypatch.setattr(DhanWebSocketTransport, "connect", _always_fails_to_connect)
+
+    # Pre-seed a row so the test also proves the stale value gets
+    # overwritten, not merely created fresh.
+    WorkerRuntimeStatus.objects.update_or_create(
+        provider="dhan", defaults={"worker_state": "RUNNING"}
+    )
+
+    out = io.StringIO()
+    call_command(
+        "run_market_data_worker",
+        "--provider",
+        "dhan",
+        "--max-reconnect-attempts",
+        "2",
+        stdout=out,
+    )
+
+    output = out.getvalue()
+    assert "final_state=FAILED" in output
+    assert "worker ended in terminal state FAILED" in output
+
+    status = WorkerRuntimeStatus.objects.get(provider="dhan")
+    # THE regression proof: today's actual bug left this at RECONNECTING
+    # (or whatever the last periodic persist happened to write) forever.
+    assert status.worker_state == "FAILED"
+    assert status.worker_state != "RUNNING"
+    assert status.worker_state != "RECONNECTING"
+    assert status.reconnect_count == 2
+    assert status.last_error_safe == "reconnect_attempts_exhausted"
+
+
 # --- Checkpoint 64.2: the live worker now reaches the shared strategy/
 # signal/risk/paper pipeline (`signal_pipeline_runtime.py`), not just
 # persistence/aggregation - proven by mypy (the call site type-checks

@@ -164,6 +164,64 @@ def test_save_all_dedup_is_per_instrument() -> None:
     assert LiveQuoteObservation.objects.filter(instrument_symbol="TCS").count() == 1
 
 
+# --- Checkpoint 67.12.2-H, Part 2: the ordering-determinism fix.
+# `get_observations()` previously had NO explicit tiebreaker for two rows
+# sharing the exact same (instrument_symbol, source_timestamp) - the
+# `conflicting_same_timestamp` case `domain/market_data/aggregation.py`
+# resolves by "arrival order," which the query did not structurally
+# guarantee. `id` (the existing auto-increment PK, already the genuine
+# insertion-order sequence for a `bulk_create()`d batch) is now an
+# explicit secondary `order_by()` key.
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_get_observations_breaks_an_identical_timestamp_tie_by_insertion_order() -> None:
+    """Two observations for the same instrument at the EXACT same
+    `source_timestamp` (a real `conflicting_same_timestamp` event) must
+    come back in the same order every time - the order they were
+    actually inserted in, not whatever incidental physical/heap order
+    PostgreSQL happens to produce."""
+    from intraday.infrastructure.persistence.live_market_data_repositories import (
+        DjangoLiveQuoteRepository,
+    )
+
+    repo = DjangoLiveQuoteRepository()
+    # Two SEPARATE save_all() calls - each is its own bulk_create() batch
+    # and its own id sequence - guaranteeing the second call's row(s) get
+    # strictly higher `id`s than the first's, exactly like two distinct
+    # packets arriving at (apparently) the same source timestamp in
+    # production.
+    repo.save_all((_quote("RELIANCE", "1000.00", NOW),), fetched_at=NOW)
+    repo.save_all((_quote("RELIANCE", "1005.00", NOW),), fetched_at=NOW)
+
+    observations = repo.get_observations(since=NOW)
+    prices = [q.last_price for q in observations]
+
+    assert prices == [Decimal("1000.00"), Decimal("1005.00")]
+
+
+@requires_postgres
+@pytest.mark.django_db
+def test_get_observations_tie_break_is_stable_across_repeated_calls() -> None:
+    """The SAME conflicting-timestamp pair, read back repeatedly, must
+    resolve to the SAME order every single time - proving the tiebreaker
+    is a genuine, provable guarantee (an explicit ORDER BY key), not
+    "likely in practice" (the honest, previously-named gap this
+    checkpoint closes)."""
+    from intraday.infrastructure.persistence.live_market_data_repositories import (
+        DjangoLiveQuoteRepository,
+    )
+
+    repo = DjangoLiveQuoteRepository()
+    repo.save_all((_quote("RELIANCE", "1000.00", NOW),), fetched_at=NOW)
+    repo.save_all((_quote("RELIANCE", "1005.00", NOW),), fetched_at=NOW)
+
+    first_read = [q.last_price for q in repo.get_observations(since=NOW)]
+    for _ in range(5):
+        assert [q.last_price for q in repo.get_observations(since=NOW)] == first_read
+
+
 @requires_postgres
 @pytest.mark.django_db
 def test_health_get_before_any_record_returns_unconfigured_defaults() -> None:

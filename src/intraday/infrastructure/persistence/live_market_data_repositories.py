@@ -153,8 +153,23 @@ class DjangoLiveQuoteRepository:
         return tuple(quotes)
 
     def get_observations(self, *, since: _dt.datetime) -> tuple[Quote, ...]:
+        # Checkpoint 67.12.2-H: explicit, monotonic secondary sort key.
+        # `conflicting_same_timestamp` rows (two observations for the same
+        # `instrument_symbol` + `source_timestamp`, per
+        # `domain/market_data/aggregation.py`'s arrival-order tie-break)
+        # previously had NO tiebreaker in this `ORDER BY` at all - ties
+        # were left to whatever order PostgreSQL happened to return them
+        # in, which is not a documented guarantee. `id` is the existing
+        # auto-increment primary key already on `LiveQuoteObservation`;
+        # rows for one ingestion pass are written together via
+        # `bulk_create()` (see `save_batch()` above), so ascending `id`
+        # is genuinely the row-insertion order - the same ordering the
+        # aggregation docstring already claims to rely on, now actually
+        # enforced by the query rather than left to incidental physical
+        # layout. No new column - reusing the sequence that already
+        # exists.
         rows = LiveQuoteObservation.objects.filter(source_timestamp__gte=since).order_by(
-            "instrument_symbol", "source_timestamp"
+            "instrument_symbol", "source_timestamp", "id"
         )
         return tuple(_row_to_quote(row) for row in rows)
 

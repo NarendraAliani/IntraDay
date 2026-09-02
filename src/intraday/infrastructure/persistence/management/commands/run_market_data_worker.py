@@ -1162,6 +1162,39 @@ class Command(BaseCommand):
                 now=dt.datetime.now(tz=dt.UTC),
             )
             self.stdout.write(self.style.WARNING("  stop requested - worker shut down cleanly."))
+        elif supervisor_result.final_state is not WorkerState.STOPPED:
+            # Checkpoint 67.12.2-H: the stale-status bug. Today's two live
+            # crashes both left `WorkerRuntimeStatus.worker_state` stuck at
+            # RECONNECTING (whatever the last periodic `persist()` inside
+            # `connect_and_run()` happened to write) because NOTHING
+            # persisted the supervisor's own genuinely-terminal verdict once
+            # `run_worker_with_reconnect()` returned - `mark_failed()` was
+            # only ever called from inside a single attempt's direct
+            # FAILED/AUTH_FAILED/TOKEN_EXPIRED result, never for
+            # "reconnect_attempts_exhausted" (attempt count hit max_attempts
+            # while every attempt itself reported RECONNECTING - see
+            # `reconnect_supervisor.py`'s `result.final_state = WorkerState.FAILED`
+            # branch, which is a return-value-only fact with no callback into
+            # `health_tracker`). This mirrors the existing STOPPED-branch
+            # persist pattern exactly - same tracker, same repository, same
+            # call shape - rather than inventing a second status-transition
+            # path.
+            health_tracker.mark_failed(
+                supervisor_result.final_state,
+                reason=supervisor_result.last_disconnect_reason or supervisor_result.final_state.value,
+            )
+            health_tracker.reconnect_count = supervisor_result.reconnect_count
+            await sync_to_async(health_tracker.persist)(
+                DjangoWorkerRuntimeStatusRepository(),
+                provider="dhan",
+                now=dt.datetime.now(tz=dt.UTC),
+            )
+            self.stdout.write(
+                self.style.ERROR(
+                    f"  worker ended in terminal state {supervisor_result.final_state.value} - "
+                    f"reason={supervisor_result.last_disconnect_reason!r} - status persisted."
+                )
+            )
 
         # Checkpoint 64.73: after the feed is closed and persistence has
         # settled, record what this session actually archived. Read-only
