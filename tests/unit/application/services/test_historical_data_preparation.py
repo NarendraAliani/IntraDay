@@ -22,6 +22,21 @@ from intraday.domain.market_data.contracts import Bar
 from intraday.domain.shared_kernel.contracts import Exchange, Timeframe
 
 RELIANCE = make_instrument_id(Exchange.NSE, "RELIANCE")
+# Checkpoint 67.12.2-J: RELIANCE was CATEGORY_II_NON_CAS (uniform 09:15-15:30
+# IST session) when this test file was written (Phase 22 / Checkpoint 63.x).
+# Checkpoint 64.87 later classified RELIANCE CATEGORY_I_CAS (continuous
+# trading now ends 15:15 IST, not 15:30), and Checkpoint 65.27 wired that
+# classification into `HistoricalDataCoverageService`'s expected-timestamp
+# count. `_AlwaysAvailableProvider` below still fetches a full uniform
+# (non-CAS) session regardless of instrument, so for RELIANCE specifically
+# it now persists 3 more bars (the 15:15-15:30 window) than the coverage
+# service's CAS-aware "expected" set counts as cache hits - an invariant
+# mismatch in this test fixture, not in production code. This dedicated
+# instrument stays CATEGORY_II_NON_CAS so the fixture's uniform-session
+# provider and the coverage service's expected count agree, as Phase 22's
+# invariant (`cache_hits == bars_persisted` for a fully-cached uniform
+# range) requires.
+NON_CAS_INSTRUMENT = make_instrument_id(Exchange.NSE, "TATASTEEL")
 START = datetime(2026, 1, 5, 3, 45, tzinfo=UTC)
 END = datetime(2026, 1, 5, 10, 0, tzinfo=UTC)
 
@@ -56,9 +71,9 @@ class _FakeWriteRepository:
         return len(bars)
 
 
-def _bar(ts: datetime) -> Bar:
+def _bar(ts: datetime, instrument_id: object = RELIANCE) -> Bar:
     return Bar(
-        instrument_id=RELIANCE,
+        instrument_id=instrument_id,
         timeframe=Timeframe.FIVE_MINUTE,
         timestamp=ts,
         open=Decimal("100"),
@@ -81,7 +96,10 @@ class _AlwaysAvailableProvider:
         from intraday.domain.session.calendar import build_session_for
 
         session = build_session_for(start.date(), end)
-        return tuple(_bar(ts) for ts in expected_bar_timestamps(session, Timeframe.FIVE_MINUTE))
+        return tuple(
+            _bar(ts, instrument_id)
+            for ts in expected_bar_timestamps(session, Timeframe.FIVE_MINUTE)
+        )
 
 
 class _UnavailableProvider:
@@ -123,11 +141,11 @@ def test_fully_cached_range_triggers_zero_provider_calls() -> None:
     read = _FakeReadRepository()
     provider = _AlwaysAvailableProvider()
     service = _service(read, provider)
-    first = service.prepare(RELIANCE, Timeframe.FIVE_MINUTE, START, END)
+    first = service.prepare(NON_CAS_INSTRUMENT, Timeframe.FIVE_MINUTE, START, END)
     assert first.status == PreparationStatus.COMPLETE
     assert provider.fetch_calls == 1
 
-    second = service.prepare(RELIANCE, Timeframe.FIVE_MINUTE, START, END)
+    second = service.prepare(NON_CAS_INSTRUMENT, Timeframe.FIVE_MINUTE, START, END)
 
     assert second.status == PreparationStatus.COMPLETE
     assert second.api_requests == 0
