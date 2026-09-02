@@ -525,8 +525,17 @@ export function DashboardPage({
           is happening right now", and this answers "how does this
           platform get from data to a decision, and which of those links
           are actually wired". It claims nothing the API does not
-          expose. */}
-      <DecisionPipeline onNavigate={onNavigate} />
+          expose.
+          Checkpoint FRONTEND-3: wrapped in a native <details> disclosure,
+          collapsed by default. This is a presentation change only - all
+          of the evidence/narrative content below is fully present and
+          reachable, just not dominating the initial view above the live
+          status cards. Nothing is deleted, nothing moved to another
+          page. */}
+      <details className="dashboard__evidence-disclosure">
+        <summary>Evidence &amp; Audited Relationships — click to expand</summary>
+        <DecisionPipeline onNavigate={onNavigate} />
+      </details>
     </section>
   );
 }

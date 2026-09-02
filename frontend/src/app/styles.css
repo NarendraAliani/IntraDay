@@ -116,6 +116,46 @@ body {
     -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
 
+/* Checkpoint FRONTEND-3: base token-backed styling for native form
+   controls that no component-specific class already styles (e.g. the
+   Settings page's `<input type="date">` fields and its "Fetch & Save"
+   button). Before this rule, any un-classed input/select/button fell
+   back to full browser UA chrome, which does not know this app's
+   theme and rendered as a jarring, low-contrast light-mode control on
+   every dark theme (`color-scheme` alone was not enough for buttons/
+   fieldsets). A more specific class-based rule anywhere else in this
+   file still wins on specificity, so nothing already styled changes. */
+input:not([type="checkbox"]):not([type="radio"]),
+select,
+textarea,
+button {
+  background: var(--color-surface);
+  color: var(--color-text);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: var(--font-size-base);
+  padding: 0.4rem 0.6rem;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+fieldset {
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+}
+
+legend {
+  color: var(--color-text);
+}
+
 /* Checkpoint 35: visible focus state for every keyboard-focusable
    element - WCAG 2.4.7. Applied globally rather than per-component so
    no interactive element can ship without one by omission. */
@@ -1953,6 +1993,46 @@ dd {
 
 .dashboard__group:last-child {
   margin-bottom: 0;
+}
+
+/* Checkpoint FRONTEND-3: the evidence/narrative section (Decision
+   Pipeline + "Other audited relationships") is collapsed by default
+   behind a native <details>/<summary> disclosure, so the live-status
+   cards above it are what a trader sees first without scrolling past
+   ~1400px of documentation. All of its content is unchanged and fully
+   reachable - this only changes whether it is expanded by default. */
+.dashboard__evidence-disclosure {
+  margin-top: var(--space-5);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  padding: var(--space-3) var(--space-4);
+}
+
+.dashboard__evidence-disclosure summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--color-text);
+  padding: var(--space-2) 0;
+  list-style: none;
+}
+
+.dashboard__evidence-disclosure summary::-webkit-details-marker {
+  display: none;
+}
+
+.dashboard__evidence-disclosure summary::before {
+  content: "▸ ";
+  color: var(--color-accent);
+}
+
+.dashboard__evidence-disclosure[open] summary::before {
+  content: "▾ ";
+}
+
+.dashboard__evidence-disclosure[open] summary {
+  margin-bottom: var(--space-3);
+  border-bottom: 1px solid var(--color-border);
 }
 
 .dashboard__grid {

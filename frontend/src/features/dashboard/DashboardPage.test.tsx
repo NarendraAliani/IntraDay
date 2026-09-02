@@ -239,6 +239,30 @@ describe("DashboardPage — navigation", () => {
     expect(handlers.onOpenMarketData).toHaveBeenCalledTimes(1);
     expect(handlers.onOpenBacktesting).toHaveBeenCalledTimes(1);
   });
+
+  // Checkpoint FRONTEND-3: the evidence/narrative section (Decision
+  // Pipeline + "Other audited relationships") is collapsed by default so
+  // the live-status cards are what a trader sees first - but the content
+  // must remain fully present in the DOM (a <details> element, not a
+  // deletion) and must expand on click.
+  it("collapses the evidence/audited-relationships section by default and expands it on click", async () => {
+    stubApi();
+    renderDashboard();
+    await screen.findByRole("heading", { name: "Market Status", level: 2 });
+
+    const disclosure = screen.getByText("Evidence & Audited Relationships — click to expand")
+      .closest("details");
+    expect(disclosure).not.toBeNull();
+    expect(disclosure).not.toHaveAttribute("open");
+
+    // The Decision Pipeline content is present in the DOM even while
+    // collapsed (a <details> element, not conditionally rendered) - this
+    // is a presentation change, not a content removal.
+    expect(screen.getByRole("heading", { name: /Market Data to Outcome/i })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("Evidence & Audited Relationships — click to expand"));
+    expect(disclosure).toHaveAttribute("open");
+  });
 });
 
 describe("DashboardPage — loading, empty and error states", () => {

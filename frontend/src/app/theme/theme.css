@@ -84,6 +84,7 @@
    palette so an unconfigured install looks as it always has. ------ */
 [data-theme="focus"],
 .theme-swatch--focus {
+  color-scheme: light;
   --color-bg: #f5f7fa;
   --color-bg-deep: #eaeef3;
   --color-surface: #ffffff;
@@ -125,6 +126,7 @@
 /* --- MIDNIGHT -- deep navy terminal, cool cyan signal. ----------- */
 [data-theme="midnight"],
 .theme-swatch--midnight {
+  color-scheme: dark;
   --color-bg: #0b1220;
   --color-bg-deep: #070c16;
   --color-surface: #111a2b;
@@ -168,6 +170,7 @@
    users who find coloured dark themes fatiguing. ------------------ */
 [data-theme="obsidian"],
 .theme-swatch--obsidian {
+  color-scheme: dark;
   --color-bg: #0d0d0f;
   --color-bg-deep: #060607;
   --color-surface: #151517;
@@ -209,6 +212,7 @@
 /* --- AURORA -- slate-teal depth, restrained jade/violet accents. - */
 [data-theme="aurora"],
 .theme-swatch--aurora {
+  color-scheme: dark;
   --color-bg: #0e1618;
   --color-bg-deep: #08100f;
   --color-surface: #142022;
