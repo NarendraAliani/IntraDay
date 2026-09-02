@@ -24,12 +24,34 @@
 # a database connection and are unaffected either way.
 from __future__ import annotations
 
+import os
+
 from .base import *  # noqa: F401,F403
 from .trading_mode import resolve_trading_mode
 
 DEBUG = False
 ALLOWED_HOSTS = ["testserver"]
 SECRET_KEY = "test-secret-key-not-for-production"  # noqa: S105
+
+# ---------------------------------------------------------------------------
+# Checkpoint 67.12.2-K — optional test-database NAME override.
+#
+# By default Django/pytest-django compute the test database name as
+# "test_" + DATABASES['default']['NAME'] (e.g. "test_intraday"), and
+# every pytest-django session sharing this settings module contends for
+# that same name. Some tests (e.g.
+# test_migration_67_10_execute.py::test_migration_67_7_dry_run_test_suite_still_passes_unmodified)
+# legitimately need to spawn a genuinely separate OS subprocess that
+# independently runs Django's own setup_databases()/create_test_db() —
+# to prove real process-level isolation — without racing an outer
+# pytest-django session that already holds the default test database
+# open. Setting INTRADAY_TEST_DB_NAME in that subprocess's environment
+# overrides the test database name it provisions/tears down, so it
+# gets its own disposable database with no collision. Unset (the
+# normal case for every other test run) this is a no-op — Django falls
+# back to its usual "test_" + NAME default.
+DATABASES["default"].setdefault("TEST", {})
+DATABASES["default"]["TEST"]["NAME"] = os.environ.get("INTRADAY_TEST_DB_NAME") or None
 
 CACHES = {
     "default": {

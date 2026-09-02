@@ -22,6 +22,7 @@
 #      guard proof (ProductionWriteGuardError).
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from datetime import UTC, date, datetime, timedelta
@@ -410,11 +411,36 @@ def test_migration_67_7_dry_run_test_suite_still_passes_unmodified():
     """Re-runs the ENTIRE pre-existing 67.7 dry-run test file as a
     subprocess, proving this checkpoint's additions did not alter its
     behavior in any way - the file itself is untouched (no edits made
-    to it in this checkpoint)."""
+    to it in this checkpoint).
+
+    Checkpoint 67.12.2-K: this subprocess is a genuine separate OS
+    process (fresh Python interpreter, fresh Django app registry) -
+    that process-level isolation is deliberately preserved because it
+    is what actually proves 67.10's additions did not silently alter
+    67.7's suite. What was NOT isolated before this checkpoint was the
+    Postgres TEST database name: the subprocess independently runs
+    Django's own create_test_db() against the SAME "test_intraday"
+    name an outer, broader pytest-django sweep (e.g. this repo's
+    persistence + market-data-provider + application-services sweep)
+    already holds open, and Postgres correctly refuses to
+    recreate/drop a database another session is connected to -
+    producing 16 spurious "database is being accessed by other users"
+    errors with no bearing on migration_execute.py/migration_dry_run.py
+    correctness (see CHECKPOINT_67.12.2-J_SUMMARY.md for the original
+    diagnosis). INTRADAY_TEST_DB_NAME (read by
+    intraday/settings/testing.py) gives this subprocess its own
+    distinctly-named, disposable test database so it no longer
+    collides with whatever outer session invoked this test - pytest-
+    django provisions and tears that database down entirely within the
+    subprocess's own lifetime, in both the pass and fail case, so
+    nothing leaks."""
+    subprocess_env = dict(os.environ)
+    subprocess_env["INTRADAY_TEST_DB_NAME"] = "test_intraday_migration_meta"
     result = subprocess.run(
         [sys.executable, "-m", "pytest", "-q",
          "tests/unit/application/services/test_migration_67_7_dry_run.py"],
         cwd=None, capture_output=True, text=True, timeout=300,
+        env=subprocess_env,
     )
     assert result.returncode == 0, result.stdout + result.stderr
 

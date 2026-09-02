@@ -154,6 +154,48 @@ def test_fully_cached_range_triggers_zero_provider_calls() -> None:
     assert provider.fetch_calls == 1  # unchanged - the provider was never called again
 
 
+def test_fully_cached_cas_instrument_range_triggers_zero_provider_calls() -> None:
+    """Checkpoint 67.12.2-K: closes the CAS-path coverage gap left by
+    67.12.2-J's fix above. That fix correctly switched
+    `test_fully_cached_range_triggers_zero_provider_calls` to a
+    non-CAS instrument (TATASTEEL) to restore its strict
+    `cache_hits == bars_persisted` invariant, but that means the
+    "fully cached => zero provider calls" behavior was no longer
+    verified for any CATEGORY_I_CAS instrument (RELIANCE/TCS/HDFCBANK/
+    INFY). This test restores that coverage for RELIANCE, without
+    reusing the non-CAS invariant: `_AlwaysAvailableProvider` still
+    persists a full uniform (non-CAS) session's worth of bars, so
+    `cache_hits` is asserted against the CAS-aware EXPECTED count the
+    coverage service itself computes for the second call's range
+    (derived live via the same `_expected_timestamps` the production
+    coverage service uses - not a hardcoded literal, so this does not
+    silently drift if the CAS session definition ever changes), not
+    against `bars_persisted`. The mandatory "zero provider calls on an
+    already-complete range" behavior is asserted exactly as strictly
+    as the non-CAS test above."""
+    from intraday.application.services.historical_data_coverage import (
+        _expected_timestamps,  # noqa: SLF001 - deriving the CAS-aware expectation, not testing it
+    )
+
+    read = _FakeReadRepository()
+    provider = _AlwaysAvailableProvider()
+    service = _service(read, provider)
+    first = service.prepare(RELIANCE, Timeframe.FIVE_MINUTE, START, END)
+    assert first.status == PreparationStatus.COMPLETE
+    assert provider.fetch_calls == 1
+
+    second = service.prepare(RELIANCE, Timeframe.FIVE_MINUTE, START, END)
+
+    expected_cas_aware_count = len(
+        _expected_timestamps(START, END, Timeframe.FIVE_MINUTE, RELIANCE)
+    )
+    assert second.status == PreparationStatus.COMPLETE
+    assert second.api_requests == 0
+    assert second.bars_fetched == 0
+    assert second.cache_hits == expected_cas_aware_count
+    assert provider.fetch_calls == 1  # unchanged - the provider was never called again
+
+
 def test_provider_unavailable_does_not_produce_a_falsely_complete_result() -> None:
     """Phase 6/23: an unreachable provider must never be silently
     treated as success - and must never leave a caller unable to tell
