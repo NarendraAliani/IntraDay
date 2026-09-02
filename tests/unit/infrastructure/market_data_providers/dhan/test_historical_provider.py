@@ -24,6 +24,11 @@ from intraday.infrastructure.market_data_providers.dhan.historical_provider impo
 )
 
 RELIANCE_ID = make_instrument_id(Exchange.NSE, "RELIANCE")
+# Checkpoint 67.6: a BSE-listed instrument, used ONLY to prove the
+# segment-discrimination fix - 67.0's empirical proof never touched BSE,
+# so every proof-scope check against this id must resolve UNPROVEN even
+# when timeframe/era exactly match the proven NSE_EQ scope.
+RELIANCE_BSE_ID = make_instrument_id(Exchange.BSE, "RELIANCE")
 
 
 class _FakeInstrumentMaster:
@@ -518,3 +523,278 @@ def test_provenance_is_real_dhan() -> None:
 
     provider = _provider(())
     assert provider.provenance == PROVENANCE_REAL_DHAN
+
+
+# Checkpoint 67.5: request windows used across the era-aware policy
+# tests below. `_CAS_ERA_WINDOW` is entirely on/after CAS_EFFECTIVE_DATE
+# (2026-08-03); `_PRE_CAS_WINDOW` is entirely before it; both are single-day
+# windows so they can never straddle the boundary (no MIXED_UNRESOLVED
+# ambiguity in these fixtures).
+_CAS_ERA_WINDOW = (
+    datetime(2026, 8, 17, 3, 50, tzinfo=UTC),
+    datetime(2026, 8, 17, 9, 45, tzinfo=UTC),
+)
+_PRE_CAS_WINDOW = (
+    datetime(2026, 7, 20, 3, 50, tzinfo=UTC),
+    datetime(2026, 7, 20, 9, 45, tzinfo=UTC),
+)
+
+
+def test_canonicalization_state_for_5m_cas_era_is_canonicalized() -> None:
+    """Checkpoint 67.5 Part 4: ONLY 5m + CAS-era (67.0's exact proven
+    scope: RELIANCE, 2026-08-17) is stamped CANONICALIZED."""
+    from intraday.domain.market_data.source_timestamp import (
+        CANONICALIZATION_STATE_CANONICALIZED,
+    )
+
+    provider = _provider(())
+    start, end = _CAS_ERA_WINDOW
+    assert (
+        provider.canonicalization_state_for(RELIANCE_ID, Timeframe.FIVE_MINUTE, start, end)
+        == CANONICALIZATION_STATE_CANONICALIZED
+    )
+
+
+def test_canonicalization_state_for_5m_pre_cas_is_unknown_not_canonicalized() -> None:
+    """Checkpoint 67.5 Part 4 - THE KEY REGRESSION TEST: a future 5m
+    ingestion request for a PRE-CAS date must NOT inherit the CAS-era-only
+    67.0 proof merely because it is 5-minute. This is the exact scope-leakage
+    bug 67.5 fixes (67.4's `_EMPIRICALLY_PROVEN_CANONICAL_TIMEFRAMES` keyed
+    proof off `timeframe` alone, so this case would have wrongly resolved
+    CANONICALIZED under 67.4)."""
+    from intraday.domain.market_data.source_timestamp import CANONICALIZATION_STATE_UNKNOWN
+
+    provider = _provider(())
+    start, end = _PRE_CAS_WINDOW
+    assert (
+        provider.canonicalization_state_for(RELIANCE_ID, Timeframe.FIVE_MINUTE, start, end)
+        == CANONICALIZATION_STATE_UNKNOWN
+    )
+
+
+def test_canonicalization_state_for_unproven_intraday_timeframes_is_unknown() -> None:
+    """Checkpoint 67.4 Part 4/I (still true under 67.5's era-aware
+    policy): 1m/15m/1h still run the `+interval` arithmetic
+    (harmless/best-effort) but must NEVER be reported as CANONICALIZED -
+    only UNKNOWN, since 67.0 never proved their semantics, at any era.
+    'Code applied +interval' must never be treated as 'data is
+    semantically proven canonical'."""
+    from intraday.domain.market_data.source_timestamp import CANONICALIZATION_STATE_UNKNOWN
+
+    provider = _provider(())
+    for start, end in (_CAS_ERA_WINDOW, _PRE_CAS_WINDOW):
+        for timeframe in (Timeframe.ONE_MINUTE, Timeframe.FIFTEEN_MINUTE, Timeframe.ONE_HOUR):
+            assert (
+                provider.canonicalization_state_for(RELIANCE_ID, timeframe, start, end)
+                == CANONICALIZATION_STATE_UNKNOWN
+            )
+
+
+def test_canonicalization_state_for_daily_is_not_applicable() -> None:
+    """Checkpoint 67.3 Part 11 (unchanged by 67.4/67.5): daily is
+    deliberately kept OUT of this state transition entirely - never
+    mislabeled UNCANONICALIZED or CANONICALIZED just because `fetch()`
+    treats its raw timestamp as already-CLOSE, regardless of era."""
+    from intraday.domain.market_data.source_timestamp import (
+        CANONICALIZATION_STATE_NOT_APPLICABLE,
+    )
+
+    provider = _provider(())
+    start, end = _CAS_ERA_WINDOW
+    assert (
+        provider.canonicalization_state_for(RELIANCE_ID, Timeframe.DAY, start, end)
+        == CANONICALIZATION_STATE_NOT_APPLICABLE
+    )
+
+
+def test_canonicalization_state_for_5m_mixed_era_window_is_unknown() -> None:
+    """Checkpoint 67.5 Part 1/3: a request window that straddles
+    `CAS_EFFECTIVE_DATE` resolves MIXED_UNRESOLVED, not silently either
+    era - it must NOT be treated as proven CAS-era just because its
+    `end` falls in the CAS era."""
+    from intraday.domain.market_data.source_timestamp import CANONICALIZATION_STATE_UNKNOWN
+
+    provider = _provider(())
+    start = datetime(2026, 7, 20, 3, 50, tzinfo=UTC)  # PRE-CAS
+    end = datetime(2026, 8, 17, 9, 45, tzinfo=UTC)  # CAS-era
+    assert (
+        provider.canonicalization_state_for(RELIANCE_ID, Timeframe.FIVE_MINUTE, start, end)
+        == CANONICALIZATION_STATE_UNKNOWN
+    )
+
+
+def test_source_timestamp_semantics_for_5m_cas_era_is_open() -> None:
+    """Checkpoint 67.5 Part 2/4: the SEMANTICS half - only 5m + CAS-era
+    is the scope 67.0 empirically proved OPEN."""
+    from intraday.domain.market_data.source_timestamp import SourceTimestampSemantics
+
+    provider = _provider(())
+    start, end = _CAS_ERA_WINDOW
+    assert (
+        provider.source_timestamp_semantics_for(RELIANCE_ID, Timeframe.FIVE_MINUTE, start, end)
+        == SourceTimestampSemantics.OPEN.value
+    )
+
+
+def test_source_timestamp_semantics_for_5m_pre_cas_is_unknown() -> None:
+    """Checkpoint 67.5 Part 4 - the SEMANTICS-half companion to the key
+    regression test above: PRE-CAS 5m must report UNKNOWN, never OPEN."""
+    from intraday.domain.market_data.source_timestamp import SourceTimestampSemantics
+
+    provider = _provider(())
+    start, end = _PRE_CAS_WINDOW
+    assert (
+        provider.source_timestamp_semantics_for(RELIANCE_ID, Timeframe.FIVE_MINUTE, start, end)
+        == SourceTimestampSemantics.UNKNOWN.value
+    )
+
+
+def test_source_timestamp_semantics_for_1m_is_unknown_at_any_era() -> None:
+    """Checkpoint 67.4 Part 13 test 5 (still true under 67.5): 1m must
+    not pass as canonical while its semantics are unproven - the
+    provider must report UNKNOWN, never OPEN, for 1m, regardless of
+    era."""
+    from intraday.domain.market_data.source_timestamp import SourceTimestampSemantics
+
+    provider = _provider(())
+    for start, end in (_CAS_ERA_WINDOW, _PRE_CAS_WINDOW):
+        assert (
+            provider.source_timestamp_semantics_for(RELIANCE_ID, Timeframe.ONE_MINUTE, start, end)
+            == SourceTimestampSemantics.UNKNOWN.value
+        )
+
+
+def test_source_timestamp_semantics_for_daily_is_not_applicable() -> None:
+    from intraday.domain.market_data.source_timestamp import (
+        CANONICALIZATION_STATE_NOT_APPLICABLE,
+    )
+
+    provider = _provider(())
+    start, end = _CAS_ERA_WINDOW
+    assert (
+        provider.source_timestamp_semantics_for(RELIANCE_ID, Timeframe.DAY, start, end)
+        == CANONICALIZATION_STATE_NOT_APPLICABLE
+    )
+
+
+def test_proof_scope_resolver_reports_provider_endpoint_segment_and_era_explicitly() -> None:
+    """Checkpoint 67.5 Part 1, EXTENDED 67.6 Part 2: `DhanTimestampProofScope`
+    carries the full proof-scope tuple (provider/endpoint/segment/timeframe/
+    era/proof_status), not just a boolean - a caller/test can inspect
+    exactly WHY a scope was or was not permitted, rather than only the
+    final yes/no. `segment="NSE_EQ"` must be passed explicitly for the
+    PROVEN case - 67.0's proof was NSE-only, so the resolver's proof
+    lookup genuinely depends on segment being supplied, not merely
+    timeframe/era."""
+    from intraday.infrastructure.market_data_providers.dhan.historical_provider import (
+        ProofStatus,
+        _resolve_intraday_proof_scope,
+    )
+
+    cas_start, cas_end = _CAS_ERA_WINDOW
+    proven_scope = _resolve_intraday_proof_scope(
+        Timeframe.FIVE_MINUTE, cas_start, cas_end, segment="NSE_EQ"
+    )
+    assert proven_scope.provider == "DHAN"
+    assert proven_scope.endpoint == "INTRADAY"
+    assert proven_scope.segment == "NSE_EQ"
+    assert proven_scope.era == "CAS_ERA"
+    assert proven_scope.proof_status is ProofStatus.PROVEN
+    assert proven_scope.canonicalization_permitted is True
+
+    pre_cas_start, pre_cas_end = _PRE_CAS_WINDOW
+    unproven_scope = _resolve_intraday_proof_scope(
+        Timeframe.FIVE_MINUTE, pre_cas_start, pre_cas_end, segment="NSE_EQ"
+    )
+    assert unproven_scope.era == "PRE_CAS"
+    assert unproven_scope.proof_status is ProofStatus.UNPROVEN
+    assert unproven_scope.canonicalization_permitted is False
+
+
+# ---------------------------------------------------------------------------
+# Checkpoint 67.6 Part 5 - THE NEW REGRESSION TESTS: segment discrimination.
+# ---------------------------------------------------------------------------
+
+
+def test_bse_eq_5m_cas_era_is_unproven_never_inherits_nse_proof() -> None:
+    """Checkpoint 67.6 Part 5 test 2 - THE KEY REGRESSION TEST for this
+    checkpoint: a BSE_EQ instrument, otherwise IDENTICAL request
+    (5m, CAS-era) to the one 67.0 empirically proved for NSE_EQ, must
+    resolve UNPROVEN/UNKNOWN. Before this checkpoint's fix,
+    `_PROVEN_INTRADAY_SCOPES` was keyed only by (timeframe, era), so
+    this exact case would have wrongly resolved PROVEN/CANONICALIZED."""
+    from intraday.domain.market_data.source_timestamp import (
+        CANONICALIZATION_STATE_UNKNOWN,
+        SourceTimestampSemantics,
+    )
+
+    provider = _provider(())
+    start, end = _CAS_ERA_WINDOW
+    assert (
+        provider.canonicalization_state_for(RELIANCE_BSE_ID, Timeframe.FIVE_MINUTE, start, end)
+        == CANONICALIZATION_STATE_UNKNOWN
+    )
+    assert (
+        provider.source_timestamp_semantics_for(RELIANCE_BSE_ID, Timeframe.FIVE_MINUTE, start, end)
+        == SourceTimestampSemantics.UNKNOWN.value
+    )
+
+
+def test_nse_eq_and_bse_eq_genuinely_diverge_for_the_identical_request() -> None:
+    """Checkpoint 67.6 - concrete before/after proof that the lookup key
+    ACTUALLY uses segment: the exact same timeframe/window, only the
+    instrument's exchange differs, and the two calls must produce
+    DIFFERENT `canonicalization_state_for` results."""
+    from intraday.domain.market_data.source_timestamp import (
+        CANONICALIZATION_STATE_CANONICALIZED,
+        CANONICALIZATION_STATE_UNKNOWN,
+    )
+
+    provider = _provider(())
+    start, end = _CAS_ERA_WINDOW
+    nse_result = provider.canonicalization_state_for(
+        RELIANCE_ID, Timeframe.FIVE_MINUTE, start, end
+    )
+    bse_result = provider.canonicalization_state_for(
+        RELIANCE_BSE_ID, Timeframe.FIVE_MINUTE, start, end
+    )
+    assert nse_result == CANONICALIZATION_STATE_CANONICALIZED
+    assert bse_result == CANONICALIZATION_STATE_UNKNOWN
+    assert nse_result != bse_result
+
+
+def test_policy_lookup_fails_closed_for_unsupported_segment() -> None:
+    """Checkpoint 67.6 Part 5 test 8: an instrument whose exchange isn't
+    even in `_EXCHANGE_SEGMENTS` (i.e. `_segment_for_instrument` returns
+    `None`) must fail closed to UNPROVEN, never silently pass through as
+    if segment were irrelevant."""
+    from intraday.infrastructure.market_data_providers.dhan.historical_provider import (
+        ProofStatus,
+        _resolve_intraday_proof_scope,
+    )
+
+    cas_start, cas_end = _CAS_ERA_WINDOW
+    scope = _resolve_intraday_proof_scope(
+        Timeframe.FIVE_MINUTE, cas_start, cas_end, segment=None
+    )
+    assert scope.proof_status is ProofStatus.UNPROVEN
+    assert scope.canonicalization_permitted is False
+
+    scope_bse = _resolve_intraday_proof_scope(
+        Timeframe.FIVE_MINUTE, cas_start, cas_end, segment="BSE_EQ"
+    )
+    assert scope_bse.proof_status is ProofStatus.UNPROVEN
+    assert scope_bse.canonicalization_permitted is False
+
+
+def test_segment_for_instrument_reuses_the_existing_exchange_segment_mapping() -> None:
+    """Checkpoint 67.6 Part 2: `_segment_for_instrument` must resolve the
+    SAME NSE_EQ/BSE_EQ vocabulary `fetch()` already uses
+    (`_EXCHANGE_SEGMENTS`) - a new, parallel segment concept was
+    explicitly NOT to be invented."""
+    from intraday.infrastructure.market_data_providers.dhan.historical_provider import (
+        _segment_for_instrument,
+    )
+
+    assert _segment_for_instrument(RELIANCE_ID) == "NSE_EQ"
+    assert _segment_for_instrument(RELIANCE_BSE_ID) == "BSE_EQ"

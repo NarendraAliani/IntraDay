@@ -1237,6 +1237,58 @@ class HistoricalBar(models.Model):
     without positive evidence, and no existing row was relabeled by the
     migration that added this column — see that migration's docstring."""
 
+    canonicalization_state = models.CharField(max_length=20, default="UNKNOWN")
+    """Checkpoint 67.3 (migrations 0037/0038), RENAMED VALUES ONLY by
+    Checkpoint 67.4 (migrations 0039/0040): explicit, per-row
+    UNCANONICALIZED / CANONICALIZED / NOT_APPLICABLE / UNKNOWN
+    PROCESSING-STATE marker — see
+    `domain.market_data.source_timestamp.CANONICALIZATION_STATE_*` for
+    the vocabulary. Answers ONLY "has this row's `bar_timestamp` been
+    run through `canonicalize_close_timestamp` (the OPEN->CLOSE shift)
+    or not" — a mechanical fact about which code path wrote the row.
+
+    Checkpoint 67.4 split this field's ORIGINAL, overloaded meaning
+    (which used to also encode "was the raw timestamp's OPEN/CLOSE
+    convention ever proven") into two orthogonal fields: this one keeps
+    the PROCESSING-STATE question only; `source_timestamp_semantics`
+    below carries the SEMANTICS question. See that field's own
+    docstring, and `source_timestamp.py`'s "THE CONFLATION FIX" comment,
+    for the full rationale — 67.3's old `RAW_OPEN`/`CANONICAL_CLOSE`
+    member NAMES smuggled a semantics claim into a processing-state
+    field; 67.4 renamed them to `UNCANONICALIZED`/`CANONICALIZED`
+    (migration 0040 is a pure value-rename on this column — no row's
+    `bar_timestamp`/OHLC/volume/provenance changes).
+
+    Defaults to `"UNKNOWN"` — the SAME fail-closed default discipline
+    `provenance` established (65.12): nothing may assign
+    `"CANONICALIZED"` without a writer that can prove the shift ran, and
+    no existing row's `bar_timestamp` value is ever touched by adding or
+    populating this column."""
+
+    source_timestamp_semantics = models.CharField(max_length=20, default="UNKNOWN")
+    """Checkpoint 67.4 (migrations 0039/0040): explicit, per-row
+    OPEN / CLOSE / UNKNOWN / NOT_APPLICABLE SOURCE-SEMANTICS marker —
+    see `domain.market_data.source_timestamp.SourceTimestampSemantics`
+    for the vocabulary. Answers "was this row's PROVIDER raw timestamp
+    ever empirically PROVEN to be OPEN-of-interval or CLOSE-of-interval
+    (67.0-class proof), or is that still unestablished?" — the field
+    `canonicalization_state` above deliberately does NOT answer (it only
+    says whether the shift arithmetic ran, not whether running it was
+    justified).
+
+    This is the field that stops "code applied +interval" from being
+    silently treated as "data is semantically proven canonical": a
+    `REAL_DHAN` row can be `canonicalization_state=CANONICALIZED` (the
+    shift ran) while `source_timestamp_semantics=UNKNOWN` (67.0 never
+    proved that shift for this row's timeframe/era) — e.g. 1m or
+    PRE-CAS 5m intraday data. `ResearchDataGateService` requires BOTH
+    fields be favorable, never either alone.
+
+    Defaults to `"UNKNOWN"` — the same fail-closed discipline every
+    other classification field in this model follows: nothing may
+    assign `"OPEN"`/`"CLOSE"` without positive, checkpoint-documented
+    empirical proof (67.0, currently: Dhan intraday 5m, CAS-era only)."""
+
     class Meta:
         app_label = "persistence"
         constraints = [
@@ -1248,6 +1300,8 @@ class HistoricalBar(models.Model):
         indexes = [
             models.Index(fields=["instrument_id", "timeframe", "bar_timestamp"]),
             models.Index(fields=["provenance"]),
+            models.Index(fields=["canonicalization_state"]),
+            models.Index(fields=["source_timestamp_semantics"]),
         ]
         ordering = ["bar_timestamp"]
 
@@ -1936,4 +1990,114 @@ class OpenInterestObservation(models.Model):
         indexes = [
             models.Index(fields=["trading_date", "contract_id"], name="oio_date_contract_idx"),
             models.Index(fields=["contract_id", "-observed_at"], name="oio_contract_ts_idx"),
+        ]
+
+
+# ----------------------------------------------------------------------
+# Checkpoint 67.9 Part 4 — DURABLE MIGRATION AUDIT SCHEMA.
+#
+# Three new, EMPTY-ON-MIGRATE tables (pure ADD, mirroring migrations
+# 0037/0039's forensic-evidence discipline: no backfill, no read or
+# write of any EXISTING table's data, no HistoricalBar column touched).
+# Turns 67.7/67.8's design-only `migration_audit.py` dataclasses
+# (`MigrationRunAuditRecord`, `MigrationUnitAuditRecord`,
+# `MigrationAuditRecord`) into real, queryable, constrained tables so a
+# FUTURE write-capable migration run has somewhere durable to record
+# state (Part 5/6/11 resume semantics depend on this being on disk, not
+# in a process's memory). This checkpoint creates the schema only —
+# NO row is ever inserted into any of the three tables below by any
+# code path this checkpoint adds or runs (see taskReport.md Part O for
+# the explicit before/after row-count-zero confirmation).
+class MigrationRun(models.Model):
+    """RUN — one row per migration execution. `migration_id` is the
+    natural key (Part 5's "do not allow two active migrations with the
+    same migration_id" is enforced here as a UNIQUE constraint, not
+    merely a runner-side check)."""
+
+    migration_id = models.CharField(max_length=100, unique=True)
+    migration_version = models.CharField(max_length=32)
+    status = models.CharField(max_length=32)
+    """One of `MigrationRunState` (`domain.market_data.migration_state`)
+    — stored as its `.value` string, never re-derived from inequality
+    checks on any other column."""
+    scope_fingerprint = models.CharField(max_length=64)
+    """Hex SHA-256 digest from
+    `domain.market_data.migration_scope_fingerprint.compute_scope_fingerprint`
+    — Part 7."""
+    started_at = models.DateTimeField()
+    completed_at = models.DateTimeField(null=True, blank=True)
+    failure_code = models.CharField(max_length=64, blank=True, default="")
+
+    class Meta:
+        app_label = "persistence"
+        indexes = [
+            models.Index(fields=["status"], name="mig_run_status_idx"),
+        ]
+
+
+class MigrationUnit(models.Model):
+    """UNIT — one row per `(instrument_id, timeframe, trading_date)`
+    unit touched by a run. Required uniqueness `(migration_id, unit_id)`
+    per the directive, enforced as a real DB `UniqueConstraint` — not
+    merely checked in application code."""
+
+    migration_id = models.CharField(max_length=100)
+    unit_id = models.CharField(max_length=200)
+    """Deterministic string derived from `(instrument_id, timeframe,
+    trading_date)`, matching `migration_dry_run.py`'s existing unit
+    identification convention."""
+    instrument_id = models.CharField(max_length=100)
+    timeframe = models.CharField(max_length=8)
+    trading_date = models.DateField()
+    status = models.CharField(max_length=40)
+    """One of `MigrationUnitState` — `.value` string."""
+    old_row_count = models.IntegerField()
+    new_row_count = models.IntegerField()
+    old_scope_fingerprint = models.CharField(max_length=64)
+    """Recomputed-at-revalidation-time fingerprint for JUST this unit's
+    slice of scope (Part 7/11) — distinct from the RUN-level
+    `scope_fingerprint` above, which covers the whole migration."""
+    committed_at = models.DateTimeField(null=True, blank=True)
+    error_code = models.CharField(max_length=64, blank=True, default="")
+
+    class Meta:
+        app_label = "persistence"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["migration_id", "unit_id"], name="uq_migration_unit_identity"
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["migration_id", "status"], name="mig_unit_run_status_idx"),
+        ]
+
+
+class MigrationRow(models.Model):
+    """ROW — one row per `HistoricalBar` row a unit touches. Required
+    uniqueness `(migration_id, row_id)` — a real `UniqueConstraint`,
+    the DB-level version of `migration_audit.assert_unique_migration_row_pairs`'s
+    in-memory check."""
+
+    migration_id = models.CharField(max_length=100)
+    row_id = models.BigIntegerField()
+    """`HistoricalBar.id` this audit row describes — never re-derived,
+    never assumed contiguous."""
+    old_timestamp = models.DateTimeField()
+    new_timestamp = models.DateTimeField()
+    source_semantics = models.CharField(max_length=20)
+    proof_scope = models.CharField(max_length=100)
+    status = models.CharField(max_length=40)
+    """One of `MigrationUnitState` — `.value` string (a ROW inherits its
+    owning unit's status vocabulary; there is no separate row-level
+    state machine)."""
+
+    class Meta:
+        app_label = "persistence"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["migration_id", "row_id"], name="uq_migration_row_identity"
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["migration_id", "status"], name="mig_row_run_status_idx"),
         ]

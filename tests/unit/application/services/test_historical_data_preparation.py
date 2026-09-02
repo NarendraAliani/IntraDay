@@ -42,7 +42,13 @@ class _FakeWriteRepository:
         self.upsert_calls = 0
 
     def bulk_upsert(  # noqa: ARG002
-        self, bars: tuple[Bar, ...], *, source: str, provenance: str = "UNKNOWN"
+        self,
+        bars: tuple[Bar, ...],
+        *,
+        source: str,
+        provenance: str = "UNKNOWN",
+        canonicalization_state: str = "UNKNOWN",
+        source_timestamp_semantics: str = "UNKNOWN",
     ) -> int:
         self.upsert_calls += 1
         for bar in bars:

@@ -28,6 +28,10 @@ from intraday.application.services.historical_data_coverage import (
 )
 from intraday.domain.market_data.contracts import Bar
 from intraday.domain.market_data.provenance import PROVENANCE_UNKNOWN
+from intraday.domain.market_data.source_timestamp import (
+    CANONICALIZATION_STATE_UNKNOWN,
+    SourceTimestampSemantics,
+)
 from intraday.domain.market_data.quality import (
     DuplicateBarTimestampError,
     OutOfOrderBarError,
@@ -193,8 +197,64 @@ class HistoricalDataPreparationService:
 
             bars_fetched += len(validated)
             provider_provenance = getattr(self.provider, "provenance", PROVENANCE_UNKNOWN)
+            # Checkpoint 67.3 Part 3, corrected 67.4 Part 4: the provider
+            # itself is the ONLY party that knows whether the bars it
+            # just returned were canonicalized (`canonicalize_close_
+            # timestamp`) AND whether that shift was empirically PROVEN
+            # for this specific timeframe — this service never guesses
+            # either. Two SEPARATE optional provider methods are
+            # consulted (67.4 split what used to be one conflated
+            # question into two):
+            #   `canonicalization_state_for(timeframe)` — PROCESSING
+            #   STATE only: did the +interval shift actually run?
+            #   `source_timestamp_semantics_for(timeframe)` — SEMANTICS
+            #   only: was that shift's OPEN/CLOSE convention ever
+            #   empirically proven (67.0-class proof) for this
+            #   timeframe? `DhanHistoricalBarProvider` now answers this
+            #   honestly per-timeframe — CANONICALIZED/OPEN only for the
+            #   67.0-proven 5m scope, UNKNOWN/UNKNOWN for 1m/15m/1h
+            #   (the shift still runs, but is not claimed proven), so
+            #   "code applied +interval" is never conflated with "data
+            #   is semantically proven canonical" (the exact 67.3 defect
+            #   this checkpoint fixes). A provider that exposes neither
+            #   method (e.g. the synthetic fixture provider — its rows
+            #   are `SYNTHETIC_TEST` provenance and therefore never
+            #   research-eligible regardless) defaults both to
+            #   `UNKNOWN`, never `CANONICALIZED`/`OPEN`.
+            # Checkpoint 67.5 Parts 1-3: both provider hooks are now
+            # ERA-AWARE — they need to know WHICH request window this
+            # batch of bars came from (`missing_range.start`/`.end`),
+            # not just `timeframe`, so a PRE-CAS 5m request can no longer
+            # inherit the CAS-era-only 67.0 proof merely because it is
+            # 5-minute. `missing_range` is exactly the per-gap window
+            # this loop already fetched from `self.provider.fetch()`
+            # above — the same date scope the provider used to decide
+            # what to return is the same date scope it must use to
+            # decide how to classify what it returned.
+            # Checkpoint 67.6 Parts 1-2: both hooks now take `instrument_id`
+            # too, not just `timeframe`/window — the proof-scope lookup
+            # inside the provider needs the instrument's exchange segment
+            # (NSE_EQ vs BSE_EQ) to avoid extending 67.0's NSE-only
+            # empirical proof to BSE. `instrument_id` is already in scope
+            # here (this whole loop is per-instrument).
+            state_for = getattr(self.provider, "canonicalization_state_for", None)
+            provider_canonicalization_state = (
+                state_for(instrument_id, timeframe, missing_range.start, missing_range.end)
+                if state_for is not None
+                else CANONICALIZATION_STATE_UNKNOWN
+            )
+            semantics_for = getattr(self.provider, "source_timestamp_semantics_for", None)
+            provider_source_timestamp_semantics = (
+                semantics_for(instrument_id, timeframe, missing_range.start, missing_range.end)
+                if semantics_for is not None
+                else SourceTimestampSemantics.UNKNOWN.value
+            )
             bars_persisted += self.writer.bulk_upsert(
-                validated, source=PROVENANCE_API_FETCH, provenance=provider_provenance
+                validated,
+                source=PROVENANCE_API_FETCH,
+                provenance=provider_provenance,
+                canonicalization_state=provider_canonicalization_state,
+                source_timestamp_semantics=provider_source_timestamp_semantics,
             )
 
         # STORE -> VERIFY PERSISTENCE (Phase 5's final step): re-check

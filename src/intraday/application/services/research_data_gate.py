@@ -43,14 +43,20 @@ import enum
 from dataclasses import dataclass
 from datetime import date, datetime
 
+from typing import Callable
+
 from intraday.application.repositories.historical_bars import HistoricalBarReadRepository
 from intraday.application.services.historical_data_coverage import (
     CoverageReport,
     HistoricalDataCoverageService,
 )
 from intraday.domain.market_data.contracts import Bar
-from intraday.domain.market_data.provenance import is_research_eligible
+from intraday.domain.market_data.provenance import PROVENANCE_REAL_DHAN, is_research_eligible
 from intraday.domain.market_data.quality import ensure_chronological
+from intraday.domain.market_data.source_timestamp import (
+    is_canonicalized,
+    is_source_semantics_proven,
+)
 from intraday.domain.session.calendar import INDIA_STANDARD_TIME
 from intraday.domain.session.resolver import ResolvedSession, resolve_market_session_for_instant
 from intraday.domain.shared_kernel.contracts import Exchange, InstrumentId, Timeframe
@@ -63,6 +69,24 @@ class ResearchRejectionReason(enum.Enum):
     NO_DATA = "NO_DATA"
     INCOMPLETE_COVERAGE = "INCOMPLETE_COVERAGE"
     INELIGIBLE_PROVENANCE = "INELIGIBLE_PROVENANCE"
+    UNCANONICALIZED_TIMESTAMP = "UNCANONICALIZED_TIMESTAMP"
+    """Checkpoint 67.3 Part 4/13/14, HARDENED 67.4 Part 6: raised when
+    every row is `REAL_DHAN` (passes the provenance gate above) but at
+    least one row fails EITHER of the two now-separate canonicalization
+    checks: its `canonicalization_state` is not `CANONICALIZED` (the
+    shift never ran — `UNCANONICALIZED`/`NOT_APPLICABLE`/`UNKNOWN`), OR
+    its `source_timestamp_semantics` is not a PROVEN value (`OPEN`/
+    `CLOSE`) — i.e. it is `UNKNOWN`/`NOT_APPLICABLE`. This is the 67.4
+    fix for 67.3's own conflation flaw: a row can have
+    `canonicalization_state=CANONICALIZED` (the `+interval` arithmetic
+    ran) while `source_timestamp_semantics=UNKNOWN` (that arithmetic was
+    never empirically proven for this row's timeframe/era, e.g. 1m or
+    PRE-CAS 5m) — "code applied +interval" must never be treated as
+    equivalent to "data is semantically proven canonical", so BOTH
+    checks must independently pass. Distinguished from
+    `INELIGIBLE_PROVENANCE` (a different row-level fact) so a caller/test
+    can tell "wrong source" apart from "right source, timestamp not yet
+    trustworthy"."""
 
 
 class ResearchDataRejectedError(Exception):
@@ -115,6 +139,36 @@ class ResearchDataGateService:
 
     repository: HistoricalBarReadRepository
     coverage_service: HistoricalDataCoverageService
+    migration_status_resolver: Callable[..., object] | None = None
+    """Checkpoint 67.9 Part 8-9 — dependency-injected resolver for the
+    fail-closed migration control-plane check
+    (`migration_research_gate_integration.resolve_migration_scope_status`
+    by default, see `__post_init__`). Deliberately injectable (not a
+    hardcoded import-time call) so:
+      (1) EVERY real, production construction site (both explicit and
+          via `BacktestingService.for_database_backed_research`) gets
+          the REAL DB-backed resolver by default — the safety default
+          is never "unrestricted", matching the directive's explicit
+          "no feature flag defaulting to unrestricted access."
+      (2) Pre-existing 66.1-era pure in-memory unit tests of THIS
+          service's completeness/provenance/canonicalization gates
+          (`test_research_data_gate.py`) can inject a trivial
+          `lambda **_: None` fake ("no migration ever touches this
+          scope") instead of requiring a real PostgreSQL connection for
+          a check that file was never testing in the first place —
+          exactly mirroring 67.9's OWN dedicated boundary tests
+          (`test_checkpoint_67_9_research_gate_migration_wiring.py`),
+          which use the REAL resolver against a REAL disposable-DB
+          fixture specifically because migration-status wiring is
+          what THEY test."""
+
+    def __post_init__(self) -> None:
+        if self.migration_status_resolver is None:
+            from intraday.application.services.migration_research_gate_integration import (
+                resolve_migration_scope_status,
+            )
+
+            object.__setattr__(self, "migration_status_resolver", resolve_migration_scope_status)
 
     def get_research_eligible_bars(
         self,
@@ -174,6 +228,56 @@ class ResearchDataGateService:
                 "no row relabeled, no row dropped silently, request rejected outright",
             )
 
+        # PART 4/6/13/14 — canonicalization gate (Checkpoint 67.3,
+        # HARDENED 67.4 to check TWO independent, orthogonal facts
+        # instead of one conflated field). Runs ONLY over rows that
+        # already passed the provenance gate above (every
+        # `provenanced_bar` reaching here is `REAL_DHAN` — the loop
+        # above raised before this point if any row was not).
+        #
+        # A row is research-eligible ONLY if BOTH:
+        #   (1) `canonicalization_state` is `CANONICALIZED` — the
+        #       OPEN->CLOSE shift actually ran on this row
+        #       (`is_canonicalized`); AND
+        #   (2) `source_timestamp_semantics` is a PROVEN value (`OPEN`
+        #       or `CLOSE`) — that shift was empirically justified for
+        #       this row's provider/timeframe/era, never merely
+        #       `UNKNOWN` (`is_source_semantics_proven`).
+        #
+        # This is the exact 67.4 fix: 67.3 alone would have accepted a
+        # row whose `canonicalization_state=CANONICALIZED` regardless of
+        # whether `source_timestamp_semantics` was ever proven — exactly
+        # the bug that let 1m/PRE-CAS-5m data masquerade as
+        # research-ready purely because `+interval` arithmetic ran on
+        # it. Checking both here is what blocks that. Neither check ever
+        # relabels or drops a row silently — any failure rejects the
+        # whole range outright.
+        uncanonicalized_counts: dict[str, int] = {}
+        for provenanced_bar in provenanced:
+            if provenanced_bar.provenance != PROVENANCE_REAL_DHAN:
+                continue
+            state_ok = is_canonicalized(provenanced_bar.canonicalization_state)
+            semantics_ok = is_source_semantics_proven(provenanced_bar.source_timestamp_semantics)
+            if not (state_ok and semantics_ok):
+                key = (
+                    f"canonicalization_state={provenanced_bar.canonicalization_state},"
+                    f"source_timestamp_semantics={provenanced_bar.source_timestamp_semantics}"
+                )
+                uncanonicalized_counts[key] = uncanonicalized_counts.get(key, 0) + 1
+        if uncanonicalized_counts:
+            detail = ", ".join(
+                f"{count}x ({key})" for key, count in sorted(uncanonicalized_counts.items())
+            )
+            raise ResearchDataRejectedError(
+                ResearchRejectionReason.UNCANONICALIZED_TIMESTAMP,
+                f"{detail} REAL_DHAN row(s) not both canonicalization_state=CANONICALIZED "
+                f"AND source_timestamp_semantics proven (OPEN/CLOSE) for "
+                f"{instrument_id} {timeframe} in [{start.isoformat()}, {end.isoformat()}] — "
+                "REAL_DHAN provenance alone is not sufficient for performance-research "
+                "eligibility, and neither is an applied-but-unproven canonicalization shift; "
+                "no row relabeled, no row dropped silently, request rejected outright",
+            )
+
         bars = ensure_chronological(tuple(pb.bar for pb in provenanced))
 
         # PART 5/6 — resolver/regime context, computed ONCE PER
@@ -189,6 +293,44 @@ class ResearchDataGateService:
                     as_of=bar.timestamp,
                     is_historical=True,
                 )
+
+        # PART 8/9 (Checkpoint 67.9) — FAIL-CLOSED MIGRATION CONTROL-
+        # PLANE GATE, wired into the ACTUAL research/backtest boundary
+        # (not merely tested against the standalone helper). Runs LAST,
+        # after every existing 66.1/67.3/67.4 check has already passed
+        # (this new gate never RELAXES anything those checks already
+        # reject — it can only add a further rejection). For every
+        # distinct trading date this call would return bars for,
+        # resolve that unit's real migration status
+        # (`migration_research_gate_integration.
+        # enforce_migration_scope_or_deny`) and enforce the mechanical
+        # mixed-grid rule. `unit_is_complete=True` here because the
+        # completeness gate above (`coverage.is_complete`) has ALREADY
+        # verified the whole requested range is 100% covered — this
+        # call reuses that verdict rather than re-deriving per-date
+        # completeness the audit schema does not yet track.
+        #
+        # `enforce_migration_scope_or_deny` propagates BOTH failure
+        # modes verbatim, deliberately uncaught here: an ordinary
+        # in-progress/incomplete migration rejection
+        # (`MixedGridResearchRejection`) and, critically, an
+        # UNDETERMINABLE migration status
+        # (`MigrationStatusUndeterminable`) — the fail-closed case. No
+        # `except Exception` anywhere in this path defaults to
+        # "allowed"; an undetermined status DENIES by raising, exactly
+        # like every other rejection this method already raises.
+        from intraday.application.services.migration_research_gate_integration import (
+            enforce_migration_scope_or_deny,
+        )
+
+        for trading_date in sessions_by_date:
+            enforce_migration_scope_or_deny(
+                instrument_id=instrument_id,
+                timeframe=timeframe,
+                trading_date=trading_date,
+                unit_is_complete=True,
+                resolver=self.migration_status_resolver,
+            )
 
         return ResearchEligibleBars(
             instrument_id=instrument_id,

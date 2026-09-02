@@ -25,10 +25,37 @@
 # the model's own `uq_historical_bar_identity` constraint — a single
 # batched statement per fetch, not one `save()` per bar (Phase 28's
 # explicit "avoid one ORM save per bar" instruction).
+#
+# Checkpoint 67.8 Part 1 — closes the concurrency gap 67.7 Part 2
+# named (see `migration_advisory_lock.py`'s docstring): `bulk_upsert`
+# now groups its incoming bars by `(instrument_id, timeframe)` — the
+# same two dimensions the migration runner's lock key is derived from
+# — and, for each group, acquires
+# `acquire_historical_bar_migration_lock(instrument_id, timeframe)`
+# (the EXACT canonical lock from `migration_advisory_lock.py`, same
+# key derivation, no parallel scheme) around that group's
+# `bulk_create(..., update_conflicts=True)` call. This is the smallest
+# safe change that closes the bypass: it does not alter what gets
+# written, does not change the upsert semantics or conflict-resolution
+# fields, only wraps each group's write in the transaction-scoped
+# advisory lock so a concurrent migration commit for the same
+# instrument/timeframe cannot race this ingestion path's
+# read-modify-write window. A `bulk_upsert()` call touching several
+# instruments/timeframes now issues one `bulk_create` per group instead
+# of one for the whole batch — in production every call already comes
+# from a single-instrument/single-timeframe fetch
+# (`HistoricalDataPreparationService.prepare()`), so this is a no-op
+# for the common case and only adds grouping overhead in the
+# multi-group case, never changes correctness.
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import datetime
 
+from intraday.application.services.migration_advisory_lock import (
+    acquire_historical_bar_migration_lock,
+    historical_migration_lock_key,
+)
 from intraday.domain.instrument.contracts import make_instrument_id
 from intraday.domain.market_data.contracts import Bar
 from intraday.domain.market_data.research_bar import ProvenancedBar
@@ -64,14 +91,20 @@ class DjangoHistoricalBarRepository:
         return frozenset(rows)
 
     def bulk_upsert(
-        self, bars: tuple[Bar, ...], *, source: str, provenance: str = "UNKNOWN"
+        self,
+        bars: tuple[Bar, ...],
+        *,
+        source: str,
+        provenance: str = "UNKNOWN",
+        canonicalization_state: str = "UNKNOWN",
+        source_timestamp_semantics: str = "UNKNOWN",
     ) -> int:
         if not bars:
             return 0
-        records = []
+        groups: dict[tuple[InstrumentId, Timeframe], list[HistoricalBar]] = defaultdict(list)
         for bar in bars:
             exchange, symbol = _split_instrument_id(bar.instrument_id)
-            records.append(
+            groups[(bar.instrument_id, bar.timeframe)].append(
                 HistoricalBar(
                     instrument_id=str(bar.instrument_id),
                     exchange=exchange,
@@ -85,23 +118,61 @@ class DjangoHistoricalBarRepository:
                     volume=bar.volume,
                     source=source,
                     provenance=provenance,
+                    canonicalization_state=canonicalization_state,
+                    source_timestamp_semantics=source_timestamp_semantics,
                 )
             )
-        HistoricalBar.objects.bulk_create(
-            records,
-            update_conflicts=True,
-            unique_fields=["instrument_id", "timeframe", "bar_timestamp"],
-            update_fields=[
-                "open_price",
-                "high_price",
-                "low_price",
-                "close_price",
-                "volume",
-                "source",
-                "provenance",
-            ],
+        # Checkpoint 67.9 Part 2 — DETERMINISTIC LOCK ORDERING.
+        #
+        # 67.8 iterated `groups.items()` in whatever order Python's dict
+        # preserved (== the order bars first appeared in the input
+        # tuple). If a single `bulk_upsert()` call ever spans MORE THAN
+        # ONE (instrument_id, timeframe) group, and two concurrent
+        # callers pass their groups in opposite orders (call A: X then
+        # Y; call B: Y then X), each acquiring a `pg_advisory_xact_lock`
+        # per group in turn, that is the textbook lock-ordering deadlock
+        # shape — A holds X, waits for Y; B holds Y, waits for X.
+        #
+        # The fix: sort groups by their CANONICAL lock key
+        # (`historical_migration_lock_key`, the exact same deterministic
+        # int this module already derives its lock from) before
+        # acquiring anything, and acquire strictly ascending. Two callers
+        # given the SAME set of groups in ANY input order now attempt
+        # acquisition in the SAME order, so the "A holds X waits for Y /
+        # B holds Y waits for X" shape cannot occur — one of the two
+        # callers always acquires its (lowest-key) first lock before the
+        # other even attempts it. This does not rely on PostgreSQL's
+        # deadlock detector as the primary defense; canonical ordering
+        # prevents the cycle from forming at all. See
+        # `test_checkpoint_67_9_multi_lock_ordering_and_deadlock.py` for
+        # the two-process proof (opposite input order, no deadlock) and
+        # confirmation of which mechanism (ordering vs. detector) is
+        # actually doing the preventing.
+        ordered_groups = sorted(
+            groups.items(),
+            key=lambda item: historical_migration_lock_key(item[0][0], item[0][1]),
         )
-        return len(records)
+        total = 0
+        for (instrument_id, timeframe), records in ordered_groups:
+            with acquire_historical_bar_migration_lock(instrument_id, timeframe):
+                HistoricalBar.objects.bulk_create(
+                    records,
+                    update_conflicts=True,
+                    unique_fields=["instrument_id", "timeframe", "bar_timestamp"],
+                    update_fields=[
+                        "open_price",
+                        "high_price",
+                        "low_price",
+                        "close_price",
+                        "volume",
+                        "source",
+                        "provenance",
+                        "canonicalization_state",
+                        "source_timestamp_semantics",
+                    ],
+                )
+            total += len(records)
+        return total
 
     def get_bars(
         self,
@@ -168,6 +239,8 @@ class DjangoHistoricalBarRepository:
                     volume=row.volume,
                 ),
                 provenance=row.provenance,
+                canonicalization_state=row.canonicalization_state,
+                source_timestamp_semantics=row.source_timestamp_semantics,
             )
             for row in rows
         )

@@ -26,6 +26,13 @@ from intraday.domain.market_data.provenance import (
     PROVENANCE_UNKNOWN,
 )
 from intraday.domain.market_data.research_bar import ProvenancedBar
+from intraday.domain.market_data.source_timestamp import (
+    CANONICALIZATION_STATE_CANONICALIZED,
+    CANONICALIZATION_STATE_NOT_APPLICABLE,
+    CANONICALIZATION_STATE_UNCANONICALIZED,
+    CANONICALIZATION_STATE_UNKNOWN,
+    SourceTimestampSemantics,
+)
 from intraday.domain.session.calendar import CAS_EFFECTIVE_DATE
 from intraday.domain.session.resolver import HistoricalEligibility, Regime
 from intraday.domain.shared_kernel.contracts import Exchange, Timeframe
@@ -74,11 +81,29 @@ class _FakeRepository:
         return tuple(pb for pb in self._bars if start <= pb.bar.timestamp <= end)
 
 
+def _no_migration_in_flight(**_kwargs):
+    """Checkpoint 67.9: this file tests ONLY the pre-existing 66.1/67.3/
+    67.4 completeness/provenance/canonicalization gates, never migration
+    status - injecting this trivial resolver keeps every test here a
+    pure in-memory unit test (no PostgreSQL needed) while still
+    exercising the REAL Part 8/9 wiring code path in
+    `get_research_eligible_bars` (it always calls the injected resolver;
+    this fake just always answers "no migration has ever touched this
+    scope", which is what `migration_research_gate_integration.
+    resolve_migration_scope_status` also currently answers for every
+    real scope today, since this checkpoint populates zero MigrationUnit
+    rows). Migration-status wiring itself is proven separately, against
+    a REAL resolver and a REAL disposable-DB fixture, in
+    `test_checkpoint_67_9_research_gate_migration_wiring.py`."""
+    return None
+
+
 def _gate(provenanced_bars: tuple[ProvenancedBar, ...]) -> ResearchDataGateService:
     repository = _FakeRepository(provenanced_bars)
     return ResearchDataGateService(
         repository=repository,
         coverage_service=HistoricalDataCoverageService(repository=repository),
+        migration_status_resolver=_no_migration_in_flight,
     )
 
 
@@ -91,7 +116,19 @@ def _gate(provenanced_bars: tuple[ProvenancedBar, ...]) -> ResearchDataGateServi
 # EXACTLY those timestamps as "complete" or deliberately omitting one as
 # "incomplete" - so completeness is asserted against the real domain
 # logic, never a hand-rolled parallel definition.
-def _full_day_bars(trading_date, provenance: str) -> tuple[ProvenancedBar, ...]:
+def _full_day_bars(
+    trading_date,
+    provenance: str,
+    canonicalization_state: str = CANONICALIZATION_STATE_CANONICALIZED,
+    source_timestamp_semantics: str = SourceTimestampSemantics.OPEN.value,
+) -> tuple[ProvenancedBar, ...]:
+    """`canonicalization_state`/`source_timestamp_semantics` (Checkpoint
+    67.3/67.4) default to `CANONICALIZED`/`OPEN` so every PRE-67.4 test
+    in this file (which only ever varied `provenance`) keeps its
+    original REAL_DHAN-accepted / non-REAL_DHAN-rejected meaning
+    unchanged - it now represents "new, already-canonicalized,
+    proven-OPEN REAL_DHAN data", the state the corrected 67.4 Dhan
+    5m-CAS-era ingestion path actually produces."""
     from intraday.application.services.historical_data_coverage import _expected_timestamps
 
     start = datetime.combine(trading_date, datetime.min.time(), tzinfo=UTC)
@@ -112,6 +149,8 @@ def _full_day_bars(trading_date, provenance: str) -> tuple[ProvenancedBar, ...]:
                     volume=__import__("decimal").Decimal("1000"),
                 ),
                 provenance=provenance,
+                canonicalization_state=canonicalization_state,
+                source_timestamp_semantics=source_timestamp_semantics,
             )
         )
     return tuple(bars), start, end
@@ -245,3 +284,202 @@ def test_rejection_reason_and_detail_are_observable_on_the_exception() -> None:
     assert isinstance(error.reason, ResearchRejectionReason)
     assert isinstance(error.detail, str) and len(error.detail) > 0
     assert error.reason.value in str(error)
+
+
+# --- Checkpoint 67.4: split semantics/canonicalization-state gate --------
+# The Part 9 eligibility matrix, plus the double-canonicalization proof.
+# `_full_day_bars` defaults to CANONICALIZED/OPEN so only the dimension
+# under test needs to be overridden per case.
+
+
+def test_open_uncanonicalized_is_rejected() -> None:
+    """Matrix row 2: REAL_DHAN, OPEN semantics, UNCANONICALIZED state ->
+    NO. Proven semantics alone is not enough - the shift must have
+    actually run."""
+    bars, start, end = _full_day_bars(
+        CAS_EFFECTIVE_DATE,
+        PROVENANCE_REAL_DHAN,
+        canonicalization_state=CANONICALIZATION_STATE_UNCANONICALIZED,
+        source_timestamp_semantics=SourceTimestampSemantics.OPEN.value,
+    )
+    gate = _gate(bars)
+    with pytest.raises(ResearchDataRejectedError) as exc_info:
+        gate.get_research_eligible_bars(
+            RELIANCE, TIMEFRAME, start, end, exchange=Exchange.NSE, segment="CASH_EQUITY", symbol="RELIANCE"
+        )
+    assert exc_info.value.reason is ResearchRejectionReason.UNCANONICALIZED_TIMESTAMP
+    assert "UNCANONICALIZED" in exc_info.value.detail
+
+
+def test_open_canonicalized_is_accepted() -> None:
+    """Matrix row 1: REAL_DHAN, OPEN semantics, CANONICALIZED state ->
+    YES. This is `_full_day_bars`'s default; restated explicitly here."""
+    bars, start, end = _full_day_bars(CAS_EFFECTIVE_DATE, PROVENANCE_REAL_DHAN)
+    gate = _gate(bars)
+    result = gate.get_research_eligible_bars(
+        RELIANCE, TIMEFRAME, start, end, exchange=Exchange.NSE, segment="CASH_EQUITY", symbol="RELIANCE"
+    )
+    assert len(result.bars) == len(bars)
+
+
+def test_unknown_semantics_canonicalized_is_rejected() -> None:
+    """Matrix row 3, and Checkpoint 67.4's core fix / Part 13 test 3:
+    REAL_DHAN, UNKNOWN semantics, CANONICALIZED state -> NO. This is
+    EXACTLY the bug 67.3's review found: the `+interval` arithmetic
+    having run (`canonicalization_state=CANONICALIZED`) must never be
+    treated as proof the shift was semantically justified when
+    `source_timestamp_semantics` is still UNKNOWN - the real-world
+    manifestation being 1m/PRE-CAS-5m Dhan data."""
+    bars, start, end = _full_day_bars(
+        CAS_EFFECTIVE_DATE,
+        PROVENANCE_REAL_DHAN,
+        canonicalization_state=CANONICALIZATION_STATE_CANONICALIZED,
+        source_timestamp_semantics=SourceTimestampSemantics.UNKNOWN.value,
+    )
+    gate = _gate(bars)
+    with pytest.raises(ResearchDataRejectedError) as exc_info:
+        gate.get_research_eligible_bars(
+            RELIANCE, TIMEFRAME, start, end, exchange=Exchange.NSE, segment="CASH_EQUITY", symbol="RELIANCE"
+        )
+    assert exc_info.value.reason is ResearchRejectionReason.UNCANONICALIZED_TIMESTAMP
+    assert "source_timestamp_semantics=UNKNOWN" in exc_info.value.detail
+
+
+def test_unknown_semantics_uncanonicalized_is_rejected() -> None:
+    """Matrix row 4: REAL_DHAN, UNKNOWN semantics, UNCANONICALIZED state
+    -> NO. Both dimensions fail simultaneously - the worst case, still
+    rejected outright."""
+    bars, start, end = _full_day_bars(
+        CAS_EFFECTIVE_DATE,
+        PROVENANCE_REAL_DHAN,
+        canonicalization_state=CANONICALIZATION_STATE_UNCANONICALIZED,
+        source_timestamp_semantics=SourceTimestampSemantics.UNKNOWN.value,
+    )
+    gate = _gate(bars)
+    with pytest.raises(ResearchDataRejectedError) as exc_info:
+        gate.get_research_eligible_bars(
+            RELIANCE, TIMEFRAME, start, end, exchange=Exchange.NSE, segment="CASH_EQUITY", symbol="RELIANCE"
+        )
+    assert exc_info.value.reason is ResearchRejectionReason.UNCANONICALIZED_TIMESTAMP
+
+
+def test_close_canonicalized_is_accepted() -> None:
+    """Matrix row 5: REAL_DHAN, CLOSE semantics, CANONICALIZED state ->
+    YES (only if independently supported - CLOSE semantics require no
+    shift by definition, so a row genuinely carrying that proven
+    classification is accepted, exactly like OPEN)."""
+    bars, start, end = _full_day_bars(
+        CAS_EFFECTIVE_DATE,
+        PROVENANCE_REAL_DHAN,
+        canonicalization_state=CANONICALIZATION_STATE_CANONICALIZED,
+        source_timestamp_semantics=SourceTimestampSemantics.CLOSE.value,
+    )
+    gate = _gate(bars)
+    result = gate.get_research_eligible_bars(
+        RELIANCE, TIMEFRAME, start, end, exchange=Exchange.NSE, segment="CASH_EQUITY", symbol="RELIANCE"
+    )
+    assert len(result.bars) == len(bars)
+
+
+def test_unknown_provenance_unknown_everything_is_rejected() -> None:
+    """Matrix row 6: UNKNOWN provenance, UNKNOWN semantics, UNKNOWN
+    state -> NO. Rejected at the provenance gate before the
+    canonicalization gate is even reached."""
+    bars, start, end = _full_day_bars(
+        CAS_EFFECTIVE_DATE,
+        PROVENANCE_UNKNOWN,
+        canonicalization_state=CANONICALIZATION_STATE_UNKNOWN,
+        source_timestamp_semantics=SourceTimestampSemantics.UNKNOWN.value,
+    )
+    gate = _gate(bars)
+    with pytest.raises(ResearchDataRejectedError) as exc_info:
+        gate.get_research_eligible_bars(
+            RELIANCE, TIMEFRAME, start, end, exchange=Exchange.NSE, segment="CASH_EQUITY", symbol="RELIANCE"
+        )
+    assert exc_info.value.reason is ResearchRejectionReason.INELIGIBLE_PROVENANCE
+
+
+def test_synthetic_test_not_applicable_is_rejected() -> None:
+    """Matrix row 7: SYNTHETIC_TEST provenance, N/A semantics, N/A state
+    -> NO. Rejected at the provenance gate."""
+    bars, start, end = _full_day_bars(
+        CAS_EFFECTIVE_DATE,
+        PROVENANCE_SYNTHETIC_TEST,
+        canonicalization_state=CANONICALIZATION_STATE_NOT_APPLICABLE,
+        source_timestamp_semantics=SourceTimestampSemantics.NOT_APPLICABLE.value,
+    )
+    gate = _gate(bars)
+    with pytest.raises(ResearchDataRejectedError) as exc_info:
+        gate.get_research_eligible_bars(
+            RELIANCE, TIMEFRAME, start, end, exchange=Exchange.NSE, segment="CASH_EQUITY", symbol="RELIANCE"
+        )
+    assert exc_info.value.reason is ResearchRejectionReason.INELIGIBLE_PROVENANCE
+
+
+def test_not_applicable_canonicalization_state_real_dhan_is_rejected() -> None:
+    """A REAL_DHAN row somehow marked NOT_APPLICABLE (a state reserved
+    for non-REAL_DHAN rows) must still be rejected, never treated as
+    research-ready by default."""
+    bars, start, end = _full_day_bars(
+        CAS_EFFECTIVE_DATE,
+        PROVENANCE_REAL_DHAN,
+        canonicalization_state=CANONICALIZATION_STATE_NOT_APPLICABLE,
+        source_timestamp_semantics=SourceTimestampSemantics.NOT_APPLICABLE.value,
+    )
+    gate = _gate(bars)
+    with pytest.raises(ResearchDataRejectedError) as exc_info:
+        gate.get_research_eligible_bars(
+            RELIANCE, TIMEFRAME, start, end, exchange=Exchange.NSE, segment="CASH_EQUITY", symbol="RELIANCE"
+        )
+    assert exc_info.value.reason is ResearchRejectionReason.UNCANONICALIZED_TIMESTAMP
+
+
+def test_canonical_row_is_never_double_shifted() -> None:
+    """Part 7/13 test 7: the gate must be a pure PASS-THROUGH of
+    `bar.timestamp` for CANONICALIZED+OPEN rows - it must never re-apply
+    any shift of its own. Every returned bar's timestamp is asserted
+    byte-identical to the corresponding input `ProvenancedBar.bar.
+    timestamp`."""
+    bars, start, end = _full_day_bars(CAS_EFFECTIVE_DATE, PROVENANCE_REAL_DHAN)
+    gate = _gate(bars)
+    result = gate.get_research_eligible_bars(
+        RELIANCE, TIMEFRAME, start, end, exchange=Exchange.NSE, segment="CASH_EQUITY", symbol="RELIANCE"
+    )
+    input_timestamps = sorted(pb.bar.timestamp for pb in bars)
+    output_timestamps = sorted(bar.timestamp for bar in result.bars)
+    assert output_timestamps == input_timestamps
+
+
+def test_synthetic_test_provenance_remains_not_applicable_semantics() -> None:
+    """Part 13 test 8: SYNTHETIC_TEST rows stay N/A on both dimensions
+    and are rejected purely on the provenance gate - never promoted to
+    research-ready via the canonicalization gate."""
+    bars, start, end = _full_day_bars(
+        CAS_EFFECTIVE_DATE,
+        PROVENANCE_SYNTHETIC_TEST,
+        canonicalization_state=CANONICALIZATION_STATE_NOT_APPLICABLE,
+        source_timestamp_semantics=SourceTimestampSemantics.NOT_APPLICABLE.value,
+    )
+    for pb in bars:
+        assert pb.source_timestamp_semantics == SourceTimestampSemantics.NOT_APPLICABLE.value
+        assert pb.canonicalization_state == CANONICALIZATION_STATE_NOT_APPLICABLE
+    gate = _gate(bars)
+    with pytest.raises(ResearchDataRejectedError):
+        gate.get_research_eligible_bars(
+            RELIANCE, TIMEFRAME, start, end, exchange=Exchange.NSE, segment="CASH_EQUITY", symbol="RELIANCE"
+        )
+
+
+def test_unknown_provenance_row_stays_unknown_semantics_unless_proven() -> None:
+    """Part 13 test 9: an UNKNOWN-provenance row's
+    source_timestamp_semantics stays UNKNOWN (never silently proven) -
+    verified directly on the `ProvenancedBar`, independent of the gate's
+    rejection (already covered by the provenance gate)."""
+    bars, _, _ = _full_day_bars(
+        CAS_EFFECTIVE_DATE,
+        PROVENANCE_UNKNOWN,
+        canonicalization_state=CANONICALIZATION_STATE_UNKNOWN,
+        source_timestamp_semantics=SourceTimestampSemantics.UNKNOWN.value,
+    )
+    for pb in bars:
+        assert pb.source_timestamp_semantics == SourceTimestampSemantics.UNKNOWN.value

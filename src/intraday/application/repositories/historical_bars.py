@@ -59,7 +59,13 @@ class HistoricalBarReadRepository(Protocol):
 
 class HistoricalBarWriteRepository(Protocol):
     def bulk_upsert(
-        self, bars: tuple[Bar, ...], *, source: str, provenance: str = "UNKNOWN"
+        self,
+        bars: tuple[Bar, ...],
+        *,
+        source: str,
+        provenance: str = "UNKNOWN",
+        canonicalization_state: str = "UNKNOWN",
+        source_timestamp_semantics: str = "UNKNOWN",
     ) -> int:
         """Persists `bars`, upserting by the
         `(instrument_id, timeframe, bar_timestamp)` identity (Phase 2's
@@ -72,5 +78,23 @@ class HistoricalBarWriteRepository(Protocol):
         (`domain.market_data.provenance`), orthogonal to `source`
         (which pipeline stage wrote the row). Defaults to `"UNKNOWN"` —
         a caller that does not know what kind of data it is fetching
-        must never guess `"REAL_DHAN"`."""
+        must never guess `"REAL_DHAN"`.
+
+        `canonicalization_state` (Checkpoint 67.3, renamed values 67.4)
+        is the explicit UNCANONICALIZED / CANONICALIZED / NOT_APPLICABLE
+        / UNKNOWN PROCESSING-STATE marker
+        (`domain.market_data.source_timestamp.CANONICALIZATION_STATE_*`)
+        — orthogonal to `source` and `provenance`: it answers only
+        whether THIS bar's timestamp has already been passed through
+        `canonicalize_close_timestamp`. Defaults to `"UNKNOWN"` — a
+        caller that does not know must never guess `"CANONICALIZED"`.
+
+        `source_timestamp_semantics` (Checkpoint 67.4) is the explicit
+        OPEN / CLOSE / UNKNOWN / NOT_APPLICABLE SEMANTICS marker
+        (`domain.market_data.source_timestamp.SourceTimestampSemantics`)
+        — a FOURTH, orthogonal fact: whether this bar's provider raw
+        timestamp convention was ever empirically PROVEN, independent of
+        whether `canonicalization_state` says the shift ran. Defaults to
+        `"UNKNOWN"` — a caller that does not know must never guess
+        `"OPEN"`/`"CLOSE"`."""
         ...

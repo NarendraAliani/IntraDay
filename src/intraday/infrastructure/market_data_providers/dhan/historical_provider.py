@@ -12,14 +12,20 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import Decimal
 
+import enum
+
 from intraday.application.services.instrument_master import InstrumentMasterProvider
 from intraday.domain.instrument.contracts import parse_instrument_id
 from intraday.domain.market_data.contracts import Bar
 from intraday.domain.market_data.provenance import PROVENANCE_REAL_DHAN
 from intraday.domain.market_data.source_timestamp import (
+    CANONICALIZATION_STATE_CANONICALIZED,
+    CANONICALIZATION_STATE_NOT_APPLICABLE,
+    CANONICALIZATION_STATE_UNKNOWN,
     SourceTimestampSemantics,
     canonicalize_close_timestamp,
 )
+from intraday.domain.session.calendar import CAS_EFFECTIVE_DATE
 from intraday.domain.shared_kernel.contracts import Exchange, InstrumentId, Timeframe
 from intraday.infrastructure.market_data_providers.dhan.historical_client import (
     DhanHistoricalCandle,
@@ -58,6 +64,170 @@ _INTRADAY_INTERVAL_MINUTES: dict[Timeframe, int] = {
 # mechanism (interval-bucketed OHLC aggregation) across all five of its
 # interval values, not a per-interval-different one.
 _DHAN_INTRADAY_TIMESTAMP_SEMANTICS = SourceTimestampSemantics.OPEN
+
+# Checkpoint 67.5 Parts 1-3 — THE FIX for the exact gap 67.4 itself left
+# open: `_EMPIRICALLY_PROVEN_CANONICAL_TIMEFRAMES` (67.4's fix, now
+# REMOVED) keyed proof off `timeframe` ALONE. That is still too coarse:
+# 67.0's empirical proof (15/15 interior-bucket OPEN match) was run
+# against RELIANCE, 2026-08-17, 5-minute, which POSTDATES
+# `CAS_EFFECTIVE_DATE` (2026-08-03) — i.e. it proved 5m ONLY for the
+# CAS-era, never for PRE-CAS 5m data. Under the 67.4 policy, a future
+# ingestion request for PRE-CAS 5m data (e.g. 2026-07-20) would have
+# been stamped OPEN/CANONICALIZED purely because it is 5-minute — even
+# though 67.0 never tested a single PRE-CAS candle. This is "scope
+# leakage": treating a narrower proof (5m, CAS-era) as if it covered a
+# broader one (5m, any era).
+#
+# THE FIX: proof scope is now resolved from (provider, endpoint,
+# timeframe, era) — see `_resolve_intraday_proof_scope` below — not from
+# `timeframe` alone. `_PROVEN_INTRADAY_SCOPES` names the ONLY
+# (timeframe, era) pairs 67.0 actually tested; every other combination
+# (1m/15m/1h at any era, or 5m PRE-CAS/MIXED) resolves UNPROVEN and is
+# reported UNKNOWN/NOT_RESEARCH_READY, exactly mirroring migration
+# 0040's own CAS_EFFECTIVE_DATE-based classification of the 296
+# PRE-CAS-5m rows and the 880 1m rows (see that migration's docstring —
+# this is the ONGOING policy that migration's one-time reclassification
+# already anticipated)."""
+_ERA_CAS = "CAS_ERA"
+_ERA_PRE_CAS = "PRE_CAS"
+_ERA_MIXED_UNRESOLVED = "MIXED_UNRESOLVED"
+"""A fetch request whose `[request_start, request_end]` window straddles
+`CAS_EFFECTIVE_DATE` — part of the window is CAS-era, part is PRE-CAS.
+Deliberately its OWN era value (not silently folded into either side):
+resolving it to either CAS-era or PRE-CAS would either over-claim proof
+for the PRE-CAS portion or under-claim it for the CAS-era portion. Fails
+closed like every other UNKNOWN default in this module — treated as
+UNPROVEN by `_resolve_intraday_proof_scope`."""
+
+
+class ProofStatus(enum.Enum):
+    """Whether 67.0-class empirical proof exists for a given
+    (timeframe, era) scope. Exhaustive, no default member — mirrors
+    `SourceTimestampSemantics`'s own "no silent default" discipline."""
+
+    PROVEN = "PROVEN"
+    UNPROVEN = "UNPROVEN"
+
+
+@dataclass(frozen=True, slots=True)
+class DhanTimestampProofScope:
+    """Checkpoint 67.5 Part 1, CORRECTED 67.6 Part 1/2: the SMALLEST
+    explicit structure that can represent every fact the directive
+    requires (provider, endpoint, exchange segment, timeframe, era,
+    semantics, canonicalization permitted, proof status) without
+    becoming a generic rules engine — one frozen dataclass plus one
+    resolver function (`_resolve_intraday_proof_scope`), not a new
+    abstraction layer.
+
+    THE 67.6 FIX: 67.5 left `segment` as a field that was carried but
+    never consulted by the lookup (`_PROVEN_INTRADAY_SCOPES` was keyed
+    only by `(timeframe, era)`) — a "field exists but isn't semantically
+    active" bug. 67.0's empirical proof ran against RELIANCE on NSE_EQ
+    ONLY; it says nothing about BSE_EQ. `segment` is now a REAL input to
+    the proof lookup (see `_PROVEN_INTRADAY_SCOPES` and
+    `_resolve_intraday_proof_scope` below): only `segment == "NSE_EQ"`
+    can ever resolve PROVEN for the tested (timeframe, era) pair; every
+    other segment value (including `"BSE_EQ"` and `None` — an instrument
+    whose exchange this module doesn't recognize at all) fails closed to
+    UNPROVEN, regardless of timeframe/era. No new empirical claim is
+    made about BSE_EQ in either direction — it is simply never treated
+    as proven from NSE-only evidence."""
+
+    provider: str
+    endpoint: str
+    segment: str | None
+    timeframe: Timeframe
+    era: str
+    semantics: SourceTimestampSemantics
+    canonicalization_permitted: bool
+    proof_status: ProofStatus
+
+
+# The ONLY (segment, timeframe, era) triples 67.0 actually tested.
+# Checkpoint 67.6: segment is now part of the key itself — adding a new
+# entry (e.g. a future BSE_EQ diagnostic) requires an independent
+# 67.0-style empirical diagnostic for that EXACT triple — never inferred
+# from "it's the same endpoint", "it's a nearby timeframe/era", or "NSE
+# and BSE share one Dhan candle-generation mechanism" (a plausibility
+# argument, not a per-segment empirical proof).
+_PROVEN_INTRADAY_SCOPES: frozenset[tuple[str, Timeframe, str]] = frozenset(
+    {("NSE_EQ", Timeframe.FIVE_MINUTE, _ERA_CAS)}
+)
+
+
+def _dhan_intraday_era(request_start: datetime, request_end: datetime) -> str:
+    """Checkpoint 67.5 Part 1: classifies a Dhan intraday FETCH REQUEST's
+    date range against `CAS_EFFECTIVE_DATE` (`domain.session.calendar` —
+    the SAME constant migration 0040 already used for its one-time
+    per-row reclassification; no parallel date boundary is invented
+    here). Applied to the REQUEST window (not a persisted row's
+    `bar_timestamp`) because this function must run BEFORE any row
+    exists — `historical_data_preparation.py` calls it with the exact
+    `missing_range.start`/`.end` it is about to ask the provider for.
+
+    A request whose window straddles `CAS_EFFECTIVE_DATE` resolves
+    `MIXED_UNRESOLVED` rather than being guessed either way — fail
+    closed, the same discipline every other UNKNOWN default in this
+    module already follows."""
+    start_is_cas_era = request_start.date() >= CAS_EFFECTIVE_DATE
+    end_is_cas_era = request_end.date() >= CAS_EFFECTIVE_DATE
+    if start_is_cas_era and end_is_cas_era:
+        return _ERA_CAS
+    if not start_is_cas_era and not end_is_cas_era:
+        return _ERA_PRE_CAS
+    return _ERA_MIXED_UNRESOLVED
+
+
+def _resolve_intraday_proof_scope(
+    timeframe: Timeframe,
+    request_start: datetime,
+    request_end: datetime,
+    *,
+    segment: str | None = None,
+) -> DhanTimestampProofScope:
+    """Checkpoint 67.5 Parts 2/3, CORRECTED 67.6 Part 2: the ONE place
+    `canonicalization_state_for`/`source_timestamp_semantics_for` below
+    consult to decide whether a given (segment, timeframe, era) fetch is
+    allowed to be marked canonical. Not called for `Timeframe.DAY` (kept
+    out of this transition entirely, unchanged from 67.3/67.4 Part 11 —
+    daily is `NOT_APPLICABLE`, never resolved through this function).
+
+    `segment` is keyword-only and defaults to `None` ONLY so this
+    function's existing direct callers (tests probing era resolution in
+    isolation) keep working without every call site needing to name a
+    segment — `None` is itself a real, fail-closed segment value (an
+    instrument whose exchange isn't in `_EXCHANGE_SEGMENTS`, or a caller
+    that never supplied one), never a silent stand-in for "NSE_EQ" or
+    "any segment". The two real production call sites
+    (`canonicalization_state_for`/`source_timestamp_semantics_for`)
+    always pass a concrete `segment` resolved from the instrument being
+    fetched — see `_segment_for_instrument` below."""
+    era = _dhan_intraday_era(request_start, request_end)
+    proven = (segment, timeframe, era) in _PROVEN_INTRADAY_SCOPES
+    return DhanTimestampProofScope(
+        provider="DHAN",
+        endpoint="INTRADAY",
+        segment=segment,
+        timeframe=timeframe,
+        era=era,
+        semantics=SourceTimestampSemantics.OPEN if proven else SourceTimestampSemantics.UNKNOWN,
+        canonicalization_permitted=proven,
+        proof_status=ProofStatus.PROVEN if proven else ProofStatus.UNPROVEN,
+    )
+
+
+def _segment_for_instrument(instrument_id: InstrumentId) -> str | None:
+    """Checkpoint 67.6 Part 2: resolves the SAME `Exchange` ->
+    `exchange_segment` mapping `fetch()` already uses
+    (`_EXCHANGE_SEGMENTS`, module-level above) so the proof-scope lookup
+    reuses this codebase's one existing NSE_EQ/BSE_EQ concept instead of
+    inventing a parallel one. Returns `None` (fails closed to UNPROVEN,
+    never guesses) for any exchange `_EXCHANGE_SEGMENTS` doesn't
+    recognize — mirrors `fetch()`'s own `exchange_segment is None` guard,
+    but as a plain lookup rather than a raised error, since these are
+    advisory classification hooks, not the fetch call itself."""
+    exchange, _symbol = parse_instrument_id(instrument_id)
+    return _EXCHANGE_SEGMENTS.get(exchange)
 
 # Dhan's DAILY endpoint (`/v2/charts/historical`) is UNCHANGED by this
 # checkpoint - it was never part of 67.0's diagnostic (that experiment
@@ -198,6 +368,100 @@ class DhanHistoricalBarProvider:
     = REAL_DHAN` instead of silently falling back to UNKNOWN (the exact
     defect 65.22-R identified: this attribute was previously absent)."""
 
+    def canonicalization_state_for(
+        self,
+        instrument_id: InstrumentId,
+        timeframe: Timeframe,
+        request_start: datetime,
+        request_end: datetime,
+    ) -> str:
+        """Checkpoint 67.3 Part 3/11, CORRECTED 67.4 Part 4, MADE
+        ERA-AWARE 67.5 Parts 1-3, MADE SEGMENT-AWARE 67.6 Parts 1-2:
+        tells `HistoricalDataPreparationService`
+        whether the bars this provider is about to return for
+        `timeframe`/`[request_start, request_end]` have already been
+        canonicalized (`canonicalize_close_timestamp`) — a PURE
+        PROCESSING-STATE fact, WITHOUT that caller needing to know
+        Dhan's own timestamp-semantics table.
+
+        DAY -> `NOT_APPLICABLE`, deliberately: Part 11 forbids encoding
+        Dhan daily as canonicalized unless independently proven, so
+        daily rows are kept OUT of this state transition entirely (era
+        is irrelevant for DAY — `_resolve_intraday_proof_scope` is never
+        even called for it).
+
+        Every other timeframe is resolved through
+        `_resolve_intraday_proof_scope(timeframe, request_start,
+        request_end)` — 67.5's fix for the exact gap 67.4 left open:
+        `timeframe` ALONE used to be the sole proof key, which meant a
+        future PRE-CAS 5m request would have inherited the CAS-era-only
+        67.0 proof merely because it is 5-minute. Now ONLY
+        `(NSE_EQ, FIVE_MINUTE, CAS_ERA)` resolves `canonicalization_permitted`
+        -> `CANONICALIZED` (67.6: `segment` is now a REAL input, resolved
+        from `instrument_id` via `_segment_for_instrument` — a BSE_EQ
+        instrument with the SAME timeframe/era resolves `UNKNOWN`, never
+        `CANONICALIZED`, because 67.0's proof never touched BSE); 5m
+        PRE-CAS/MIXED_UNRESOLVED and every other intraday timeframe at
+        any era or segment resolve `UNKNOWN` — `fetch()`
+        still runs the SAME `+interval` arithmetic on all of them (Dhan
+        documents one shared candle-generation mechanism, so applying it
+        is harmless/best-effort and keeps `Bar.timestamp` internally
+        consistent), but that arithmetic having RUN is never, by itself,
+        treated as proof it was semantically JUSTIFIED for a
+        (timeframe, era) pair 67.0 never tested. Reporting `UNKNOWN` here
+        (rather than `CANONICALIZED`) is what stops
+        `ResearchDataGateService` from ever trusting an unproven scope as
+        research-ready — see `source_timestamp_semantics_for` below for
+        the companion SEMANTICS half of this same fix."""
+        if timeframe is Timeframe.DAY:
+            return CANONICALIZATION_STATE_NOT_APPLICABLE
+        segment = _segment_for_instrument(instrument_id)
+        scope = _resolve_intraday_proof_scope(
+            timeframe, request_start, request_end, segment=segment
+        )
+        if scope.canonicalization_permitted:
+            return CANONICALIZATION_STATE_CANONICALIZED
+        return CANONICALIZATION_STATE_UNKNOWN
+
+    def source_timestamp_semantics_for(
+        self,
+        instrument_id: InstrumentId,
+        timeframe: Timeframe,
+        request_start: datetime,
+        request_end: datetime,
+    ) -> str:
+        """Checkpoint 67.4 Part 4, MADE ERA-AWARE 67.5 Parts 1-3, MADE
+        SEGMENT-AWARE 67.6 Parts 1-2: the SEMANTICS-half companion to
+        `canonicalization_state_for` above —
+        tells `HistoricalDataPreparationService` whether this provider's
+        raw timestamp CONVENTION (not merely whether the shift ran) has
+        ever been empirically proven for this `timeframe`/era.
+
+        DAY -> `NOT_APPLICABLE` (same Part 11 exclusion as above — never
+        claimed proven or unproven by this state transition at all).
+
+        Every other timeframe delegates to the SAME
+        `_resolve_intraday_proof_scope` call `canonicalization_state_for`
+        makes (both methods must always agree on proof status — they are
+        two views of the one scope resolution, never independently
+        computed) — only `(NSE_EQ, FIVE_MINUTE, CAS_ERA)` resolves `OPEN`,
+        the literal 67.0-proven convention; every other
+        (segment, timeframe, era) triple — including 5m PRE-CAS (67.5's
+        fix) and BSE_EQ 5m CAS-era (67.6's fix — the exact "segment field
+        exists but isn't looked up" bug this checkpoint closes) — resolves
+        `UNKNOWN`, never `OPEN`, regardless of the shared-mechanism
+        plausibility argument. Only actual per-(segment, timeframe, era)
+        empirical proof (a future checkpoint's own diagnostic, mirroring
+        67.0's) may promote a new entry into
+        `_PROVEN_INTRADAY_SCOPES`."""
+        if timeframe is Timeframe.DAY:
+            return CANONICALIZATION_STATE_NOT_APPLICABLE
+        segment = _segment_for_instrument(instrument_id)
+        scope = _resolve_intraday_proof_scope(
+            timeframe, request_start, request_end, segment=segment
+        )
+        return scope.semantics.value
+
     def _security_id(self, exchange: Exchange, symbol: str) -> int:
         for entry in self.instrument_master.list_instruments(exchange):
             if entry.symbol == symbol and entry.security_id is not None:
@@ -307,5 +571,7 @@ class DhanHistoricalBarProvider:
 __all__ = [
     "DhanHistoricalBarProvider",
     "DhanHistoricalBarProviderUnavailableError",
+    "DhanTimestampProofScope",
+    "ProofStatus",
     "ProviderRequestEnvelope",
 ]

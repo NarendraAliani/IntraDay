@@ -29,10 +29,32 @@ class ProvenancedBar:
     (`domain.market_data.provenance.PROVENANCE_*`) it was persisted
     with. `bar` is the ordinary, unmodified `Bar` — nothing about its
     own shape changes; `provenance` is carried alongside it, not
-    inside it."""
+    inside it.
+
+    `canonicalization_state` (Checkpoint 67.3, renamed values only in
+    67.4): the row's `HistoricalBar.canonicalization_state` PROCESSING-
+    STATE label (`domain.market_data.source_timestamp.
+    CANONICALIZATION_STATE_*`), additive alongside `provenance` for the
+    exact same reason — `ResearchDataGateService` needs "where did this
+    data come from" AND "has this row's timestamp been canonicalized"
+    to decide research eligibility.
+
+    `source_timestamp_semantics` (Checkpoint 67.4): the row's
+    `HistoricalBar.source_timestamp_semantics` SEMANTICS label
+    (`domain.market_data.source_timestamp.SourceTimestampSemantics`),
+    a THIRD, orthogonal fact carried alongside the other two — 67.3's
+    `canonicalization_state` alone conflated "was the shift arithmetic
+    run" with "was the raw convention ever proven"; this field restores
+    the second question so `ResearchDataGateService` can require BOTH
+    a proven semantics AND an applied canonicalization before treating a
+    row as research-eligible (Part 6: REAL_DHAN provenance and a
+    CANONICALIZED processing state are together still not sufficient —
+    the semantics must also be proven, not merely UNKNOWN-but-shifted)."""
 
     bar: Bar
     provenance: str
+    canonicalization_state: str
+    source_timestamp_semantics: str
 
 
 __all__ = ["ProvenancedBar"]
