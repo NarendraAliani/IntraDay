@@ -51,6 +51,14 @@ top of an unverified claim.
   documented. Separate "new implementation behavior" from "new proof
   coverage" from "pre-existing behavior that was previously
   undocumented."
+- P15. No speculative directory creation. A directory may only be
+  created in the same step as the specific named file it will hold.
+  Never `mkdir` or `os.makedirs` a path "in case it's needed later."
+- P16. One persistent working branch. All checkpoints commit directly
+  to `active-development`. No checkpoint creates a new
+  `checkpoint/<n>` branch unless a future checkpoint explicitly
+  overrides this rule by name. `main` is not committed to by any
+  checkpoint.
 
 ## Evidence Vocabulary
 
