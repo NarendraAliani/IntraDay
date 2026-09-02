@@ -1480,6 +1480,37 @@ class WorkerRuntimeStatus(models.Model):
     """Operator-supplied, non-credential text only - same
     `*_safe` discipline as `last_error_safe`."""
 
+    # Checkpoint 67.12.2-S: THE PID ANCHOR startup reconciliation needs.
+    #
+    # 67.12.2-H (commit 4e38fdd) closed ONE proximate cause of a stale
+    # row (the in-process reconnect supervisor not persisting a terminal
+    # state on exhaustion) - but a row this worker last wrote is only
+    # ever as trustworthy as the assumption that the process which wrote
+    # it is still alive to correct it later. Any death that skips the
+    # worker's own cleanup code entirely (external kill, crash, OOM,
+    # host reboot - exactly what froze this real row at RECONNECTING the
+    # morning of 2026-09-02) leaves it lying regardless of H's fix.
+    #
+    # These three columns are written ONCE per connection attempt
+    # (`WorkerHealthTracker.mark_connecting()`/persist()), stamping which
+    # real OS process currently claims to own this provider's row - the
+    # anchor a startup reconciliation check (`worker_status_reconciliation.py`)
+    # can verify against actual OS process state before trusting
+    # RUNNING/RECONNECTING at face value.
+    owner_pid = models.PositiveIntegerField(null=True, blank=True)
+    owner_process_started_at = models.DateTimeField(null=True, blank=True)
+    """The owning process's OS creation time (`GetProcessTimes` on
+    Windows) - PID alone is not proof of identity (PIDs are reused), so
+    this plus `owner_cmdline_safe` disambiguate "same process that wrote
+    this row" from "a different process that happens to have the same
+    PID now"."""
+    owner_cmdline_safe = models.CharField(max_length=500, blank=True, default="")
+    """The owning process's command line, best-effort and truncated -
+    used only to confirm this is genuinely a `run_market_data_worker`/
+    `supervise_market_data_worker` process, never logged/exposed as a
+    credential (it never contains one - Dhan tokens are passed via
+    stored settings, never a CLI argument)."""
+
     class Meta:
         app_label = "persistence"
 

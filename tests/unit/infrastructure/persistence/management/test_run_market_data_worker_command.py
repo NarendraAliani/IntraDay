@@ -318,6 +318,69 @@ def test_reconnect_exhaustion_persists_a_terminal_failed_status_not_a_stale_reco
     assert status.last_error_safe == "reconnect_attempts_exhausted"
 
 
+# --- Checkpoint 67.12.2-S, Part 3 (wiring half): proves
+# `run_market_data_worker --provider dhan` runs PID-verified startup
+# reconciliation BEFORE anything else - including before the AUTH_FAILED
+# credential-refusal path below writes anything of its own. Uses the
+# SAME no-credentials refusal path as
+# `test_dhan_provider_refuses_to_connect_with_no_credentials_configured`
+# above (never a real Dhan connection) purely because it is the
+# cheapest way to let the command run to completion without a real
+# WebSocket - the AUTH_FAILED branch's own `_QuoteSink` has no
+# `runtime_status_provider`, so it never persists anything, meaning
+# whatever reconciliation wrote is what the test observes at the end,
+# unclobbered by any later write.
+@requires_postgres
+def test_startup_reconciliation_corrects_a_stale_row_before_the_worker_proceeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from intraday.infrastructure.persistence.models import WorkerRuntimeStatus
+    from intraday.infrastructure.system import process_liveness
+
+    monkeypatch.setattr(DhanSettingsService, "effective_credentials", lambda self: None)
+
+    # A PID essentially guaranteed not to be alive on this host right now.
+    DEAD_PID = 999_999
+    WorkerRuntimeStatus.objects.update_or_create(
+        provider="dhan",
+        defaults={
+            "worker_state": "RECONNECTING",
+            "owner_pid": DEAD_PID,
+            "owner_process_started_at": None,
+            "owner_cmdline_safe": "python manage.py run_market_data_worker --provider dhan",
+        },
+    )
+
+    _real_probe_process = process_liveness.probe_process
+
+    def _dead_probe(pid: int) -> process_liveness.ProcessSnapshot | None:
+        # Only the RECONCILIATION check (against the stale row's
+        # DEAD_PID) needs to report "not alive" - `current_process_
+        # identity()` also probes the REAL pid of this test process (to
+        # stamp `owner_pid` for its own, unrelated purpose), which must
+        # be left alone.
+        if pid == DEAD_PID:
+            return None
+        return _real_probe_process(pid)
+
+    monkeypatch.setattr(
+        "intraday.infrastructure.persistence.management.commands.run_market_data_worker.probe_process",
+        _dead_probe,
+    )
+
+    out = io.StringIO()
+    call_command("run_market_data_worker", "--provider", "dhan", stdout=out)
+
+    output = out.getvalue()
+    assert "startup reconciliation: action=reconciled_stale" in output
+    # The credential-refusal branch runs AFTER reconciliation and never
+    # persists anything (no runtime_status_provider) - so the reconciled
+    # state from the startup check is exactly what remains.
+    status = WorkerRuntimeStatus.objects.get(provider="dhan")
+    assert status.worker_state == "FAILED"
+    assert "reconciled: stale status detected at startup" in status.last_error_safe
+
+
 # --- Checkpoint 64.2: the live worker now reaches the shared strategy/
 # signal/risk/paper pipeline (`signal_pipeline_runtime.py`), not just
 # persistence/aggregation - proven by mypy (the call site type-checks

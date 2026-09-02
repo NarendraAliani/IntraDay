@@ -45,6 +45,29 @@ class WorkerHealthTracker:
     consecutive_failures: int = 0
     last_error_safe: str = ""
     subscribed_instrument_count: int = 0
+    owner_pid: int | None = None
+    """Checkpoint 67.12.2-S: the OS PID of the process this tracker
+    belongs to - the anchor `worker_status_reconciliation.py` verifies
+    against actual OS process state at a later startup. `None` only for
+    a tracker that never had `mark_owner()` called (the synthetic
+    fake/fake-ws providers, which never persist to a real provider row
+    at all - see `_QuoteSink.__init__`'s own `runtime_status_provider`
+    discipline)."""
+    owner_process_started_at: datetime | None = None
+    owner_cmdline_safe: str = ""
+
+    def mark_owner(
+        self, *, pid: int, started_at: datetime | None, cmdline_safe: str
+    ) -> None:
+        """Stamps this tracker with the identity of the real OS process
+        that now owns it. Called ONCE, at composition-root time
+        (`run_market_data_worker.py`'s `_run_dhan()`), from
+        `infrastructure.system.process_liveness.current_process_identity()`
+        - never computed inside this class itself, keeping this tracker
+        free of any direct OS dependency and fully fake-testable."""
+        self.owner_pid = pid
+        self.owner_process_started_at = started_at
+        self.owner_cmdline_safe = cmdline_safe
 
     def mark_token_state(self, token_state: str) -> None:
         self.token_state = token_state
@@ -129,6 +152,9 @@ class WorkerHealthTracker:
             consecutive_failures=self.consecutive_failures,
             subscribed_instrument_count=self.subscribed_instrument_count,
             last_error_safe=self.last_error_safe,
+            owner_pid=self.owner_pid,
+            owner_process_started_at=self.owner_process_started_at,
+            owner_cmdline_safe=self.owner_cmdline_safe,
         )
 
 

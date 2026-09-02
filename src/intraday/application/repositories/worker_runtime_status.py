@@ -35,6 +35,9 @@ class WorkerRuntimeStatusRecord:
     effective_strategy_ids: tuple[str, ...]
     effective_universe_requested_count: int
     effective_universe_subscribed_count: int
+    owner_pid: int | None
+    owner_process_started_at: datetime | None
+    owner_cmdline_safe: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,7 +89,22 @@ class WorkerRuntimeStatusRepository(Protocol):
         consecutive_failures: int,
         subscribed_instrument_count: int,
         last_error_safe: str,
+        owner_pid: int | None = None,
+        owner_process_started_at: datetime | None = None,
+        owner_cmdline_safe: str = "",
     ) -> None: ...
+
+    def reconcile_stale(
+        self, provider: str, *, last_error_safe: str, checked_at: datetime
+    ) -> None:
+        """Checkpoint 67.12.2-S: overwrites ONLY `worker_state` (to
+        `FAILED`) and `last_error_safe` on an EXISTING row, leaving
+        every other column (owner_pid, effective_*, etc.) untouched -
+        called by `worker_status_reconciliation.py` when a row claims
+        RUNNING/RECONNECTING but the recorded OS process is not
+        genuinely alive. Never called on a row that does not already
+        exist."""
+        ...
 
     def save_effective_scanner_state(
         self,

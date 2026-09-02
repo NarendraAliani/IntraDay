@@ -31,6 +31,9 @@ from intraday.application.services.market_data_worker_supervisor import (
     SupervisorResult,
     supervise_market_data_worker,
 )
+from intraday.application.services.worker_status_reconciliation import (
+    reconcile_worker_runtime_status,
+)
 from intraday.domain.market_data.archive import trading_date_for
 from intraday.infrastructure.persistence.market_data_archive_repository import (
     DjangoMarketDataArchiveRepository,
@@ -38,6 +41,7 @@ from intraday.infrastructure.persistence.market_data_archive_repository import (
 from intraday.infrastructure.persistence.worker_runtime_status_repository import (
     DjangoWorkerRuntimeStatusRepository,
 )
+from intraday.infrastructure.system.process_liveness import probe_process
 
 
 class Command(BaseCommand):
@@ -101,6 +105,25 @@ class Command(BaseCommand):
 
         status_repository = DjangoWorkerRuntimeStatusRepository()
         archive_service = MarketDataArchiveService(DjangoMarketDataArchiveRepository())
+
+        # Checkpoint 67.12.2-S, Part 3: THE supervisor is the command
+        # that runs unattended tomorrow and whose own restart-decision
+        # logic depends on trusting this row more than any other caller
+        # does - this is a plain synchronous call (handle() itself runs
+        # outside any asyncio loop at this point, before `asyncio.run()`
+        # below), before ANY decision this command makes from
+        # `WorkerRuntimeStatus` (in particular before
+        # `supervise_market_data_worker()`'s own first `status_repository.get()`
+        # poll).
+        reconciliation = reconcile_worker_runtime_status(
+            provider,
+            status_repository=status_repository,
+            probe_process=probe_process,
+            now=lambda: dt.datetime.now(tz=dt.UTC),
+        )
+        self.stdout.write(
+            f"  startup reconciliation: action={reconciliation.action} reason={reconciliation.reason!r}"
+        )
 
         child_process: asyncio.subprocess.Process | None = None
 

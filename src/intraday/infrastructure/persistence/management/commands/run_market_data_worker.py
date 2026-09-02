@@ -69,6 +69,9 @@ from intraday.application.services.token_lifecycle import (
     TokenLifecycleState,
     evaluate_dhan_token_lifecycle,
 )
+from intraday.application.services.worker_status_reconciliation import (
+    reconcile_worker_runtime_status,
+)
 from intraday.application.services.worker_stop_request import watch_for_stop_request
 from intraday.communication.contracts.signal_communication import CommunicationChannel
 from intraday.domain.market_data.aggregation import BarStatus
@@ -134,6 +137,7 @@ from intraday.infrastructure.persistence.scanner_scan_progress_repository import
 from intraday.infrastructure.persistence.worker_runtime_status_repository import (
     DjangoWorkerRuntimeStatusRepository,
 )
+from intraday.infrastructure.system.process_liveness import current_process_identity, probe_process
 
 DHAN_LIVE_FEED_ENDPOINT = "wss://api-feed.dhan.co"
 """Verified directly against Dhan's own official documentation
@@ -973,7 +977,28 @@ class Command(BaseCommand):
         FRESH on every aggregation cycle instead (see `_QuoteSink.
         aggregate_now()`), genuinely live-reconfigurable without a
         reconnect."""
+        # Checkpoint 67.12.2-S, Part 1.2: PID-verified startup
+        # reconciliation - runs BEFORE any decision based on existing
+        # `WorkerRuntimeStatus` state (in particular before the
+        # `clear_stop_request()` a few lines below, and long before
+        # anything a future gate reads). Never weakens what such a gate
+        # reads - it only corrects a row whose claimed owner process is
+        # verifiably NOT the one running right now.
+        reconciliation = await sync_to_async(reconcile_worker_runtime_status)(
+            "dhan",
+            status_repository=DjangoWorkerRuntimeStatusRepository(),
+            probe_process=probe_process,
+            now=lambda: dt.datetime.now(tz=dt.UTC),
+        )
+        self.stdout.write(
+            f"  startup reconciliation: action={reconciliation.action} reason={reconciliation.reason!r}"
+        )
+
         health_tracker = WorkerHealthTracker()
+        owner = current_process_identity()
+        health_tracker.mark_owner(
+            pid=owner.pid, started_at=owner.started_at, cmdline_safe=owner.cmdline_safe
+        )
         timestamp_diagnostics = TimestampDiagnosticCollector(
             enabled=os.environ.get(_TIMESTAMP_DIAGNOSTICS_ENV_VAR) == "1"
         )

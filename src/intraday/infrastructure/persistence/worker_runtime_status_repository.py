@@ -37,6 +37,9 @@ class DjangoWorkerRuntimeStatusRepository:
             effective_strategy_ids=tuple(row.effective_strategy_ids),
             effective_universe_requested_count=row.effective_universe_requested_count,
             effective_universe_subscribed_count=row.effective_universe_subscribed_count,
+            owner_pid=row.owner_pid,
+            owner_process_started_at=row.owner_process_started_at,
+            owner_cmdline_safe=row.owner_cmdline_safe,
         )
 
     def save(
@@ -52,20 +55,45 @@ class DjangoWorkerRuntimeStatusRepository:
         consecutive_failures: int,
         subscribed_instrument_count: int,
         last_error_safe: str,
+        owner_pid: int | None = None,
+        owner_process_started_at: datetime | None = None,
+        owner_cmdline_safe: str = "",
     ) -> None:
-        WorkerRuntimeStatus.objects.update_or_create(
-            provider=provider,
-            defaults={
-                "worker_state": worker_state,
-                "token_state": token_state,
-                "watchdog_state": watchdog_state,
-                "last_packet_at": last_packet_at,
-                "last_bar_at": last_bar_at,
-                "reconnect_count": reconnect_count,
-                "consecutive_failures": consecutive_failures,
-                "subscribed_instrument_count": subscribed_instrument_count,
-                "last_error_safe": last_error_safe,
-            },
+        defaults: dict[str, object] = {
+            "worker_state": worker_state,
+            "token_state": token_state,
+            "watchdog_state": watchdog_state,
+            "last_packet_at": last_packet_at,
+            "last_bar_at": last_bar_at,
+            "reconnect_count": reconnect_count,
+            "consecutive_failures": consecutive_failures,
+            "subscribed_instrument_count": subscribed_instrument_count,
+            "last_error_safe": last_error_safe,
+        }
+        # Checkpoint 67.12.2-S: the owner PID anchor is only ever stamped
+        # when the caller actually has one to give (a real `save()` call
+        # from `WorkerHealthTracker.persist()`) - a caller that omits
+        # these (any pre-existing test/save-site) must NEVER blank out a
+        # previously recorded owner identity, so they are only included
+        # in `defaults` when explicitly provided.
+        if owner_pid is not None:
+            defaults["owner_pid"] = owner_pid
+            defaults["owner_process_started_at"] = owner_process_started_at
+            defaults["owner_cmdline_safe"] = owner_cmdline_safe
+        WorkerRuntimeStatus.objects.update_or_create(provider=provider, defaults=defaults)
+
+    def reconcile_stale(
+        self, provider: str, *, last_error_safe: str, checked_at: datetime
+    ) -> None:
+        # Deliberately a narrow `.update()` on an EXISTING row (never
+        # `update_or_create`) - reconciliation only ever corrects a row
+        # that already claims something; it never fabricates one, and it
+        # touches ONLY worker_state/last_error_safe, leaving owner_pid,
+        # effective_* and everything else exactly as last written (so a
+        # future reader can still see which PID/cmdline the stale claim
+        # came from).
+        WorkerRuntimeStatus.objects.filter(provider=provider).update(
+            worker_state="FAILED", last_error_safe=last_error_safe
         )
 
     # Checkpoint 64.73: process-independent stop request. Deliberately
