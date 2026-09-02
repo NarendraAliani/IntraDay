@@ -10,7 +10,7 @@ tests_added: 6 (1 Part-1 regression, 2 Part-2 tiebreaker, 2 Part-3 supervisor bo
 tests_passing: 6/6 new, 44/44 in the direct target files, 712/714 in the broader persistence+market_data_providers+application/services sweep (2 pre-existing failures, unrelated to this checkpoint - see Section E)
 existing_suite_regression: NONE (the 2 failing tests are in files this checkpoint never touched - test_historical_data_preparation.py and test_migration_67_10_execute.py/test_migration_67_7_dry_run.py - already present in the working tree from earlier, separately-committed checkpoint work before this one started; git status confirms this checkpoint's diff touches only 4 files, none of the failing ones)
 recommended_tomorrow_command: python manage.py supervise_market_data_worker --provider dhan --max-restarts 4 --cooldown-seconds 30 --session-end 2026-09-03T15:30:00+05:30 --mode observe-only
-commit: (recorded below after commit)
+commit: 4e38fdd
 blockers: []
 ```
 
