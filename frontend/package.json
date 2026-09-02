@@ -27,6 +27,7 @@
     "@vitejs/plugin-react": "^4.3.1",
     "jsdom": "^25.0.1",
     "openapi-typescript": "^7.4.1",
+    "playwright": "^1.62.1",
     "typescript": "^5.5.4",
     "vite": "^5.4.1",
     "vitest": "^2.1.4"

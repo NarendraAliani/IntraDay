@@ -654,7 +654,7 @@ export function LiveScannerConsole(): JSX.Element {
                   />
                   {strategy.display_name}
                   {!strategy.is_active && (
-                    <span className="badge badge--historical" style={{ marginLeft: "0.5rem" }}>
+                    <span className="badge badge--historical badge--inline">
                       Not currently selectable
                     </span>
                   )}
@@ -686,14 +686,12 @@ export function LiveScannerConsole(): JSX.Element {
                   />
                   {channel.display_name}
                   <span
-                    className={`badge ${channel.configured ? "badge--active" : "badge--danger"}`}
-                    style={{ marginLeft: "0.5rem" }}
+                    className={`badge badge--inline ${channel.configured ? "badge--active" : "badge--danger"}`}
                   >
                     {channel.configured ? "Configured" : "Not configured"}
                   </span>
                   <span
-                    className={`badge ${channel.enabled ? "badge--active" : "badge--historical"}`}
-                    style={{ marginLeft: "0.5rem" }}
+                    className={`badge badge--inline ${channel.enabled ? "badge--active" : "badge--historical"}`}
                   >
                     {channel.enabled ? "Enabled" : "Disabled"}
                   </span>
@@ -879,7 +877,7 @@ export function LiveScannerConsole(): JSX.Element {
             <dd>
               {scannerProgress.status}
               {scannerProgress.stale && (
-                <span className="badge badge--danger" style={{ marginLeft: "0.5rem" }}>
+                <span className="badge badge--danger badge--inline">
                   STALE
                 </span>
               )}

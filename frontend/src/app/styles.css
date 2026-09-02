@@ -406,6 +406,15 @@ main {
   white-space: nowrap;
 }
 
+/* Checkpoint FRONTEND-2: replaces ad hoc `style={{ marginLeft: "0.5rem" }}`
+ * usages (previously in LiveScannerConsole.tsx) with the existing spacing
+ * token, so a badge that follows inline text/label content gets consistent
+ * separation from the existing token system rather than a one-off inline
+ * style. */
+.badge--inline {
+  margin-left: var(--space-2);
+}
+
 .badge--active {
   background: var(--color-active-bg);
   border-color: var(--color-active-border);
