@@ -14,7 +14,7 @@ still_failing: 4 (all four -- ENVIRONMENT_DRIFT, deferred, see D)
 contention_errors_resolved: YES (root cause was not K's pattern; see C)
 full_sweep_result: 729 passed / 733 total (4 known failures; 0 new regressions
   vs the 719-passed baseline + 14 tests in this file)
-commit: <filled in after commit, see final line of this file's git log entry>
+commit: 3855e129eb48e083f943ef54b385825aecd28f09
 blockers:
   - "ResearchDataGateService.get_research_eligible_bars() rejects
     SYNTHETIC_TEST-provenance rows (INELIGIBLE_PROVENANCE), which is
