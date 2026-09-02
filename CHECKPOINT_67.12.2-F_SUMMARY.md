@@ -1,96 +1,142 @@
-# Checkpoint 67.12.2-F (2nd attempt) — Historical Backfill Pilot: HALTED at Part 0
+# Checkpoint 67.12.2-F (3rd attempt) — Historical Backfill Pilot: COMPLETE
 
 ```
 checkpoint: 67.12.2-F
-verdict: HALTED_LIVE_WORKER_ACTIVE
+verdict: PILOT_COMPLETE
 symbols: [RELIANCE, TCS, HDFCBANK]
-date_range_requested: NOT_ATTEMPTED
-trading_days_skipped: []
-rows_inserted: 0
-rows_skipped_duplicate: 0
+date_range_requested: 2026-08-05 to 2026-09-01
+trading_days_skipped: [2026-08-08, 2026-08-09, 2026-08-15, 2026-08-16, 2026-08-22, 2026-08-23, 2026-08-29, 2026-08-30] (all weekends, correctly excluded)
+rows_inserted: 20521
+rows_skipped_duplicate: 0 explicit skips (idempotency instead expressed as partial-range fetches — see B)
 rows_rejected: 0
 rate_limit_events: 0
 invariant_violations: 0
-commit: (this file only)
-blockers: [WorkerRuntimeStatus(dhan).worker_state = RECONNECTING, not STOPPED/absent — Part 0 check 1's literal gate]
+commit: (recorded below after commit)
+blockers: []
 ```
 
-## A. Part 0 findings
+## Preamble — this is a re-attempt
 
-Checked in the order specified, and stopped at the first failure per
-the directive's explicit "HALT immediately... do not proceed" instruction:
+The first attempt at this checkpoint today HALTED at Part 0 (a stale
+`WorkerRuntimeStatus` row read `RECONNECTING` despite no process
+actually running — see `git log` for that commit). With the user's
+explicit authorization, that one known-stale row was corrected to
+`STOPPED` as a one-time data fix (not a code change), and this
+checkpoint was re-run from Part 0 through completion. All three Part 0
+gates now pass on their own merits, re-verified independently below.
 
-1. **`WorkerRuntimeStatus` for provider `dhan`**: `worker_state:
-   RECONNECTING`, `stop_requested_at: 2026-09-02 09:59:33 UTC`. This
-   is not `STOPPED`/absent, so Part 0 check 1's literal gate triggers a
-   HALT.
+## A. Part 0/1 findings
 
-   **Important caveat, reported honestly rather than silently overriding
-   the gate**: this is very likely the known stale-status artifact
-   named and diagnosed in 67.12.2-E's addendum and fixed prospectively
-   by 67.12.2-H — `mark_failed()`/terminal-state persistence was never
-   called when the reconnect supervisor exhausted its attempts, so the
-   DB row froze at `RECONNECTING` even after the worker process had
-   genuinely exited. That specific bug is fixed in code now
-   (`run_market_data_worker.py`, commit `4e38fdd`), but **this
-   particular row still holds a value written before that fix
-   existed** — the fix only changes behavior for a future crash, not
-   this leftover row.
+**Part 0** (re-verified, not assumed from the correction alone):
+1. `WorkerRuntimeStatus(dhan).worker_state = STOPPED`, `stop_requested_at
+   = None`. Pass.
+2. 67.12.2-E's addendum confirmed complete (its own commit `67ff25a`
+   already established this; re-confirmed here via check 3).
+3. `ScannerConfiguration(dhan)`: `universe_mode=ALL_CONFIGURED`,
+   `timeframe=3m`, `selected_instrument_ids=()` — exactly the
+   originally recorded values. Pass.
 
-   Independent confirmation the process is NOT actually running (done
-   as due diligence, not as a basis for overriding the gate):
-   `Get-CimInstance Win32_Process -Filter "Name='python.exe'"` filtered
-   for `run_market_data_worker`/`supervise_market_data_worker` command
-   lines returned **zero rows**, immediately before this check.
-
-   **Despite that independent evidence, this checkpoint does not treat
-   the gate as satisfied.** The directive's Part 0 is deliberately
-   conservative ("there is no reason to risk it") and instructs a
-   literal DB-state check with an unconditional HALT — silently
-   reasoning past an explicit safety gate on my own judgment would be
-   exactly the kind of gate-weakening this project's standing
-   discipline prohibits. The correct next step is either (a) an
-   explicit, separate, minimal action to correct this one known-stale
-   row (not a code change — a one-time data correction, itself worth
-   its own small authorization rather than folding into this pilot),
-   or (b) simply re-running this checkpoint after that row is
-   naturally overwritten by a future clean worker start/stop cycle.
-
-2. **67.12.2-E's addendum**: confirmed complete (checked independently
-   here, not merely assumed) — `ScannerConfiguration` for provider
-   `dhan` reads `universe_mode=ALL_CONFIGURED`, `timeframe=3m`,
-   `selected_instrument_ids=()`, exactly the originally recorded
-   values. Check 2 and check 3 both pass on their own merits.
-
-3. **`ScannerConfiguration` match**: as above — `RESTORED_EXACTLY`,
-   confirmed again here independently of 67.12.2-E's own report.
-
-**Only check 1 fails. Checks 2 and 3 pass.** Per the directive's own
-structure ("Only if all three checks pass: continue to Part 1"), this
-is sufficient to HALT before Part 1.
-
-**No REST call was made. No `DhanHistoricalBarProvider` fetch was
-attempted. Part 1 (rate-limit documentation check) was not reached.**
+**Part 1** — Dhan's documented limits, read from
+`docs/architecture/DHAN_MARKET_DATA_CAPABILITY_RESEARCH.md`:
+- Intraday requests capped at **90 days of data per single request**
+  (already implemented as chunking in `historical_client.py`, not
+  newly discovered). Intraday data available going back **5 years** —
+  no lookback concern for a 20-trading-day window.
+- Rate limit: no endpoint-exact figure directly quoted from Dhan's
+  page. The document's own "Data APIs" category (5/sec, 100,000/day)
+  is a **medium-confidence inference** for `/v2/charts/*` endpoints,
+  not a directly-quoted mapping. Per this checkpoint's own fallback
+  instruction, used the most conservative documented figure anywhere
+  in the project instead: **1 request/second** (the high-confidence,
+  independently-confirmed "Quote APIs" rate from Checkpoint 22/23).
+- REST vs. WebSocket quota independence: **inferred, not confirmed** —
+  the rate-limit table lists "Data APIs" and "Quote APIs" as separate
+  named categories, suggesting independent quotas, but Dhan's page
+  does not explicitly state this. Reported as an open, medium-
+  confidence item, not treated as settled.
 
 ## B. What was actually fetched vs. requested
 
-Nothing. Zero rows inserted, zero rows skipped, zero rate-limit events
-— the pilot never started.
+Exactly as scoped: 3 symbols × 20 trading days = 60 `(symbol, day)`
+pairs, timeframe `ONE_MINUTE`, full session (09:15–15:30 IST request
+window). 8 calendar weekend days within the range correctly excluded
+(listed in the header block).
 
-## C. Invariant check results
+**All 60 requests succeeded** (60 real `POST /v2/charts/intraday`
+calls, all HTTP 200), paced at 1 request/second between calls, zero
+rate-limit-shaped responses.
 
-Not applicable — no rows were inserted this checkpoint.
+`[F]` **Idempotency was expressed as partial-range re-fetching, not a
+simple row-level skip** — this is the existing, correct
+`HistoricalDataPreparationService` behavior (the same mechanism
+67.12.2-J/K/O's tests already verify against fakes), observed here
+against real data for the first time in this pilot:
+- 15 of 60 `(symbol, day)` pairs already had 44 pre-existing rows
+  (from the original narrow capture earlier this session) — the
+  service correctly fetched only the **missing** 315 bars for each
+  (359 full session − 44 already-present = 315, confirmed exactly for
+  every one of those 15 pairs), never re-fetching or duplicating the
+  44 that already existed.
+- 1 pair (`RELIANCE`/`2026-08-31`) was already **fully** covered (from
+  67.12.2-Q's own pull earlier tonight): `bars_fetched=0`,
+  `bars_persisted=0` — correctly zero new rows. **One minor
+  inefficiency worth naming honestly**: the preparation service still
+  made a real HTTP request for this already-fully-covered date (the
+  same `PARTIAL`-status coverage-accounting nuance 67.12.2-Q already
+  found — the completeness check compares against the full
+  09:15–15:30 request window rather than these instruments' actual
+  09:17–15:15 CAS-shortened session, so it never reports `COMPLETE`
+  and always re-attempts a fetch for the "missing" 09:15–09:17/
+  15:15–15:30 fringe). This wasted one API call, not any data
+  correctness — zero duplicate rows resulted.
+- The remaining 44 pairs had no pre-existing data: full 359-bar
+  fetches.
+
+**Total: 20,521 new rows inserted** (0 rejected, 0 explicit duplicate
+skips because the service's own missing-range logic prevented
+duplicates from ever being requested in the first place, rather than
+fetching-then-discarding).
+
+## C. Invariant check results — all clean, checked directly
+
+Over the full 21,540-row scope (3 symbols × 20 days, pre-existing plus
+newly inserted):
+- **OHLC sanity**: 0 violations (`low <= min(open,close)`,
+  `high >= max(open,close)`, `high >= low` all hold for every row).
+- **Non-positive prices**: 0.
+- **Negative volume**: 0.
+- **Duplicate `(symbol, timeframe, bar_timestamp)`**: 0 groups.
+- **Provenance**: 100% `REAL_DHAN` (21,540/21,540) — no row in scope
+  stamped anything else.
+- **Session-window compliance**: 0 timestamps outside 09:15–15:30 IST.
+- **Per-day bar count**: **exactly 359 bars for every one of the 60
+  `(symbol, day)` pairs** — perfectly uniform, matching these three
+  `CATEGORY_I_CAS` instruments' known CAS-shortened continuous-trading
+  window (09:17–15:15 IST inclusive, 359 one-minute bars), with zero
+  gaps in any day for any symbol.
 
 ## D. Recommendation
 
-The blocker here is narrow and almost certainly cosmetic (a stale
-status field, not a real live connection), but per this checkpoint's
-own conservative design this report does not resolve it unilaterally.
-Recommended next step: a small, explicitly-authorized action to correct
-`WorkerRuntimeStatus(dhan).worker_state` to `STOPPED` (or clear the
-row), justified by the same independent process-liveness evidence
-gathered here, **or** simply re-attempt this pilot after any future
-clean worker start/stop cycle naturally overwrites the stale row via
-67.12.2-H's now-fixed terminal-status persistence path. Either path
-unblocks this same pilot without weakening or bypassing Part 0's gate
-as written.
+The pilot succeeded cleanly across all 60 requested units with zero
+rate-limit events and zero data-quality problems. Per this
+checkpoint's own "do not over-engineer" instruction, no generalized
+backfill framework was built. If a future checkpoint decides to widen
+this:
+- The one real inefficiency found (a wasted request on an
+  already-fully-covered date, caused by the coverage predicate's
+  full-window vs. CAS-shortened-window mismatch) is worth fixing
+  before scaling this up meaningfully — at 1 req/sec pacing it's cheap
+  today, but would compound linearly with a much larger symbol/date
+  matrix.
+- The REST-vs-WebSocket quota independence question (Part 1) should be
+  confirmed directly with Dhan (or empirically, cautiously) before ever
+  running a wide REST backfill concurrently with a live WebSocket
+  capture — this pilot deliberately never tested that combination
+  (Part 0 explicitly refused to run while anything live was active).
+- This is unwired from `is_research_eligible()` deliberately, per this
+  checkpoint's own scope — these 20,521 new rows are real, correctly
+  provenance-stamped `HistoricalBar` data, but (per 67.12.2-L/P) will
+  not pass the research-eligibility gate until `ONE_MINUTE`
+  canonicalization is separately, formally proven (67.12.2-Q already
+  produced one genuinely well-shaped sample for that future proof;
+  this pilot now adds many more).
