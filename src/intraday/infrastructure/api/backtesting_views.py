@@ -45,12 +45,10 @@ from intraday.application.services.research_data_gate import ResearchDataGateSer
 from intraday.domain.shared_kernel.contracts import InstrumentId, Timeframe
 from intraday.infrastructure.api.errors import invalid_configuration, not_found, unknown_strategy
 from intraday.infrastructure.api.permissions import IsConfigurationOperator
+from intraday.infrastructure.api.tasks import _select_historical_bar_provider
 from intraday.infrastructure.market_data_providers.fixtures import (
     SYNTHETIC_INSTRUMENT_ID,
     FixtureHistoricalMarketDataRepository,
-)
-from intraday.infrastructure.market_data_providers.synthetic_historical import (
-    SyntheticHistoricalBarProvider,
 )
 from intraday.infrastructure.persistence.historical_bar_repository import (
     DjangoHistoricalBarRepository,
@@ -121,28 +119,33 @@ def _prepare_if_needed(config: BacktestConfiguration) -> None:
     polled background run, since this view is deliberately still
     synchronous (Checkpoint 27's original design).
 
-    Checkpoint 65.12 note (65.01's root-cause bug #2): this still
-    unconditionally constructs `SyntheticHistoricalBarProvider()` for
-    every non-fixture instrument, because NO real Dhan historical-
-    candle adapter exists in this codebase yet — there is nothing else
-    to select between (Part F: building one is out of this
-    checkpoint's offline, data-foundation scope). What 65.12 fixes is
-    the SILENT part of the bug: `SyntheticHistoricalBarProvider` now
-    declares `provenance = PROVENANCE_SYNTHETIC_TEST`
-    (`domain.market_data.provenance`) and
-    `HistoricalDataPreparationService` stamps every bar it writes with
-    that label honestly, instead of the previous undifferentiated
-    `source="API_FETCH"` that looked identical to genuine data. The
-    day a real adapter exists, selecting it here (mirroring the
-    `SYNTHETIC_INSTRUMENT_ID` branch in `_service()` above) is the
-    smallest remaining change — no repository, service, or backtest
-    code needs to change again."""
+    Checkpoint 67.12.2-L fix: this now uses
+    `tasks._select_historical_bar_provider()` — the SAME real-vs-
+    synthetic selector `build_historical_backtest_orchestrator()`
+    already uses for the multi-instrument panel (65.x) — instead of
+    unconditionally constructing `SyntheticHistoricalBarProvider()`.
+    `DhanHistoricalBarProvider` genuinely exists and is selected
+    whenever Dhan credentials are actually configured (the stale
+    claim that "no real Dhan historical provider exists," carried
+    over from Checkpoint 65.12, was confirmed false by 67.12.2-B);
+    with no credentials configured (this project's default dev/test
+    environment) the selector falls back to
+    `SyntheticHistoricalBarProvider()`, honestly labeled
+    `provenance = PROVENANCE_SYNTHETIC_TEST`
+    (`domain.market_data.provenance`) exactly as before — this fix
+    changes WHICH provider may be selected, never how either
+    provider's output is labeled or persisted. 67.12.2-L Part 2 first
+    confirmed, end-to-end through the real
+    `ResearchDataGateService`, that `SYNTHETIC_TEST`-provenance rows
+    are rejected outright from any `RESEARCH`-mode backtest — this
+    provider-selection fix does not touch that gate and relies on it
+    unchanged."""
     if config.instrument_id == SYNTHETIC_INSTRUMENT_ID:
         return
     bar_repository = DjangoHistoricalBarRepository()
     preparation = HistoricalDataPreparationService(
         coverage=HistoricalDataCoverageService(repository=bar_repository),
-        provider=SyntheticHistoricalBarProvider(),
+        provider=_select_historical_bar_provider(),
         writer=bar_repository,
     )
     preparation.prepare(config.instrument_id, config.timeframe, config.start, config.end)
