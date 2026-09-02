@@ -41,7 +41,16 @@ const READY_READINESS: components["schemas"]["LivePaperReadinessResponse"] = {
   real_trading_state: "DISABLED",
   can_start: true,
   safe_reason: "All readiness checks passed.",
-  remediation: null,
+  // Checkpoint FRONTEND-1: `LivePaperReadinessResponse.remediation` is a
+  // non-nullable `string` (backend: `live_paper_readiness_views.py:86`,
+  // `serializers.CharField()` with no `allow_null=True`) - unlike
+  // `LivePaperSessionResponse.remediation`, which IS nullable. For
+  // READY_FOR_PAPER specifically, the real backend value
+  // (`live_paper_readiness.py`'s own `_REMEDIATIONS` table) is this
+  // exact string - reused here rather than an empty placeholder so the
+  // fixture matches real backend output, not just the type.
+  remediation:
+    "Start the Live Paper Session explicitly - this gate reporting READY never starts it automatically.",
 };
 
 const BASE_CONFIG: ScannerConfigurationResponse = {

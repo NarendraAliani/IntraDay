@@ -293,12 +293,20 @@ describe("NOT APPLICABLE - there is no scanner-condition entity", () => {
   });
 });
 
-describe("NOT YET IMPLEMENTED - archive completeness has no HTTP API", () => {
-  it("no archive or reconciliation path exists in the contract", () => {
-    expect(CONTRACT).not.toContain("/api/v1/config/market-data/archive/");
-    expect(CONTRACT).not.toContain("reconciliation");
-  });
-});
+// Checkpoint FRONTEND-1: the "NOT YET IMPLEMENTED - archive completeness
+// has no HTTP API" guard this block used to contain (checkpoint 64.90) is
+// now factually false, not a real gap - Checkpoint 64.83 Phases 3/5 added
+// real, deliberate, documented endpoints:
+// `/api/v1/market-data/archive/{trading_date}/` and
+// `/api/v1/market-data/reconciliation/{trading_date}/` (note: neither
+// ever lived under `/config/` - the removed assertion's own path was
+// never the real one, even when this test was first written). Both are
+// intentional, stable backend surface (exercised extensively by this
+// session's own backend checkpoints, via `MarketDataArchiveDay`'s
+// `reconciliation_status`/`reconciliation_outcome` fields) - the correct
+// fix is removing this stale premise, not asserting the feature's
+// continued absence. No frontend consumption of these endpoints exists
+// yet; that remains a real, separate gap this test file does not track.
 
 // ---------------------------------------------------------------------
 // The scope rules.

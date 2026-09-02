@@ -88,7 +88,12 @@ const EMPTY_WORKBENCH: components["schemas"]["LivePaperWorkbenchResponse"] = {
     real_trading_state: "DISABLED",
     can_start: true,
     safe_reason: "All readiness checks passed.",
-    remediation: null,
+    // Checkpoint FRONTEND-1: `remediation` is non-nullable on
+    // `LivePaperReadinessResponse` (backend: `serializers.CharField()`,
+    // no `allow_null=True`) - see the sibling `.64_93.test.tsx` fixture
+    // for the full explanation. Same real backend value reused here.
+    remediation:
+      "Start the Live Paper Session explicitly - this gate reporting READY never starts it automatically.",
   },
   checklist: [],
   session_state: "STOPPED",
