@@ -7,7 +7,7 @@ legacy_checksum_match: YES
 schema_fingerprint: 3e9b7d907eb56fdeac45083c383ba5017d154ef9fd3015de765a46c20732ab19
 unknown_classification: { reproducible: 3900, plausible_unverified: 817, implausible: 383 }
 tests_passing: 20/20
-commit: <see final `git log -1` after commit — recorded below>
+commit: bfa6feb
 blockers: []
 ```
 
