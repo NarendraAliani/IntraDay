@@ -1,0 +1,100 @@
+{
+  "payload_format_version": 1,
+  "snapshot_identity": {
+    "pg_current_snapshot_first": "2975706:2975706:",
+    "pg_current_snapshot_last": "2975706:2975706:",
+    "snapshot_matches": true,
+    "pg_backend_pid_first": 8244,
+    "pg_backend_pid_last": 8244,
+    "backend_pid_matches": true,
+    "pg_current_xact_id": "2975706",
+    "transaction_timestamp": "2026-09-02 08:27:20.757849+00",
+    "pg_current_wal_lsn": "1/A60FE250",
+    "transaction_isolation": "serializable",
+    "pg_control_system_identifier": "7673506760484326492",
+    "current_database": "intraday",
+    "server_version_num": "160014"
+  },
+  "content_checksum": "3d2d6db480215ae048d10184c3b99458bef96338543d2e59eee56a1b914a27a7",
+  "content_checksum_row_count": 16542,
+  "legacy_id_timestamp_checksum": "efad4a2121da7db912f1867b62ffd27ae8d54d8e98efe3b5bd7cf0e0c2edfd8e",
+  "schema_fingerprint": "3e9b7d907eb56fdeac45083c383ba5017d154ef9fd3015de765a46c20732ab19",
+  "counts": {
+    "by_provenance": [
+      {
+        "provenance": "REAL_DHAN",
+        "n": 11442
+      },
+      {
+        "provenance": "UNKNOWN",
+        "n": 5100
+      }
+    ],
+    "by_source": [
+      {
+        "source": "API_FETCH",
+        "n": 16542
+      }
+    ],
+    "by_timeframe": [
+      {
+        "timeframe": "1m",
+        "n": 880
+      },
+      {
+        "timeframe": "5m",
+        "n": 15662
+      }
+    ],
+    "distinct_dates_symbols_by_provenance": [
+      {
+        "provenance": "REAL_DHAN",
+        "distinct_dates": 12,
+        "distinct_symbols": 15
+      },
+      {
+        "provenance": "UNKNOWN",
+        "distinct_dates": 9,
+        "distinct_symbols": 22
+      }
+    ],
+    "migration_run_count": 0,
+    "migration_unit_count": 0,
+    "migration_row_count": 0
+  },
+  "invariants": {
+    "duplicate_symbol_timeframe_bar_timestamp": {
+      "count": 0,
+      "examples": []
+    },
+    "ohlc_sanity_violations": {
+      "count": 0,
+      "examples": []
+    },
+    "non_positive_prices": {
+      "count": 0,
+      "examples": []
+    },
+    "negative_volume": {
+      "count": 0,
+      "examples": []
+    },
+    "required_column_nulls": {
+      "count": 0,
+      "examples": []
+    },
+    "weekend_bar_timestamps": {
+      "count": 0,
+      "examples": []
+    },
+    "holiday_bar_timestamps": {
+      "count": 0,
+      "examples": []
+    },
+    "out_of_session_bar_timestamps": {
+      "count": 0,
+      "examples": []
+    },
+    "per_cell_bar_count_vs_expected_note": "Full per-(symbol,trading_date) 1m coverage table is computed and reported separately in Part 4 (this invariant here only flags timestamps that fall outside a session's expected-timestamp set, CAS-aware, per above)."
+  }
+}
