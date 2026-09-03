@@ -1,18 +1,31 @@
-# Checkpoint LIVE-1 — Today's Real Supervised Session
+# Checkpoint LIVE-1 — Today's Real Supervised Session (Finalized Post-Close)
 
 ```
 checkpoint: LIVE-1
 verdict: PARTIAL
-pid_reconciliation_exercised_live: PARTIALLY (ran for real at startup, found nothing stale — "action=not_active" — no restart-cycle row was ever stale mid-session either, since the fixed terminal-status persistence from 67.12.2-H kept the row honest throughout)
 crash_occurred: YES (5 times total — 1 initial + 4 restarts, all reconnect_attempts_exhausted)
 restart_exercised_live: YES (4/4, exactly as designed, then correctly stopped permanently on exhaustion)
-config_restored: RESTORED_EXACTLY
-bars_captured_5m: 135 CLOSED AggregatedBarObservation rows (live-observation table) — 0 new HistoricalBar rows (see Section D, a real structural finding)
+config_restored: RESTORED_EXACTLY (re-confirmed field-by-field after market close: ALL_CONFIGURED/3m/())
+config_lifecycle_gap_still_open: YES (confirmed — the supervisor's own run never reached its --session-end handling at all, since it stopped hours earlier on restart-exhaustion; ScannerConfiguration restoration was performed manually by this checkpoint both times, exactly as 67.12.2-I's design note flagged: the supervisor owns process lifecycle, not config lifecycle)
+bars_captured_5m_total: 135 CLOSED AggregatedBarObservation rows (9 per symbol, 15 symbols — see Section D) — 0 new HistoricalBar rows (a real structural finding, unchanged after market close)
 provenance_confirmed: NOT_APPLICABLE (no HistoricalBar rows exist to check provenance on)
 canonicalization_confirmed: NOT_APPLICABLE (same reason)
 commit: (recorded below)
 blockers: [live-capture pipeline never writes to HistoricalBar — only the separate REST backfill path does; network instability far exceeded the 4-restart budget chosen for today]
 ```
+
+**Note on this finalization pass**: the supervisor actually stopped
+permanently at **07:40:51 UTC (~13:10 IST)**, hours before market
+close, on exhausting `--max-restarts`. Part 4 (archive refresh,
+`ScannerConfiguration` restoration) was already performed at that time
+— this pass re-verifies everything fresh now that the trading day has
+genuinely elapsed (checked 10:17:19 UTC / 15:47 IST, past the ~15:40
+IST close), and re-runs the archive refresh once more since a cell's
+status legitimately differs before vs. after the session actually
+ends (`IN_PROGRESS`/`session_not_closed` earlier today →
+`PARTIAL`/`missing_bars` now that the day is over). No new capture
+happened between the two checks — nothing was running, confirmed via
+process check.
 
 ## A. Part 0 findings
 
@@ -104,21 +117,33 @@ restored: ALL_CONFIGURED 3m ()
 
 ## D. Final counts and the canonicalization finding
 
-`[F]` `market_data_archive --refresh` was run: 15 cells refreshed,
-`status=IN_PROGRESS` for all 15 symbols (`reason=session_not_closed`
-— correct, since the session stopped at 07:40 UTC, hours before the
-real 15:30 IST close), `closed=9/75` (HDFCBANK/INFY/RELIANCE/TCS show
-`9/72`, reflecting their CAS-shortened session), `reconciliation=NOT_RECONCILED`
-for every cell — none silently upgraded.
+`[F]` `market_data_archive --refresh` re-run **after market close**
+(10:17 UTC / 15:47 IST): 15 cells refreshed, status now correctly
+**`PARTIAL`** for all 15 symbols (`reason=missing_bars:66`, or `:63`
+for the four CAS-shortened symbols HDFCBANK/INFY/RELIANCE/TCS) — an
+honest final status, not the earlier `IN_PROGRESS`/`session_not_closed`
+that applied while the trading day was still technically open.
+`closed=9/75` (`9/72` for the CAS-shortened four),
+`reconciliation=NOT_RECONCILED` for every cell — none silently
+upgraded, both before and after this re-check.
 
-`[F]` **135 `AggregatedBarObservation` rows with `status=CLOSED`** exist
-for today at `timeframe=5m` (plus 13 `FORMING`) — this is real,
-successfully-captured 5-minute bar data.
+`[F]` **135 `AggregatedBarObservation` rows with `status=CLOSED`**
+exist for today at `timeframe=5m` — confirmed again post-close,
+unchanged from the mid-session count (nothing captured between the
+supervisor's 07:40 UTC stop and this final check, as expected — no
+process was running). Exactly **9 closed bars for every one of the 15
+symbols**:
 
-`[F]` **`HistoricalBar` count for `timeframe=5m`, today's date: 0.**
-Checked directly, not assumed. This is the single most important
-finding of this checkpoint, and it changes what "success" means for
-today: **the live WebSocket capture pipeline
+```
+ADANIPORTS 9  AXISBANK 9  BAJFINANCE 9  HDFCBANK 9  HINDUNILVR 9
+ICICIBANK 9   INFY 9      ITC 9         KOTAKBANK 9  LT 9
+MARUTI 9      RELIANCE 9  SBIN 9        SUNPHARMA 9  TCS 9
+```
+
+`[F]` **`HistoricalBar` count for `timeframe=5m`, today's date: 0** —
+re-checked directly after market close, still zero, unchanged. This is
+the single most important finding of this checkpoint, and it changes
+what "success" means for today: **the live WebSocket capture pipeline
 (`run_market_data_worker` → `BarAggregationService` →
 `AggregatedBarObservation`) has no code path that ever writes to
 `HistoricalBar`.** Every `HistoricalBar` row this entire multi-day
@@ -129,6 +154,15 @@ historical-candle path** (`DhanHistoricalBarProvider` /
 a pre-existing architectural fact, not something today's session or
 this checkpoint broke, and not something fixed here (no code change
 was made, per the standing prohibitions).
+
+`[F]` **Credential state, re-checked post-close**: `effective_credentials()`
+still resolves successfully, `exp_utc=2026-09-04 06:38:27`, still
+valid (~14.8 hours remaining from this check). Today's crashes,
+restarts, and the permanent stop on exhaustion left the credential
+itself completely unaffected — it was never the cause of any of
+today's failures (`last_error_safe` was `reconnect_attempts_exhausted`
+throughout, never `TOKEN_EXPIRED`/`AUTH_FAILED`) and remains usable for
+a future attempt without needing another renewal right now.
 
 **Consequence, stated plainly**: today's live session — even in the
 counterfactual case of zero crashes and a full clean run to 15:30 IST
@@ -161,3 +195,23 @@ capture and the `HistoricalBar` research archive are two disconnected
 pipelines, and closing that gap is a genuine, separate, and now
 clearly-motivated future checkpoint"** — not a small thing to patch
 inline here.
+
+## F. One recommended next step
+
+**Do not attempt a real backtest against today's captured data** — it
+would either be pointed at `AggregatedBarObservation` directly (a
+different table than what `BacktestingService`/`ResearchDataGateService`
+actually read, per 67.12.2-L) or fail outright for lack of any eligible
+`HistoricalBar` rows, proving nothing new. The single most valuable
+next checkpoint is a **small, dedicated, explicitly-scoped one that
+traces exactly where a "promote closed live bars into `HistoricalBar`"
+step would need to live** — likely somewhere in
+`BarAggregationService`'s own closed-bar handling, or as a separate
+periodic promotion job — and proposes (not necessarily implements
+immediately) the correct provenance/canonicalization stamping for
+that path, reusing the same `REAL_DHAN`/`CANONICALIZED` machinery
+`DhanHistoricalBarProvider` already uses, rather than inventing a
+second one. Separately, and less urgently: revisit the supervisor's
+`--max-restarts`/`--cooldown-seconds` defaults given today's real
+evidence (5 crashes, two near-instant re-failures, budget exhausted in
+42 minutes) before the next live attempt.
