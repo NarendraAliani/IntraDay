@@ -318,6 +318,107 @@ def test_reconnect_exhaustion_persists_a_terminal_failed_status_not_a_stale_reco
     assert status.last_error_safe == "reconnect_attempts_exhausted"
 
 
+# --- Checkpoint LIVE-1-INSTRUMENT: per-attempt close-code logging.
+# The LIVE-1-POSTMORTEM checkpoint found a real, confirmed gap: a real
+# live session's ENTIRE output contained zero `close_code` lines -
+# only the final aggregate `attempts=N` summary was ever printed, even
+# though `AsyncWorkerRunResult.last_close_code` (Checkpoint 64.23) was
+# already being captured in-process per attempt. This test proves each
+# individual reconnect attempt's own close code now reaches stdout
+# DURING the run, with a distinct code per attempt - not merely the
+# last one repeated, which a naive "log the final reason" fix could
+# still pass by accident.
+@requires_postgres
+def test_each_reconnect_attempt_logs_its_own_distinct_close_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import base64
+    import json
+    from datetime import UTC, datetime, timedelta
+
+    from intraday.infrastructure.market_data_providers.dhan import async_worker as async_worker_mod
+    from intraday.infrastructure.market_data_providers.dhan.websocket_transport import (
+        DhanWebSocketTransport,
+    )
+    from intraday.infrastructure.market_data_providers.dhan.worker_state import WorkerState
+    from intraday.infrastructure.persistence.management.commands import (
+        run_market_data_worker as command_module,
+    )
+
+    valid_until = datetime.now(tz=UTC) + timedelta(hours=1)
+    header = base64.urlsafe_b64encode(b'{"alg":"HS512","typ":"JWT"}').rstrip(b"=").decode()
+    payload = (
+        base64.urlsafe_b64encode(json.dumps({"exp": valid_until.timestamp()}).encode())
+        .rstrip(b"=")
+        .decode()
+    )
+    valid_jwt = f"{header}.{payload}.fake-signature-not-verified"
+
+    monkeypatch.setattr(
+        DhanSettingsService,
+        "effective_credentials",
+        lambda self: ("fake-client-id", valid_jwt),
+    )
+
+    # `connect()`/`send_json_text()`/`close()` never touch a real
+    # socket - only `run_worker_against_websocket()` (patched below)
+    # decides the outcome of each attempt, exactly like the fake
+    # transport harness's own contract, just without a real server.
+    async def _fake_connect(self: object) -> None:
+        return None
+
+    async def _fake_send(self: object, message: object) -> None:
+        return None
+
+    async def _fake_close(self: object) -> None:
+        return None
+
+    monkeypatch.setattr(DhanWebSocketTransport, "connect", _fake_connect)
+    monkeypatch.setattr(DhanWebSocketTransport, "send_json_text", _fake_send)
+    monkeypatch.setattr(DhanWebSocketTransport, "close", _fake_close)
+
+    # Three attempts, three DISTINCT simulated close codes - the exact
+    # shape a real, recurring-but-varying Dhan disconnect would take.
+    distinct_close_codes = [1006, 1011, 1000]
+    calls: list[int] = []
+
+    async def _fake_run_against_websocket(*args: object, **kwargs: object) -> object:
+        code = distinct_close_codes[len(calls)]
+        calls.append(code)
+        if len(calls) < len(distinct_close_codes):
+            return async_worker_mod.AsyncWorkerRunResult(
+                final_state=WorkerState.RECONNECTING, last_close_code=code
+            )
+        # Final attempt: clean stop, so the command actually exits.
+        return async_worker_mod.AsyncWorkerRunResult(final_state=WorkerState.STOPPED)
+
+    monkeypatch.setattr(
+        command_module, "run_worker_against_websocket", _fake_run_against_websocket
+    )
+
+    out = io.StringIO()
+    call_command(
+        "run_market_data_worker",
+        "--provider",
+        "dhan",
+        "--max-reconnect-attempts",
+        "5",
+        stdout=out,
+    )
+
+    output = out.getvalue()
+
+    # THE regression proof: every attempt's own close code appears
+    # individually, DURING the run - not just the last one, and not
+    # only in a final aggregate line.
+    assert "reconnect attempt #1: connection_lost:close_code=1006" in output
+    assert "reconnect attempt #2: connection_lost:close_code=1011" in output
+    # The third attempt is a clean STOPPED result, not a reconnect - it
+    # must NOT produce a spurious third "reconnect attempt" line.
+    assert "reconnect attempt #3" not in output
+    assert len(calls) == 3
+
+
 # --- Checkpoint 67.12.2-S, Part 3 (wiring half): proves
 # `run_market_data_worker --provider dhan` runs PID-verified startup
 # reconciliation BEFORE anything else - including before the AUTH_FAILED

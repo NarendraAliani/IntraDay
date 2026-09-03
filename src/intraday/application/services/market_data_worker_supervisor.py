@@ -161,6 +161,25 @@ async def supervise_market_data_worker(
             restarts_used += 1
             await start_worker()
             _log("worker_restarted", f"restart {restarts_used}/{max_restarts}")
+            # Checkpoint LIVE-1-INSTRUMENT, Part 3: a grace period BEFORE
+            # the next poll, not just before the restart. Without this,
+            # the loop fell straight back to the top and polled
+            # `WorkerRuntimeStatus` again with ZERO elapsed time - a real
+            # subprocess spawn/Django-startup/credential-fetch sequence
+            # needs real wall-clock time to overwrite its own row away
+            # from the PREVIOUS process's terminal FAILED state
+            # (`run_market_data_worker.py::_run_dhan`'s own long list of
+            # `await sync_to_async(...)` calls before its first
+            # `health_tracker.persist()`), so that stale FAILED read was
+            # being mistaken for a brand-new crash - proven by
+            # `test_a_stale_failed_row_after_restart_produces_a_phantom_
+            # second_crash_detected`. `poll_interval_seconds` is reused
+            # deliberately rather than inventing a new tunable: it is
+            # already this loop's own answer to "how long is a reasonable
+            # gap before checking status again," and reusing it keeps
+            # `--max-restarts`/cooldown semantics completely untouched,
+            # per this checkpoint's own prohibition.
+            await sleep(poll_interval_seconds)
             continue
 
         await sleep(poll_interval_seconds)

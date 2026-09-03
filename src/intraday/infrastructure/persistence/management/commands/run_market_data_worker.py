@@ -1127,6 +1127,17 @@ class Command(BaseCommand):
                 # the bounded-backoff retry logic handles it exactly
                 # like a mid-stream disconnect.
                 health_tracker.mark_reconnecting(reason=f"connect_failed:{exc!r}")
+                # Checkpoint LIVE-1-INSTRUMENT: log EACH reconnect attempt
+                # as it happens, not only the final aggregate summary line
+                # at the bottom of `_run_dhan()` - the postmortem found
+                # zero per-attempt close-code lines in a real session's
+                # output because this call did not previously exist.
+                self.stdout.write(
+                    self.style.WARNING(
+                        f"  reconnect attempt #{health_tracker.reconnect_count}: "
+                        f"{health_tracker.last_error_safe}"
+                    )
+                )
                 return AsyncWorkerRunResult(final_state=WorkerState.RECONNECTING)
             health_tracker.mark_connected(subscribed_instrument_count=len(instruments))
             try:
@@ -1153,6 +1164,16 @@ class Command(BaseCommand):
                     if result.last_close_code is not None:
                         reason = f"connection_lost:close_code={result.last_close_code}"
                     health_tracker.mark_reconnecting(reason=reason)
+                    # Checkpoint LIVE-1-INSTRUMENT: same per-attempt log
+                    # line as the connect_failed branch above - this is
+                    # the mid-stream-disconnect branch, the one the
+                    # postmortem's real close_code=1006 citation came
+                    # from, and it needed this exact instrumentation.
+                    self.stdout.write(
+                        self.style.WARNING(
+                            f"  reconnect attempt #{health_tracker.reconnect_count}: {reason}"
+                        )
+                    )
                 elif result.final_state in (
                     WorkerState.FAILED,
                     WorkerState.AUTH_FAILED,
