@@ -7,6 +7,7 @@
 import type { JSX } from "react";
 
 import { CapabilityStatus } from "../../common/components/CapabilityStatus";
+import { Icon } from "../../common/icons/Icon";
 import { CAPABILITY_REGISTRY } from "./capabilityRegistry";
 import {
   CONDITIONS_PASSED,
@@ -16,9 +17,15 @@ import {
 } from "./marketDataQualityReport";
 import { REPORT_CATALOGUE } from "./reportCatalogue";
 
+// Checkpoint FRONTEND-5 Part 2: NOT_SATISFIED's label used a raw "✕"
+// Unicode glyph outside the closed icon system (flagged, but correctly
+// left unfixed, by FRONTEND-4). Replaced here with the real `error`
+// icon from `Icon.tsx`. SATISFIED/BLOCKED's own glyphs are untouched -
+// this page's broader density/layout question stays deliberately
+// deferred, out of scope for this checkpoint.
 const CONDITION_LABEL: Record<string, string> = {
   SATISFIED: "✓ Satisfied",
-  NOT_SATISFIED: "✕ Not Satisfied",
+  NOT_SATISFIED: "Not Satisfied",
   BLOCKED: "⊘ Blocked",
 };
 
@@ -84,6 +91,7 @@ export function ReportsOverviewPage(): JSX.Element {
                 <td>{condition.description}</td>
                 <td>
                   <span className={CONDITION_CLASS[condition.status]}>
+                    {condition.status === "NOT_SATISFIED" && <Icon name="error" />}{" "}
                     {CONDITION_LABEL[condition.status]}
                   </span>
                 </td>

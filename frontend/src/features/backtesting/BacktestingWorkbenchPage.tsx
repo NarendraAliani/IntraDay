@@ -18,6 +18,8 @@ import { DrawdownChart, EquityCurveChart } from "../../common/components/EquityC
 import { ErrorState } from "../../common/components/ErrorState";
 import { InstrumentPickerMulti } from "../../common/components/InstrumentPicker";
 import { LoadingState } from "../../common/components/LoadingState";
+import { badgeIconName } from "../../common/components/statusIcon";
+import { Icon } from "../../common/icons/Icon";
 import {
   asConfigurationView,
   asDataQualityView,
@@ -401,14 +403,18 @@ export function BacktestingWorkbenchPage(): JSX.Element {
                 <p className="strategy-config-page__help-text">
                   {costModelName === "INDIAN_CASH_EQUITY_INTRADAY" ? (
                     <>
-                      <strong className="badge badge--ok">VERIFIED COST MODEL</strong> — real NSE
-                      STT/exchange charges/SEBI fees/GST/stamp duty. Brokerage itself remains a
-                      configurable, representative default (see below).
+                      <strong className="badge badge--ok">
+                        <Icon name={badgeIconName("badge--ok")} /> VERIFIED COST MODEL
+                      </strong>{" "}
+                      — real NSE STT/exchange charges/SEBI fees/GST/stamp duty. Brokerage itself
+                      remains a configurable, representative default (see below).
                     </>
                   ) : (
                     <>
-                      <strong className="badge badge--pending">MODEL ASSUMPTION</strong> — a flat
-                      percentage cost, not a verified Indian cost schedule.
+                      <strong className="badge badge--pending">
+                        <Icon name={badgeIconName("badge--pending")} /> MODEL ASSUMPTION
+                      </strong>{" "}
+                      — a flat percentage cost, not a verified Indian cost schedule.
                     </>
                   )}
                 </p>
@@ -551,7 +557,9 @@ const ENGINE_VALIDATION = {
 function EngineValidationIndicator(): JSX.Element {
   return (
     <div className="callout callout--info" role="note">
-      <span className="badge badge--ok">ENGINE VALIDATION: {ENGINE_VALIDATION.status}</span>{" "}
+      <span className="badge badge--ok">
+        <Icon name={badgeIconName("badge--ok")} /> ENGINE VALIDATION: {ENGINE_VALIDATION.status}
+      </span>{" "}
       Calculation engine cross-checked against an {ENGINE_VALIDATION.reference} on{" "}
       {ENGINE_VALIDATION.datasets} (last validated {ENGINE_VALIDATION.lastValidated}). This
       confirms the engine computes signals, trades, costs, and equity correctly - it does{" "}
@@ -585,7 +593,10 @@ function BacktestResultsPanel({ result }: { result: BacktestResult }): JSX.Eleme
       <div className="callout callout--warn" role="note">
         <strong>RESULT, not a promise.</strong> Backtest results are historical simulations and
         are not guarantees of future performance. Trust level:{" "}
-        <span className="badge badge--pending">{trustLevel}</span> - see the Strategy &amp;
+        <span className="badge badge--pending">
+          <Icon name={badgeIconName("badge--pending")} /> {trustLevel}
+        </span>{" "}
+        - see the Strategy &amp;
         Backtesting guide for what this level means and does not mean.
       </div>
 
@@ -595,6 +606,7 @@ function BacktestResultsPanel({ result }: { result: BacktestResult }): JSX.Eleme
         <span
           className={costModelIdentity.is_verified ? "badge badge--ok" : "badge badge--pending"}
         >
+          <Icon name={badgeIconName(costModelIdentity.is_verified ? "badge--ok" : "badge--pending")} />{" "}
           {costModelIdentity.is_verified ? "VERIFIED COST MODEL" : "MODEL ASSUMPTION"}
         </span>{" "}
         {costModelIdentity.name} v{costModelIdentity.version} (effective from{" "}
@@ -687,6 +699,7 @@ function BacktestResultsPanel({ result }: { result: BacktestResult }): JSX.Eleme
           <li>
             <strong>Data quality:</strong>{" "}
             <span className={level === "warning" ? "badge badge--pending" : "badge badge--ok"}>
+              <Icon name={badgeIconName(level === "warning" ? "badge--pending" : "badge--ok")} />{" "}
               {dataQuality.data_quality}
             </span>
             {dataQuality.data_quality === "SAMPLE_BAR" && (
@@ -1182,9 +1195,13 @@ function HistoricalBacktestRunPanel(props: HistoricalBacktestRunPanelProps): JSX
                 <td>{entry.coverage_percent.toFixed(1)}%</td>
                 <td>
                   {entry.is_complete ? (
-                    <span className="badge badge--ok">READY</span>
+                    <span className="badge badge--ok">
+                      <Icon name={badgeIconName("badge--ok")} /> READY
+                    </span>
                   ) : (
-                    <span className="badge badge--pending">FETCH REQUIRED</span>
+                    <span className="badge badge--pending">
+                      <Icon name={badgeIconName("badge--pending")} /> FETCH REQUIRED
+                    </span>
                   )}
                 </td>
               </tr>
@@ -1252,7 +1269,9 @@ function HistoricalBacktestRunPanel(props: HistoricalBacktestRunPanelProps): JSX
             <dd>{formatSeconds(progress.eta_seconds)}</dd>
             <dt>Scan Source</dt>
             <dd>
-              <strong className="badge badge--ok">DATABASE ONLY</strong>
+              <strong className="badge badge--ok">
+                <Icon name={badgeIconName("badge--ok")} /> DATABASE ONLY
+              </strong>
             </dd>
           </dl>
 
@@ -1283,6 +1302,9 @@ function HistoricalBacktestRunPanel(props: HistoricalBacktestRunPanelProps): JSX
                 <strong
                   className={`badge ${progress.status === "COMPLETED" ? "badge--ok" : "badge--pending"}`}
                 >
+                  <Icon
+                    name={badgeIconName(progress.status === "COMPLETED" ? "badge--ok" : "badge--pending")}
+                  />{" "}
                   {progress.status}
                 </strong>
               </p>
