@@ -160,6 +160,38 @@ describe("Iconography - one system only", () => {
     expect(violations).toEqual([]);
   });
 
+  // Checkpoint FRONTEND-6: closes the ~40-file gap named above. Every
+  // prior checkpoint in this thread (FRONTEND-2 through FRONTEND-5)
+  // found real glyphs by manual grep, one sweep at a time - this makes
+  // the guarantee automatic across every feature-page file, not just
+  // the shell/dashboard/shared-component list, so a future regression
+  // is caught by the test suite rather than needing another manual
+  // audit. Reports' own `✓ Satisfied`/`⊘ Blocked` labels are the ONE
+  // known, deliberately-deferred exception (FRONTEND-2 through
+  // FRONTEND-5's own explicit scope decision - Reports' broader
+  // redesign is separate, deferred work) - exempted by EXACT line
+  // content, not by excluding the whole file, so any OTHER glyph this
+  // file might gain in the future still fails this test.
+  const FEATURES_ROOT = join(SRC_ROOT, "features");
+  const KNOWN_DEFERRED_GLYPH_LINES = new Set<string>([
+    '  SATISFIED: "✓ Satisfied",',
+    '  BLOCKED: "⊘ Blocked",',
+  ]);
+
+  it("every feature-page file uses no Unicode glyph icons, except Reports' two known-deferred labels", () => {
+    const banned = /[●○◐✕✖✓✔⚠⚙]/u;
+    const violations: { file: string; line: number; content: string }[] = [];
+    for (const file of collectSourceFiles(FEATURES_ROOT)) {
+      const lines = readFileSync(file, "utf-8").split("\n");
+      lines.forEach((line, index) => {
+        if (banned.test(line) && !KNOWN_DEFERRED_GLYPH_LINES.has(line)) {
+          violations.push({ file, line: index + 1, content: line.trim() });
+        }
+      });
+    }
+    expect(violations).toEqual([]);
+  });
+
   it("no source file anywhere contains emoji", () => {
     const emoji = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{26FF}]/u;
     const violations = collectSourceFiles(SRC_ROOT).filter((file) =>

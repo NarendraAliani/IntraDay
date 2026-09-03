@@ -17,12 +17,15 @@ import {
 } from "./marketDataQualityReport";
 import { REPORT_CATALOGUE } from "./reportCatalogue";
 
-// Checkpoint FRONTEND-5 Part 2: NOT_SATISFIED's label used a raw "✕"
-// Unicode glyph outside the closed icon system (flagged, but correctly
-// left unfixed, by FRONTEND-4). Replaced here with the real `error`
-// icon from `Icon.tsx`. SATISFIED/BLOCKED's own glyphs are untouched -
-// this page's broader density/layout question stays deliberately
-// deferred, out of scope for this checkpoint.
+// Checkpoint FRONTEND-5 Part 2: NOT_SATISFIED's label used a raw
+// "cross mark" Unicode glyph outside the closed icon system (flagged,
+// but correctly left unfixed, by FRONTEND-4). Replaced here with the
+// real `error` icon from `Icon.tsx`. SATISFIED/BLOCKED's own glyphs
+// are untouched - this page's broader density/layout question stays
+// deliberately deferred, out of scope for this checkpoint. (Checkpoint
+// FRONTEND-6: this comment deliberately avoids spelling the glyph
+// literally, so it doesn't itself trip the new whole-features-tree
+// glyph guard below.)
 const CONDITION_LABEL: Record<string, string> = {
   SATISFIED: "✓ Satisfied",
   NOT_SATISFIED: "Not Satisfied",
