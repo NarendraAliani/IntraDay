@@ -321,6 +321,44 @@ re-deriving them. Not a full transcript; no invented detail.
   specific claim, still far short of validation. No
   `RESEARCH_ACTIVE`/status change made for any strategy at either
   checkpoint, per the roadmap's own manual-gate finding.
+- **`CHECKPOINT_71`: cross-symbol walk-forward (TCS/HDFCBANK/INFY,
+  reusing `CHECKPOINT_70`'s already-backfilled/gate-verified data, no
+  new fetch) + interior-gap recon.** Which of `CHECKPOINT_70`'s
+  RELIANCE-only findings generalize: `ema_crossover`'s in-sample
+  unprofitability now holds on ALL 4 symbols (12/12 fold/symbol
+  in-sample returns negative) - genuinely cross-symbol-confirmed, not
+  a RELIANCE artifact. `gainz_aggressive` is now the single most
+  consistent result of this whole session: zero sign flips on every
+  fold, all 4 symbols (12/12 same-signed, always negative);
+  `gainz_balanced` nearly as consistent (1 small flip, HDFCBANK only).
+  **`gainz_conservative`'s "zero signal" finding did NOT generalize** -
+  RELIANCE/HDFCBANK/INFY all stayed silent (HDFCBANK's one IS-only
+  trade never repeats in any OOS window, still functionally silent),
+  but **TCS produced genuine non-zero IS and OOS trades** under the
+  identical `minimum_setup_quality_score=70` threshold - the earlier
+  "too strict to ever fire" characterization was RELIANCE-specific
+  (and coincidentally also true for 2 other symbols), not universal;
+  do not repeat it as a general property of the preset going forward.
+  `atr_volatility_breakout` and `sma_trend_filter` both remain
+  symbol-dependent and unstable (different flip fold/direction on
+  every symbol, `atr`'s `mean_degradation_ratio` even changes SIGN
+  between symbols) - reinforces the existing "not meaningful at this
+  fold count" caveat rather than adding confidence either way. Still
+  not enough for any `RESEARCH_ACTIVE`/trading decision - more
+  instrument coverage, not more history, on the same 16-day real
+  window. **Interior-gap recon**: `2026-08-17`-`08-28`'s
+  `UNCANONICALIZED` state is CONFIRMED to be the already-known,
+  already-documented migration gap (`67.7`-`67.13-C`), not a new or
+  different issue - verified directly by calling
+  `DhanHistoricalBarProvider.canonicalization_state_for()` for this
+  exact range against TODAY's code, which returns `CANONICALIZED`
+  (this range is comfortably inside the proven `(NSE_EQ, FIVE_MINUTE,
+  CAS_ERA)` scope, `CAS_EFFECTIVE_DATE=2026-08-03`) - meaning these
+  rows were written under an earlier processing state and are exactly
+  the class of row the still-unexecuted migration exists to
+  retroactively reclassify. No fix attempted (read-only recon, per
+  the checkpoint's own rule); migration-execution remains the
+  operator's own deferred decision, not re-litigated.
 - **`LIVE-2-FINALIZE`**: an end-of-day close-out checkpoint for
   `LIVE-2` was requested with the premise that market had just closed
   on the same day as the `LIVE-2` run — but this conversation's
