@@ -359,6 +359,39 @@ re-deriving them. Not a full transcript; no invented detail.
   retroactively reclassify. No fix attempted (read-only recon, per
   the checkpoint's own rule); migration-execution remains the
   operator's own deferred decision, not re-litigated.
+- **`CHECKPOINT_72`: lightweight recurring daily backfill routine
+  built.** New Django management command `backfill_daily_coverage`
+  (`src/intraday/infrastructure/persistence/management/commands/
+  backfill_daily_coverage.py`, thin wrapper) + application service
+  `daily_coverage_backfill.py` (`run_daily_backfill()`,
+  `most_recent_closed_trading_day()`) — keeps RELIANCE/TCS/HDFCBANK/
+  INFY's 5m coverage current by calling
+  `HistoricalDataPreparationService.prepare()` (completely unmodified,
+  no new fetch mechanism) for a `[most_recent_closed_trading_day -
+  7 days, most_recent_closed_trading_day]` rolling window each run.
+  **Operator-triggered only** — `.venv\Scripts\python.exe manage.py
+  backfill_daily_coverage` (add `--dry-run` to preview, `--lookback-days
+  N` for a one-off override). Deliberately NOT wired to the existing
+  Celery Beat schedule (`src/intraday/celery.py` already runs 3 other
+  tasks automatically) because that would make a REAL, unconditional
+  Dhan network call every day with no per-run operator action — P6 and
+  this checkpoint's own "no surprise automation" rule both forbid that;
+  every real Dhan call this session has been explicitly triggered, and
+  this preserves that. Automating it via Windows Task Scheduler is
+  documented (not performed) in `CHECKPOINT_72_SUMMARY.md` §5 for the
+  operator to opt into themselves. Idempotency and P4 (upsert-only,
+  never mutates an existing row) both proven directly via dedicated
+  unit tests, plus one real, explicitly-reported test against
+  production data today confirming a genuine `api_requests=0`
+  zero-network no-op. **Incidental finding while choosing the lookback
+  value** (refines, does not contradict, `CHECKPOINT_71`'s interior-gap
+  recon): the `2026-08-17`–`2026-08-28` gap is missing BOTH its
+  day-start AND day-end bar every single day (70/72 bars, uniformly),
+  not just the day-start bar — `DEFAULT_LOOKBACK_DAYS` was set to `7`
+  (not the originally-tried `10`) specifically so this routine's window
+  can never reach back far enough to touch that block. Not
+  investigated further or fixed, per the checkpoint's own rule —
+  remains the operator's same deferred migration decision.
 - **`LIVE-2-FINALIZE`**: an end-of-day close-out checkpoint for
   `LIVE-2` was requested with the premise that market had just closed
   on the same day as the `LIVE-2` run — but this conversation's
