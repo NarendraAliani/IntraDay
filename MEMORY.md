@@ -152,11 +152,56 @@ re-deriving them. Not a full transcript; no invented detail.
 
 ## 3. Open/pending threads as of today
 
-- **Gainz integration**: referenced only as a named, separate,
-  explicitly-untouched thread in checkpoint directives (e.g. "No
-  Gainz-related work" in `LIVE-2`'s global rules) — not otherwise
-  discussed, designed, or built in this conversation. Status:
-  **pending**, untouched.
+- **Gainz integration** — UPDATED, no longer "untouched": a
+  `GAINZ_ROADMAP.md` recon (untracked, per its own checkpoint's rule)
+  found a working `GainzCompatibleResearchStrategy`
+  (`gainz_compatible_research.py`, Checkpoint 64.99,
+  `strategy_id="gainz_compatible_research"`, deliberately NOT
+  registered in `registry.py`) already existed, with 3 documented
+  blockers (A: 20-bar breakout feature missing; B: no previous-bar
+  feature-value channel; C: `regime` labeling — later found stale,
+  `market_regime` was built one checkpoint later at 65.08). The
+  roadmap re-scoped Phase B as "close 64.99's gaps incrementally,"
+  not "build Gainz from scratch":
+  - **BLOCKER A closed** at `CHECKPOINT-GAINZ-A` (`1af77bb`): a new
+    canonical `rolling_breakout` feature
+    (`signal_intelligence/feature_engine/rolling_breakout.py`,
+    field_id `rolling_breakout`, default lookback 20, signed
+    `1`/`-1`/`0` — breakout/breakdown/in-range), pure feature-engine
+    addition, no strategy/registry change.
+  - **Supersede-in-place decision** (made at `CHECKPOINT-GAINZ-B1`,
+    not re-derived here — see that checkpoint's own directive): future
+    Gainz strategy-logic changes extend `GainzCompatibleResearchStrategy`
+    IN PLACE (same `strategy_id`/`specification_version`, bump
+    `code_version`) rather than forking a second, parallel strategy
+    identity. `CHECKPOINT-GAINZ-B1` bumped `code_version` `"v1"` →
+    `"v2"` — the FIRST time any strategy in this codebase has ever
+    bumped its own `code_version` (checked via `git log -p` on all 3
+    registered strategies: none had ever bumped it before) — and, in
+    the same checkpoint: replaced the equal-weight (1/8, now
+    conceptually 1/9) scoring scheme with a
+    `0.72*dominant_score + 0.28*separation` formula (`bull_score`/
+    `bear_score` defined as the 0–100 proportion of 9 directional
+    conditions satisfied per side), wired `rolling_breakout` in as a
+    real 9th bull/bear condition (BLOCKER A closed FOR REAL, not just
+    feature-availability), and added a `gainz_alpha_rejection_reason_code`
+    evidence entry alongside the existing `setup_quality_score` one —
+    all via `StrategySignal.evidence`, the existing extension point,
+    with the frozen `StrategySignal` schema itself untouched.
+    `market_regime` deliberately NOT wired in (a separate, explicitly
+    deferred decision). `registry.py` NOT touched — the strategy
+    remains unregistered/unreachable from the live scanner and
+    backtest API after both Gainz checkpoints.
+  - **Current Gainz roadmap phase status**: Phase A (feature layer)
+    complete for `rolling_breakout`; Phase B in progress, first
+    sub-step (`B1`, scoring formula + breakout wiring) done; BLOCKER B
+    (previous-bar feature-value channel, an architecture gap) and
+    BLOCKER C-successor (whether/how to wire `market_regime` in) both
+    remain open, undecided, explicitly deferred — not silently routed
+    around. Still **pending**: registration in `registry.py` (so the
+    strategy becomes reachable from the live scanner/backtest API),
+    any config-preset work, and any walk-forward proof for this
+    strategy specifically.
 - **`LIVE-2` live-capture connectivity failure**: Stream 1's
   `close_code=1006` / zero-quotes failure across all 8 restart
   attempts on 2026-09-04, root cause undetermined at checkpoint close.

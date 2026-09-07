@@ -216,6 +216,7 @@ def test_4_required_features_are_all_canonical_field_ids() -> None:
         "candle_body_ratio",
         "bullish_engulfing",
         "bearish_engulfing",
+        "rolling_breakout_20",
         "atr_14",
     }
     # None of these are the reference file's private functions - each is
@@ -538,7 +539,11 @@ def test_19_signal_carries_full_strategy_version_provenance() -> None:
     signal = next(s for s in signals if s is not None)
     assert signal.strategy_id == STRATEGY_ID
     assert signal.specification_version == "v1"
-    assert signal.code_version == "v1"
+    # Bumped "v1" -> "v2" at CHECKPOINT-GAINZ-B1 (see strategy module
+    # header) - `_config()` above still stamps `configuration_version`
+    # "v1" (a config-version label independent of the strategy code
+    # version).
+    assert signal.code_version == "v2"
     assert signal.configuration_version == "v1"
     assert signal.instrument_id == INSTRUMENT
     assert signal.timeframe == TF
@@ -574,15 +579,17 @@ def test_20_repeated_full_backtest_run_is_reproducible() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_21_required_features_never_include_breakout_or_regime() -> None:
-    """Blocker A (20-bar breakout) and Blocker C (regime) are
-    documented as REQUIRED-BUT-UNAVAILABLE and deliberately omitted -
-    this strategy must never request a `breakout*`/`regime*` field_id,
-    since no such canonical feature exists to satisfy it."""
+def test_21_required_features_include_rolling_breakout_but_never_regime() -> None:
+    """Blocker A (20-bar breakout) was CLOSED at CHECKPOINT-GAINZ-B1 -
+    `rolling_breakout_{lookback}` is now a real required feature (see
+    `gainz_compatible_research.py` module header points (1)/(2)).
+    Blocker C (`regime`/`market_regime`) remains documented as
+    REQUIRED-BUT-UNAVAILABLE / deliberately deferred - this strategy
+    must never request a `regime*`/`market_regime*` field_id."""
     config = _config()
     required = _strategy().required_features(config)
+    assert "rolling_breakout_20" in required
     for field_id in required:
-        assert "breakout" not in field_id
         assert "regime" not in field_id
 
 

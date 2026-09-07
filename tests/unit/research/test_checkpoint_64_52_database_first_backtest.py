@@ -527,13 +527,16 @@ def test_j_gainz_strategy_runs_through_real_coordinator_against_db_bars() -> Non
         StrategyDirection.BEARISH,
         StrategyDirection.NEUTRAL,
     )
-    # Checkpoint 64.99: evidence is now the 13 real, non-`atr` canonical
+    # Checkpoint 64.99: evidence is the 13 real, non-`atr` canonical
     # FeatureValues the expanded Alpha condition set consumes (EMA
     # fast/slow/trend, RSI, price_delta, ADX/+DI/-DI, relative volume,
     # MACD histogram, candle body ratio, bullish/bearish engulfing),
-    # PLUS the adapter-owned `setup_quality_score` (not a canonical
-    # feature - see that strategy module's own "SCORING" header).
-    assert len(signal.evidence) == 14
+    # PLUS the adapter-owned `setup_quality_score`. CHECKPOINT-GAINZ-B1:
+    # `rolling_breakout_20` (14th real canonical FeatureValue, BLOCKER A
+    # closed) and a second adapter-owned evidence entry,
+    # `gainz_alpha_rejection_reason_code`, are both now also present ->
+    # 14 canonical + 2 adapter-owned = 16.
+    assert len(signal.evidence) == 16
     assert all(ev is not None for ev in signal.evidence)  # real, non-fabricated evidence values
 
     # On this deliberately accelerating uptrend, the strategy's own

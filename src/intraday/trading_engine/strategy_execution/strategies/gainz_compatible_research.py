@@ -2,6 +2,49 @@
 #
 # Checkpoint 64.99: GainzCompatibleResearchStrategy - profile "alpha".
 #
+# CHECKPOINT-GAINZ-B1 (extends 64.99 IN PLACE - `code_version` bumped
+# "v1" -> "v2", same `strategy_id`/`specification_version`, still NOT
+# registered in `registry.py`): three real behavior changes, all
+# documented here rather than silently reframed:
+#
+#   (1) SCORING FORMULA REPLACED. The equal-weight 1/8-each scheme
+#   below (module header "SCORING", now more precisely 1/9-each - see
+#   (2)) is REPLACED by:
+#       bull_score = (# bullish conditions true / total conditions) * 100
+#       bear_score = (# bearish conditions true / total conditions) * 100
+#       dominant_score = max(bull_score, bear_score)
+#       separation = abs(bull_score - bear_score) / max(bull_score + bear_score, 1) * 100
+#       setup_quality_score = 0.72 * dominant_score + 0.28 * separation
+#   This is a REAL, DELIBERATE BEHAVIOR CHANGE to the numeric value of
+#   `setup_quality_score` for every signal (previously a flat count/8;
+#   now a 72%-dominance/28%-separation-weighted blend of two 0-100
+#   percentages) - NOT a silent reframing of the same number under new
+#   names. `bull_score`/`bear_score` are still PROJECT RESEARCH
+#   PARAMETERS, not verified Gainz mathematics - same disclaimer as
+#   64.99, extended to the new formula.
+#
+#   (2) BLOCKER A CLOSED FOR REAL (not just feature-availability).
+#   `rolling_breakout_{lookback}` (CHECKPOINT-GAINZ-A,
+#   `signal_intelligence/feature_engine/rolling_breakout.py`, signed
+#   1/-1/0) is now a REAL 9th condition in both `bull_conditions` and
+#   `bear_conditions` (`value == 1` -> bullish, `value == -1` ->
+#   bearish, `0` -> neither, matching neither list). `_TOTAL_ALPHA_CONDITIONS`
+#   is now 9, not 8.
+#
+#   (3) EVIDENCE EXTENDED, `StrategySignal` SCHEMA UNTOUCHED. A second
+#   `FeatureValue` is now appended to `evidence` alongside
+#   `setup_quality_score`: `gainz_alpha_rejection_reason_code` (Decimal
+#   0 = signal emitted BULLISH/BEARISH, 1 = REJECTED_TIE - see
+#   `_REJECTION_REASON_*` below). Same extension point 64.99 already
+#   used for `setup_quality_score` (`StrategySignal.evidence: tuple[
+#   FeatureValue, ...]`, the existing, documented mechanism) -
+#   `contracts.py`'s `StrategySignal` dataclass itself is NOT modified.
+#
+# NOT done in this checkpoint (explicitly out of scope): `market_regime`
+# is NOT wired in (a separate decision, per the roadmap's own "honest
+# complication #3"). `registry.py` is NOT touched - this strategy
+# remains unregistered, unreachable from the live scanner/backtest API.
+#
 # HONESTY NOTICE (do not remove): this is the "Gainz Research Adapter" /
 # "Gainz-Compatible Research Strategy" - NOT authentic GainzAlgo, NOT
 # verified Gainz V2, NOT a proprietary Gainz implementation. The
@@ -187,7 +230,21 @@ from intraday.trading_engine.strategy_execution.errors import InvalidParameterVa
 STRATEGY_ID = "gainz_compatible_research"
 DISPLAY_NAME = "Gainz Research Adapter (Gainz-Compatible Research Strategy - profile: alpha)"
 SPECIFICATION_VERSION = "v1"
-CODE_VERSION = "v1"
+# Bumped "v1" -> "v2" at CHECKPOINT-GAINZ-B1: a real behavior change to
+# the scoring formula and condition set (see module header) - same
+# `strategy_id`/`specification_version` (this is an IN-PLACE extension
+# of 64.99, not a new strategy identity, per this checkpoint's explicit
+# directive). No prior strategy in this codebase had ever bumped its
+# own `code_version` before this checkpoint (checked: `ema_crossover.py`,
+# `sma_trend_filter.py`, `atr_volatility_breakout.py` have each carried
+# a hardcoded `CODE_VERSION = "v1"` string literal, unchanged, since
+# their introduction - `git log -p` on each file shows no second commit
+# ever touching that line) - so there is no prior LITERAL precedent for
+# "how" a bump was formatted; this follows the only convention that
+# does exist in the code itself, the plain `"v{N}"` string shape already
+# used for `SPECIFICATION_VERSION`/`code_version` everywhere in this
+# module and `contracts.py`, incrementing N by 1.
+CODE_VERSION = "v2"
 
 # The ONLY implemented profile - see module header. `allowed_values`
 # below is deliberately a single-element tuple, so
@@ -201,17 +258,45 @@ PROFILE_ALPHA = "alpha"
 # `signal_intelligence.feature_engine` feature), carried in
 # `StrategySignal.evidence` only. See module header "SCORING".
 SETUP_QUALITY_SCORE_FEATURE_NAME = "gainz_alpha_setup_quality_score"
+# CHECKPOINT-GAINZ-B1 addition - rejection-reason code, same evidence
+# extension point as `setup_quality_score` (see module header point (3)).
+REJECTION_REASON_CODE_FEATURE_NAME = "gainz_alpha_rejection_reason_code"
 _ADAPTER_EVIDENCE_VERSION = Version(value="v1")
 
-# PROJECT RESEARCH PARAMETER (Checkpoint 64.99) - NOT a Gainz-verified
-# weight (see module header "SCORING"). Every one of the 8 implemented
-# shared-base conditions counts equally (1 point) toward the winning
-# side's setup_quality_score numerator; the denominator is the total
-# number of conditions actually evaluated (8, fixed - all 8 are always
-# evaluable once required features are present, unlike the reference's
-# conditional rel_volume tiers). Deliberately NOT the reference's
-# 25/15/12/10/8/7 point scale.
-_TOTAL_ALPHA_CONDITIONS = 8
+# `gainz_alpha_rejection_reason_code` values - Decimal (FeatureValue.value
+# is Decimal-only, see `domain/feature/contracts.py`), so these are
+# small integer codes, not a string enum.
+#   0 = NOT_REJECTED: a directional (BULLISH/BEARISH) signal was emitted.
+#   1 = REJECTED_TIE: `bull_score == bear_score` (including 0 == 0, no
+#       condition satisfied on either side) - the only way `evaluate()`'s
+#       existing direction-selection logic below can produce NEUTRAL,
+#       since `bull_score`/`bear_score` are both non-negative and
+#       `bull_score > bear_score` already implies `bull_score > 0`
+#       (symmetrically for bear) - re-derived and asserted in the test
+#       suite, not merely assumed.
+REJECTION_REASON_NOT_REJECTED = Decimal(0)
+REJECTION_REASON_TIE = Decimal(1)
+
+# PROJECT RESEARCH PARAMETER (Checkpoint 64.99, REPLACED at
+# CHECKPOINT-GAINZ-B1 - see module header point (1)). `_TOTAL_ALPHA_CONDITIONS`
+# is now 9 (the original 8 shared-base conditions PLUS the new
+# `rolling_breakout` condition, BLOCKER A closed - see module header
+# point (2)). `bull_score`/`bear_score` are each the PROPORTION (0-100)
+# of this strategy's 9 directional conditions satisfied in that
+# direction: `bull_score = (# True in bull_conditions / 9) * 100`,
+# symmetrically for `bear_score` - see `evaluate()` below for the exact
+# Decimal arithmetic. Still a PROJECT RESEARCH PARAMETER, NOT a
+# Gainz-verified weight.
+_TOTAL_ALPHA_CONDITIONS = 9
+
+# CHECKPOINT-GAINZ-B1 scoring formula constants (see module header point
+# (1) for the full formula). Decimal literals throughout, matching this
+# project's existing precision convention (`coerce_configuration_values`/
+# `require_decimal` - see `contracts.py`).
+_DOMINANT_WEIGHT = Decimal("0.72")
+_SEPARATION_WEIGHT = Decimal("0.28")
+_HUNDRED = Decimal("100")
+_ONE = Decimal("1")
 
 
 class GainzCompatibleResearchStrategy:
@@ -361,6 +446,19 @@ class GainzCompatibleResearchStrategy:
                     help_text="Reference-artifact-default candle_stability gate.",
                 ),
                 ParameterDefinition(
+                    parameter_id="rolling_breakout_lookback",
+                    label="Rolling Breakout Lookback",
+                    parameter_type=ParameterType.INTEGER,
+                    required=True,
+                    default=20,
+                    minimum=1,
+                    maximum=400,
+                    help_text="CHECKPOINT-GAINZ-B1: N-bar lookback for the canonical "
+                    "`rolling_breakout` feature (BLOCKER A, closed at CHECKPOINT-GAINZ-A) - "
+                    "20 is that feature's own conventional (Donchian-channel) default, not a "
+                    "verified Gainz parameter.",
+                ),
+                ParameterDefinition(
                     parameter_id="macd_fast",
                     label="MACD Fast EMA",
                     parameter_type=ParameterType.INTEGER,
@@ -457,6 +555,7 @@ class GainzCompatibleResearchStrategy:
         price_delta_lookback = require_int(config.values, "price_delta_lookback")
         adx_lookback = require_int(config.values, "adx_lookback")
         rvol_lookback = require_int(config.values, "relative_volume_lookback")
+        rolling_breakout_lookback = require_int(config.values, "rolling_breakout_lookback")
         macd_fast = require_int(config.values, "macd_fast")
         macd_slow = require_int(config.values, "macd_slow")
         macd_signal = require_int(config.values, "macd_signal")
@@ -486,6 +585,7 @@ class GainzCompatibleResearchStrategy:
             "candle_body_ratio",
             "bullish_engulfing",
             "bearish_engulfing",
+            f"rolling_breakout_{rolling_breakout_lookback}",
             f"atr_{trade_plan_atr_lookback}",
         )
 
@@ -522,6 +622,7 @@ class GainzCompatibleResearchStrategy:
             body_ratio_name,
             bullish_engulfing_name,
             bearish_engulfing_name,
+            rolling_breakout_name,
             _atr_name,  # TradePlan-only - see `required_features()` docstring; not a signal input
         ) = self.required_features(config)
 
@@ -538,6 +639,7 @@ class GainzCompatibleResearchStrategy:
         body_ratio = feature_values.get(body_ratio_name)
         bullish_engulfing = feature_values.get(bullish_engulfing_name)
         bearish_engulfing = feature_values.get(bearish_engulfing_name)
+        rolling_breakout = feature_values.get(rolling_breakout_name)
 
         evidence = (
             ema_fast,
@@ -553,6 +655,7 @@ class GainzCompatibleResearchStrategy:
             body_ratio,
             bullish_engulfing,
             bearish_engulfing,
+            rolling_breakout,
         )
         # WARMUP / MISSING-DATA SAFETY: never fabricates a signal when
         # any required canonical feature is unavailable (insufficient
@@ -573,6 +676,7 @@ class GainzCompatibleResearchStrategy:
         assert body_ratio is not None
         assert bullish_engulfing is not None
         assert bearish_engulfing is not None
+        assert rolling_breakout is not None
 
         rsi_alpha_threshold = require_decimal(config.values, "rsi_alpha_threshold")
         adx_minimum = require_decimal(config.values, "adx_minimum")
@@ -596,10 +700,12 @@ class GainzCompatibleResearchStrategy:
         candle_bullish = bar.close > bar.open
         candle_bearish = bar.close < bar.open
 
-        # Each of the 8 implemented shared-base Alpha conditions below is
-        # an independent True/False - equal-weight PROJECT RESEARCH
-        # PARAMETER scoring (see module header "SCORING"), NOT the
-        # reference's 25/15/12/10/8/7 point scale.
+        # Each of the 9 implemented shared-base Alpha conditions below is
+        # an independent True/False (the original 8 PLUS `rolling_breakout`,
+        # CHECKPOINT-GAINZ-B1 - see module header point (2)). Scoring
+        # itself is CHECKPOINT-GAINZ-B1's 0.72/0.28 dominant/separation
+        # formula (module header point (1)), NOT 64.99's equal-weight
+        # count and NOT the reference's 25/15/12/10/8/7 point scale.
         bull_conditions = (
             bullish_engulfing.value == 1,
             stable_candle,
@@ -609,6 +715,7 @@ class GainzCompatibleResearchStrategy:
             macd_hist.value > 0,
             volume_confirmed and candle_bullish,
             adx_trend_strong and plus_di.value > minus_di.value,
+            rolling_breakout.value == 1,
         )
         bear_conditions = (
             bearish_engulfing.value == 1,
@@ -619,19 +726,42 @@ class GainzCompatibleResearchStrategy:
             macd_hist.value < 0,
             volume_confirmed and candle_bearish,
             adx_trend_strong and minus_di.value > plus_di.value,
+            rolling_breakout.value == -1,
         )
-        bull_score = sum(1 for c in bull_conditions if c)
-        bear_score = sum(1 for c in bear_conditions if c)
+        bull_true_count = sum(1 for c in bull_conditions if c)
+        bear_true_count = sum(1 for c in bear_conditions if c)
 
-        if bull_score > bear_score and bull_score > 0:
+        # bull_score / bear_score: the PROPORTION (0..100) of this
+        # strategy's directional conditions satisfied in each direction
+        # - e.g. 5 of 9 bullish conditions true -> bull_score = 5/9*100.
+        # Decimal arithmetic throughout (project convention - see
+        # `require_decimal`/`coerce_configuration_values` in `contracts.py`).
+        bull_score = (Decimal(bull_true_count) / Decimal(_TOTAL_ALPHA_CONDITIONS)) * _HUNDRED
+        bear_score = (Decimal(bear_true_count) / Decimal(_TOTAL_ALPHA_CONDITIONS)) * _HUNDRED
+
+        if bull_score > bear_score:
             direction = StrategyDirection.BULLISH
-            winning_score = bull_score
-        elif bear_score > bull_score and bear_score > 0:
+            rejection_reason_code = REJECTION_REASON_NOT_REJECTED
+        elif bear_score > bull_score:
             direction = StrategyDirection.BEARISH
-            winning_score = bear_score
+            rejection_reason_code = REJECTION_REASON_NOT_REJECTED
         else:
+            # bull_score == bear_score (including the 0 == 0 case) - the
+            # only way this branch is reached, since a strictly greater
+            # score is always > 0 (see REJECTION_REASON_TIE docstring
+            # above).
             direction = StrategyDirection.NEUTRAL
-            winning_score = 0
+            rejection_reason_code = REJECTION_REASON_TIE
+
+        # CHECKPOINT-GAINZ-B1 formula (module header point (1)):
+        #   dominant_score = max(bull_score, bear_score)
+        #   separation = abs(bull_score - bear_score) / max(bull_score + bear_score, 1) * 100
+        #   setup_quality_score = 0.72 * dominant_score + 0.28 * separation
+        dominant_score = max(bull_score, bear_score)
+        separation = (
+            abs(bull_score - bear_score) / max(bull_score + bear_score, _ONE) * _HUNDRED
+        )
+        setup_quality_score_value = _DOMINANT_WEIGHT * dominant_score + _SEPARATION_WEIGHT * separation
 
         setup_quality_score = FeatureValue(
             feature_name=SETUP_QUALITY_SCORE_FEATURE_NAME,
@@ -640,7 +770,15 @@ class GainzCompatibleResearchStrategy:
             timeframe=bar.timeframe,
             timestamp=bar.timestamp,
             # 0..100, NOT a probability - see module header "SCORING".
-            value=(Decimal(winning_score) / Decimal(_TOTAL_ALPHA_CONDITIONS)) * Decimal(100),
+            value=setup_quality_score_value,
+        )
+        rejection_reason = FeatureValue(
+            feature_name=REJECTION_REASON_CODE_FEATURE_NAME,
+            feature_version=_ADAPTER_EVIDENCE_VERSION,
+            instrument_id=bar.instrument_id,
+            timeframe=bar.timeframe,
+            timestamp=bar.timestamp,
+            value=rejection_reason_code,
         )
 
         return StrategySignal(
@@ -653,7 +791,7 @@ class GainzCompatibleResearchStrategy:
             timestamp=bar.timestamp,
             direction=direction,
             price=price,
-            evidence=evidence + (setup_quality_score,),  # type: ignore[arg-type]
+            evidence=evidence + (setup_quality_score, rejection_reason),  # type: ignore[arg-type]
         )
 
     def build_trade_plan(

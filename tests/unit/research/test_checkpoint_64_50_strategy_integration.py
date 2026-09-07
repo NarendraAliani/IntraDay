@@ -189,7 +189,8 @@ def test_a1_strategy_constructs_with_expected_identity() -> None:
     strategy = GainzCompatibleResearchStrategy()
     assert strategy.strategy_id == "gainz_compatible_research"
     assert strategy.specification_version == "v1"
-    assert strategy.code_version == "v1"
+    # Bumped "v1" -> "v2" at CHECKPOINT-GAINZ-B1 (see strategy module header).
+    assert strategy.code_version == "v2"
 
 
 def test_a2_strategy_name_is_not_gainzstrategy() -> None:
@@ -229,6 +230,7 @@ def test_b1_required_features_uses_canonical_field_ids() -> None:
         "candle_body_ratio",
         "bullish_engulfing",
         "bearish_engulfing",
+        "rolling_breakout_20",
         "atr_14",
     )
     # Every declared field_id must actually be a real, registered
@@ -356,6 +358,10 @@ def test_efgh_real_coordinator_produces_real_signal_with_real_evidence() -> None
     evidence_names = {fv.feature_name for fv in signal.evidence}
     expected_names = set(strategy.required_features(config)) - {"atr_14"}
     expected_names.add("gainz_alpha_setup_quality_score")
+    # CHECKPOINT-GAINZ-B1: a second adapter-owned evidence entry -
+    # rejection-reason code - carried via the same `evidence` extension
+    # point as `setup_quality_score` (see module header point (3)).
+    expected_names.add("gainz_alpha_rejection_reason_code")
     assert evidence_names == expected_names
     for fv in signal.evidence:
         assert isinstance(fv, FeatureValue)
