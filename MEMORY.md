@@ -275,6 +275,52 @@ re-deriving them. Not a full transcript; no invented detail.
   or (in `LIVE-2` Stream 2, the one attempt that went through the
   real gate) was rejected outright by it. Status: **pending**, blocked
   on the coverage-gap finding above.
+- **UPDATE (`CHECKPOINT_69`/`CHECKPOINT_70`): the `LIVE-2` Stream 2
+  coverage-gap finding above is RESOLVED**, and its "pending" status
+  and the "no genuinely research-eligible walk-forward result exists
+  yet" bullet above are both now stale. Root cause (found by
+  `CHECKPOINT_69`, confirmed via a controlled, zero-persistence
+  diagnostic in `LIVE-4` beforehand): `_provider_request_envelope()`'s
+  `from_time` widening was one bar-duration too narrow — Dhan's
+  `fromDate` comparison is EXCLUSIVE, so a single bar of widening
+  still landed on the immediately-preceding candle's own timestamp,
+  which Dhan then also excludes for the same reason. Fix: widen by
+  TWO bar-durations instead of one (`historical_provider.py:301-323`,
+  regression-tested through the real, unbypassed
+  `HistoricalDataPreparationService` path). `CHECKPOINT_69` then
+  recovered the day-start bar for all 13 already-known-gapped
+  CANONICALIZED days (RELIANCE/TCS/HDFCBANK/INFY, 52 rows, 1/day, zero
+  duplicates/alterations) and proved the real `ResearchDataGateService`
+  now ACCEPTS a genuine multi-day CANONICALIZED request end-to-end for
+  the first time this session (720/720 bars, RELIANCE
+  2026-08-03..08-14). `CHECKPOINT_70` then widened the backfill
+  forward to the most recent closed trading day (+3 new days,
+  2026-09-03/09-04/09-07, 216 rows/symbol, every new day landing as a
+  complete, genuinely fresh 72-bar day — proving the fix holds on data
+  it never diagnosed against, not just the originally-fixed range) and
+  ran the first proper gate-verified walk-forward comparison across
+  ALL 4 strategies (`ema_crossover`, `sma_trend_filter`,
+  `atr_volatility_breakout`, and all 3 `gainz_compatible_research`
+  presets) against 1,152 bars / 16 real, gate-verified trading days
+  (two separately gate-accepted CANONICALIZED blocks concatenated
+  around the still-untouched, still-`UNCANONICALIZED`
+  `2026-08-17`..`2026-08-28` interior gap - that specific gap remains
+  a SEPARATE, unresolved issue, not addressed by this fix). Honest
+  finding: the legacy 3 strategies' qualitative comparative picture
+  from `68.4`'s mixed/bypassed dataset does NOT hold up unchanged
+  under the real gate-verified subset (e.g. `ema_crossover` was
+  consistently profitable in-sample in `68.4`, consistently
+  unprofitable in-sample in both `69` and `70`) - still not enough
+  data for real confidence in any of the 3. The Gainz presets' pattern
+  (conservative: zero signals under this real data's actual score
+  distribution; balanced/aggressive: consistently unprofitable,
+  in-sample and out-of-sample, no sign flips) DID reproduce
+  identically across two independent real datasets
+  (`CHECKPOINT-GAINZ-D`'s mixed 25-day set and `CHECKPOINT_70`'s
+  gate-verified 16-day set) - modestly stronger evidence for that
+  specific claim, still far short of validation. No
+  `RESEARCH_ACTIVE`/status change made for any strategy at either
+  checkpoint, per the roadmap's own manual-gate finding.
 - **`LIVE-2-FINALIZE`**: an end-of-day close-out checkpoint for
   `LIVE-2` was requested with the premise that market had just closed
   on the same day as the `LIVE-2` run — but this conversation's
