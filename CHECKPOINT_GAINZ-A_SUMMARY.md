@@ -187,16 +187,41 @@ checkpoint's own investigation — unrelated to this diff, see below):
   — the three tests genuinely sensitive to adding a 25th field — all
   **pass** after the documented, minimal, expected updates described
   above.
-- A full unrestricted `pytest tests/` run was attempted twice during
+- A full unrestricted `pytest tests/` run was attempted twice earlier in
   this checkpoint; both showed elevated DB-related error counts
   (18-137) that did NOT reproduce consistently between runs and did NOT
   reproduce with changes stashed either — traced to multiple concurrent
   pytest/Postgres test-DB processes accumulating in this Windows
   environment during this checkpoint's own iterative testing (confirmed
-  via `tasklist`: 7 stray `python.exe` processes found). This is
-  environmental test-database contention, not a code regression from
-  this diff — the targeted, clean, serial run above is the trustworthy
-  comparison.
+  via `tasklist`: 7 stray `python.exe` processes found). Environmental
+  test-database contention, not a code regression from this diff.
+- **A subsequent single, clean, full `pytest -q` run (whole `tests/`
+  tree, this checkpoint's changes applied) completed successfully**:
+  **3242 passed, 16 failed, 14 errors, 2 warnings, in 1087.06s
+  (0:18:07)**. All 16 failures and all 14 errors are in files this
+  diff never touches (`test_active_loop_end_to_end.py`,
+  `test_checkpoint_64_81_correlation_traceability.py`,
+  `test_checkpoint_64_55_live_market_data_validation.py`,
+  `test_market_data_sync_api.py`, `test_reports_views.py`,
+  `test_risk_api.py`, `test_checkpoint_64_52_database_first_backtest.py`,
+  `test_migration_67_11_6_backup_restore_rehearsal.py`,
+  `test_migration_67_12_pre_integrity_hardening.py`,
+  `test_api_boundaries.py`, plus the two Gainz-honesty-guard tests
+  below) — none reference `field_registry`, `definitions.py`,
+  `strategy_execution.py`, or `rolling_breakout.py`. Two of the
+  failures — `test_k_no_gainz_reference_file_exists_in_repo` and
+  `test_zz_no_real_gainz_source_file_exists` — were independently
+  re-confirmed pre-existing on this run too: both flag
+  `src/intraday/application/services/backtesting.py` (an existing
+  code comment mentioning a hypothetical "future Gainz backtest entry
+  point," not this checkpoint's file) as an unlisted Gainz reference,
+  and `git stash` + re-running just those two tests against the
+  unmodified tree reproduces the identical two failures verbatim
+  (confirmed this run, not merely asserted). This full-suite run is
+  now the authoritative before/after comparison, superseding the
+  targeted-scope numbers above as the primary evidence; the targeted
+  numbers remain accurate and are kept for their finer-grained
+  per-file breakdown.
 
 ## Scope confirmation
 
