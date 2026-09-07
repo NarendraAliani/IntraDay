@@ -295,12 +295,30 @@ def _provider_request_envelope(
     absent candle - a question this envelope's boundary arithmetic cannot
     answer either way.
 
-    Lower boundary (`from_time`) is UNCHANGED and remains widened by one
-    bar - that effect (recovering the 09:20 IST candle) was independently
-    proven in 66.6 and is not affected by this checkpoint's finding."""
+    Lower boundary (`from_time`) - UPDATED at Checkpoint 69. `LIVE-3`/
+    `LIVE-4` found that even after 66.6's one-bar widening, the
+    day-start candle was STILL missing (RELIANCE/2026-08-04/5m: 71 rows
+    instead of the expected 72). `LIVE-4` Stream 2 ran a controlled,
+    zero-persistence diagnostic directly against
+    `fetch_intraday_candles()` and CONFIRMED, with direct evidence, that
+    Dhan's `fromDate` comparison is exclusive: sending `fromDate` at
+    exactly a candle's own raw timestamp excludes that candle. 66.6's
+    single-bar widening only ever moved `fromDate` to the PRECEDING
+    candle's timestamp - which Dhan then excludes for the same
+    exclusive-boundary reason, still discarding the candle that
+    canonicalizes into the day's first bar. Widening by a SECOND
+    bar-duration moves `fromDate` one candle further back, so the
+    boundary Dhan excludes is now the day-start candle's own PREDECESSOR
+    (a candle before market open, or - safely - simply absent), and the
+    day-start candle itself is correctly included. Checkpoint 69 applies
+    this two-bar widening as production behavior for the first time -
+    see `CHECKPOINT_69_SUMMARY.md` for the regression proof (RELIANCE/
+    2026-08-04's CANONICALIZED day-start coverage returns to 72 rows via
+    the normal `HistoricalDataPreparationService` path, not the raw
+    client bypass used for diagnosis)."""
     one_bar = timedelta(minutes=interval_minutes)
     return ProviderRequestEnvelope(
-        from_time=canonical_start - one_bar,
+        from_time=canonical_start - (one_bar * 2),
         to_time=canonical_end,
     )
 
@@ -513,9 +531,11 @@ class DhanHistoricalBarProvider:
                 # PROVIDER REQUEST ENVELOPE (`_provider_request_envelope`,
                 # module-level above) is a separate, narrower concept:
                 # the outbound `fromDate`/`toDate` Dhan actually receives.
-                # `from_time` is widened by one bar-duration below the
-                # canonical start - PROVEN (66.6) to recover a candle
-                # Dhan otherwise omits at the raw request boundary.
+                # `from_time` is widened by TWO bar-durations below the
+                # canonical start (Checkpoint 69 - was one bar, 66.6-68.x)
+                # - PROVEN (66.6, then LIVE-4/69) to recover the candle(s)
+                # Dhan otherwise omits at the raw request boundary, per
+                # Dhan's exclusive `fromDate` semantics.
                 # `to_time` is sent as the UNWIDENED canonical end -
                 # 66.7's own controlled diagnostic DISPROVED any benefit
                 # from widening it (see `_provider_request_envelope`'s

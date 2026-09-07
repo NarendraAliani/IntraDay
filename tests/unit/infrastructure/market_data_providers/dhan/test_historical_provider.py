@@ -110,18 +110,21 @@ def test_fetch_delegates_to_the_intraday_client_for_a_minute_timeframe(
 def test_fetch_widens_the_dhan_request_window_on_the_lower_boundary_only(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Checkpoint 66.8: `start`/`end` passed into `fetch()` are the
-    CANONICAL RESEARCH WINDOW - the caller's expected bar-CLOSE
-    timestamps (see `HistoricalDataCoverageService._expected_timestamps` -
-    `market_open + timeframe_duration` is the FIRST expected close). The
-    PROVIDER REQUEST ENVELOPE actually sent to Dhan widens only the LOWER
-    boundary by one bar-duration (66.6 proved this recovers the first
-    expected candle). 66.7 had symmetrically widened the upper boundary
-    too, on an inference that its own controlled diagnostic then
-    disproved (widening `to_time` changed nothing about Dhan's response);
-    66.8 removed that dead widening, so `to_time` is now sent as the
-    unwidened canonical `end` - see `_provider_request_envelope`'s
-    docstring for the full history."""
+    """Checkpoint 66.8 / UPDATED Checkpoint 69: `start`/`end` passed into
+    `fetch()` are the CANONICAL RESEARCH WINDOW - the caller's expected
+    bar-CLOSE timestamps (see `HistoricalDataCoverageService.
+    _expected_timestamps` - `market_open + timeframe_duration` is the
+    FIRST expected close). The PROVIDER REQUEST ENVELOPE actually sent to
+    Dhan widens only the LOWER boundary, and only by TWO bar-durations as
+    of Checkpoint 69 (was one, 66.6-68.x) - `LIVE-4` Stream 2's
+    controlled diagnostic CONFIRMED Dhan's `fromDate` comparison is
+    exclusive, so a single bar of widening still lost the day-start
+    candle; a second bar recovers it (see `_provider_request_envelope`'s
+    docstring for the full history). 66.7 had symmetrically widened the
+    upper boundary too, on an inference that its own controlled
+    diagnostic then disproved (widening `to_time` changed nothing about
+    Dhan's response); 66.8 removed that dead widening, so `to_time` is
+    still sent as the unwidened canonical `end`."""
     calls: list[dict[str, object]] = []
 
     def _fake_fetch_intraday_candles(**kwargs: object) -> tuple[DhanHistoricalCandle, ...]:
@@ -137,7 +140,7 @@ def test_fetch_widens_the_dhan_request_window_on_the_lower_boundary_only(
     end = datetime(2024, 1, 1, 9, 45, tzinfo=UTC)  # 15:15 IST - last expected close
     provider.fetch(RELIANCE_ID, Timeframe.FIVE_MINUTE, start, end)
 
-    assert calls[0]["from_time"] == start - timedelta(minutes=5)
+    assert calls[0]["from_time"] == start - timedelta(minutes=10)
     assert calls[0]["to_time"] == end
 
 
@@ -798,3 +801,126 @@ def test_segment_for_instrument_reuses_the_existing_exchange_segment_mapping() -
 
     assert _segment_for_instrument(RELIANCE_ID) == "NSE_EQ"
     assert _segment_for_instrument(RELIANCE_BSE_ID) == "BSE_EQ"
+
+
+# ---------------------------------------------------------------------------
+# Checkpoint 69: regression proof for the two-bar `from_time` widening,
+# through the REAL `HistoricalDataPreparationService` path (not the raw
+# client bypass `LIVE-4` Stream 2 used for diagnosis).
+# ---------------------------------------------------------------------------
+
+
+class _FakeCoverageReadRepository:
+    """Same minimal shape `test_historical_data_preparation.py`'s
+    `_FakeReadRepository` already uses - reused here rather than
+    inventing a second fake, since `HistoricalDataPreparationService`'s
+    `HistoricalBarProvider`/repository Protocols are identical
+    regardless of which real provider sits behind them."""
+
+    def __init__(self) -> None:
+        self.timestamps: set[datetime] = set()
+
+    def get_existing_timestamps(
+        self, instrument_id: object, timeframe: object, start: datetime, end: datetime
+    ) -> frozenset[datetime]:
+        return frozenset(ts for ts in self.timestamps if start <= ts <= end)
+
+
+class _FakeCoverageWriteRepository:
+    def __init__(self, read_repository: _FakeCoverageReadRepository) -> None:
+        self._read = read_repository
+        self.upsert_calls = 0
+        self.persisted_bars: list[object] = []
+
+    def bulk_upsert(  # noqa: ARG002
+        self,
+        bars: tuple[object, ...],
+        *,
+        source: str,
+        provenance: str = "UNKNOWN",
+        canonicalization_state: str = "UNKNOWN",
+        source_timestamp_semantics: str = "UNKNOWN",
+    ) -> int:
+        self.upsert_calls += 1
+        for bar in bars:
+            self._read.timestamps.add(bar.timestamp)
+            self.persisted_bars.append(bar)
+        return len(bars)
+
+
+def test_checkpoint_69_two_bar_widening_recovers_day_start_candle_via_preparation_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`LIVE-4` Stream 2's own diagnostic used the raw client bypass
+    (`fetch_intraday_candles()` directly), never the real
+    `HistoricalDataPreparationService.prepare()` path production code
+    actually calls. This is the promised follow-up: prove the SAME
+    recovery end-to-end through that real path, for the SAME real day
+    (RELIANCE, 2026-08-04, 5m, CAS-era) that was previously missing its
+    72nd (day-start, 09:20 IST) bar.
+
+    The fake `fetch_intraday_candles` below simulates Dhan's own
+    CONFIRMED exclusive-`fromDate` behavior (`LIVE-4` Stream 2) - it
+    drops any candle whose raw timestamp is `<= from_time` exactly,
+    mirroring the real API rather than just returning a fixed,
+    unconditional candle set - so this test genuinely exercises the
+    envelope's new two-bar arithmetic, not just the post-filter."""
+    session_start_raw = datetime(2026, 8, 4, 3, 45, tzinfo=UTC)  # 09:15 IST raw OPEN
+    # 72 canonical closes means 72 raw OPEN candles, 09:15 IST through
+    # 15:10 IST inclusive (the last raw OPEN canonicalizes to the CAS-era
+    # session's final 15:15 IST close).
+    all_raw_candles = tuple(
+        DhanHistoricalCandle(
+            timestamp=session_start_raw + timedelta(minutes=5 * i),
+            open=100.0,
+            high=101.0,
+            low=99.0,
+            close=100.5,
+            volume=1000,
+        )
+        for i in range(72)
+    )
+
+    def _fake_fetch_intraday_candles(**kwargs: object) -> tuple[DhanHistoricalCandle, ...]:
+        from_time = kwargs["from_time"]
+        # Dhan's real, CONFIRMED behavior: `fromDate` is EXCLUSIVE.
+        return tuple(c for c in all_raw_candles if c.timestamp > from_time)
+
+    monkeypatch.setattr(historical_provider, "fetch_intraday_candles", _fake_fetch_intraday_candles)
+
+    provider = _provider(
+        (InstrumentMasterEntry(symbol="RELIANCE", display_name="Reliance", security_id=2885),)
+    )
+
+    from intraday.application.services.historical_data_coverage import (
+        HistoricalDataCoverageService,
+    )
+    from intraday.application.services.historical_data_preparation import (
+        HistoricalDataPreparationService,
+        PreparationStatus,
+    )
+
+    read = _FakeCoverageReadRepository()
+    write = _FakeCoverageWriteRepository(read)
+    service = HistoricalDataPreparationService(
+        coverage=HistoricalDataCoverageService(repository=read), provider=provider, writer=write
+    )
+
+    day_start_canonical_close = datetime(2026, 8, 4, 3, 50, tzinfo=UTC)  # 09:20 IST
+    canonical_end = datetime(2026, 8, 4, 9, 45, tzinfo=UTC)  # 15:15 IST
+
+    outcome = service.prepare(
+        RELIANCE_ID, Timeframe.FIVE_MINUTE, day_start_canonical_close, canonical_end
+    )
+
+    assert outcome.status == PreparationStatus.COMPLETE
+    # The regression this checkpoint fixes: coverage returns to the full
+    # 72 rows, not 71 - the previously-missing day-start candle is now
+    # present.
+    assert outcome.bars_persisted == 72
+    persisted_timestamps = {bar.timestamp for bar in write.persisted_bars}
+    assert day_start_canonical_close in persisted_timestamps
+    # No duplication and no alteration of any other bar: exactly one bar
+    # per expected canonical close, each upserted exactly once.
+    assert len(write.persisted_bars) == len(persisted_timestamps) == 72
+    assert write.upsert_calls == 1
