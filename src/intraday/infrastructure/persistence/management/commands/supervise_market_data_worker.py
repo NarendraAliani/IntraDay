@@ -150,7 +150,18 @@ class Command(BaseCommand):
                 requested_by = getpass.getuser()
             except Exception:  # pragma: no cover - environment-dependent
                 requested_by = "supervise_market_data_worker"
-            status_repository.request_stop(
+            # LIVE-3: `status_repository.request_stop()` is a synchronous
+            # Django ORM call - calling it directly from this async
+            # function crashes the entire supervisor uncaught with
+            # `SynchronousOnlyOperation` the moment session-end is
+            # actually reached (confirmed live, 2026-09-07: the
+            # supervisor never got a chance to cleanly stop the running
+            # worker or exit gracefully). `refresh_archive()` immediately
+            # below already wraps its own sync call in
+            # `asyncio.to_thread(...)` for exactly this reason - this
+            # call must match that same, already-established pattern.
+            await asyncio.to_thread(
+                status_repository.request_stop,
                 provider,
                 requested_at=dt.datetime.now(tz=dt.UTC),
                 requested_by=requested_by,

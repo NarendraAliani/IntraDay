@@ -141,3 +141,64 @@ def test_supervisor_does_not_touch_a_row_that_verifiably_reflects_a_live_process
     status = WorkerRuntimeStatus.objects.get(provider="dhan")
     assert status.worker_state == "RUNNING"
     assert status.last_error_safe == ""
+
+
+def test_session_end_stop_does_not_crash_with_synchronousonlyoperation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LIVE-3: a real live run on 2026-09-07 reached session-end and the
+    ENTIRE supervisor process crashed uncaught with
+    `django.core.exceptions.SynchronousOnlyOperation` - the command's
+    own `request_session_end_stop()` closure called
+    `status_repository.request_stop()` (a synchronous Django ORM write)
+    directly from an async function, instead of wrapping it in
+    `asyncio.to_thread(...)` the way its sibling `refresh_archive()`
+    closure already does. The worker was never cleanly stopped and the
+    supervisor never produced a `SupervisorResult` at all.
+
+    Unlike the two tests above, this test does NOT stub the whole
+    `supervise_market_data_worker` core loop - it lets the REAL core
+    loop run, with a `--session-end` already in the past so the loop's
+    very first iteration takes the session-end branch and calls the
+    REAL `request_session_end_stop`/`refresh_archive` closures built
+    inside `handle()`. Only the actual subprocess spawn is stubbed
+    (no real `run_market_data_worker` process needed to prove this)."""
+
+    class _FakeProcess:
+        pid = 424_243
+        returncode: int | None = 0
+
+        async def wait(self) -> int:
+            return 0
+
+    async def _fake_create_subprocess_exec(*args: object, **kwargs: object) -> _FakeProcess:
+        return _FakeProcess()
+
+    monkeypatch.setattr(
+        command_module.asyncio, "create_subprocess_exec", _fake_create_subprocess_exec
+    )
+
+    out = io.StringIO()
+    session_end = (dt.datetime.now(tz=dt.UTC) - dt.timedelta(seconds=1)).isoformat()
+    # Before the fix, this call_command() raised SynchronousOnlyOperation
+    # (uncaught, propagating straight out of asyncio.run()) instead of
+    # returning normally - that failure IS this test's assertion.
+    call_command(
+        "supervise_market_data_worker",
+        "--provider",
+        "dhan",
+        "--max-restarts",
+        "0",
+        "--cooldown-seconds",
+        "0",
+        "--session-end",
+        session_end,
+        stdout=out,
+    )
+
+    output = out.getvalue()
+    assert "Supervisor finished: stopped_cleanly=True" in output
+    status = WorkerRuntimeStatus.objects.get(provider="dhan")
+    # `request_stop()`'s own write (a real, verified side effect - not
+    # just "no exception was raised") reached the database.
+    assert status.stop_reason_safe == "session_end_reached"
