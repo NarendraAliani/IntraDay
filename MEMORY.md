@@ -198,9 +198,59 @@ re-deriving them. Not a full transcript; no invented detail.
     (previous-bar feature-value channel, an architecture gap) and
     BLOCKER C-successor (whether/how to wire `market_regime` in) both
     remain open, undecided, explicitly deferred — not silently routed
-    around. Still **pending**: registration in `registry.py` (so the
-    strategy becomes reachable from the live scanner/backtest API),
-    any config-preset work, and any walk-forward proof for this
+    around.
+  - **CHECKPOINT-GAINZ-C** (extends B1 IN PLACE again, `code_version`
+    `"v2"` -> `"v3"`, same `strategy_id`/`specification_version`,
+    `registry.py`/`market_regime` still untouched): added a NEW gate,
+    `minimum_setup_quality_score` (DECIMAL, default `Decimal("0")`, a
+    deliberate NO-OP default), authorized directly by the operator
+    after a genuine gap was found while building this checkpoint's own
+    3 config presets — `setup_quality_score` was pure evidence, never
+    a gate, so no preset could be proven to change a signal's actual
+    `direction`, only its attached evidence number. When a genuine
+    bull/bear winner exists (never for a tie -
+    `REJECTION_REASON_TIE` still takes precedence) but
+    `setup_quality_score` falls below the configured threshold,
+    `direction` is downgraded to NEUTRAL with a new
+    `REJECTION_REASON_BELOW_QUALITY_THRESHOLD` (`Decimal(2)`) - the
+    score itself always stays in `evidence` unchanged. Created and
+    verified (direct DB read) 3 real, persisted
+    `StrategyConfigurationRecord` presets in the dev database via the
+    real `StrategyConfigurationService.save_configuration()` path:
+    `gainz_conservative` (`minimum_setup_quality_score=70`),
+    `gainz_balanced` (`=55`), `gainz_aggressive` (`=40`) - each also
+    varies `adx_minimum`/`relative_volume_minimum`/
+    `candle_body_ratio_minimum`/`rsi_alpha_threshold` by strictness
+    tier; every indicator-lookback-window parameter is deliberately
+    identical across all 3 (feature parameters, not risk parameters).
+    Proved per-preset gating behaviorally (`test_checkpoint_gainz_c_
+    presets.py`, 5 tests, all passing): the SAME hand-computed
+    `evaluate()` feature set produces 3 DIFFERENT outcomes depending
+    only on which preset's config is passed in (score=68 -> BULLISH
+    under aggressive/balanced, NEUTRAL under conservative; score=52 ->
+    BULLISH only under aggressive; score≈25.33 -> NEUTRAL under all 3,
+    with a control case confirming the NO-OP default would have let
+    that same weak signal through un-gated). Full before/after test
+    suite comparison (both runs synchronous, foreground, `--reuse-db`,
+    ~10-11 min each): BEFORE (clean `763c19e` tree) 5 failed/1
+    error/3277 passed; AFTER (full GAINZ-C diff) 7 failed/3281 passed
+    - exact-name comparison found **zero genuine regressions**: 5
+    failures identical in both runs (pre-existing, files this
+    checkpoint never touches), 1 flaky/order-dependent test
+    (`test_notification_channel_registry_lists_telegram_and_discord`)
+    present only in BEFORE and confirmed passing in isolation, and 2
+    failures present only in AFTER
+    (`test_canary_backup_restores_with_exact_field_preservation_in_
+    disposable_db`, `test_h_live_backup_restored_three_way_equality`)
+    confirmed via `--create-db` to be stale-disposable-table
+    contamination left by an earlier, unrelated interrupted
+    `manage.py shell` process THIS SAME SESSION, not caused by any
+    code this checkpoint changed (neither migration test file, nor
+    anything they import, appears in the diff). See
+    `CHECKPOINT_GAINZ-C_SUMMARY.md` for the full exact-name failure
+    tables and reasoning. Still **pending** after GAINZ-C too:
+    registration in `registry.py` (deliberately out of scope every
+    Gainz checkpoint so far) and any walk-forward proof for this
     strategy specifically.
 - **`LIVE-2` live-capture connectivity failure**: Stream 1's
   `close_code=1006` / zero-quotes failure across all 8 restart

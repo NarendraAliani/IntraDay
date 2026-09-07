@@ -539,11 +539,12 @@ def test_19_signal_carries_full_strategy_version_provenance() -> None:
     signal = next(s for s in signals if s is not None)
     assert signal.strategy_id == STRATEGY_ID
     assert signal.specification_version == "v1"
-    # Bumped "v1" -> "v2" at CHECKPOINT-GAINZ-B1 (see strategy module
-    # header) - `_config()` above still stamps `configuration_version`
-    # "v1" (a config-version label independent of the strategy code
-    # version).
-    assert signal.code_version == "v2"
+    # Bumped "v1" -> "v2" at CHECKPOINT-GAINZ-B1, then "v2" -> "v3" at
+    # CHECKPOINT-GAINZ-C (the minimum_setup_quality_score gate) - see
+    # strategy module header. `_config()` above still stamps
+    # `configuration_version` "v1" (a config-version label independent
+    # of the strategy code version).
+    assert signal.code_version == "v3"
     assert signal.configuration_version == "v1"
     assert signal.instrument_id == INSTRUMENT
     assert signal.timeframe == TF

@@ -486,7 +486,11 @@ def test_7_evidence_carries_both_adapter_owned_fields_signal_schema_unchanged() 
         "price",
         "evidence",
     }
-    assert signal.code_version == "v2"
+    # CHECKPOINT-GAINZ-C bumped code_version again ("v2" -> "v3") when
+    # adding the minimum_setup_quality_score gate - this assertion is
+    # updated as the same kind of expected, documented consequence
+    # CHECKPOINT-GAINZ-B1 itself already established a precedent for.
+    assert signal.code_version == "v3"
 
 
 # ---------------------------------------------------------------------------
@@ -494,9 +498,12 @@ def test_7_evidence_carries_both_adapter_owned_fields_signal_schema_unchanged() 
 # ---------------------------------------------------------------------------
 
 
-def test_8_code_version_bumped_to_v2_same_strategy_and_spec_identity() -> None:
+def test_8_code_version_bumped_at_least_once_same_strategy_and_spec_identity() -> None:
     strategy = _strategy()
     assert strategy.strategy_id == STRATEGY_ID
     assert strategy.specification_version == "v1"
-    assert strategy.code_version == "v2"
-    assert CODE_VERSION == "v2"
+    # "v2" at CHECKPOINT-GAINZ-B1, "v3" at CHECKPOINT-GAINZ-C (the
+    # minimum_setup_quality_score gate) - same strategy/spec identity
+    # preserved across both in-place extensions.
+    assert strategy.code_version == "v3"
+    assert CODE_VERSION == "v3"

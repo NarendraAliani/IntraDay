@@ -45,6 +45,28 @@
 # complication #3"). `registry.py` is NOT touched - this strategy
 # remains unregistered, unreachable from the live scanner/backtest API.
 #
+# CHECKPOINT-GAINZ-C (extends B1 IN PLACE - `code_version` bumped
+# "v2" -> "v3", same `strategy_id`/`specification_version`, still NOT
+# registered): a genuine gap was found while building the 3 config
+# presets this checkpoint was originally scoped to produce -
+# `setup_quality_score` was pure evidence, never a gate, so the
+# checkpoint's own required behavioral proof (a signal passing under
+# one preset's threshold but rejected under another's) was impossible.
+# Authorized directly by the operator (not assumed) as a small,
+# separately-reviewed addition:
+#
+#   (4) NEW GATE: `minimum_setup_quality_score` (default `Decimal("0")`,
+#   a deliberate NO-OP default - see its own parameter_schema()
+#   docstring). When a genuine bull/bear winner exists (never for a
+#   tie - `REJECTION_REASON_TIE` already means NEUTRAL) but
+#   `setup_quality_score` falls below this configured threshold,
+#   `direction` is downgraded to NEUTRAL and
+#   `REJECTION_REASON_BELOW_QUALITY_THRESHOLD` (Decimal 2) is recorded
+#   - the score itself always stays in `evidence` unchanged, only
+#   `direction` is gated. This is what makes the 3 GAINZ-C presets
+#   (conservative/balanced/aggressive) genuinely behavior-differentiating,
+#   not inert config data.
+#
 # HONESTY NOTICE (do not remove): this is the "Gainz Research Adapter" /
 # "Gainz-Compatible Research Strategy" - NOT authentic GainzAlgo, NOT
 # verified Gainz V2, NOT a proprietary Gainz implementation. The
@@ -244,7 +266,7 @@ SPECIFICATION_VERSION = "v1"
 # does exist in the code itself, the plain `"v{N}"` string shape already
 # used for `SPECIFICATION_VERSION`/`code_version` everywhere in this
 # module and `contracts.py`, incrementing N by 1.
-CODE_VERSION = "v2"
+CODE_VERSION = "v3"
 
 # The ONLY implemented profile - see module header. `allowed_values`
 # below is deliberately a single-element tuple, so
@@ -276,6 +298,14 @@ _ADAPTER_EVIDENCE_VERSION = Version(value="v1")
 #       suite, not merely assumed.
 REJECTION_REASON_NOT_REJECTED = Decimal(0)
 REJECTION_REASON_TIE = Decimal(1)
+# CHECKPOINT-GAINZ-C addition - 2 = BELOW_QUALITY_THRESHOLD: a strict
+# bull_score/bear_score winner existed (NOT a tie - REJECTION_REASON_TIE
+# takes precedence and this code is never emitted for a tie), but the
+# resulting `setup_quality_score` fell below the configured
+# `minimum_setup_quality_score` gate - direction is downgraded to
+# NEUTRAL. See `evaluate()`'s gating block below and
+# `minimum_setup_quality_score`'s own parameter_schema() docstring.
+REJECTION_REASON_BELOW_QUALITY_THRESHOLD = Decimal(2)
 
 # PROJECT RESEARCH PARAMETER (Checkpoint 64.99, REPLACED at
 # CHECKPOINT-GAINZ-B1 - see module header point (1)). `_TOTAL_ALPHA_CONDITIONS`
@@ -457,6 +487,23 @@ class GainzCompatibleResearchStrategy:
                     "`rolling_breakout` feature (BLOCKER A, closed at CHECKPOINT-GAINZ-A) - "
                     "20 is that feature's own conventional (Donchian-channel) default, not a "
                     "verified Gainz parameter.",
+                ),
+                ParameterDefinition(
+                    parameter_id="minimum_setup_quality_score",
+                    label="Minimum Setup Quality Score (gate)",
+                    parameter_type=ParameterType.DECIMAL,
+                    required=True,
+                    default=Decimal("0"),
+                    minimum=Decimal("0"),
+                    maximum=Decimal("100"),
+                    help_text="CHECKPOINT-GAINZ-C: when the CHECKPOINT-GAINZ-B1 "
+                    "`setup_quality_score` (0.72*dominant_score + 0.28*separation) falls "
+                    "below this threshold, a would-be BULLISH/BEARISH direction is "
+                    "downgraded to NEUTRAL with REJECTION_REASON_BELOW_QUALITY_THRESHOLD - "
+                    "see `evaluate()`. Default 0 is a deliberate NO-OP (every reachable "
+                    "score is >= 0, so no existing caller's behavior changes unless it "
+                    "explicitly configures a higher value) - PROJECT RESEARCH PARAMETER, "
+                    "not a Gainz-verified threshold.",
                 ),
                 ParameterDefinition(
                     parameter_id="macd_fast",
@@ -762,6 +809,27 @@ class GainzCompatibleResearchStrategy:
             abs(bull_score - bear_score) / max(bull_score + bear_score, _ONE) * _HUNDRED
         )
         setup_quality_score_value = _DOMINANT_WEIGHT * dominant_score + _SEPARATION_WEIGHT * separation
+
+        # CHECKPOINT-GAINZ-C gating: applied AFTER direction/rejection-
+        # reason are already decided above, and ONLY when a genuine
+        # bull/bear winner exists (never overrides REJECTION_REASON_TIE -
+        # a tie is already NEUTRAL, nothing to downgrade). A directional
+        # signal whose setup_quality_score falls below the configured
+        # `minimum_setup_quality_score` is downgraded to NEUTRAL with its
+        # own distinct rejection-reason code - the score itself is still
+        # attached to `evidence` unchanged either way (the informational
+        # evidence stream is never suppressed, only `direction` is
+        # gated), so a caller can always see the score that caused the
+        # rejection.
+        minimum_setup_quality_score = require_decimal(
+            config.values, "minimum_setup_quality_score"
+        )
+        if (
+            direction is not StrategyDirection.NEUTRAL
+            and setup_quality_score_value < minimum_setup_quality_score
+        ):
+            direction = StrategyDirection.NEUTRAL
+            rejection_reason_code = REJECTION_REASON_BELOW_QUALITY_THRESHOLD
 
         setup_quality_score = FeatureValue(
             feature_name=SETUP_QUALITY_SCORE_FEATURE_NAME,

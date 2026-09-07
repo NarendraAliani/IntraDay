@@ -189,8 +189,10 @@ def test_a1_strategy_constructs_with_expected_identity() -> None:
     strategy = GainzCompatibleResearchStrategy()
     assert strategy.strategy_id == "gainz_compatible_research"
     assert strategy.specification_version == "v1"
-    # Bumped "v1" -> "v2" at CHECKPOINT-GAINZ-B1 (see strategy module header).
-    assert strategy.code_version == "v2"
+    # Bumped "v1" -> "v2" at CHECKPOINT-GAINZ-B1, then "v2" -> "v3" at
+    # CHECKPOINT-GAINZ-C (the minimum_setup_quality_score gate) - see
+    # strategy module header.
+    assert strategy.code_version == "v3"
 
 
 def test_a2_strategy_name_is_not_gainzstrategy() -> None:
