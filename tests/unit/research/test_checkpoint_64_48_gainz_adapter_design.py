@@ -380,6 +380,12 @@ def test_e_feature_registry_reuse_opportunities_identified() -> None:
     # the registry. Same situation as 65.03/65.04/65.05 above: GENERIC,
     # NOT Gainz-specific, no corresponding GAINZ_FEATURE_MAPPING concept,
     # so GAINZ_FEATURE_MAPPING itself remains unchanged.
+    #
+    # Updated at CHECKPOINT-GAINZ-A: `rolling_breakout` (closes BLOCKER A
+    # documented in GAINZ_ROADMAP.md - a canonical N-bar breakout/
+    # breakdown feature, see rolling_breakout.py) added to the registry.
+    # No "Breakout" entry exists in GAINZ_FEATURE_MAPPING above, so that
+    # table is unchanged - only this set of real registry ids.
     assert real_field_ids == {
         "open",
         "high",
@@ -405,6 +411,7 @@ def test_e_feature_registry_reuse_opportunities_identified() -> None:
         "ma_divergence_sma",
         "ma_divergence_ema",
         "market_regime",
+        "rolling_breakout",
     }
 
     # "+DI/-DI" is one directive-prose concept mapping onto TWO real

@@ -390,6 +390,28 @@ _FIELDS: tuple[FieldDefinition, ...] = (
     # for the full rule/warm-up/edge-case documentation and
     # docs/research/MARKET_CONTEXT_INTELLIGENCE.md section 7&8.
     # -------------------------------------------------------------------
+    # -------------------------------------------------------------------
+    # CHECKPOINT-GAINZ-A addition - Rolling N-Bar Breakout/Breakdown.
+    # Closes BLOCKER A from GAINZ_ROADMAP.md ("20-bar breakout/
+    # breakdown - no canonical rolling-high/low feature existed at
+    # Checkpoint 64.99"). GENERIC feature, NOT Gainz-specific, NOT
+    # performance-validated. Pure feature-engine addition - no strategy
+    # logic. See signal_intelligence.feature_engine.rolling_breakout
+    # module docstring for the full formula/representation/warm-up
+    # documentation.
+    # -------------------------------------------------------------------
+    _derived(
+        "rolling_breakout",
+        "Rolling N-Bar Breakout/Breakdown",
+        ("high", "low", "close"),
+        "1 if close[t] > max(high[t-N..t-1]) (breakout), -1 if close[t] < "
+        "min(low[t-N..t-1]) (breakdown), else 0, via "
+        "signal_intelligence.feature_engine.rolling_breakout.compute_rolling_breakout. "
+        "Signed representation chosen over a two-boolean-column shape, matching "
+        "price_delta's precedent. Default N=20 (RollingBreakoutDefinition.lookback), a "
+        "conventional Donchian-style default, not tuned against any performance data. "
+        "GENERIC feature - NOT verified against a Gainz reference (none exists).",
+    ),
     _derived_categorical(
         "market_regime",
         "Market Regime",

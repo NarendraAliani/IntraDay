@@ -209,6 +209,8 @@ def test_field_registry_every_field_has_a_real_dispatchable_implementation() -> 
             concrete_field_id = "ma_divergence_ema_2_5"
         elif field_def.field_id == "market_regime":
             concrete_field_id = "market_regime_20_9_20"
+        elif field_def.field_id == "rolling_breakout":
+            concrete_field_id = "rolling_breakout_20"
         else:
             assert field_def.field_id in lookback_by_kind, (
                 f"{field_def.field_id!r} is registered but this test has no "

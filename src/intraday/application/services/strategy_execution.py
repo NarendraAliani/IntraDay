@@ -72,6 +72,7 @@ from intraday.signal_intelligence.feature_engine.definitions import (
     ReboundCandidateDefinition,
     RelativeStrengthIndexDefinition,
     RelativeVolumeDefinition,
+    RollingBreakoutDefinition,
     SimpleMovingAverageDefinition,
 )
 from intraday.signal_intelligence.feature_engine.directional_movement import (
@@ -96,6 +97,9 @@ from intraday.signal_intelligence.feature_engine.rebound_candidate import (
     compute_rebound_candidate,
 )
 from intraday.signal_intelligence.feature_engine.relative_volume import compute_relative_volume
+from intraday.signal_intelligence.feature_engine.rolling_breakout import (
+    compute_rolling_breakout,
+)
 from intraday.signal_intelligence.feature_engine.rsi import compute_relative_strength_index
 from intraday.signal_intelligence.feature_engine.sma import compute_simple_moving_average
 from intraday.trading_engine.strategy_execution.contracts import StrategyConfigurationValues
@@ -109,8 +113,9 @@ from intraday.trading_engine.strategy_execution.registry import StrategyRegistry
 def compute_feature_series(field_id: str, bars: tuple[Bar, ...]) -> tuple[AnyFeatureValue, ...]:
     """Dispatches one "sma_20"/"ema_9"/"atr_14"/"rsi_14"/"adx_14"/
     "plus_di_14"/"minus_di_14"/"relative_volume_20"/
-    "macd_hist_12_26_9"/"candle_body_ratio"/"market_regime_20_9_20"-shaped
-    field_id to the matching existing compute function. Raises ValueError
+    "macd_hist_12_26_9"/"candle_body_ratio"/"market_regime_20_9_20"/
+    "rolling_breakout_20"-shaped field_id to the matching existing
+    compute function. Raises ValueError
     for anything else - callers only ever pass field_ids strategies
     themselves declared via `required_features()` (raw OHLCV fields are
     read straight off `Bar`, never computed).
@@ -182,6 +187,8 @@ def compute_feature_series(field_id: str, bars: tuple[Bar, ...]) -> tuple[AnyFea
         return compute_ma_divergence_ema(MaDivergenceEmaDefinition(*params), bars)
     if kind == "market_regime":
         return compute_market_regime(MarketRegimeDefinition(*params), bars)
+    if kind == "rolling_breakout":
+        return compute_rolling_breakout(RollingBreakoutDefinition(*params), bars)
     raise ValueError(f"unrecognized computed field_id {field_id!r}")
 
 

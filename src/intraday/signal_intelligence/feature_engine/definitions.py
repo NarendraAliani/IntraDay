@@ -592,3 +592,44 @@ class MarketRegimeDefinition:
     @property
     def feature_version(self) -> Version:
         return FEATURE_ENGINE_VERSION
+
+
+# ---------------------------------------------------------------------------
+# CHECKPOINT-GAINZ-A addition - Rolling N-Bar Breakout/Breakdown. Same
+# one-off-dataclass-per-identity pattern as every definition above.
+# `lookback` here means N, the number of PRIOR bars whose high/low form
+# the breakout/breakdown reference window - see
+# `signal_intelligence.feature_engine.rolling_breakout` module docstring
+# for the full formula/warm-up/representation documentation. This closes
+# BLOCKER A from `GAINZ_ROADMAP.md` (no canonical rolling-high/low
+# feature existed at Checkpoint 64.99) - it is a pure, reusable, generic
+# feature-engine addition only; no strategy logic is touched.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class RollingBreakoutDefinition:
+    """Identifies one parameterized rolling N-bar breakout/breakdown -
+    `feature_name` "rolling_breakout_20" for
+    `RollingBreakoutDefinition(20)` (the default). N=20 is a documented,
+    conventional default (classic Donchian-channel-style lookback) baked
+    directly into this dataclass field - following
+    `MacdHistogramDefinition`'s precedent of defaulting a genuinely
+    conventional parameter value directly, rather than
+    `PriceDeltaDefinition`'s precedent of requiring every caller to
+    supply an unverified reference-artifact value explicitly. See
+    `signal_intelligence.feature_engine.rolling_breakout` for the full
+    formula/warm-up documentation."""
+
+    lookback: int = 20
+
+    def __post_init__(self) -> None:
+        _validate_lookback(self.lookback, owner="RollingBreakoutDefinition")
+
+    @property
+    def feature_name(self) -> str:
+        return f"rolling_breakout_{self.lookback}"
+
+    @property
+    def feature_version(self) -> Version:
+        return FEATURE_ENGINE_VERSION
