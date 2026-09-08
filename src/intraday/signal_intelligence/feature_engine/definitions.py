@@ -633,3 +633,48 @@ class RollingBreakoutDefinition:
     @property
     def feature_version(self) -> Version:
         return FEATURE_ENGINE_VERSION
+
+
+# ---------------------------------------------------------------------------
+# CHECKPOINT-VWAP-A: Session-Anchored VWAP - Phase A of
+# `VWAP_STRATEGY_ROADMAP.md`. A genuinely NEW strategy thread, unrelated
+# to Gainz (paused per `CHECKPOINT_75`). Pure feature-engine addition
+# only - no strategy logic, no `registry.py` change.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class SessionVwapDefinition:
+    """Identifies the session-anchored Volume-Weighted Average Price
+    feature - `feature_name` is the fixed string `"vwap"`, since (unlike
+    every other `*Definition` in this module) VWAP has NO tunable
+    numeric parameter: it is defined purely by the standard formula
+    (typical price weighted by volume, reset at each session boundary),
+    not by a lookback/multiplier an operator could vary. This dataclass
+    still exists, with no constructor fields, purely for CONSISTENCY
+    with every other feature's `feature_name`/`feature_version`
+    derivation shape (`RollingBreakoutDefinition`, `MacdHistogramDefinition`,
+    etc.) - `candle_body_ratio.py`'s alternative "no Definition object at
+    all, just a module-level `..._FIELD_ID` constant" precedent was
+    considered and rejected here specifically because
+    `compute_feature_series()`'s existing dispatch shape (parse-then-
+    construct-a-Definition-then-call-the-pure-function) is what every
+    OTHER derived feature in `field_registry.py` follows, and this
+    checkpoint's own task explicitly names a `definition` parameter to
+    match that shape - `candle_body_ratio`/`bullish_engulfing`/
+    `bearish_engulfing` remain the only three EXACT-field-id-match,
+    no-Definition-object dispatches, an older precedent this addition
+    does not extend further. See
+    `signal_intelligence.feature_engine.vwap` for the full formula/
+    session-reset/warm-up documentation."""
+
+    def __post_init__(self) -> None:  # no fields to validate
+        return None
+
+    @property
+    def feature_name(self) -> str:
+        return "vwap"
+
+    @property
+    def feature_version(self) -> Version:
+        return FEATURE_ENGINE_VERSION

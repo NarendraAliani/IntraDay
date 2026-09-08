@@ -99,17 +99,18 @@ def test_a_canonical_registry_field_count_is_the_current_15_not_the_stale_8() ->
     bearish_engulfing/price_delta (18), 65.03's addition of
     price_vs_ma_pct_sma/price_vs_ma_pct_ema (20), 65.04's addition of
     rebound_candidate (21), 65.05's addition of ma_divergence_sma/
-    ma_divergence_ema (23), 65.08's addition of market_regime (24), and
-    CHECKPOINT-GAINZ-A's addition of rolling_breakout (25 total). This
+    ma_divergence_ema (23), 65.08's addition of market_regime (24),
+    CHECKPOINT-GAINZ-A's addition of rolling_breakout (25), and
+    CHECKPOINT-VWAP-A's addition of vwap (26 total). This
     is a deliberate architectural assertion (Part 3's permitted
     exception: "unless that is genuinely the correct architectural
     assertion") - the count is pinned so a future accidental field
     removal/addition is caught, exactly the class of regression this
     checkpoint exists to prevent recurring.
     (Test name kept historically accurate to 64.49/64.51 - the count
-    itself is the current, up-to-date 25.)"""
+    itself is the current, up-to-date 26.)"""
     field_ids = {f.field_id for f in list_fields()}
-    assert len(field_ids) == 25
+    assert len(field_ids) == 26
     assert field_ids == {
         "open",
         "high",
@@ -136,6 +137,7 @@ def test_a_canonical_registry_field_count_is_the_current_15_not_the_stale_8() ->
         "ma_divergence_ema",
         "market_regime",
         "rolling_breakout",
+        "vwap",
     }
 
 
@@ -176,6 +178,8 @@ def test_b_every_registered_field_is_dispatchable_through_the_real_dispatcher() 
             concrete = "market_regime_20_9_20"
         elif field_def.field_id == "rolling_breakout":
             concrete = "rolling_breakout_20"
+        elif field_def.field_id == "vwap":
+            concrete = "vwap"
         else:
             concrete = f"{field_def.field_id}_{lookback_by_kind[field_def.field_id]}"
         values = compute_feature_series(concrete, bars)

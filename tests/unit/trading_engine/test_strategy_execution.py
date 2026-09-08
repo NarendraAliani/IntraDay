@@ -211,6 +211,8 @@ def test_field_registry_every_field_has_a_real_dispatchable_implementation() -> 
             concrete_field_id = "market_regime_20_9_20"
         elif field_def.field_id == "rolling_breakout":
             concrete_field_id = "rolling_breakout_20"
+        elif field_def.field_id == "vwap":
+            concrete_field_id = "vwap"
         else:
             assert field_def.field_id in lookback_by_kind, (
                 f"{field_def.field_id!r} is registered but this test has no "
@@ -234,9 +236,12 @@ def test_field_registry_never_lists_unimplemented_indicators() -> None:
     """Checkpoint 64.51: `rsi`/`macd` were removed from this forbidden
     list because 64.49 intentionally, correctly implemented them
     (Wilder RSI, standard MACD histogram) - continuing to forbid them
-    would itself be the stale assumption. The remaining names are
-    genuinely unimplemented today (vwap/supertrend/bollinger - never
-    built; delta/breakout - explicitly deferred by 64.49/64.51, see
+    would itself be the stale assumption. CHECKPOINT-VWAP-A removed
+    `vwap` for the identical reason: it is now intentionally, correctly
+    implemented (session-anchored, typical-price VWAP -
+    `signal_intelligence.feature_engine.vwap`). The remaining names are
+    genuinely unimplemented today (supertrend/bollinger - never built;
+    delta/breakout - explicitly deferred by 64.49/64.51, see
     field_registry.py's own module docstring). This test proves BOTH
     that they are absent from the registry AND that the real dispatcher
     genuinely rejects them (not just "the registry doesn't mention them"
@@ -245,7 +250,6 @@ def test_field_registry_never_lists_unimplemented_indicators() -> None:
 
     field_ids = {f.field_id for f in list_fields()}
     still_unimplemented = (
-        "vwap",
         "supertrend",
         "bollinger",
         "bollinger_bands",

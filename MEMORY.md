@@ -510,6 +510,69 @@ re-deriving them. Not a full transcript; no invented detail.
   against `HistoricalBar` directly before considering resumption. A
   future checkpoint should treat this as a real gate, not a
   suggestion.
+- **`RECON-VWAP-STRATEGY` (backfilled here - that checkpoint did not
+  update this file itself, confirmed missing, added now alongside
+  `CHECKPOINT-VWAP-A`'s own entry below): a genuinely NEW strategy
+  thread started, unrelated to Gainz.** VWAP mean-reversion design
+  (entry: price deviates from session VWAP by >=N x ATR; exit: target
+  = VWAP itself or a fraction reverted; stop = wider M x ATR, M>N;
+  4 parameters total, deliberately small - no multi-factor scorer).
+  Read-only recon confirmed: no VWAP feature exists anywhere in
+  `feature_engine/` (three search shapes, including `field_registry.py`'s
+  own header comment explicitly documenting the absence); session-
+  anchoring needs a genuinely NEW computation shape (no existing
+  feature has a reset concept, only fixed `deque(maxlen=N)` windows),
+  but the grouping primitive already exists and is proven elsewhere
+  (`walk_forward.py`'s own `bar.timestamp.date()` grouping,
+  `bars_by_date`); `Bar.timestamp.date()` in UTC alone is sufficient to
+  detect session boundaries (NSE hours 09:15-15:30 IST = 03:45-10:00
+  UTC never cross UTC midnight) - no IST conversion, no separate
+  session marker needed. Reasoned (not yet proven) that a VWAP target
+  likely avoids Gainz's T2/T3-unreachable trap, because the target
+  distance (back to VWAP) scales with the SAME distance the entry
+  condition already proved price could travel, unlike Gainz's
+  independently-chosen T2/T3 multiples - flagged the real caveat too
+  (VWAP itself can drift during a trending session; untested until
+  Phase D). Full phased roadmap (`VWAP_STRATEGY_ROADMAP.md`, repo
+  root, uncommitted per its own convention) written: A (feature) -> B
+  (strategy, computing MFE/MAE from its OWN first run per the
+  `CHECKPOINT_75` lesson, not deferred) -> C (2-3 presets) -> D
+  (walk-forward, explicitly starting fresh against the now-working
+  gate-verified dataset, no Gainz-style bypass history to inherit).
+- **`CHECKPOINT-VWAP-A`: the VWAP feature itself, built and tested.**
+  New `src/intraday/signal_intelligence/feature_engine/vwap.py`
+  (`compute_session_vwap(definition, bars)`), new
+  `SessionVwapDefinition` (`definitions.py` - no constructor fields,
+  `feature_name` is the fixed string `"vwap"`, unlike every
+  lookback-parameterized definition; kept for consistency with the
+  `feature_name`/`feature_version`-derivation shape every other
+  derived feature uses, per the checkpoint's own explicit
+  `compute_session_vwap(definition, bars)` signature request - the
+  alternative `candle_body_ratio.py`-style "no Definition object,
+  just a field-id constant" shape was considered and explicitly not
+  used here). Formula: typical price `(high+low+close)/3`, volume-
+  weighted, cumulative from the first bar of each trading day, reset
+  at every session boundary (`bar.timestamp.date()`, UTC). NO warm-up
+  (first bar of a session already has a defined VWAP, unlike every
+  lookback-based feature) - only skips a bar when cumulative volume is
+  still exactly zero (mathematically undefined), matching
+  `candle_body_ratio.py`'s own "skip, never fabricate" precedent for
+  its analogous edge case. Wired into BOTH `field_registry.py` (new
+  `_derived("vwap", ...)` entry) AND `compute_feature_series()`'s
+  explicit dispatch (`if kind == "vwap":` branch) - confirmed both are
+  required, per `CHECKPOINT-GAINZ-A`'s own already-documented finding
+  that a registry entry alone is insufficient. 16 new tests, all
+  passing, including the most important one for this feature: two
+  consecutive trading days in one `bars` tuple, day 2's first bar
+  proven to equal EXACTLY its own typical price (not blended with day
+  1's very different price level) - confirms the session-reset
+  actually works, not just that it doesn't crash. `registry.py` and
+  every strategy file confirmed untouched (`git status --short` shows
+  only the 3 expected `src/` diffs: the dispatcher, `definitions.py`,
+  `field_registry.py`, plus the 2 new files). Full suite re-run after
+  this checkpoint - see `CHECKPOINT_VWAP-A_SUMMARY.md` for the exact
+  before/after failure-name comparison. Phase B (the strategy itself)
+  is the next step in this thread, not yet started.
 - **`LIVE-2-FINALIZE`**: an end-of-day close-out checkpoint for
   `LIVE-2` was requested with the premise that market had just closed
   on the same day as the `LIVE-2` run — but this conversation's

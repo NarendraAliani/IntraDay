@@ -73,6 +73,7 @@ from intraday.signal_intelligence.feature_engine.definitions import (
     RelativeStrengthIndexDefinition,
     RelativeVolumeDefinition,
     RollingBreakoutDefinition,
+    SessionVwapDefinition,
     SimpleMovingAverageDefinition,
 )
 from intraday.signal_intelligence.feature_engine.directional_movement import (
@@ -102,6 +103,7 @@ from intraday.signal_intelligence.feature_engine.rolling_breakout import (
 )
 from intraday.signal_intelligence.feature_engine.rsi import compute_relative_strength_index
 from intraday.signal_intelligence.feature_engine.sma import compute_simple_moving_average
+from intraday.signal_intelligence.feature_engine.vwap import compute_session_vwap
 from intraday.trading_engine.strategy_execution.contracts import StrategyConfigurationValues
 from intraday.trading_engine.strategy_execution.coordinator import (
     CoordinatorResult,
@@ -189,6 +191,8 @@ def compute_feature_series(field_id: str, bars: tuple[Bar, ...]) -> tuple[AnyFea
         return compute_market_regime(MarketRegimeDefinition(*params), bars)
     if kind == "rolling_breakout":
         return compute_rolling_breakout(RollingBreakoutDefinition(*params), bars)
+    if kind == "vwap":
+        return compute_session_vwap(SessionVwapDefinition(*params), bars)
     raise ValueError(f"unrecognized computed field_id {field_id!r}")
 
 

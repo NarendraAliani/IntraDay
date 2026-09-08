@@ -412,6 +412,30 @@ _FIELDS: tuple[FieldDefinition, ...] = (
         "conventional Donchian-style default, not tuned against any performance data. "
         "GENERIC feature - NOT verified against a Gainz reference (none exists).",
     ),
+    # -------------------------------------------------------------------
+    # CHECKPOINT-VWAP-A addition - Session-Anchored VWAP. Phase A of
+    # VWAP_STRATEGY_ROADMAP.md - a genuinely NEW strategy thread,
+    # unrelated to Gainz (paused per CHECKPOINT_75). Standard textbook
+    # VWAP formula (typical price, volume-weighted, reset at each
+    # session boundary via bar.timestamp.date() in UTC - see
+    # signal_intelligence.feature_engine.vwap module docstring for the
+    # full formula/session-reset/warm-up documentation). Pure
+    # feature-engine addition - no strategy logic, no registry.py
+    # change.
+    # -------------------------------------------------------------------
+    _derived(
+        "vwap",
+        "Session VWAP",
+        ("high", "low", "close", "volume"),
+        "Volume-weighted average of typical price ((high+low+close)/3), cumulative from "
+        "the first bar of each trading day (bar.timestamp.date(), UTC) and reset at every "
+        "session boundary, via signal_intelligence.feature_engine.vwap.compute_session_vwap. "
+        "No warm-up (first bar of a session already has a defined VWAP) - skipped only when "
+        "cumulative volume is still zero (mathematically undefined). No tunable parameter "
+        "(SessionVwapDefinition has no fields) - the field_id is always exactly \"vwap\", "
+        "never parameterized like sma_20/ema_9. Standard, well-established technical-"
+        "analysis convention - not Gainz-specific, not performance-validated.",
+    ),
     _derived_categorical(
         "market_regime",
         "Market Regime",
