@@ -634,6 +634,42 @@ re-deriving them. Not a full transcript; no invented detail.
   confirmed on the BEARISH side too. `registry.py` untouched, zero
   `src/` diff this checkpoint. Phase D (walk-forward validation) is
   the next and final step in this thread.
+- **`CHECKPOINT-VWAP-D`: walk-forward validation gate for
+  `vwap_mean_reversion`, all 3 presets, all 4 symbols - the final step
+  in the VWAP thread.** Data re-checked directly: still 17 real
+  trading days/symbol (unchanged since `CHECKPOINT-VWAP-B` - the daily
+  backfill routine hasn't been re-run since `2026-09-08` itself).
+  **Headline finding**: all 12 symbol x preset combinations produced a
+  NEGATIVE `aggregate_oos_return` - no combination is net profitable
+  at this sample size. Smallest loss: `INFY/vwap_normal` (-0.020);
+  worst: `TCS/vwap_tight` (-0.379). Within every symbol, `vwap_wide`
+  (or `vwap_normal` for INFY/HDFCBANK) lost LESS than `vwap_tight` -
+  directionally consistent across all 4 symbols, though not acted on
+  (would repeat the exact overfitting risk this session's own Gainz
+  arc already flagged and paused for). **A real, honestly-flagged
+  dataset artifact, not strategy skill**: fold 2's OOS window
+  (`2026-09-01`-`09-03`, only 3 real days) flipped POSITIVE in 11 of
+  12 combinations - far too consistent across every symbol/preset to
+  be anything but a genuinely favorable short-term market window,
+  reported as such rather than credited to the strategy.
+  **Cross-strategy comparison (RELIANCE, same data family as
+  `CHECKPOINT_70`)**: VWAP lands mid-pack - every VWAP preset beats
+  `ema_crossover` (-0.290) and `gainz_aggressive` (-0.415), but every
+  VWAP preset underperforms `atr_volatility_breakout` (+0.011, the
+  session's ONE genuinely positive result) and `sma_trend_filter`
+  (-0.052); `vwap_wide` (-0.065) comes closest but doesn't beat
+  `sma_trend_filter`. **Answers `CHECKPOINT-VWAP-B`'s own open
+  question directly**: the MFE-distribution advantage found there
+  (VWAP reaches >=2.0x ATR favorably 42.6% of the time vs Gainz's
+  17.6%) did NOT translate into net profitability anywhere - the same
+  "favorable excursion alone doesn't create an edge" lesson
+  `CHECKPOINT_75` already established for Gainz, now confirmed for a
+  second, unrelated strategy design too. Zero persistence throughout
+  (`BacktestResultRecord` 208->208). No `RESEARCH_ACTIVE`/status
+  change made or implied, per every prior Phase D's own discipline.
+  This closes all 4 phases (A/B/C/D) of the VWAP thread;
+  `registry.py` remains untouched, the strategy remains unreachable
+  from the live scanner/backtest API.
 - **`LIVE-2-FINALIZE`**: an end-of-day close-out checkpoint for
   `LIVE-2` was requested with the premise that market had just closed
   on the same day as the `LIVE-2` run — but this conversation's
