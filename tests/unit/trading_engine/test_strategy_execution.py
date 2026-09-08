@@ -213,6 +213,8 @@ def test_field_registry_every_field_has_a_real_dispatchable_implementation() -> 
             concrete_field_id = "rolling_breakout_20"
         elif field_def.field_id == "vwap":
             concrete_field_id = "vwap"
+        elif field_def.field_id in ("opening_range_high", "opening_range_low"):
+            concrete_field_id = f"{field_def.field_id}_15"
         else:
             assert field_def.field_id in lookback_by_kind, (
                 f"{field_def.field_id!r} is registered but this test has no "

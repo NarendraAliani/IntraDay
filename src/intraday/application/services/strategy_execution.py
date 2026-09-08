@@ -66,6 +66,7 @@ from intraday.signal_intelligence.feature_engine.definitions import (
     MaDivergenceEmaDefinition,
     MaDivergenceSmaDefinition,
     MarketRegimeDefinition,
+    OpeningRangeDefinition,
     PriceDeltaDefinition,
     PriceVsMaPctEmaDefinition,
     PriceVsMaPctSmaDefinition,
@@ -89,6 +90,10 @@ from intraday.signal_intelligence.feature_engine.ma_divergence import (
     compute_ma_divergence_sma,
 )
 from intraday.signal_intelligence.feature_engine.market_regime import compute_market_regime
+from intraday.signal_intelligence.feature_engine.opening_range import (
+    compute_opening_range_high,
+    compute_opening_range_low,
+)
 from intraday.signal_intelligence.feature_engine.price_delta import compute_price_delta
 from intraday.signal_intelligence.feature_engine.price_vs_ma_pct import (
     compute_price_vs_ma_pct_ema,
@@ -193,6 +198,10 @@ def compute_feature_series(field_id: str, bars: tuple[Bar, ...]) -> tuple[AnyFea
         return compute_rolling_breakout(RollingBreakoutDefinition(*params), bars)
     if kind == "vwap":
         return compute_session_vwap(SessionVwapDefinition(*params), bars)
+    if kind == "opening_range_high":
+        return compute_opening_range_high(OpeningRangeDefinition(*params), bars)
+    if kind == "opening_range_low":
+        return compute_opening_range_low(OpeningRangeDefinition(*params), bars)
     raise ValueError(f"unrecognized computed field_id {field_id!r}")
 
 

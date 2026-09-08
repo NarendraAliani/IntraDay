@@ -768,6 +768,62 @@ re-deriving them. Not a full transcript; no invented detail.
   remains the operator's own explicit next decision.
   `CHECKPOINT_78_SUMMARY.md` restates (does not execute) the operator
   command sequence.
+- **`RECON-ORB-STRATEGY` (backfilled here - that checkpoint did not
+  update this file itself, confirmed missing, added now alongside
+  `CHECKPOINT-ORB-A`'s own entry below, same as `CHECKPOINT-VWAP-A`
+  had to backfill its own recon's identical gap): a THIRD, genuinely
+  new strategy thread started - Opening Range Breakout (ORB),
+  unrelated to Gainz (paused) and VWAP (Phase D complete, also
+  paused).** Design: mark the high/low of the first N minutes of each
+  session (classic 15 min), enter on a close beyond that range, target
+  a multiple of the range's own size, stop at the opposite boundary
+  (or a fraction of it) - deliberately self-scaling to that day's own
+  realized volatility, a genuinely different exit-distance mechanism
+  than both Gainz's (independently-chosen ATR multiples) and VWAP's
+  (target scales with the entry deviation) - reasoned expectation
+  only, not yet tested. Read-only recon confirmed: no ORB feature
+  exists anywhere; `rolling_breakout.py` (the one existing feature with
+  "breakout" in its name) is confirmed a genuinely DIFFERENT shape (a
+  trailing N-bar lookback, re-evaluated every bar forever, no session
+  concept) - not the same thing despite the name. **The one real
+  difference from VWAP's own pattern**: VWAP only ever needed to know
+  WHICH day a bar belongs to; ORB also needs WHERE in that day - but
+  this doesn't require new session-resolver logic, `TradingSession.
+  market_open` (from the EXISTING `build_session_for()`, already used
+  elsewhere this session) already supplies exactly the fact needed.
+  Classic 15-minute window = exactly 3 bars at this project's `5m`
+  close-anchored grain. Full phased roadmap (`ORB_STRATEGY_ROADMAP.md`,
+  repo root, uncommitted per its own convention) written: A (feature)
+  -> B (strategy, single target only, computing MFE/MAE from its own
+  first run, not deferred) -> C (2-3 presets) -> D (walk-forward,
+  against the current real gate-verified dataset).
+- **`CHECKPOINT-ORB-A`: the opening-range feature itself, built and
+  tested.** New `src/intraday/signal_intelligence/feature_engine/
+  opening_range.py` (`compute_opening_range_high`/`compute_opening_
+  range_low`), new `OpeningRangeDefinition` (`definitions.py` -
+  `opening_range_minutes: int = 15`, a REAL tunable parameter unlike
+  `SessionVwapDefinition`'s zero fields, so it follows `Rolling
+  BreakoutDefinition`'s dispatch shape instead). **Representation
+  decided and documented**: TWO parallel fields
+  (`opening_range_high_{N}`/`opening_range_low_{N}`), following
+  `directional_movement.py`'s `+DI`/`-DI` precedent (two independent
+  compute functions sharing one Definition) rather than `rolling_
+  breakout`'s signed-value shape - high/low are genuinely independent
+  numbers, not mutually exclusive like breakout/breakdown. Formula:
+  per-day `max(high)`/`min(low)` across bars within `[market_open,
+  market_open+N]`, frozen for the rest of that session once the window
+  closes. No output for the window's own 3 bars, or for any day whose
+  bars don't cover a complete window. Wired into BOTH `field_registry.py`
+  AND `compute_feature_series()`'s dispatch - confirmed both required,
+  per `CHECKPOINT-GAINZ-A`'s own already-documented finding. 16 new
+  tests, all passing, including the market-open-resolution tests
+  proving the window boundary derives from the session's REAL resolved
+  `market_open` (not a hardcoded clock guess) and correctly moves when
+  `opening_range_minutes` changes. `registry.py` and every strategy
+  file confirmed untouched. Full suite re-run - see
+  `CHECKPOINT_ORB-A_SUMMARY.md` for the exact before/after comparison.
+  Phase B (the strategy itself) is the next step in this thread, not
+  yet started.
 - **`LIVE-2-FINALIZE`**: an end-of-day close-out checkpoint for
   `LIVE-2` was requested with the premise that market had just closed
   on the same day as the `LIVE-2` run — but this conversation's

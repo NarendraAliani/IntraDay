@@ -678,3 +678,42 @@ class SessionVwapDefinition:
     @property
     def feature_version(self) -> Version:
         return FEATURE_ENGINE_VERSION
+
+
+# ---------------------------------------------------------------------------
+# CHECKPOINT-ORB-A: Opening Range (session-anchored, fixed-window
+# high/low) - Phase A of `ORB_STRATEGY_ROADMAP.md`. A genuinely NEW
+# strategy thread, unrelated to Gainz (paused) and VWAP (Phase D
+# complete, also paused for tuning). Pure feature-engine addition only
+# - no strategy logic, no `registry.py` change.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class OpeningRangeDefinition:
+    """Identifies one parameterized opening-range window -
+    `feature_name` "opening_range_15" for `OpeningRangeDefinition(15)`
+    (the default). `opening_range_minutes` = N, the window's duration
+    from each session's own `market_open` (classic convention: 15).
+    Unlike `SessionVwapDefinition` (zero fields - VWAP has no tunable
+    parameter at all), this DOES take a real parameter, so it follows
+    `RollingBreakoutDefinition`'s dispatch shape instead - see
+    `ORB_STRATEGY_ROADMAP.md`'s own reasoning for exactly why the two
+    prior session-anchored features (`vwap`, this one) end up with two
+    different Definition shapes, not an inconsistency. See
+    `signal_intelligence.feature_engine.opening_range` for the full
+    formula/session-reset/market-open-resolution/warm-up
+    documentation."""
+
+    opening_range_minutes: int = 15
+
+    def __post_init__(self) -> None:
+        _validate_lookback(self.opening_range_minutes, owner="OpeningRangeDefinition")
+
+    @property
+    def feature_name(self) -> str:
+        return f"opening_range_{self.opening_range_minutes}"
+
+    @property
+    def feature_version(self) -> Version:
+        return FEATURE_ENGINE_VERSION

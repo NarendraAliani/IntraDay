@@ -436,6 +436,43 @@ _FIELDS: tuple[FieldDefinition, ...] = (
         "never parameterized like sma_20/ema_9. Standard, well-established technical-"
         "analysis convention - not Gainz-specific, not performance-validated.",
     ),
+    # -------------------------------------------------------------------
+    # CHECKPOINT-ORB-A addition - Opening Range (high/low). Phase A of
+    # ORB_STRATEGY_ROADMAP.md - a genuinely NEW strategy thread,
+    # unrelated to Gainz (paused) and VWAP (Phase D complete, also
+    # paused for tuning). Session-anchored fixed-window high/low, reset
+    # at each session boundary (bar.timestamp.date(), UTC) with the
+    # window itself resolved from the session's own real market_open
+    # (build_session_for()) - see
+    # signal_intelligence.feature_engine.opening_range module docstring
+    # for the full formula/session-reset/market-open-resolution/warm-up
+    # documentation. TWO parallel fields (high, low), not one signed
+    # value - they are independent numbers, unlike rolling_breakout's
+    # mutually-exclusive breakout/breakdown case (see that module's own
+    # "representation choice" section for why). Pure feature-engine
+    # addition - no strategy logic, no registry.py change.
+    # -------------------------------------------------------------------
+    _derived(
+        "opening_range_high",
+        "Opening Range High",
+        ("high",),
+        "max(high) across every bar within [market_open, market_open + N minutes] of each "
+        "trading session (N = OpeningRangeDefinition.opening_range_minutes, default 15), via "
+        "signal_intelligence.feature_engine.opening_range.compute_opening_range_high. Frozen "
+        "for the rest of that session once the window closes - not a moving window. No output "
+        "for the window's own bars (3 bars at 5m/15min) or for a session whose supplied bars "
+        "never cover a complete window. Standard, well-established technical-analysis "
+        "convention - not Gainz-specific, not performance-validated.",
+    ),
+    _derived(
+        "opening_range_low",
+        "Opening Range Low",
+        ("low",),
+        "min(low) across the same window opening_range_high uses, via "
+        "signal_intelligence.feature_engine.opening_range.compute_opening_range_low - same "
+        "session-reset/freeze/warm-up rules, sharing OpeningRangeDefinition with "
+        "opening_range_high (not a separately parameterized field).",
+    ),
     _derived_categorical(
         "market_regime",
         "Market Regime",

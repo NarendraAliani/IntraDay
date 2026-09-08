@@ -393,6 +393,14 @@ def test_e_feature_registry_reuse_opportunities_identified() -> None:
     # exists in GAINZ_FEATURE_MAPPING above (confirmed directly, grepped
     # for it), so that table is unchanged - only this set of real
     # registry ids.
+    #
+    # Updated at CHECKPOINT-ORB-A: `opening_range_high`/`opening_range_low`
+    # (session-anchored fixed-window high/low, Phase A of
+    # ORB_STRATEGY_ROADMAP.md - a third, genuinely NEW strategy thread,
+    # unrelated to Gainz) added to the registry. No "Opening Range"/"ORB"
+    # entry exists in GAINZ_FEATURE_MAPPING above (confirmed directly,
+    # grepped for it), so that table is unchanged - only this set of
+    # real registry ids.
     assert real_field_ids == {
         "open",
         "high",
@@ -420,6 +428,8 @@ def test_e_feature_registry_reuse_opportunities_identified() -> None:
         "market_regime",
         "rolling_breakout",
         "vwap",
+        "opening_range_high",
+        "opening_range_low",
     }
 
     # "+DI/-DI" is one directive-prose concept mapping onto TWO real
