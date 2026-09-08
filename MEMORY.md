@@ -992,6 +992,35 @@ re-deriving them. Not a full transcript; no invented detail.
   real, live-polled UI panels, not requiring direct DB inspection.
   Reported inline, no summary file needed (findings not substantial
   enough to warrant one per the checkpoint's own OUTPUT instruction).
+- **`FRONTEND-LIVE-READY`**: UX audit + low-risk fixes, scoped to
+  `LivePaperOperationsConsole.tsx`/`LiveScannerConsole.tsx`'s selection
+  UI only, ahead of tomorrow's first genuinely live use. Read
+  `docs/architecture/FRONTEND_DESIGN_SYSTEM.md` first (the project's
+  own design reference, not a Claude Skill - no skill by that name
+  exists in this environment). Captured 10 Playwright/network-mocked
+  screenshots (`frontend/scripts/capture-live-ready-screenshots.mjs`,
+  same throwaway-script pattern as `CHECKPOINT_FRONTEND-2`'s own,
+  fixture shapes copied from the real `.test.tsx` files) across idle/
+  running-no-signals/running-with-signal/completed-session states, both
+  themes, in `frontend/docs/design-audit/live-ready/`. Found ONE real,
+  console-specific bug: `.signal-monitor__table` (`styles.css`) forced
+  `table-layout: fixed; width: 100%` on its 16-column signal table,
+  making `overflow-x: auto` never actually trigger - headers rendered
+  as unreadable ellipsis fragments ("Ti…", "St…"), directly hiding
+  which column was Telegram/Discord/target/stop-loss status. Fixed by
+  removing the forced fixed-width layout so the table sizes to content
+  and the existing scroll wrapper works, matching the already-
+  established `.table-scroll` pattern used elsewhere in the same file
+  rather than the broken ad hoc alternative this one class had
+  reinvented - shared by 3 components
+  (`LiveMarketDataMonitor.tsx`/`LiveScannerConsole.tsx`/
+  `LivePaperOperationsConsole.tsx`), all 3 benefit. Session state
+  (badge + timeline) and worker/connectivity health (Pre-Session
+  Readiness Checklist near the top) were both found already clear at a
+  glance - no fix needed there. Full suite: 34 files/361 tests passing
+  (including `styles.quality.test.ts`/`theme.quality.test.ts` gates),
+  `npm run typecheck` clean. No backend/API change, no new feature -
+  CSS-only fix to already-fetched data's presentation.
 - **`LIVE-2-FINALIZE`**: an end-of-day close-out checkpoint for
   `LIVE-2` was requested with the premise that market had just closed
   on the same day as the `LIVE-2` run — but this conversation's

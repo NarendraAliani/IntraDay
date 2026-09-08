@@ -976,8 +976,21 @@ dd {
   font-variant-numeric: tabular-nums;
 }
 
+/* FRONTEND-LIVE-READY: this table carries 16 columns (Signal
+   Operations) - the previous `table-layout: fixed; width: 100%` on
+   `thead`/`tbody` forced every column to compress to fit the
+   container no matter how much content it held, so `overflow-x: auto`
+   on the outer element never had anything to scroll (the table was
+   never actually wider than its container). Headers/values rendered
+   as unreadable ellipsis-truncated fragments ("Ti…", "St…") - exactly
+   the operator-facing legibility problem this checkpoint's audit
+   found. Fixed by letting the table size to its natural content width
+   (min-width: 100% keeps it from looking sparse when narrow) so the
+   outer wrapper's existing overflow-x: auto now genuinely scrolls,
+   matching `.table-scroll`'s already-established pattern elsewhere in
+   this file rather than inventing a second, broken one. */
 .signal-monitor__table {
-  width: 100%;
+  min-width: 100%;
   border-collapse: collapse;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
@@ -989,8 +1002,6 @@ dd {
 .signal-monitor__table thead,
 .signal-monitor__table tbody {
   display: table;
-  width: 100%;
-  table-layout: fixed;
 }
 
 .signal-monitor__table th,
@@ -999,8 +1010,6 @@ dd {
   padding: 0.6rem 1rem;
   border-bottom: 1px solid var(--color-border);
   font-variant-numeric: tabular-nums;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
