@@ -348,14 +348,17 @@ restated (not executed) operator command sequence.
 
 ### `LIVE-PAPER-1` attempt — halted pre-flight, market closed
 
-`[F]` A first live paper session was attempted (`LIVE-PAPER-1`) at
-`2026-09-08 20:24 IST` — halted immediately at Part 0 pre-flight, since
-real time checked directly (`date`) was well past NSE's 15:30 IST
-close. No worker was launched, no `ScannerConfiguration` changed, zero
-DB writes. **This does not affect the READY verdict above** — nothing
-about infrastructure readiness was tested, changed, or contradicted;
-the session simply never reached a point where readiness would matter.
-Needs re-attempt on a future trading day during market hours, with a
-fresh Dhan credential check (the one `CHECKPOINT_78` recorded expires
-`2026-09-09 10:17:40 UTC` and should not be reused). See
+`[F]` Two live paper session attempts (`LIVE-PAPER-1`) were made the
+same day — `2026-09-08 20:24 IST` and, after `RECON-FRONTEND-LAUNCH`
+narrowed the checkpoint's own scope to worker-launch-only, again at
+`20:30 IST` — both halted immediately at Part 0 pre-flight, since real
+time checked directly (`date`) both times was well past NSE's 15:30
+IST close. No worker was launched, no `ScannerConfiguration` changed,
+zero DB writes, either time. **This does not affect the READY verdict
+above** — nothing about infrastructure readiness was tested, changed,
+or contradicted; the session simply never reached a point where
+readiness would matter. Needs re-attempt on a future trading day
+during market hours, with a fresh Dhan credential check (the one
+`CHECKPOINT_78` recorded expires `2026-09-09 10:17:40 UTC` and should
+not be reused). See
 `LIVE_PAPER-1_SUMMARY.md` for the full (brief) record.

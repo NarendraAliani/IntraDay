@@ -47,6 +47,19 @@ including a fresh Dhan credential check, since `CHECKPOINT_78`'s own
 credential check (`expires 2026-09-09 10:17:40 UTC`) may itself have
 expired or need refreshing by the time of that attempt.
 
+## 4. Second attempt, same calendar day — also halted, same reason
+
+`[F]` A second `LIVE-PAPER-1` attempt (with a revised Part 1 scope,
+narrowed to worker-launch only per `RECON-FRONTEND-LAUNCH`'s finding
+that universe/timeframe/strategy selection and START are real UI
+flows) was made later the same day. Ran `date` directly again:
+**Tue Sep 8 2026, 20:30:56 IST** — still well past NSE's 15:30 IST
+close, same trading day, same reason. Stopped at Part 0 again, per the
+identical rule. No worker launched, no state changed, zero DB writes.
+This is not a new blocker — it is the same closed-market condition,
+re-confirmed rather than assumed. Next attempt still needs an actual
+trading day during market hours.
+
 ## `MEMORY.md` / `PROJECT_STRATEGY_STATUS.md` updates — confirmed made
 
 `[F]` Appended a new entry to `MEMORY.md` §3 recording this halted

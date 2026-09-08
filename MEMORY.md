@@ -963,7 +963,35 @@ re-deriving them. Not a full transcript; no invented detail.
   re-attempt on a future trading day during market hours (09:15-15:30
   IST), with a fresh Dhan credential check at that time (`CHECKPOINT_
   78`'s own check expires `2026-09-09 10:17:40 UTC` and should not be
-  reused).
+  reused). **A second attempt, same calendar day, narrowed to
+  worker-launch-only scope per `RECON-FRONTEND-LAUNCH`'s finding
+  (UI now handles universe/timeframe/strategy/START), also halted at
+  Part 0** — real time re-checked directly (`date`): `2026-09-08
+  20:30:56 IST`, still past close. Same reason, not a new blocker.
+- **`RECON-FRONTEND-LAUNCH`**: read-only frontend recon, no code
+  changes. Traced `LivePaperOperationsConsole.tsx`'s START button
+  (`handleStart`->`startLivePaperSession()`->`POST .../live-paper-
+  session/start/`) directly to `live_paper_session_views.py`: it only
+  re-evaluates `LivePaperReadiness` and flips
+  `ScannerConfiguration.enabled` - it never launches the worker
+  process, only reads its already-reported status
+  (`DjangoWorkerRuntimeStatusRepository`). Confirmed `LiveScannerConsole.tsx`
+  has a full, real UI for universe mode/timeframe/strategy selection
+  (writes via `updateScannerConfiguration()`, a separate path from
+  start/stop) - the strategy checklist is rendered "from the backend
+  strategy registry," confirming Gainz/VWAP/ORB are unselectable from
+  the UI too, matching their unregistered status. No DB/admin access
+  needed for steps 5-7 of the documented sequence. Confirmed the
+  worker process (`manage.py run_market_data_worker`) has NO UI
+  launch trigger anywhere - a genuine, deliberate structural
+  limitation (Celery Beat auto-launch was explicitly rejected per
+  `CHECKPOINT_72`), not an unfinished feature. Confirmed all
+  documented Success Criteria (Sec5) monitoring items - scanner
+  progress, session state, signals with risk/paper/Telegram/Discord
+  status, Daily Session Report (execution/communication/P&L) - are
+  real, live-polled UI panels, not requiring direct DB inspection.
+  Reported inline, no summary file needed (findings not substantial
+  enough to warrant one per the checkpoint's own OUTPUT instruction).
 - **`LIVE-2-FINALIZE`**: an end-of-day close-out checkpoint for
   `LIVE-2` was requested with the premise that market had just closed
   on the same day as the `LIVE-2` run — but this conversation's
