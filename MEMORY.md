@@ -670,6 +670,24 @@ re-deriving them. Not a full transcript; no invented detail.
   This closes all 4 phases (A/B/C/D) of the VWAP thread;
   `registry.py` remains untouched, the strategy remains unreachable
   from the live scanner/backtest API.
+- **`CHECKPOINT_76`: `PROJECT_STRATEGY_STATUS.md` written (repo root,
+  COMMITTED, a living reference - unlike the uncommitted roadmap
+  docs).** Consolidates all 5 strategies' status/preset counts/best-
+  worst walk-forward figures (every number re-cited from its source
+  checkpoint), a full read of `FIRST_LIVE_PAPER_VALIDATION_PROCEDURE.md`
+  (key finding: its own Success Criteria are infrastructure-only, no
+  backtest-performance gate at all - this session's whole walk-forward
+  arc was a self-imposed research bar, not a documented product
+  requirement), current data status (17 real days/symbol), and a
+  direct answer to "when can paper trading start" (technically now per
+  the documented procedure; a stricter self-imposed "validated edge"
+  bar is not yet met by any strategy - concrete criteria given: >=2 of
+  4 symbols positive/no-flip on 30+ real days). Also formally extends
+  `CHECKPOINT_75`'s Gainz tuning pause to `vwap_mean_reversion` by
+  explicit analogy (no checkpoint had declared this for VWAP before).
+  **Consult this file first** for any future "what's the current state
+  of strategy X" question rather than re-deriving from individual
+  checkpoint summaries.
 - **`LIVE-2-FINALIZE`**: an end-of-day close-out checkpoint for
   `LIVE-2` was requested with the premise that market had just closed
   on the same day as the `LIVE-2` run — but this conversation's

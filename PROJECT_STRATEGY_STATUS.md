@@ -1,0 +1,175 @@
+# Project Strategy Status
+
+Living, committed reference — unlike the roadmap documents
+(`GAINZ_ROADMAP.md`, `VWAP_STRATEGY_ROADMAP.md`), this file is meant
+to be kept current and IS committed. Consolidates everything this
+session established about all 5 strategies that exist in this
+codebase. Written by `CHECKPOINT_76` — see that checkpoint's own
+summary for process notes; this document is the actual deliverable.
+
+## 1. All 5 strategies, one table
+
+| Strategy | Registered in `registry.py`? | `RESEARCH_ACTIVE`? | Saved presets | Best `aggregate_oos_return` seen | Worst `aggregate_oos_return` seen | Ever net-positive? | Verdict |
+|---|---|---|---|---|---|---|---|
+| `ema_crossover` | **Y** | Y (explicit `StrategyResearchStatusRecord` row) | 5 | **+0.0547** (`CHECKPOINT_68.4`, 25-day MIXED/bypassed data — not gate-verified) | -0.3987 (TCS, `CHECKPOINT_71`) | Only on non-gate-verified data | Registered and nominally active, but **every gate-verified real-data run this session has been net-negative** (`CHECKPOINT_69`: -0.2803; `70`: -0.2904; `71`: -0.1868 to -0.3987 across 3 more symbols). Its one positive number came only from `68.4`'s mixed/bypassed dataset, before the gate fix existed — not a validated edge. |
+| `sma_trend_filter` | **Y** | Y (default — no explicit status row, defaults apply per `StrategyResearchStatusRecord`'s own contract) | 4 | **+0.0296** (`CHECKPOINT_69`, gate-verified, 10-day RELIANCE) | -0.2466 (TCS, `CHECKPOINT_71`) | **Yes, on gate-verified data** | The only strategy besides `atr_volatility_breakout` with a genuine gate-verified positive result — but every other real run (`68.4`: -0.0260; `70`: -0.0519; `71`'s HDFCBANK/INFY: -0.0271/-0.0473) is negative. Inconsistent across symbols/datasets, not a validated edge. |
+| `atr_volatility_breakout` | **Y** | Y (default) | 3 | **+0.0114** (`CHECKPOINT_70`, gate-verified, 16-day RELIANCE — **the session's single strongest, most-cited gate-verified positive result**) | -0.2522 (TCS, `CHECKPOINT_71`) | **Yes, on gate-verified data** | Has this session's best credible positive number, but `CHECKPOINT_71`'s cross-symbol runs (TCS/HDFCBANK/INFY) were all negative, and `CHECKPOINT_73`'s trade-level diagnosis found a real structural exit-design issue (T2/T3 essentially unreachable) shared with Gainz. One good symbol, not a validated edge across the universe. |
+| `gainz_compatible_research` | **N** (deliberately unregistered every checkpoint) | Y (default — no explicit row) | 6 (3 original + 3 `_t1_widened` from `CHECKPOINT_74`) | **0** (silent — `gainz_conservative`, most symbols; not a positive return, a non-signal) | -0.6475 (TCS `gainz_aggressive`, `CHECKPOINT_71`) | **No, never** | **Tuning explicitly PAUSED** (`CHECKPOINT_75`). Root cause of consistent losses diagnosed precisely (`CHECKPOINT_73`: symmetric SL/T1 + single-shot exit design; `CHECKPOINT_75`'s MFE analysis: T2/T3 genuinely rarely reachable regardless of exit mechanism). One real, tested improvement applied (`CHECKPOINT_74`: T1 1.0→1.5) reduced loss magnitude but never flipped any combination positive. |
+| `vwap_mean_reversion` | **N** (deliberately unregistered) | Y (default — no explicit row) | 3 | -0.0197 (INFY `vwap_normal`, `CHECKPOINT-VWAP-D` — the **least-bad** result, still negative) | -0.3790 (TCS `vwap_tight`, `CHECKPOINT-VWAP-D`) | **No, never** | Just completed Phase D (`CHECKPOINT-VWAP-D`) — all 12 symbol×preset combinations gate-verified-negative. A genuinely more favorable MFE distribution than Gainz's (`CHECKPOINT-VWAP-B`'s own finding) did **not** translate into profitability. No parameter tuning has been attempted yet. |
+
+**Reading this table honestly**: `atr_volatility_breakout` and
+`sma_trend_filter` each have exactly ONE genuine gate-verified positive
+result, both single-symbol (RELIANCE), both from a smaller (10–16
+day) dataset than what now exists. `ema_crossover`'s only positive
+number predates the `fromDate` fix (`CHECKPOINT_69`) and used
+bypassed, mixed-quality data — it should not be read as comparable to
+the other two. `gainz_compatible_research` and `vwap_mean_reversion`
+have never once produced a net-positive gate-verified result, on any
+symbol, in any checkpoint this session ran.
+
+## 2. What this project's OWN documented procedure actually requires
+
+`docs/architecture/FIRST_LIVE_PAPER_VALIDATION_PROCEDURE.md`
+(Checkpoint 64.19) was read directly in full for this checkpoint — it
+had been cited but never actually read in detail this session
+(`RECON-GAINZ-ARCHITECTURE`'s own citation only referenced it).
+
+**The single most important finding: this procedure's own Success
+Criteria (§5) are entirely about SYSTEM/INFRASTRUCTURE health, and
+contain ZERO backtest-performance requirement.** Quoted directly from
+its own §5 header: *"system health is a SEPARATE question from
+whether a strategy produced a signal — a session with zero signals is
+still a fully successful validation if every item below is real and
+correct."* Its 15-row Success Criteria table (§5) covers: Dhan
+connectivity, token validity, market-open state, scanner reconciliation
+state, scanner progress advancing, at least one complete scan cycle,
+no stale progress, signal-evidence pairing (if any signal occurs), risk
+decisions persisted (if any), paper orders/fills persisted (if any),
+Telegram/Discord delivery status visible, a real Daily Session Report,
+confirmation `PaperBroker` is the only broker in the codebase, and
+`real_trading_state` remaining structurally `DISABLED`. **Not one row
+mentions `aggregate_oos_return`, win rate, walk-forward folds, or any
+other backtest metric.**
+
+Its §3 "Recommended First Session Configuration" names the 3 ORIGINAL
+strategies (`ema_crossover`/`sma_trend_filter`/`atr_volatility_breakout`)
+at their **Checkpoint 64.17 conservative baseline defaults** (12/26
+EMA, 30/0.75% SMA, 14/2.0/... ATR) — *"never a custom, unvalidated
+parameter set for the first session"* — and a small 3-5 symbol
+universe (RELIANCE/TCS/HDFCBANK/INFY/ICICIBANK). This document predates
+both `gainz_compatible_research` and `vwap_mean_reversion` entirely; it
+has no opinion on either.
+
+**The gap, stated honestly**: this session's entire walk-forward
+validation arc (`68.x` through `CHECKPOINT-VWAP-D`) is genuinely
+valuable research work, but **it is not something `FIRST_LIVE_PAPER_
+VALIDATION_PROCEDURE.md` itself requires as a gate before paper
+trading can start.** It is a separate, additional research-quality
+bar this session's own checkpoints (the Gainz and VWAP roadmaps'
+"Phase D mandatory gate" language) imposed on themselves — a sensible
+discipline, but not the documented product requirement. The project's
+OWN procedure is satisfied by infrastructure readiness
+(credential/connectivity/worker/market-state), not by any strategy's
+walk-forward number.
+
+## 3. Data status
+
+`[F]` Current real, gate-verified `HistoricalBar` coverage: **17
+`CANONICALIZED` trading days per symbol** (RELIANCE/TCS/HDFCBANK/INFY),
+re-checked directly this checkpoint — unchanged since
+`CHECKPOINT-VWAP-D`'s own check (still the same calendar day,
+`2026-09-08`). Two contiguous blocks: `2026-08-03`–`08-14` (10 days)
+and `2026-08-31`–`09-08` (7 days). The `fromDate`-exclusive fix
+(`CHECKPOINT_69`) resolved the original day-start-bar gap and has held
+on every fresh day since, including the daily backfill routine's own
+first genuinely-new-day run (`CHECKPOINT_74` Part 3, `2026-09-08`).
+The daily backfill routine itself (`CHECKPOINT_72`,
+`manage.py backfill_daily_coverage`) is built, tested, and proven —
+but remains **operator-triggered only**, deliberately not auto-
+scheduled (Celery Beat was considered and explicitly rejected — see
+`CHECKPOINT_72`'s own §1 — because an unconditional daily Dhan call
+with no per-run operator action would conflict with this project's own
+P6/"no surprise automation" discipline). It has been run for real
+exactly once so far (`CHECKPOINT_74`). **The interior
+`2026-08-17`–`08-28` gap remains open**, deferred, unfixed —
+confirmed (`CHECKPOINT_71`'s recon, refined by `CHECKPOINT_72`'s
+incidental finding) to be rows written before the write-time
+canonicalization logic existed, exactly the class of row the
+still-unexecuted migration (`67.7`–`67.13-C`) was built to
+retroactively fix. Migration execution remains the operator's own
+deferred decision, not re-litigated by any checkpoint since.
+
+## 4. When can paper trading realistically start?
+
+**Direct answer**: per the project's OWN documented procedure, paper
+trading could technically start as soon as the infrastructure
+readiness items are met — a valid Dhan credential (`[F]` confirmed
+present via `DhanSettingsService.effective_credentials()` as of this
+checkpoint), a running `manage.py run_market_data_worker` process, and
+market genuinely open — using the 3 ALREADY-REGISTERED strategies
+(`ema_crossover`/`sma_trend_filter`/`atr_volatility_breakout`) at their
+conservative baseline defaults, exactly as `FIRST_LIVE_PAPER_
+VALIDATION_PROCEDURE.md` §3 recommends. **This is a real, honest
+answer, not a hedge**: the document's own Success Criteria do not
+require any backtest result at all.
+
+**But that same document also explicitly forbids a custom, unvalidated
+parameter set** — and every one of this session's own SAVED presets
+for the 3 registered strategies (`ema_conservative`/`sma_conservative`/
+`atr_aggresive`, etc.) is exactly that: a custom set this session
+created for walk-forward testing, distinct from — though in most cases
+numerically similar to — Checkpoint 64.17's own original baseline
+defaults. **Concrete, checkable requirement before a FIRST session,
+stated plainly**: confirm each of the 3 registered strategies'
+`parameter_schema()` DEFAULT values (not a saved preset) are what
+actually gets used, OR deliberately choose to use `ema_conservative`/
+`sma_conservative`/`atr_aggresive` and document that as a conscious
+deviation from §3's own literal instruction — this is a real, small,
+checkable gap between the document's letter and what this session's
+presets actually contain, not investigated further here (out of this
+checkpoint's own read-only, no-new-code scope).
+
+**`gainz_compatible_research` and `vwap_mean_reversion` cannot be
+selected for a live paper session at all today** — both remain
+unregistered in `registry.py`, unreachable from the live scanner/
+Strategy Selection checklist item, by deliberate design every
+checkpoint in both threads has confirmed. This is not a gap to close
+before paper trading starts — it is the CORRECT current state, since
+neither has ever produced a validated positive result.
+
+**If the operator wants "at least one strategy with a real edge"
+before starting** (a stricter, self-imposed bar this session's own
+research suggests is warranted, even though the documented procedure
+doesn't require it): **not met today.** The closest candidates —
+`atr_volatility_breakout` (`CHECKPOINT_70`'s +0.0114) and
+`sma_trend_filter` (`CHECKPOINT_69`'s +0.0296) — are each single-
+symbol, single-dataset positive results that did NOT replicate across
+the other 3 symbols (`CHECKPOINT_71`). Concrete, checkable criteria
+for closing this gap, derived directly from this session's own
+established discipline (`CHECKPOINT_75`'s explicit Gainz resumption
+rule, the same logic applied here): **at least one strategy
+maintaining a positive `aggregate_oos_return`, with zero sign flips
+across all folds, on AT LEAST 2 of the 4 tested symbols
+simultaneously, on a real dataset of 30+ real trading days** (roughly
+double the current 17) — a concrete, checkable bar, not an invented
+one, extrapolated from the same standard `CHECKPOINT_75` already set
+for Gainz specifically.
+
+## 5. What's paused, and why
+
+- **`gainz_compatible_research` tuning**: explicitly **PAUSED**
+  (`CHECKPOINT_75`). Resumption criterion: the real dataset reaches at
+  least 30 real trading days beyond the 17 already used as of
+  `2026-09-08` — a concrete, checkable number, verifiable directly
+  against `HistoricalBar` before any future checkpoint resumes tuning.
+- **`vwap_mean_reversion` tuning**: no tuning has been attempted yet
+  (only the 3 tight/normal/wide presets from `CHECKPOINT-VWAP-C`, all
+  parameter CHOICES made once, up front, never iteratively re-tested
+  against the same sample). **Should follow the identical pause
+  discipline, for the identical reason**: iterating this strategy's own
+  parameters against the SAME 17-day dataset that just produced its
+  Phase D result would create exactly the same overfitting risk
+  `CHECKPOINT_75` flagged for Gainz. No checkpoint has formally
+  declared this pause for VWAP yet — this document does so explicitly,
+  applying the same resumption criterion (30+ new real trading days)
+  by direct analogy, not a new, independently-derived rule.
