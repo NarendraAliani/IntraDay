@@ -573,6 +573,48 @@ re-deriving them. Not a full transcript; no invented detail.
   this checkpoint - see `CHECKPOINT_VWAP-A_SUMMARY.md` for the exact
   before/after failure-name comparison. Phase B (the strategy itself)
   is the next step in this thread, not yet started.
+- **`CHECKPOINT-VWAP-B`: the VWAP mean-reversion strategy itself
+  built, `registry.py` still untouched.** New `VwapMeanReversionStrategy`
+  (`vwap_mean_reversion.py`), matching the `Strategy` Protocol
+  structurally identical to `ema_crossover.py`. 4 parameters:
+  `vwap_deviation_atr_multiplier` (N, default 1.5),
+  `stop_loss_atr_multiplier` (M, default 2.5, must exceed N),
+  `atr_lookback` (14), `target_reversion_fraction` (default 1.0 =
+  target is VWAP itself). `evaluate()`: BULLISH when
+  `close < vwap - N×ATR`, BEARISH when `close > vwap + N×ATR`, a real
+  NEUTRAL signal object otherwise (matching `ema_crossover`'s own
+  convention, not `None`). `build_trade_plan()`: SINGLE target only
+  (`target = entry + fraction*(vwap-entry)`, direction-agnostic by
+  construction), no T2/T3 ladder - the deliberate design choice meant
+  to avoid Gainz's structural trap.
+  **Honest finding, matches an existing but previously-unremarked
+  gap**: `ParameterDefinition` has NO mechanism to express a
+  cross-parameter constraint like "M must exceed N" - confirmed the
+  SAME situation already exists, undocumented as a gap until now, in
+  `ema_crossover.py`'s `slow_lookback`/`fast_lookback` and
+  `atr_volatility_breakout.py`'s target ladder (both `help_text`-only,
+  no runtime enforcement anywhere in this codebase). This strategy
+  adds its OWN explicit, tested runtime guard instead (`build_trade_
+  plan()` returns `None` when `M <= N`) - a real design decision, not
+  a silent workaround; not retroactively applied to the other 2
+  strategies (out of scope). 19 new unit tests, all passing.
+  **First real backtest (explicitly a first look, NOT Phase D's
+  validation gate)**: RELIANCE, default params, full gate-verified
+  dataset (now 17 days/1224 bars - one day more than `CHECKPOINT_75`'s
+  own figure, since `CHECKPOINT_74` added `2026-09-08` in the
+  interim). 47 trades, win_rate 38.3%, risk_reward_ratio 0.61,
+  expectancy -24.95/trade, net_pnl -1172.60 - **not profitable at
+  default parameters**, reported plainly. MFE distribution (same
+  method `CHECKPOINT_75` used for Gainz): 42.6% of trades reach >=2.0x
+  ATR favorably (vs Gainz's 17.6%) - meaningfully more favorable
+  excursion by design. But losing trades also show MORE pre-reversal
+  favorable excursion than Gainz's did (62.1%/48.3% at >=0.5x/1.0x ATR
+  vs Gainz's 16.7%/7.1%) - the same "trailing-stop candidate" pattern
+  `CHECKPOINT_75` flagged for Gainz appears here too, more strongly -
+  flagged as a future diagnostic candidate, not investigated further
+  this checkpoint. Zero persistence throughout
+  (`BacktestResultRecord` 208->208). Phase C (2-3 config presets) is
+  the next step in this thread.
 - **`LIVE-2-FINALIZE`**: an end-of-day close-out checkpoint for
   `LIVE-2` was requested with the premise that market had just closed
   on the same day as the `LIVE-2` run — but this conversation's
