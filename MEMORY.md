@@ -615,6 +615,25 @@ re-deriving them. Not a full transcript; no invented detail.
   this checkpoint. Zero persistence throughout
   (`BacktestResultRecord` 208->208). Phase C (2-3 config presets) is
   the next step in this thread.
+- **`CHECKPOINT-VWAP-C`: 3 real config presets for
+  `vwap_mean_reversion`, zero code changes.** `vwap_tight` (N=1.0,
+  M=2.0), `vwap_normal` (N=1.5, M=2.5 - the intended default, matches
+  `parameter_schema()`'s own defaults), `vwap_wide` (N=2.0, M=3.0) -
+  `atr_lookback=14`/`target_reversion_fraction=1.0` deliberately
+  identical across all 3 (feature/target-completeness, not
+  deviation-band parameters). Created via the real
+  `StrategyConfigurationService.save_configuration()` path. M > N
+  runtime guard (`CHECKPOINT-VWAP-B`) verified directly per preset's
+  real persisted config, not assumed - all 3 produce a genuine plan.
+  **Real behavioral divergence proven** (8 tests,
+  `test_checkpoint_vwap_c_presets.py`): identical feature values
+  (vwap=1000, atr=10) fed to all 3 presets - small deviation (-1.2x
+  ATR) -> only `vwap_tight` signals; medium deviation (-1.7x ATR) ->
+  `vwap_tight`+`vwap_normal` signal, `vwap_wide` stays NEUTRAL; large
+  deviation (-2.5x ATR, control case) -> all 3 agree; symmetric check
+  confirmed on the BEARISH side too. `registry.py` untouched, zero
+  `src/` diff this checkpoint. Phase D (walk-forward validation) is
+  the next and final step in this thread.
 - **`LIVE-2-FINALIZE`**: an end-of-day close-out checkpoint for
   `LIVE-2` was requested with the premise that market had just closed
   on the same day as the `LIVE-2` run — but this conversation's
