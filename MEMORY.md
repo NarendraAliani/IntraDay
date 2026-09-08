@@ -688,6 +688,44 @@ re-deriving them. Not a full transcript; no invented detail.
   **Consult this file first** for any future "what's the current state
   of strategy X" question rather than re-deriving from individual
   checkpoint summaries.
+- **`CHECKPOINT_77`: resolved the preset-vs-baseline gap + found a
+  real, previously-undiscovered blocker to live paper trading.**
+  Part 1: `ema_crossover`/`sma_trend_filter`/`atr_volatility_breakout`'s
+  raw schema DEFAULTS all exactly match `FIRST_LIVE_PAPER_VALIDATION_
+  PROCEDURE.md` §3's own documented baseline (12/26 EMA, 30/0.75% SMA,
+  14/2.0/1.0/1.5/2.5/3.5/1.0 ATR) - but NONE of `atr_volatility_
+  breakout`'s 3 saved presets does (including `atr_aggresive`, the one
+  this session's own walk-forward checkpoints used - every value
+  differs from the documented baseline). A first session should use
+  raw schema defaults, not any saved preset, for ATR specifically.
+  **Part 2's critical finding, traced directly in code, not assumed**:
+  the REAL live signal-evaluation path
+  (`signal_pipeline_runtime.py::promote_bars_and_trigger_signals()`)
+  constructs a completely EMPTY `StrategyConfigurationValues({})` for
+  every strategy, every tick - no default-fill exists anywhere
+  downstream (`validate_configuration()` tolerates a missing key but
+  never injects the default; `require_int`/`require_decimal` are raw,
+  un-defaulted dict subscripts). A live session today would run,
+  connect, ingest bars - but would NEVER produce a single real signal
+  for any registered strategy (first parameter lookup raises
+  `KeyError`, silently caught by the coordinator's own isolation
+  boundary as a `StrategyExecutionFailure`). Confirmed no existing test
+  exercises this real empty-`{}` path -
+  `test_active_loop_end_to_end.py`'s own `_config()` helper always
+  supplies real values instead. **Everything else checked out clean**:
+  Dhan credential VALID (expires `2026-09-09 10:17:40 UTC`),
+  `PaperBroker` confirmed the only broker implementation,
+  `real_trading_state` confirmed structurally `DISABLED`, universe/
+  timeframe/strategy selection configurable with zero new code,
+  Telegram/Discord already configured AND enabled. **Verdict: NOT
+  READY** - not a data/credential/config issue, a real code gap. NOT
+  fixed this checkpoint (read-only, no-code-changes scope) - the fix
+  (`default_configuration_values()`, already used for this exact
+  purpose in `replay_paper_session.py`) is described precisely for a
+  future checkpoint. No live session launched, no
+  `ScannerConfiguration` activated, no broker-order code called.
+  `PROJECT_STRATEGY_STATUS.md` §6 updated with this finding, superseding
+  `CHECKPOINT_76`'s own more provisional "technically ready" reading.
 - **`LIVE-2-FINALIZE`**: an end-of-day close-out checkpoint for
   `LIVE-2` was requested with the premise that market had just closed
   on the same day as the `LIVE-2` run — but this conversation's

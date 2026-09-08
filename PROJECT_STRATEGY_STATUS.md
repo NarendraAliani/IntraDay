@@ -101,6 +101,13 @@ deferred decision, not re-litigated by any checkpoint since.
 
 ## 4. When can paper trading realistically start?
 
+> **SUPERSEDED BY `CHECKPOINT_77` — see §6 below.** The "technically
+> ready" reading directly below was written before `CHECKPOINT_77`
+> traced the actual live signal-evaluation code path and found a real,
+> blocking gap. Read §6 first; this section is kept for its still-valid
+> secondary points (the preset-vs-baseline gap, the stricter-bar
+> criteria) but its own headline conclusion is no longer current.
+
 **Direct answer**: per the project's OWN documented procedure, paper
 trading could technically start as soon as the infrastructure
 readiness items are met — a valid Dhan credential (`[F]` confirmed
@@ -173,3 +180,47 @@ for Gainz specifically.
   declared this pause for VWAP yet — this document does so explicitly,
   applying the same resumption criterion (30+ new real trading days)
   by direct analogy, not a new, independently-derived rule.
+
+## 6. Paper-trading readiness — `CHECKPOINT_77`, current as of `2026-09-08`
+
+**Verdict: NOT READY.** Every infrastructure precondition checks
+out — Dhan credential `VALID` (expires `2026-09-09 10:17:40 UTC`),
+`PaperBroker` confirmed the only broker implementation in the
+codebase, `real_trading_state` confirmed structurally `DISABLED`,
+universe/timeframe/strategy selection all configurable today with zero
+new code, Telegram/Discord already configured AND enabled. **None of
+that is why this is NOT READY.**
+
+**The actual blocker, traced directly in code**: the live signal-
+evaluation path (`signal_pipeline_runtime.py::promote_bars_and_
+trigger_signals()`) constructs an EMPTY `StrategyConfigurationValues`
+(`{}`) for every strategy, every tick — no default-fill happens
+anywhere downstream (`validate_configuration()` tolerates a missing
+key but never injects the schema default; `require_int`/
+`require_decimal` do a raw, un-defaulted dict subscript). **A live
+session started today would run, connect, and ingest bars — but would
+never produce a single real signal for any of the 3 registered
+strategies**, since the first parameter lookup inside any of their
+`evaluate()` methods raises `KeyError`, silently caught as a
+`StrategyExecutionFailure` by the coordinator's own isolation
+boundary. No existing test in this codebase exercises this exact
+real, empty-`{}` path — every test that touches `run_active_loop_tick()`
+supplies its own real values instead.
+
+**Also found, secondary to the above**: none of `atr_volatility_
+breakout`'s 3 saved presets (`atr_aggresive`/`atr_Balanced`/
+`atr_Conservative`) matches `FIRST_LIVE_PAPER_VALIDATION_PROCEDURE.md`
+§3's own documented baseline exactly — only the strategy's raw schema
+DEFAULTS do (`ema_crossover`'s and `sma_trend_filter`'s defaults also
+match exactly). A first session should use raw schema defaults, not
+any currently-saved preset, for `atr_volatility_breakout` specifically.
+
+**What closing this gap requires** (a future checkpoint's own decision
+— NOT fixed by `CHECKPOINT_77`, which stayed read-only per its own
+scope): wire real parameter values into `promote_bars_and_trigger_
+signals()`'s configuration construction — `default_configuration_
+values()` (the existing helper `replay_paper_session.py` already uses
+for exactly this purpose) is the most direct, already-proven fit.
+
+See `CHECKPOINT_77_SUMMARY.md` for the full trace and every file/line
+this finding is based on.
