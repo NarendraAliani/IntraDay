@@ -21,6 +21,7 @@ import { useAuth } from "../../common/auth/AuthContext";
 import { ErrorState } from "../../common/components/ErrorState";
 import { LoadingState } from "../../common/components/LoadingState";
 import { ParameterSchemaFields, defaultValuesFor } from "../../common/components/ParameterSchemaFields";
+import { SegmentedToggle } from "../../common/components/SegmentedToggle";
 import {
   getFieldRegistry,
   getStrategySchema,
@@ -173,21 +174,22 @@ export function StrategyConfigurationPage(): JSX.Element {
         data is not yet trading-grade - see Live Market Data Monitor).
       </p>
 
-      <div className="strategy-config-page__field">
-        <label htmlFor="strategy-select">Strategy</label>
-        <select
-          id="strategy-select"
-          value={selectedStrategyId}
-          onChange={(e) => setSelectedStrategyId(e.target.value)}
-        >
-          {strategies.map((strategy) => (
-            <option key={strategy.strategy_id} value={strategy.strategy_id}>
-              {strategy.display_name}
-              {strategy.is_active ? " (active)" : ""}
-            </option>
-          ))}
-        </select>
-      </div>
+      {/* Checkpoint FRONTEND-3: a segmented toggle beats a dropdown for
+          this project's current, deliberately small registered-strategy
+          count (3 today) - a single click instead of opening a menu.
+          `SegmentedToggle` itself falls back to a `<select>` past 5
+          options, so this stays correct if/when more strategies are
+          registered later; no follow-up change needed here. */}
+      <SegmentedToggle
+        id="strategy-select"
+        label="Strategy"
+        value={selectedStrategyId}
+        onChange={setSelectedStrategyId}
+        options={strategies.map((strategy) => ({
+          value: strategy.strategy_id,
+          label: `${strategy.display_name}${strategy.is_active ? " (active)" : ""}`,
+        }))}
+      />
 
       {schemaError && <ErrorState message={schemaError} />}
 

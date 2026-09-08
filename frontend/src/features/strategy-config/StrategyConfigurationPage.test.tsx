@@ -190,8 +190,7 @@ describe("StrategyConfigurationPage", () => {
       expect(screen.getByLabelText(/Fast EMA Lookback/)).toBeInTheDocument();
     });
 
-    const select = screen.getByLabelText("Strategy") as HTMLSelectElement;
-    fireEvent.change(select, { target: { value: "sma_trend_filter" } });
+    fireEvent.click(screen.getByRole("radio", { name: /SMA Trend Filter/ }));
 
     await waitFor(() => {
       expect(screen.getByLabelText(/SMA Lookback/)).toBeInTheDocument();
@@ -253,5 +252,43 @@ describe("StrategyConfigurationPage", () => {
     for (const forbidden of ["Buy", "Sell", "Place Order", "Execute Trade"]) {
       expect(bodyText).not.toContain(forbidden);
     }
+  });
+
+  it("Checkpoint FRONTEND-3: renders the strategy selector as a segmented toggle (radiogroup), not a dropdown, for a few real options", async () => {
+    stubFetch({
+      "/strategy-engine/fields/": FIELDS,
+      "/strategy-engine/strategies/": STRATEGIES,
+      "/strategy-engine/strategies/ema_crossover/schema/": EMA_SCHEMA,
+      "/strategy-engine/strategies/ema_crossover/configurations/": [],
+    });
+
+    renderWithAuth(<StrategyConfigurationPage />);
+
+    await waitFor(() => expect(screen.getByRole("radiogroup")).toBeInTheDocument());
+    expect(screen.getByRole("radio", { name: "EMA Crossover" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("radio", { name: "SMA Trend Filter" })).toHaveAttribute("aria-checked", "false");
+    expect(document.querySelector("select#strategy-select")).not.toBeInTheDocument(); // no <select> present
+  });
+
+  it("Checkpoint FRONTEND-3: falls back to a dropdown once there are more than 5 strategies", async () => {
+    const manyStrategies: StrategySummary[] = Array.from({ length: 6 }, (_, i) => ({
+      strategy_id: `strategy_${i}`,
+      display_name: `Strategy ${i}`,
+      specification_version: "v1",
+      code_version: "v1",
+      is_active: false,
+    }));
+    stubFetch({
+      "/strategy-engine/fields/": FIELDS,
+      "/strategy-engine/strategies/": manyStrategies,
+      "/strategy-engine/strategies/strategy_0/schema/": { ...EMA_SCHEMA, strategy_id: "strategy_0" },
+      "/strategy-engine/strategies/strategy_0/configurations/": [],
+    });
+
+    renderWithAuth(<StrategyConfigurationPage />);
+
+    await waitFor(() => expect(screen.getByLabelText("Strategy")).toBeInTheDocument());
+    expect(screen.getByLabelText("Strategy").tagName).toBe("SELECT");
+    expect(screen.queryByRole("radiogroup")).not.toBeInTheDocument();
   });
 });

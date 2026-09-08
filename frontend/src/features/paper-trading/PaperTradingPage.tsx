@@ -22,6 +22,7 @@ import {
 import type { KillSwitchStatusResponse } from "../../common/api/killSwitchApi";
 import { ApiNetworkError, ApiRequestError } from "../../common/api/client";
 import { InstrumentPickerSingle } from "../../common/components/InstrumentPicker";
+import { SegmentedToggle } from "../../common/components/SegmentedToggle";
 import { Icon } from "../../common/icons/Icon";
 import {
   getPaperFunds,
@@ -320,21 +321,18 @@ export function PaperTradingPage(): JSX.Element {
                   value={orderForm.instrumentId}
                   onChange={(instrumentId) => setOrderForm((f) => ({ ...f, instrumentId }))}
                 />
-                <label>
-                  Side
-                  <select
-                    value={orderForm.side}
-                    onChange={(e) =>
-                      setOrderForm((f) => ({ ...f, side: e.target.value as typeof f.side }))
-                    }
-                  >
-                    {SIDES.map((side) => (
-                      <option key={side} value={side}>
-                        {side}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                {/* Checkpoint FRONTEND-3: Side/Order Type each have a
+                    handful of real, fixed options - a segmented toggle
+                    is a single click instead of opening a menu. */}
+                <SegmentedToggle
+                  id="paper-order-side"
+                  label="Side"
+                  value={orderForm.side}
+                  onChange={(value) =>
+                    setOrderForm((f) => ({ ...f, side: value as typeof f.side }))
+                  }
+                  options={SIDES.map((side) => ({ value: side, label: side }))}
+                />
                 <label>
                   Quantity
                   <input
@@ -344,24 +342,15 @@ export function PaperTradingPage(): JSX.Element {
                     onChange={(e) => setOrderForm((f) => ({ ...f, quantity: e.target.value }))}
                   />
                 </label>
-                <label>
-                  Order Type
-                  <select
-                    value={orderForm.orderType}
-                    onChange={(e) =>
-                      setOrderForm((f) => ({
-                        ...f,
-                        orderType: e.target.value as typeof f.orderType,
-                      }))
-                    }
-                  >
-                    {ORDER_TYPES.map((type) => (
-                      <option key={type} value={type}>
-                        {type}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                <SegmentedToggle
+                  id="paper-order-type"
+                  label="Order Type"
+                  value={orderForm.orderType}
+                  onChange={(value) =>
+                    setOrderForm((f) => ({ ...f, orderType: value as typeof f.orderType }))
+                  }
+                  options={ORDER_TYPES.map((type) => ({ value: type, label: type }))}
+                />
                 {needsLimitPrice && (
                   <label>
                     Limit Price

@@ -32,6 +32,7 @@ import type { PaperSessionResponse } from "../../common/api/paperSessionApi";
 import { useAuth } from "../../common/auth/AuthContext";
 import { ErrorState } from "../../common/components/ErrorState";
 import { LoadingState } from "../../common/components/LoadingState";
+import { SegmentedToggle } from "../../common/components/SegmentedToggle";
 import { badgeIconName } from "../../common/components/statusIcon";
 import { Icon } from "../../common/icons/Icon";
 
@@ -255,20 +256,19 @@ export function PaperSessionPanel(): JSX.Element {
         <>
           <h3>Session Setup</h3>
           <div className="form-grid">
-            <label>
-              Strategy
-              <select
-                value={form.strategyId}
-                onChange={(e) => setForm((f) => ({ ...f, strategyId: e.target.value }))}
-                disabled={stoppable}
-              >
-                {session.available_strategy_ids.map((id) => (
-                  <option key={id} value={id}>
-                    {id}
-                  </option>
-                ))}
-              </select>
-            </label>
+            {/* Checkpoint FRONTEND-3: a handful of real, fixed options
+                each - a segmented toggle is a single click instead of
+                opening a menu. Falls back to a dropdown automatically
+                past 5 options (relevant for Strategy, whose option
+                count is dynamic). */}
+            <SegmentedToggle
+              id="paper-session-strategy"
+              label="Strategy"
+              value={form.strategyId}
+              disabled={stoppable}
+              onChange={(value) => setForm((f) => ({ ...f, strategyId: value }))}
+              options={session.available_strategy_ids.map((id) => ({ value: id, label: id }))}
+            />
             <label>
               Symbols (comma-separated)
               <input
@@ -278,20 +278,14 @@ export function PaperSessionPanel(): JSX.Element {
                 onChange={(e) => setForm((f) => ({ ...f, instrumentIds: e.target.value }))}
               />
             </label>
-            <label>
-              Timeframe
-              <select
-                value={form.timeframe}
-                disabled={stoppable}
-                onChange={(e) => setForm((f) => ({ ...f, timeframe: asTimeframe(e.target.value) }))}
-              >
-                {TIMEFRAMES.map((tf) => (
-                  <option key={tf} value={tf}>
-                    {tf}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <SegmentedToggle
+              id="paper-session-timeframe"
+              label="Timeframe"
+              value={form.timeframe}
+              disabled={stoppable}
+              onChange={(value) => setForm((f) => ({ ...f, timeframe: asTimeframe(value) }))}
+              options={TIMEFRAMES.map((tf) => ({ value: tf, label: tf }))}
+            />
             <label>
               Starting Capital (Paper)
               <input

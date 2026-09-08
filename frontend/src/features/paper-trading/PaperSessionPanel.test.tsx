@@ -8,7 +8,7 @@
 // The LIVE-SAFETY tests here are the frontend half of the §10 proof
 // (the backend half is `mode: "PAPER_REPLAY"`, asserted in
 // `tests/unit/infrastructure/api/test_checkpoint_64_68_paper_session_api.py`).
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { PaperSessionPanel } from "./PaperSessionPanel";
@@ -244,10 +244,14 @@ describe("PaperSessionPanel", () => {
     stubFetch([STOPPED_SESSION]);
     renderWithAuth(<PaperSessionPanel />, withCapabilities(["configuration.activate"]));
 
-    await waitFor(() => expect(screen.getByLabelText(/Strategy/)).toBeInTheDocument());
-    const options = Array.from(
-      screen.getByLabelText(/Strategy/).querySelectorAll("option"),
-    ).map((option) => option.textContent);
+    await waitFor(() =>
+      expect(document.getElementById("paper-session-strategy-label")).toBeInTheDocument(),
+    );
+    const strategyGroup = document.getElementById("paper-session-strategy-label")
+      ?.parentElement as HTMLElement;
+    const options = within(strategyGroup)
+      .getAllByRole("radio")
+      .map((radio) => radio.textContent);
     expect(options).toEqual([
       "ema_crossover",
       "sma_trend_filter",

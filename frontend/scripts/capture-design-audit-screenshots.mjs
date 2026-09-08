@@ -28,7 +28,9 @@ const BASE_URL = "http://127.0.0.1:5173";
 // clicks through the real navigation exactly as a user would.
 const SCREENS = [
   { id: "dashboard", label: "Dashboard" },
+  { id: "configuration", label: "Configuration" },
   { id: "market-data-archive", label: "Market Data Archive" },
+  { id: "market-data", label: "Market Data" },
   { id: "settings", label: "Settings" },
   { id: "strategies", label: "Strategies" },
   { id: "backtesting", label: "Backtesting" },
@@ -38,6 +40,13 @@ const SCREENS = [
   { id: "paper-trading", label: "Paper Trading" },
   { id: "reports", label: "Reports" },
 ];
+// Live Scanner / Live Paper Operations are deliberately NOT added here
+// - each already has its own dedicated, more accurately-fixtured
+// screenshot script (FRONTEND-LIVE-READY's
+// capture-live-ready-screenshots.mjs) whose mocks this generic
+// fallback would not match well. This checkpoint's audit reuses those
+// existing, already-committed screenshots instead of re-capturing them
+// with a worse fixture.
 
 // Mock/fixture data, clearly labelled as such (PROHIBITIONS: no real
 // account, no real Dhan call). Kept intentionally generic - it exists to
@@ -57,7 +66,7 @@ function jsonBody(obj) {
     // so a mocked response needs these or the browser discards it as a
     // cross-origin failure even though Playwright never touched the wire.
     headers: {
-      "Access-Control-Allow-Origin": "http://127.0.0.1:5173",
+      "Access-Control-Allow-Origin": BASE_URL,
       "Access-Control-Allow-Credentials": "true",
     },
     body: JSON.stringify(obj),
@@ -84,7 +93,7 @@ async function installApiMocks(page) {
       return route.fulfill({
         status: 204,
         headers: {
-          "Access-Control-Allow-Origin": "http://127.0.0.1:5173",
+          "Access-Control-Allow-Origin": BASE_URL,
           "Access-Control-Allow-Credentials": "true",
           "Access-Control-Allow-Methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
           "Access-Control-Allow-Headers": "content-type,x-csrftoken",
@@ -167,6 +176,12 @@ async function installApiMocks(page) {
     // listStrategies/listWatchlists/listResearchStatuses in
     // src/common/api/*.ts), never a paginated {results: [...]} envelope
     // - the fallback below mirrors that.
+    if (p === "/api/v1/config/signals/") {
+      return route.fulfill(jsonBody({ items: [], total_count: 0, page: 1, page_size: 10 }));
+    }
+    if (p === "/api/v1/config/market-data/instruments/") {
+      return route.fulfill(jsonBody({ exchange: "NSE", data_source: "DHAN_SCRIP_MASTER", instruments: [] }));
+    }
     if (p === "/api/v1/config/watchlists/") {
       return route.fulfill(
         jsonBody([

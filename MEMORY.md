@@ -1056,6 +1056,34 @@ re-deriving them. Not a full transcript; no invented detail.
   The user's own separately-running `app.bat` dev servers (5173/8000)
   were left untouched throughout - all testing used an isolated port
   (5199).
+- **`FRONTEND-3`**: app-wide audit round 2 (extends `FRONTEND-2`'s
+  screenshot script to the 2 previously-unaudited pages its generic
+  mock could handle - Configuration, Market Data; Live Scanner/Live
+  Paper Operations deliberately reuse `FRONTEND-LIVE-READY`'s own
+  dedicated, better-fixtured screenshots instead of a worse re-capture)
+  plus the operator's explicit strategy-selector-toggle request. Found
+  and fixed a real mock bug while extending the script: Market Data's
+  screen threw because `/config/signals/`/`/market-data/instruments/`
+  had no dedicated mock and fell through to a `[]` fallback that
+  doesn't match either endpoint's real object shape. New shared
+  `SegmentedToggle.tsx` component (~75 lines, real
+  `role="radiogroup"`/`role="radio"`, not styled divs) - falls back to
+  a `<select>` automatically past 5 options (proven by a dedicated
+  6-option test, not just asserted). Applied to 4 real call sites:
+  `StrategyConfigurationPage.tsx` (Strategy, the operator's explicit
+  ask), `PaperTradingPage.tsx` (Side/Order Type),
+  `PaperSessionPanel.tsx` (Strategy/Timeframe). Categorized findings:
+  Category 1 (above, implemented); Category 2 (Reports density,
+  Dashboard length, Paper Trading's duplicate panels - all `FRONTEND-2`
+  carryovers, still open; NEW: Market Data's 6-filter sidebar has
+  toggle-pattern option counts but converting them risks reducing
+  density in an already-narrow column - real layout judgment, not
+  applied); Category 3 (nav now 3 rows/14 buttons, `react-router`
+  question - both unchanged, still deferred). Full suite: 34
+  files/367 tests passing, typecheck clean. Did not touch the Compare
+  page or instrument picker beyond confirming their post-
+  `FRONTEND-DATA-TABLES` state. The user's own `app.bat` dev servers
+  (5173/8000) were left untouched - isolated test port (5198) used.
 - **`LIVE-2-FINALIZE`**: an end-of-day close-out checkpoint for
   `LIVE-2` was requested with the premise that market had just closed
   on the same day as the `LIVE-2` run — but this conversation's
