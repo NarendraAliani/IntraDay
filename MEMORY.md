@@ -472,6 +472,44 @@ re-deriving them. Not a full transcript; no invented detail.
   day fetched) - worked correctly on the first real try, and
   `CHECKPOINT_69`'s fix continues to hold on fresh data 5 checkpoints
   later.
+- **`CHECKPOINT_75`: MFE (Maximum Favorable Excursion) diagnostic —
+  final Gainz-tuning checkpoint, read-only, no parameter changes.**
+  For RELIANCE/`gainz_balanced_t1_widened`'s 68 trades, computed each
+  trade's real `SimulatedTrade.mfe` as a multiple of its own `atr_14`
+  value at entry. **Answers `CHECKPOINT_73`'s open question directly**:
+  T2/T3 are unreachable not ONLY because of the single-shot exit
+  mechanism, but because price genuinely rarely travels that far -
+  only 17.6% of trades ever reach 2.0x ATR favorably, and just 1.5%
+  (1/68) ever reach 3.0x ATR, regardless of exit design.
+  `atr_volatility_breakout` (already T1=1.5x) shows a similar shape
+  (34.8% reach 2.0x, only 4.3% reach 3.0x) - confirms this is a
+  real instrument/timeframe property, not Gainz-specific. **Verdict**:
+  raising T1 further (e.g. to 2.0) does NOT have clearly favorable
+  room - it would convert the 17 trades (25%) currently landing
+  between 1.5x-2.0x MFE from winners into probable losers, a real
+  trade-off, not a free improvement. **Real secondary finding**: 16.7%
+  of Gainz's losing trades (25.0% of ATR's) showed genuine favorable
+  excursion (>=1.0x ATR) before reversing into a stop-out - a
+  trailing-stop (the `TradePlan.trailing_stop_loss` field already
+  exists and `simulate_tradeplan_exit()` already reads it - Gainz's
+  own `build_trade_plan()` just never populates it) is a real,
+  evidence-backed idea for a FUTURE checkpoint, not evaluated further
+  here. One unresolved, single-trade anomaly flagged honestly, not
+  explained away (a `2026-08-31` BEARISH trade whose `TARGET_1` exit
+  price sits above entry - plausibly a real gap at that block's
+  boundary, not traced further as it would mean debugging exit-
+  simulation code, out of this checkpoint's read-only scope).
+  **GAINZ TUNING IS NOW EXPLICITLY PAUSED** - `73`/`74`/`75` all tuned
+  or diagnosed against the SAME 16-17 real trading day dataset, a real
+  overfitting risk this project's own roadmap Phase D exists to guard
+  against. **Resumption criterion (concrete, checkable)**: do not
+  resume Gainz parameter tuning until the real dataset (growing daily
+  via `CHECKPOINT_72`'s routine) reaches **at least 30 real trading
+  days beyond** the 17 already used as of `2026-09-08` (16
+  gate-verified + `09-08` itself) - verify the current day count
+  against `HistoricalBar` directly before considering resumption. A
+  future checkpoint should treat this as a real gate, not a
+  suggestion.
 - **`LIVE-2-FINALIZE`**: an end-of-day close-out checkpoint for
   `LIVE-2` was requested with the premise that market had just closed
   on the same day as the `LIVE-2` run — but this conversation's
