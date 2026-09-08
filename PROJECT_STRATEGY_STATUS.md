@@ -345,3 +345,17 @@ shaped code, not a test-only helper's own hand-built one.
 **The system is genuinely ready for a first live paper session
 today.** See `CHECKPOINT_78_SUMMARY.md` for the full fix trace and the
 restated (not executed) operator command sequence.
+
+### `LIVE-PAPER-1` attempt — halted pre-flight, market closed
+
+`[F]` A first live paper session was attempted (`LIVE-PAPER-1`) at
+`2026-09-08 20:24 IST` — halted immediately at Part 0 pre-flight, since
+real time checked directly (`date`) was well past NSE's 15:30 IST
+close. No worker was launched, no `ScannerConfiguration` changed, zero
+DB writes. **This does not affect the READY verdict above** — nothing
+about infrastructure readiness was tested, changed, or contradicted;
+the session simply never reached a point where readiness would matter.
+Needs re-attempt on a future trading day during market hours, with a
+fresh Dhan credential check (the one `CHECKPOINT_78` recorded expires
+`2026-09-09 10:17:40 UTC` and should not be reused). See
+`LIVE_PAPER-1_SUMMARY.md` for the full (brief) record.

@@ -954,6 +954,16 @@ re-deriving them. Not a full transcript; no invented detail.
   unvalidated cross-symbol. `CHECKPOINT_79_SUMMARY.md` written at repo
   root. `git status --short` confirmed only documentation files
   changed before commit.
+- **`LIVE-PAPER-1`**: first live paper trading session attempt —
+  **halted at Part 0 pre-flight, market closed**. Checked real time
+  directly (`date`): `2026-09-08 20:24:04 IST`, well past NSE's 15:30
+  IST close. Per this checkpoint's own explicit rule, stopped
+  immediately rather than waiting or working around it — no worker
+  launched, no `ScannerConfiguration` change, zero DB writes. Needs
+  re-attempt on a future trading day during market hours (09:15-15:30
+  IST), with a fresh Dhan credential check at that time (`CHECKPOINT_
+  78`'s own check expires `2026-09-09 10:17:40 UTC` and should not be
+  reused).
 - **`LIVE-2-FINALIZE`**: an end-of-day close-out checkpoint for
   `LIVE-2` was requested with the premise that market had just closed
   on the same day as the `LIVE-2` run — but this conversation's
