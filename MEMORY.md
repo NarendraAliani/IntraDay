@@ -824,6 +824,46 @@ re-deriving them. Not a full transcript; no invented detail.
   `CHECKPOINT_ORB-A_SUMMARY.md` for the exact before/after comparison.
   Phase B (the strategy itself) is the next step in this thread, not
   yet started.
+- **`CHECKPOINT-ORB-B`: the Opening Range Breakout strategy itself
+  built, `registry.py` still untouched - and the FIRST genuinely
+  positive first-look real backtest result of this entire session.**
+  New `OrbBreakoutStrategy` (`orb_breakout.py`), matching the
+  `Strategy` Protocol structurally identical to `ema_crossover.py`.
+  5 parameters: `opening_range_minutes` (15), `target_range_multiplier`
+  (1.0), `stop_range_fraction` (1.0 = opposite range boundary itself),
+  `minimum_range_atr_multiplier` (0 = disabled by default),
+  `atr_lookback` (14, filter-only). **`atr_lookback`'s role decided
+  explicitly, not by inertia**: an OPTIONAL, default-OFF range-size
+  filter (guards against trading a too-narrow, noise-prone range) -
+  when disabled, ATR isn't even added to `required_features()`, so a
+  default configuration never needs it to warm up. `evaluate()`: BULLISH
+  when `close > opening_range_high`, BEARISH when `close <
+  opening_range_low`. `build_trade_plan()`: SINGLE target
+  (`target = entry + sign*target_range_multiplier*range_size`,
+  `stop = opposite_boundary -/+ stop_range_fraction*range_size`) - a
+  degenerate stop-on-the-wrong-side is IMPOSSIBLE by construction here
+  (unlike the mean-reversion strategy's own M>N runtime guard),
+  confirmed directly across the full valid parameter range. 21 new
+  unit tests, all passing, including both filtered-out and
+  pass-through ATR-filter cases explicitly.
+  **First real backtest (explicitly a first look, NOT Phase D's
+  validation gate)**: RELIANCE, default params, full gate-verified
+  dataset (still 17 real days, re-checked directly, unchanged since
+  `CHECKPOINT-VWAP-B`). 18 trades, win_rate **77.8%**, expectancy
+  **+5.21/trade**, net_pnl **+93.82**, return **+0.094%** -
+  **the first genuinely positive first-look result this entire
+  session has produced**, reported honestly: driven by an
+  exceptionally high win rate (14/18 hit target) rather than a strong
+  R:R (only 0.31 - average losers ~3x larger than average winners), a
+  materially different profile from every prior strategy. MFE
+  distribution (same method `CHECKPOINT_75`/`CHECKPOINT-VWAP-B` both
+  used): 88.2% of trades reach >=2.0x ATR favorably - by far the most
+  favorable distribution of any strategy tested this session (vs
+  VWAP's 42.6%, Gainz's 17.6%). Small sample (18 trades, 17 days, one
+  symbol, default params only) - genuinely encouraging, explicitly NOT
+  validated; Phase D must test this for real, not assume it holds.
+  Zero persistence throughout (`BacktestResultRecord` 208->208).
+  Phase C (2-3 config presets) is the next step in this thread.
 - **`LIVE-2-FINALIZE`**: an end-of-day close-out checkpoint for
   `LIVE-2` was requested with the premise that market had just closed
   on the same day as the `LIVE-2` run — but this conversation's
