@@ -892,6 +892,45 @@ re-deriving them. Not a full transcript; no invented detail.
   validation) is the next and final step in this thread - and the
   first data point (`CHECKPOINT-ORB-B`'s own first-look result) is the
   most encouraging of any strategy this session so far.
+- **`CHECKPOINT-ORB-D`: walk-forward validation gate for
+  `orb_breakout`, all 3 presets, all 4 symbols - closes the ORB
+  thread. THIS SESSION'S BEST WALK-FORWARD RESULT, reported honestly
+  with its real caveats, not oversold.** Data re-checked directly:
+  still 17 real trading days/symbol. **Central question answered**:
+  does `CHECKPOINT-ORB-B`'s encouraging first look (RELIANCE,
+  `orb_classic`, +Rs93.82, 77.8% win rate) survive walk-forward split?
+  PARTIALLY - aggregate OOS return stays positive (+0.065%), but 2 of
+  3 individual folds show a real sign flip; the aggregate is carried
+  by one fold's large positive OOS result on a small (4-trade) sample.
+  **All 3 RELIANCE presets are aggregate-positive simultaneously**
+  (`orb_classic` +0.065, `orb_tight` +0.059, `orb_wide` +0.089) - the
+  best single-symbol result of the ENTIRE session, ~5-8x larger than
+  the next-best (`atr_volatility_breakout`'s own +0.0114,
+  `CHECKPOINT_70`). `orb_tight` is the most FOLD-STABLE of the 3 (only
+  1/3 folds flip, vs 2/3 for classic/wide) and shows consistently high
+  win rates (72-80% IS, 50-80% OOS) - the single most encouraging
+  individual result this checkpoint found. **Does NOT generalize
+  cross-symbol** - HDFCBANK/INFY are negative across all 3 presets
+  (mirroring `CHECKPOINT_71`'s own finding that no strategy's
+  RELIANCE edge has ever transferred cross-symbol this session); TCS
+  is mixed (2/3 presets positive, but on the thinnest, noisiest
+  samples - as few as 1-2 OOS trades/fold). **Answers `CHECKPOINT-
+  ORB-B`'s own MFE question**: this is the FIRST strategy this session
+  where a favorable MFE distribution (88.2% >=2.0x ATR) IS reflected
+  in a genuinely better walk-forward outcome (on RELIANCE) - but a
+  better outcome is not the same as a STABLE one; `orb_classic`/
+  `orb_wide` still flip 2/3 folds despite positive aggregates, so this
+  does not fully escape `CHECKPOINT_75`/`CHECKPOINT-VWAP-D`'s own
+  "MFE alone doesn't guarantee a validated edge" lesson. **Honest
+  caveat specific to ORB**: it fires at most once per session, so its
+  own per-fold trade counts (as low as 1-5) are smaller than every
+  other strategy tested this session - these numbers carry even less
+  statistical weight than usual, on top of the small-day-count caveat
+  every Phase D already carries. Zero persistence throughout
+  (`BacktestResultRecord` 208->208). No `RESEARCH_ACTIVE`/status
+  change made or implied. This closes all 4 phases (A/B/C/D) of the
+  ORB thread; `registry.py` remains untouched, the strategy remains
+  unreachable from the live scanner/backtest API.
 - **`LIVE-2-FINALIZE`**: an end-of-day close-out checkpoint for
   `LIVE-2` was requested with the premise that market had just closed
   on the same day as the `LIVE-2` run — but this conversation's
