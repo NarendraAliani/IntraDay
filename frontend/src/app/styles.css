@@ -1369,9 +1369,45 @@ dd {
   margin-top: var(--space-3);
 }
 
+/* Checkpoint FRONTEND-DATA-TABLES: the shared `Pagination` component's
+   own class - same visual recipe as `.backtest-results__pagination`
+   above, generalized so the instrument picker and Compare page's
+   result list don't duplicate it under a name that implies backtest-
+   results-specific meaning. */
+.pagination-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.pagination-controls__count {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
 .comparison-page__checkbox {
   display: block;
   margin-bottom: 0.35rem;
+}
+
+.comparison-page__result-primary {
+  font-weight: 500;
+}
+
+.comparison-page__result-secondary {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  font-family: var(--font-mono);
+}
+
+.comparison-page__list-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-3);
 }
 
 .backtest-results__cost-model-identity {

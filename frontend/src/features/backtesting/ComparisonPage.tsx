@@ -11,6 +11,7 @@ import { useEffect, useState } from "react";
 import { ApiNetworkError, ApiRequestError } from "../../common/api/client";
 import { ErrorState } from "../../common/components/ErrorState";
 import { LoadingState } from "../../common/components/LoadingState";
+import { Pagination, paginate } from "../../common/components/Pagination";
 import {
   asConfigurationView,
   asDataQualityView,
@@ -21,6 +22,38 @@ import type { BacktestResult } from "../../common/api/backtestingApi";
 import type { StrategySummary } from "../../common/api/strategyApi";
 
 type SortMetric = "net_pnl" | "profit_factor" | "return_percent" | "max_drawdown_percent";
+
+// Checkpoint FRONTEND-DATA-TABLES: sorting the RAW results list before
+// selection - distinct from `SortMetric` above, which only orders the
+// already-selected comparison table. `strategy_id`/`configuration_
+// version` come from `configuration` (see `to_json_dict()` in
+// research/backtesting/serialization.py) - already-available data, no
+// new backend field.
+type ListSort = "generated_at_desc" | "generated_at_asc" | "instrument_id" | "timeframe";
+
+const RESULTS_PER_PAGE = 20;
+
+interface BacktestConfigurationFull {
+  instrument_id: string;
+  timeframe: string;
+  strategy_id: string;
+  configuration_version: string;
+  start: string;
+  end: string;
+}
+
+function fullConfiguration(result: BacktestResult): BacktestConfigurationFull {
+  return result.configuration as unknown as BacktestConfigurationFull;
+}
+
+function formatGeneratedAt(isoTimestamp: string): string {
+  const parsed = new Date(isoTimestamp);
+  if (Number.isNaN(parsed.getTime())) return isoTimestamp;
+  return parsed.toLocaleString("en-IN", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+}
 
 function describeError(error: unknown): string {
   if (error instanceof ApiRequestError || error instanceof ApiNetworkError) {
@@ -41,6 +74,8 @@ export function ComparisonPage(): JSX.Element {
   const [results, setResults] = useState<BacktestResult[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [sortMetric, setSortMetric] = useState<SortMetric>("net_pnl");
+  const [listSort, setListSort] = useState<ListSort>("generated_at_desc");
+  const [listPage, setListPage] = useState(1);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -63,6 +98,7 @@ export function ComparisonPage(): JSX.Element {
     if (!selectedStrategyId) return;
     let cancelled = false;
     setSelectedIds([]);
+    setListPage(1);
     listBacktestResults(selectedStrategyId)
       .then((list) => {
         if (!cancelled) setResults(list);
@@ -80,6 +116,23 @@ export function ComparisonPage(): JSX.Element {
 
   const selectedResults = results.filter((r) => selectedIds.includes(r.backtest_id));
   const sorted = [...selectedResults].sort((a, b) => metricValue(b, sortMetric) - metricValue(a, sortMetric));
+
+  const sortedList = [...results].sort((a, b) => {
+    switch (listSort) {
+      case "generated_at_desc":
+        return b.generated_at.localeCompare(a.generated_at);
+      case "generated_at_asc":
+        return a.generated_at.localeCompare(b.generated_at);
+      case "instrument_id":
+        return fullConfiguration(a).instrument_id.localeCompare(fullConfiguration(b).instrument_id);
+      case "timeframe":
+        return fullConfiguration(a).timeframe.localeCompare(fullConfiguration(b).timeframe);
+      default:
+        return 0;
+    }
+  });
+  const { pageItems: pageResults, totalPages: listTotalPages, currentPage: listCurrentPage } =
+    paginate(sortedList, listPage, RESULTS_PER_PAGE);
 
   const instrumentSet = new Set(selectedResults.map((r) => asConfigurationView(r).instrument_id));
   const timeframeSet = new Set(selectedResults.map((r) => asConfigurationView(r).timeframe));
@@ -130,7 +183,7 @@ export function ComparisonPage(): JSX.Element {
       </div>
 
       <div className="strategy-config-page__field">
-        <label htmlFor="comparison-sort">Sort by</label>
+        <label htmlFor="comparison-sort">Sort comparison table by</label>
         <select
           id="comparison-sort"
           value={sortMetric}
@@ -148,24 +201,59 @@ export function ComparisonPage(): JSX.Element {
       ) : (
         <>
           <fieldset>
-            <legend>Select results to compare</legend>
-            {results.map((r) => (
-              <label key={r.backtest_id} className="comparison-page__checkbox">
-                <input
-                  type="checkbox"
-                  checked={selectedIds.includes(r.backtest_id)}
-                  onChange={(e) =>
-                    setSelectedIds((prev) =>
-                      e.target.checked
-                        ? [...prev, r.backtest_id]
-                        : prev.filter((id) => id !== r.backtest_id),
-                    )
-                  }
-                />
-                {r.backtest_id.slice(0, 12)} — {asConfigurationView(r).instrument_id} (
-                {asConfigurationView(r).timeframe})
+            <legend>Select results to compare ({results.length} saved for this strategy)</legend>
+            <div className="comparison-page__list-controls">
+              <label>
+                Sort list by
+                <select
+                  value={listSort}
+                  onChange={(e) => {
+                    setListSort(e.target.value as ListSort);
+                    setListPage(1);
+                  }}
+                >
+                  <option value="generated_at_desc">Newest first</option>
+                  <option value="generated_at_asc">Oldest first</option>
+                  <option value="instrument_id">Instrument</option>
+                  <option value="timeframe">Timeframe</option>
+                </select>
               </label>
-            ))}
+            </div>
+            {pageResults.map((r) => {
+              const config = fullConfiguration(r);
+              return (
+                <label key={r.backtest_id} className="comparison-page__checkbox">
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.includes(r.backtest_id)}
+                    onChange={(e) =>
+                      setSelectedIds((prev) =>
+                        e.target.checked
+                          ? [...prev, r.backtest_id]
+                          : prev.filter((id) => id !== r.backtest_id),
+                      )
+                    }
+                  />
+                  <span className="comparison-page__result-primary">
+                    {config.instrument_id} · {config.timeframe} · {formatGeneratedAt(r.generated_at)}
+                  </span>{" "}
+                  <span
+                    className="comparison-page__result-secondary"
+                    title={`Backtest ID: ${r.backtest_id}`}
+                  >
+                    ({r.backtest_id.slice(0, 12)}
+                    {config.configuration_version ? `, config v${config.configuration_version}` : ""})
+                  </span>
+                </label>
+              );
+            })}
+            <Pagination
+              page={listCurrentPage}
+              totalPages={listTotalPages}
+              onChange={setListPage}
+              totalItems={results.length}
+              itemLabel="result"
+            />
           </fieldset>
 
           {incompatible && (

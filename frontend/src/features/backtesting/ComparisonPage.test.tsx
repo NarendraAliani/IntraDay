@@ -117,4 +117,47 @@ describe("ComparisonPage", () => {
       expect(screen.getByText(/different instruments, timeframes/)).toBeInTheDocument(),
     );
   });
+
+  it("Checkpoint FRONTEND-DATA-TABLES: paginates the results list instead of rendering all of them at once", async () => {
+    const many = Array.from({ length: 45 }, (_, i) =>
+      result(`bt-${String(i).padStart(12, "0")}`, "10", `NSE:STOCK${i}`),
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.endsWith("/strategy-engine/strategies/")) return jsonResponse(STRATEGIES);
+        if (url.includes("/backtesting/strategies/ema_crossover/results/")) return jsonResponse(many);
+        return jsonResponse({ error_code: "not_found", message: "no route" }, 404);
+      }),
+    );
+    renderWithAuth(<ComparisonPage />);
+
+    await waitFor(() => expect(screen.getByText(/45 results?/)).toBeInTheDocument());
+    // Only one page (20/page) of checkboxes should be in the DOM, not all 45.
+    expect(screen.getAllByRole("checkbox").length).toBe(20);
+    expect(screen.getByText("Page 1 of 3")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Next →" }));
+    await waitFor(() => expect(screen.getByText("Page 2 of 3")).toBeInTheDocument());
+    expect(screen.getAllByRole("checkbox").length).toBe(20);
+  });
+
+  it("Checkpoint FRONTEND-DATA-TABLES: labels each result with instrument/timeframe/date, hash as secondary detail", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.endsWith("/strategy-engine/strategies/")) return jsonResponse(STRATEGIES);
+        if (url.includes("/backtesting/strategies/ema_crossover/results/")) {
+          return jsonResponse([result("bt-eeeeeeeeeeee", "60", "NSE:RELIANCE", "5m")]);
+        }
+        return jsonResponse({ error_code: "not_found", message: "no route" }, 404);
+      }),
+    );
+    renderWithAuth(<ComparisonPage />);
+
+    await waitFor(() => expect(screen.getByText(/NSE:RELIANCE · 5m/)).toBeInTheDocument());
+    expect(screen.getByText(/bt-eeeeeeeee/)).toBeInTheDocument();
+  });
 });

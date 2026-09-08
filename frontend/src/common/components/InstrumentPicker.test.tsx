@@ -192,4 +192,38 @@ describe("InstrumentPickerMulti", () => {
       expect(screen.getByText(/No instruments available yet/)).toBeInTheDocument(),
     );
   });
+
+  it("Checkpoint FRONTEND-DATA-TABLES: paginates the checklist instead of rendering every instrument at once", async () => {
+    const many = Array.from({ length: 150 }, (_, i) => ({
+      symbol: `STOCK${String(i).padStart(3, "0")}`,
+      displayName: `Stock ${String(i).padStart(3, "0")} Ltd`,
+    }));
+    stub({ nseInstruments: many });
+    renderWithAuth(<InstrumentPickerMulti idPrefix="test-multi" value={[]} onChange={() => {}} />);
+
+    await waitFor(() => expect(screen.getByText("150 matches")).toBeInTheDocument());
+    // Only one page (100/page) of checkboxes should be in the DOM, not all 150.
+    expect(screen.getAllByRole("checkbox").length).toBe(100);
+    expect(screen.getByText("Page 1 of 2")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Next →" }));
+    await waitFor(() => expect(screen.getByText("Page 2 of 2")).toBeInTheDocument());
+    expect(screen.getAllByRole("checkbox").length).toBe(50);
+  });
+
+  it('"Select All" still applies to every filtered instrument across all pages, not only the visible page', async () => {
+    const many = Array.from({ length: 120 }, (_, i) => ({
+      symbol: `STOCK${String(i).padStart(3, "0")}`,
+      displayName: `Stock ${String(i).padStart(3, "0")} Ltd`,
+    }));
+    stub({ nseInstruments: many });
+    const onChange = vi.fn();
+    renderWithAuth(<InstrumentPickerMulti idPrefix="test-multi" value={[]} onChange={onChange} />);
+
+    await waitFor(() => expect(screen.getByText("Page 1 of 2")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Select All" }));
+
+    expect(onChange).toHaveBeenCalledWith(expect.arrayContaining(many.map((i) => `NSE:${i.symbol}`)));
+    expect((onChange.mock.calls[0][0] as string[]).length).toBe(120);
+  });
 });

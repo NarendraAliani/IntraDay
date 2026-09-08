@@ -1021,6 +1021,41 @@ re-deriving them. Not a full transcript; no invented detail.
   (including `styles.quality.test.ts`/`theme.quality.test.ts` gates),
   `npm run typecheck` clean. No backend/API change, no new feature -
   CSS-only fix to already-fetched data's presentation.
+- **`FRONTEND-DATA-TABLES`**: fixed two concrete, screenshot-confirmed
+  usability problems - the shared instrument picker (~8,558
+  instruments rendered as one flat, unpaginated checkbox grid) and the
+  Compare/Strategy Comparison page (100+ backtest results as a flat
+  list labeled only by a cryptic hash). Confirmed scope directly:
+  `InstrumentPickerMulti`/`InstrumentPickerSingle`
+  (`InstrumentPicker.tsx`) is genuinely ONE shared component reused by
+  4 real call sites (`LiveScannerConsole`/`PaperTradingPage`/
+  `HistoricalMarketDataCard`/`WatchlistPage`) - one fix covers all 4.
+  `[F]` real row counts checked directly: `BacktestResultRecord` = 208
+  total, `ema_crossover` alone = 139 (confirms "100+"). Found and
+  reused an EXISTING client-side pagination idiom
+  (`BacktestingWorkbenchPage.tsx`'s own `TradeTable`) rather than
+  inventing a new pattern or a virtualization library - extracted it
+  into one small shared `Pagination.tsx` (~45 lines: control +
+  `paginate()` helper). Fixed `InstrumentPickerMulti`: paginated at
+  100/page, search/exchange reset to page 1, "Select All" unchanged in
+  behavior (still applies across all pages) but now says so explicitly.
+  Fixed `ComparisonPage.tsx`: results list paginated at 20/page, added
+  a "Sort list by" control (newest/oldest/instrument/timeframe, all
+  from already-available `generated_at`/`configuration` fields - no
+  backend change), replaced the raw-hash-only label with
+  `<instrument> · <timeframe> · <date>` as primary and the hash+config
+  version as secondary/tooltip detail. Grouping by strategy was
+  considered but not built - the list is already scoped to one
+  strategy at a time via the existing dropdown, so it never actually
+  mixes strategies. Screenshot script found and fixed a REAL mock bug
+  in itself (fixture used `company_name` instead of the real
+  contract's `display_name`, silently crashing the picker's own
+  `.localeCompare()` sort) - root-caused directly against the real
+  generated contract type, not worked around. Full suite: 34
+  files/365 tests passing (4 new pagination tests), typecheck clean.
+  The user's own separately-running `app.bat` dev servers (5173/8000)
+  were left untouched throughout - all testing used an isolated port
+  (5199).
 - **`LIVE-2-FINALIZE`**: an end-of-day close-out checkpoint for
   `LIVE-2` was requested with the premise that market had just closed
   on the same day as the `LIVE-2` run — but this conversation's

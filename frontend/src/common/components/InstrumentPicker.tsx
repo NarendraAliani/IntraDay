@@ -50,6 +50,15 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { getCurrentQuotes, listInstruments } from "../api/marketDataApi";
+import { Pagination, paginate } from "./Pagination";
+
+// Checkpoint FRONTEND-DATA-TABLES: an exchange can carry ~8,558
+// tradable instruments (confirmed via screenshot review) - rendering
+// all of them as DOM checkboxes at once is a real scroll/performance
+// burden. 100/page keeps each render small while still showing a
+// substantial, useful page of results (most searches narrow this down
+// well below one page anyway).
+const INSTRUMENTS_PER_PAGE = 100;
 
 export type ExchangeFilter = "ALL" | "NSE" | "BSE";
 
@@ -286,9 +295,21 @@ export interface InstrumentPickerMultiProps {
 export function InstrumentPickerMulti(props: InstrumentPickerMultiProps): JSX.Element {
   const [exchange, setExchange] = useState<ExchangeFilter>("ALL");
   const [query, setQuery] = useState("");
+  const [page, setPage] = useState(1);
   const { entries, loading, error, isFullExchangeList } = useInstrumentUniverse(exchange);
   const filtered = useMemo(() => entries.filter((e) => matchesSearch(e, query)), [entries, query]);
+  const { pageItems, totalPages, currentPage } = paginate(filtered, page, INSTRUMENTS_PER_PAGE);
   const selected = new Set(props.value);
+
+  function updateQuery(next: string): void {
+    setQuery(next);
+    setPage(1);
+  }
+
+  function updateExchange(next: ExchangeFilter): void {
+    setExchange(next);
+    setPage(1);
+  }
 
   function toggle(instrumentId: string): void {
     const next = new Set(selected);
@@ -299,13 +320,13 @@ export function InstrumentPickerMulti(props: InstrumentPickerMultiProps): JSX.El
 
   return (
     <div className="instrument-picker">
-      <ExchangeSelect id={`${props.idPrefix}-exchange`} value={exchange} onChange={setExchange} />
+      <ExchangeSelect id={`${props.idPrefix}-exchange`} value={exchange} onChange={updateExchange} />
       <IndexUnavailableNotice />
       {!loading && entries.length > 0 && (
         <SearchInput
           id={`${props.idPrefix}-search`}
           value={query}
-          onChange={setQuery}
+          onChange={updateQuery}
           resultCount={filtered.length}
         />
       )}
@@ -327,13 +348,24 @@ export function InstrumentPickerMulti(props: InstrumentPickerMultiProps): JSX.El
           <div className="instrument-picker__actions">
             <button type="button" onClick={() => props.onChange(filtered.map((e) => e.instrumentId))}>
               Select All{query ? " (Matching)" : ""}
+              {/* Checkpoint FRONTEND-DATA-TABLES: "Select All" still
+                  selects every filtered instrument across ALL pages,
+                  not just the page currently visible - unchanged
+                  behavior, called out explicitly below so pagination
+                  never makes this button look narrower than it is. */}
             </button>
             <button type="button" onClick={() => props.onChange([])}>
               Clear
             </button>
           </div>
+          {totalPages > 1 && (
+            <p className="strategy-config-page__help-text">
+              Showing {pageItems.length} of {filtered.length} instruments on this page — "Select
+              All" still applies to all {filtered.length}, not just this page.
+            </p>
+          )}
           <ul className="instrument-picker__checklist">
-            {filtered.map((entry) => (
+            {pageItems.map((entry) => (
               <li key={entry.instrumentId}>
                 <label>
                   <input
@@ -346,6 +378,13 @@ export function InstrumentPickerMulti(props: InstrumentPickerMultiProps): JSX.El
               </li>
             ))}
           </ul>
+          <Pagination
+            page={currentPage}
+            totalPages={totalPages}
+            onChange={setPage}
+            totalItems={filtered.length}
+            itemLabel="instrument"
+          />
         </>
       )}
     </div>
