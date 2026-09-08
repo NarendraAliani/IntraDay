@@ -1,13 +1,35 @@
 # Project Strategy Status
 
 Living, committed reference — unlike the roadmap documents
-(`GAINZ_ROADMAP.md`, `VWAP_STRATEGY_ROADMAP.md`), this file is meant
-to be kept current and IS committed. Consolidates everything this
-session established about all 5 strategies that exist in this
-codebase. Written by `CHECKPOINT_76` — see that checkpoint's own
-summary for process notes; this document is the actual deliverable.
+(`GAINZ_ROADMAP.md`, `VWAP_STRATEGY_ROADMAP.md`,
+`ORB_STRATEGY_ROADMAP.md`), this file is meant to be kept current and
+IS committed. Consolidates everything this session established about
+all 6 strategies that exist in this codebase. Written by
+`CHECKPOINT_76` — see that checkpoint's own summary for process notes;
+this document is the actual deliverable. Updated by `CHECKPOINT_79` to
+add `orb_breakout` and consolidate all 3 research-strategy pauses.
 
-## 1. All 5 strategies, one table
+## 0. Current state — read this first
+
+Three research strategies exist outside the original registered roster:
+`gainz_compatible_research`, `vwap_mean_reversion`, and
+`orb_breakout`. **All 3 are now paused for tuning** (§5) — Gainz per
+`CHECKPOINT_75`, VWAP per `CHECKPOINT_76`'s analogy-extension, ORB per
+this checkpoint (`CHECKPOINT_79`) — and **all 3 share the identical
+resumption criterion**: the real dataset reaching 30+ trading days
+beyond the 17 already used as of `2026-09-08`, a concrete number
+checkable directly against `HistoricalBar`. **None of the 3 is
+registered in `registry.py`**; none is selectable from the live
+scanner today, by deliberate design in every checkpoint of all 3
+threads. Of the 3, **ORB has produced the single most promising real
+result of the whole session** — RELIANCE positive across all 3 presets
+simultaneously, a clear step up from anything Gainz or VWAP produced
+on any symbol (§1, §4 below) — but it remains just as unvalidated
+cross-symbol as Gainz and VWAP: HDFCBANK and INFY are negative across
+all 3 ORB presets too. Read this paragraph, not every individual
+checkpoint, to get oriented on where the 3 research strategies stand.
+
+## 1. All 6 strategies, one table
 
 | Strategy | Registered in `registry.py`? | `RESEARCH_ACTIVE`? | Saved presets | Best `aggregate_oos_return` seen | Worst `aggregate_oos_return` seen | Ever net-positive? | Verdict |
 |---|---|---|---|---|---|---|---|
@@ -16,6 +38,7 @@ summary for process notes; this document is the actual deliverable.
 | `atr_volatility_breakout` | **Y** | Y (default) | 3 | **+0.0114** (`CHECKPOINT_70`, gate-verified, 16-day RELIANCE — **the session's single strongest, most-cited gate-verified positive result**) | -0.2522 (TCS, `CHECKPOINT_71`) | **Yes, on gate-verified data** | Has this session's best credible positive number, but `CHECKPOINT_71`'s cross-symbol runs (TCS/HDFCBANK/INFY) were all negative, and `CHECKPOINT_73`'s trade-level diagnosis found a real structural exit-design issue (T2/T3 essentially unreachable) shared with Gainz. One good symbol, not a validated edge across the universe. |
 | `gainz_compatible_research` | **N** (deliberately unregistered every checkpoint) | Y (default — no explicit row) | 6 (3 original + 3 `_t1_widened` from `CHECKPOINT_74`) | **0** (silent — `gainz_conservative`, most symbols; not a positive return, a non-signal) | -0.6475 (TCS `gainz_aggressive`, `CHECKPOINT_71`) | **No, never** | **Tuning explicitly PAUSED** (`CHECKPOINT_75`). Root cause of consistent losses diagnosed precisely (`CHECKPOINT_73`: symmetric SL/T1 + single-shot exit design; `CHECKPOINT_75`'s MFE analysis: T2/T3 genuinely rarely reachable regardless of exit mechanism). One real, tested improvement applied (`CHECKPOINT_74`: T1 1.0→1.5) reduced loss magnitude but never flipped any combination positive. |
 | `vwap_mean_reversion` | **N** (deliberately unregistered) | Y (default — no explicit row) | 3 | -0.0197 (INFY `vwap_normal`, `CHECKPOINT-VWAP-D` — the **least-bad** result, still negative) | -0.3790 (TCS `vwap_tight`, `CHECKPOINT-VWAP-D`) | **No, never** | Just completed Phase D (`CHECKPOINT-VWAP-D`) — all 12 symbol×preset combinations gate-verified-negative. A genuinely more favorable MFE distribution than Gainz's (`CHECKPOINT-VWAP-B`'s own finding) did **not** translate into profitability. No parameter tuning has been attempted yet. |
+| `orb_breakout` | **N** (deliberately unregistered every checkpoint, A through D) | Y (default — no explicit row) | 3 (`orb_classic`/`orb_tight`/`orb_wide`, `CHECKPOINT-ORB-C`) | **+0.0890** (RELIANCE `orb_wide`, `CHECKPOINT-ORB-D` — the **best `aggregate_oos_return` this entire session has produced**, on any strategy, any symbol) | -0.1096 (INFY `orb_wide`, `CHECKPOINT-ORB-D`) | **Yes, on gate-verified data — RELIANCE only, all 3 presets** | Just completed Phase D (`CHECKPOINT-ORB-D`). RELIANCE is positive across all 3 presets simultaneously — this session's single strongest walk-forward signal — but `orb_classic`/`orb_wide` both show 2-of-3 fold sign flips despite the positive aggregate; only `orb_tight` (1/3 flips, `mean_degradation_ratio=+0.260`) comes close to genuinely fold-stable. Does **not** generalize: HDFCBANK and INFY are negative across all 3 presets, and TCS's own larger `orb_wide` number (+0.2309) is explicitly the least statistically meaningful of the 12 combinations (1–2 OOS trades/fold). Honest verdict: the most promising single result of the session, not a validated edge. |
 
 **Reading this table honestly**: `atr_volatility_breakout` and
 `sma_trend_filter` each have exactly ONE genuine gate-verified positive
@@ -25,7 +48,13 @@ number predates the `fromDate` fix (`CHECKPOINT_69`) and used
 bypassed, mixed-quality data — it should not be read as comparable to
 the other two. `gainz_compatible_research` and `vwap_mean_reversion`
 have never once produced a net-positive gate-verified result, on any
-symbol, in any checkpoint this session ran.
+symbol, in any checkpoint this session ran. `orb_breakout` is the one
+exception to that pattern among the unregistered research strategies:
+it produced this session's single largest `aggregate_oos_return`
+(RELIANCE, all 3 presets), but — per its own §4 comparison
+(`CHECKPOINT-ORB-D`) — that result is RELIANCE-only and fold-unstable
+on 2 of its 3 presets, so it should be read as the most promising
+result, not a validated one.
 
 ## 2. What this project's OWN documented procedure actually requires
 
@@ -136,13 +165,31 @@ checkable gap between the document's letter and what this session's
 presets actually contain, not investigated further here (out of this
 checkpoint's own read-only, no-new-code scope).
 
-**`gainz_compatible_research` and `vwap_mean_reversion` cannot be
-selected for a live paper session at all today** — both remain
-unregistered in `registry.py`, unreachable from the live scanner/
-Strategy Selection checklist item, by deliberate design every
-checkpoint in both threads has confirmed. This is not a gap to close
-before paper trading starts — it is the CORRECT current state, since
-neither has ever produced a validated positive result.
+**`gainz_compatible_research`, `vwap_mean_reversion`, and
+`orb_breakout` cannot be selected for a live paper session at all
+today** — all 3 remain unregistered in `registry.py`, unreachable from
+the live scanner/Strategy Selection checklist item, by deliberate
+design every checkpoint in all 3 threads has confirmed
+(`CHECKPOINT-ORB-D` re-confirmed `registry.py` untouched, same as
+every prior ORB checkpoint). This is not a gap to close before paper
+trading starts — it is the CORRECT current state: Gainz and VWAP have
+never produced a validated positive result, and ORB's own best result
+(RELIANCE, this checkpoint's §1 row) is real but neither cross-symbol
+nor fully fold-stable.
+
+**`CHECKPOINT_79` update, stated plainly, not assumed**: ORB's Phase D
+result does **NOT** change this section's answer in any way.
+`CHECKPOINT_78`'s READY verdict (§6 below) concerns only the 3
+strategies actually registered in `registry.py`
+(`ema_crossover`/`sma_trend_filter`/`atr_volatility_breakout`) — their
+infrastructure readiness (credential validity, `PaperBroker`
+confirmation, `real_trading_state` DISABLED, default-config wiring)
+has no dependency on any unregistered research strategy's existence or
+performance, since `orb_breakout` (like Gainz and VWAP) cannot even
+appear in `selected_strategy_ids` while unregistered. Confirmed
+directly against `registry.py`'s own `build_default_registry()`, not
+assumed: it registers exactly 3 strategies, unchanged throughout the
+entire ORB thread.
 
 **If the operator wants "at least one strategy with a real edge"
 before starting** (a stricter, self-imposed bar this session's own
@@ -180,6 +227,35 @@ for Gainz specifically.
   declared this pause for VWAP yet — this document does so explicitly,
   applying the same resumption criterion (30+ new real trading days)
   by direct analogy, not a new, independently-derived rule.
+- **`orb_breakout` tuning**: explicitly **PAUSED**, declared by
+  `CHECKPOINT_79` on completion of Phase D (`CHECKPOINT-ORB-D`), for
+  the identical reason as Gainz and VWAP: `orb_classic`/`orb_tight`/
+  `orb_wide` were each a parameter CHOICE made once, up front
+  (`CHECKPOINT-ORB-C`), never iteratively re-tested — but any further
+  tuning pass would now be iterating against the SAME 17-day dataset
+  Phase D's own result was just measured on, the exact overfitting
+  risk `CHECKPOINT_75` first flagged. **Resumption criterion: the
+  identical bar as Gainz and VWAP** — 30+ real trading days beyond the
+  17 already used as of `2026-09-08`, checkable directly against
+  `HistoricalBar`.
+
+  **ORB-specific nuance, considered explicitly rather than copied
+  verbatim**: `CHECKPOINT-ORB-D` found `orb_tight` notably more
+  fold-stable than `orb_classic`/`orb_wide` on RELIANCE (1/3 fold flips
+  vs. 2/3 for the other two, plus a positive `mean_degradation_ratio`
+  where the other two were negative). Does this warrant changing the
+  resumption criterion itself? **Reasoned conclusion: no — keep the
+  same generic 30-day dataset-size criterion**, because the criterion
+  exists to bound overfitting risk from re-tuning against a small
+  sample, a concern that is orthogonal to which preset happened to look
+  best this round; narrowing the GATING criterion to one preset would
+  itself be a form of fitting to this round's own result. **But the
+  finding is real and worth keeping**, so it is recorded here as
+  operational guidance for whoever resumes ORB tuning, not as a new
+  gate: when tuning resumes, `orb_tight`-style shorter opening-range
+  windows should be the first variants re-tested and possibly the
+  starting point for any new presets, given this is the one preset that
+  came close to genuinely stable rather than merely aggregate-positive.
 
 ## 6. Paper-trading readiness — `CHECKPOINT_78`, current as of `2026-09-08`
 

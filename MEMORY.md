@@ -931,6 +931,29 @@ re-deriving them. Not a full transcript; no invented detail.
   change made or implied. This closes all 4 phases (A/B/C/D) of the
   ORB thread; `registry.py` remains untouched, the strategy remains
   unreachable from the live scanner/backtest API.
+- **`CHECKPOINT_79`**: documentation-only consolidation checkpoint, no
+  code/tests/backtests/data/params/registry touched. Updated
+  `PROJECT_STRATEGY_STATUS.md` (the living, committed reference): (1)
+  added `orb_breakout` as a 6th row to §1's table, all figures cited
+  directly from `CHECKPOINT-ORB-D_SUMMARY.md` (best +0.0890 RELIANCE
+  `orb_wide`; worst -0.1096 INFY `orb_wide`; positive on RELIANCE only,
+  fold-unstable on 2 of 3 presets, does not generalize cross-symbol);
+  (2) confirmed plainly in §4 that ORB's result does NOT change the
+  paper-trading-readiness answer, since `orb_breakout` remains
+  unregistered in `registry.py` (re-confirmed directly) and
+  `CHECKPOINT_78`'s READY verdict concerns only the 3 registered
+  strategies; (3) formally declared `orb_breakout` tuning PAUSED in §5,
+  identical reasoning and identical 30-day resumption criterion as
+  Gainz (`CHECKPOINT_75`) and VWAP (`CHECKPOINT_76`), plus a reasoned
+  note (not a new gate) that `orb_tight`-style shorter windows should
+  be the first variants re-tested once tuning resumes, given
+  `CHECKPOINT-ORB-D`'s own fold-stability finding; (4) added a new §0
+  "Current state" paragraph consolidating all 3 research strategies
+  (Gainz/VWAP/ORB) side by side: all paused, same resumption criterion,
+  none registered, ORB the most promising single result but still
+  unvalidated cross-symbol. `CHECKPOINT_79_SUMMARY.md` written at repo
+  root. `git status --short` confirmed only documentation files
+  changed before commit.
 - **`LIVE-2-FINALIZE`**: an end-of-day close-out checkpoint for
   `LIVE-2` was requested with the premise that market had just closed
   on the same day as the `LIVE-2` run — but this conversation's
