@@ -432,6 +432,46 @@ re-deriving them. Not a full transcript; no invented detail.
   same issue, not only inside `gainz_compatible_research.py`. Status:
   **pending**, a real, well-evidenced next step, not yet authorized or
   scheduled.
+- **`CHECKPOINT_74`: applied `CHECKPOINT_73`'s T1-widening fix
+  (config-only) + re-tested + ran the first real, genuinely-new-day
+  exercise of `CHECKPOINT_72`'s daily backfill routine.** Fix: raised
+  `trade_plan_target_1_atr_multiplier` `1.0 -> 1.5` (SL stays `1.0x
+  ATR`) for all 3 Gainz presets, via 3 NEW `StrategyConfigurationRecord`
+  rows (`gainz_conservative_t1_widened`/`gainz_balanced_t1_widened`/
+  `gainz_aggressive_t1_widened`, same `code_version="v3"`, existing
+  rows never mutated - immutable by design/convention). **Important
+  correction to `CHECKPOINT_73`'s own claim**: `atr_volatility_
+  breakout`'s saved presets were checked directly and found to carry
+  NO override for this parameter at all - the strategy's own schema
+  default is already `1.5`, not `1.0` (never symmetric) - so the
+  "shared symmetric SL=T1" explanation does not actually transfer to
+  that strategy as cleanly as `CHECKPOINT_73` implied; deliberately
+  NOT touched this checkpoint (reported, not silently skipped).
+  **Re-test result, reported honestly, not oversold**: re-ran
+  `CHECKPOINT_71`'s exact 4-symbol walk-forward suite for the 3 new
+  presets - loss magnitude reduced in most cases (e.g. RELIANCE
+  `gainz_aggressive_t1_widened` aggregate_oos_return improved -0.415
+  -> -0.285; `gainz_balanced` mixed, 2 symbols better/2 slightly
+  worse) but **zero sign flips anywhere** - every combination remains
+  net-negative. Trade-level re-check (RELIANCE/`gainz_balanced_t1_
+  widened`): `risk_reward_ratio` more than DOUBLED (0.22 -> 0.52),
+  expectancy improved ~15% (-19.57 -> -16.63/trade), net_pnl loss
+  shrank ~20% - a real, measurable, genuine partial improvement - but
+  `exit_reason_breakdown` STILL shows only `{STOP_LOSS, TARGET_1}`,
+  T2/T3 STILL never reached even at the new ratio, and expectancy
+  remains clearly negative. **Explicitly NOT a fix - a partial
+  improvement**, consistent with `CHECKPOINT_73`'s own findings that
+  the win-rate/entry-signal side was never the primary problem.
+  **Part 3, run for real after confirming the actual clock (market
+  closed `~15:30 IST`, this ran at `15:38 IST` on `2026-09-08`)**:
+  `backfill_daily_coverage`'s FIRST-EVER run against a genuinely new
+  trading day (every prior run was either `--dry-run` or a same-day
+  no-op against pre-existing data) - clean, exactly 72 new
+  `CANONICALIZED` rows per symbol (RELIANCE/TCS/HDFCBANK/INFY), zero
+  duplicates, `api_requests=1` per symbol (only the one genuinely new
+  day fetched) - worked correctly on the first real try, and
+  `CHECKPOINT_69`'s fix continues to hold on fresh data 5 checkpoints
+  later.
 - **`LIVE-2-FINALIZE`**: an end-of-day close-out checkpoint for
   `LIVE-2` was requested with the premise that market had just closed
   on the same day as the `LIVE-2` run — but this conversation's
