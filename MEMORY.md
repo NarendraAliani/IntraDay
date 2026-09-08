@@ -864,6 +864,34 @@ re-deriving them. Not a full transcript; no invented detail.
   validated; Phase D must test this for real, not assume it holds.
   Zero persistence throughout (`BacktestResultRecord` 208->208).
   Phase C (2-3 config presets) is the next step in this thread.
+- **`CHECKPOINT-ORB-C`: 3 real config presets for `orb_breakout`,
+  zero code changes.** `orb_classic` (15min/1.0x target/1.0 stop
+  fraction - the intended default, matches `parameter_schema()`'s own
+  defaults), `orb_tight` (5min/1.0/1.0), `orb_wide`
+  (30min/1.5x/0.75). `minimum_range_atr_multiplier=0`/`atr_lookback=14`
+  deliberately identical across all 3 (the filter question is
+  orthogonal to the window/target/stop axis these presets explore, and
+  with the filter disabled `atr_lookback` isn't even read). Created via
+  the real `StrategyConfigurationService.save_configuration()` path.
+  Internal validity (no degenerate stop/target) verified DIRECTLY
+  against all 3 real persisted rows, not just assumed from
+  `CHECKPOINT-ORB-B`'s own structural-safety claim. **Real behavioral
+  divergence proven** (6 tests, `test_checkpoint_orb_c_presets.py`) -
+  a genuinely different PROOF SHAPE from Gainz/VWAP's own
+  threshold-gating divergence: the SAME 3-bar real sequence, run
+  through the real dispatcher, shows `orb_tight`'s 5-minute (1-bar)
+  window already closed and firing a real BULLISH signal by the 2nd
+  bar, while `orb_classic`'s 15-minute (3-bar) window has produced
+  ZERO output at all on the same data (its own warm-up rule means the
+  first possible output is a 4th bar this fixture doesn't even reach)
+  - divergence in WHEN a signal becomes possible, not just whether one
+  fires. A second test confirms `orb_wide`'s own target/stop
+  multipliers produce genuinely different, hand-computed values than
+  `orb_classic`'s on the identical range/entry. `registry.py`
+  untouched, zero `src/` diff this checkpoint. Phase D (walk-forward
+  validation) is the next and final step in this thread - and the
+  first data point (`CHECKPOINT-ORB-B`'s own first-look result) is the
+  most encouraging of any strategy this session so far.
 - **`LIVE-2-FINALIZE`**: an end-of-day close-out checkpoint for
   `LIVE-2` was requested with the premise that market had just closed
   on the same day as the `LIVE-2` run — but this conversation's
