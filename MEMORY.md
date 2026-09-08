@@ -392,6 +392,46 @@ re-deriving them. Not a full transcript; no invented detail.
   can never reach back far enough to touch that block. Not
   investigated further or fixed, per the checkpoint's own rule —
   remains the operator's same deferred migration decision.
+- **`CHECKPOINT_73`: diagnosed WHY `gainz_aggressive`/`gainz_balanced`
+  are consistently unprofitable (`CHECKPOINT_71`'s finding).** Read-
+  only, RELIANCE/`gainz_balanced`, full 16-day gate-verified dataset,
+  72 real trades pulled at the individual-trade level via
+  `run_backtest()` directly. **Root cause, high confidence, precisely
+  traced in code (not a statistical artifact)**: `gainz_balanced`'s
+  TradePlan has `stop_loss` and `target_1` at the SAME distance
+  (both `1.0x ATR`) — since `tradeplan_execution.py::
+  simulate_tradeplan_exit()` is a single-shot, first-level-touched
+  simulator (unmodified, shared code), price must pass through T1
+  before ever reaching T2, so **T2/T3 are structurally unreachable**:
+  all 72 trades closed at either `STOP_LOSS` (40) or `TARGET_1` (32),
+  zero at T2/T3. This forces the REALIZED `risk_reward_ratio` to
+  `0.22` (real costs) / `0.82` (zero costs, cleanly isolated via
+  `cost_model=None` + `brokerage_percent=0`/`slippage_percent=0` on
+  the same 72 trades) — below the ~1.0 a 40.3% win rate would need
+  for break-even, even before costs. **Real transaction costs roughly
+  TRIPLE the average per-trade loss** (-5.66 → -19.57 expectancy) but
+  are a material AMPLIFIER, not the root cause (the zero-cost version
+  is still net-negative). **This is shared infrastructure behavior,
+  not Gainz-specific**: `atr_volatility_breakout` (the only other
+  TradePlan-based strategy) shows the identical `{STOP_LOSS,
+  TARGET_1}`-only exit pattern on the same data. **Most important
+  honest finding**: ALL 4 strategies (not just Gainz) lost money on
+  this exact real 16-day RELIANCE dataset — `ema_crossover`/
+  `sma_trend_filter` are entry-signal-limited (favorable 1.65-1.69
+  R:R completely overwhelmed by a 16.7%/27.3% win rate);
+  `atr_volatility_breakout`/`gainz_balanced` are payoff-structure-
+  limited (decent ~39-40% win rate undermined by ~1.0-or-below R:R).
+  Gainz's 40.3% win rate is actually the BEST of all 4 tested - entry
+  logic is not the problem. **Verdict**: a fixable, narrowly-scoped
+  design issue (option (a), not (b) "needs a fundamentally different
+  design" and not (c) "inconclusive"). **Precise fix for a future
+  checkpoint, NOT implemented**: widen `target_1`'s ATR multiplier
+  relative to `stop_loss`'s (e.g. keep SL at 1.0x, raise T1 to
+  ~1.5-2.0x) - a pure config/preset value change, likely belonging at
+  the shared parameter level since `atr_volatility_breakout` has the
+  same issue, not only inside `gainz_compatible_research.py`. Status:
+  **pending**, a real, well-evidenced next step, not yet authorized or
+  scheduled.
 - **`LIVE-2-FINALIZE`**: an end-of-day close-out checkpoint for
   `LIVE-2` was requested with the premise that market had just closed
   on the same day as the `LIVE-2` run — but this conversation's
