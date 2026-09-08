@@ -726,6 +726,48 @@ re-deriving them. Not a full transcript; no invented detail.
   `ScannerConfiguration` activated, no broker-order code called.
   `PROJECT_STRATEGY_STATUS.md` §6 updated with this finding, superseding
   `CHECKPOINT_76`'s own more provisional "technically ready" reading.
+- **`CHECKPOINT_78`: fixed `CHECKPOINT_77`'s empty-configuration
+  gap + found and fixed a SECOND, related gap + closed the ATR preset
+  gap + re-verified readiness by actually invoking the real pipeline.
+  Verdict: NOW READY.** `signal_pipeline_runtime.py::promote_bars_
+  and_trigger_signals()`'s empty `StrategyConfigurationValues({})`
+  replaced with `coerce_configuration_values(schema, default_
+  configuration_values(schema))` - both pre-existing functions, no new
+  mechanism. **Second gap, found while verifying the first fix (not
+  assumed to work because it compiled)**: `default_configuration_
+  values()` alone returns bare Python floats for DECIMAL-typed
+  parameters (`ParameterDefinition.default` verbatim) -
+  `require_decimal()`'s strict `isinstance(value, Decimal)` check
+  rejects a float, so `sma_trend_filter`/`atr_volatility_breakout`
+  would STILL have raised `InvalidParameterValueError` without
+  `coerce_configuration_values()` applied too (missed on a first,
+  too-shallow check because an empty `feature_values` dict
+  short-circuits BEFORE reaching that line - caught by testing with a
+  real, warmed-up feature value present instead). Fixed in the same
+  narrow scope, not escalated - it's the other half of an
+  already-established, paired mechanism
+  (`StrategyConfigurationService.save_configuration()` already pairs
+  these two functions for this exact reason). **3 new regression
+  tests** in `test_signal_pipeline_runtime.py`, including the deep one
+  `CHECKPOINT_77` identified as missing: spies on the REAL, registered
+  `EmaCrossoverStrategy.evaluate` (not a test-only `_config()` helper)
+  to prove it genuinely receives non-empty, correctly-typed config in
+  production-shaped code. **ATR preset gap closed**: new
+  `atr_baseline` preset created (`14/2.0/1.0/1.5/2.5/3.5/1.0`, exact
+  documented-baseline match), via the real `save_configuration()` path
+  - existing `atr_aggresive`/`atr_Balanced`/`atr_Conservative` presets
+  untouched. **Re-verified by actually invoking the real
+  `promote_bars_and_trigger_signals()` path** (not just re-reading
+  code) against a real open-market bar - clean
+  `SignalPipelineOutcome(promoted_count=1, active_loop_invocations=1)`,
+  no exception, for all 3 registered strategies' now-correctly-typed
+  configs. **`PROJECT_STRATEGY_STATUS.md` §6 updated to READY**,
+  superseding `CHECKPOINT_77`'s own NOT READY finding (kept in the
+  document for its full trace). Still NO live session launched, no
+  `ScannerConfiguration` activated, no broker-order code path called -
+  remains the operator's own explicit next decision.
+  `CHECKPOINT_78_SUMMARY.md` restates (does not execute) the operator
+  command sequence.
 - **`LIVE-2-FINALIZE`**: an end-of-day close-out checkpoint for
   `LIVE-2` was requested with the premise that market had just closed
   on the same day as the `LIVE-2` run — but this conversation's

@@ -181,9 +181,16 @@ for Gainz specifically.
   applying the same resumption criterion (30+ new real trading days)
   by direct analogy, not a new, independently-derived rule.
 
-## 6. Paper-trading readiness — `CHECKPOINT_77`, current as of `2026-09-08`
+## 6. Paper-trading readiness — `CHECKPOINT_78`, current as of `2026-09-08`
 
-**Verdict: NOT READY.** Every infrastructure precondition checks
+> **UPDATED BY `CHECKPOINT_78` — verdict is now READY.** The `NOT
+> READY` finding below is `CHECKPOINT_77`'s own original discovery,
+> kept for its full trace; `CHECKPOINT_78` fixed the gap it found (plus
+> one more, related gap found while verifying the fix) and re-confirmed
+> readiness by actually invoking the real pipeline. See the "RESOLVED"
+> block at the end of this section for the current state.
+
+**`CHECKPOINT_77`'s original verdict: NOT READY.** Every infrastructure precondition checks
 out — Dhan credential `VALID` (expires `2026-09-09 10:17:40 UTC`),
 `PaperBroker` confirmed the only broker implementation in the
 codebase, `real_trading_state` confirmed structurally `DISABLED`,
@@ -224,3 +231,41 @@ for exactly this purpose) is the most direct, already-proven fit.
 
 See `CHECKPOINT_77_SUMMARY.md` for the full trace and every file/line
 this finding is based on.
+
+### RESOLVED — `CHECKPOINT_78`: verdict is now READY
+
+Both gaps above are fixed. `signal_pipeline_runtime.py::promote_bars_
+and_trigger_signals()` now constructs each strategy's configuration via
+`coerce_configuration_values(schema, default_configuration_values(schema))`
+— reusing both existing, already-proven functions, no new mechanism.
+**A second, related gap was found while verifying the fix, not
+assumed away**: `default_configuration_values()` alone returns bare
+Python floats for DECIMAL-typed parameters, which `require_decimal()`
+rejects — `sma_trend_filter`/`atr_volatility_breakout` would have
+raised `InvalidParameterValueError` without `coerce_configuration_
+values()` applied too (the exact pairing `StrategyConfigurationService.
+save_configuration()` already uses). Fixed in the same narrow scope.
+
+**Re-verified by actually invoking the real pipeline** (not just
+re-reading code): `promote_bars_and_trigger_signals()` called against
+a real, open-market bar returns `SignalPipelineOutcome(promoted_count=1,
+active_loop_invocations=1)` with no exception, for all 3 registered
+strategies' real configuration values confirmed correctly-typed
+(`Decimal` where required, real ints/values throughout, matching the
+documented baseline exactly).
+
+**ATR preset gap also closed**: new `atr_baseline` preset created
+(`14/2.0/1.0/1.5/2.5/3.5/1.0`, exact match to the documented baseline),
+via the real `save_configuration()` path. The existing `atr_aggresive`/
+`atr_Balanced`/`atr_Conservative` presets are untouched, kept for their
+own already-completed research purposes.
+
+3 new regression tests added (`test_signal_pipeline_runtime.py`),
+including the deep one `CHECKPOINT_77` identified as missing — spying
+on the REAL, registered `EmaCrossoverStrategy.evaluate` to confirm it
+genuinely receives non-empty, correctly-typed config in production-
+shaped code, not a test-only helper's own hand-built one.
+
+**The system is genuinely ready for a first live paper session
+today.** See `CHECKPOINT_78_SUMMARY.md` for the full fix trace and the
+restated (not executed) operator command sequence.

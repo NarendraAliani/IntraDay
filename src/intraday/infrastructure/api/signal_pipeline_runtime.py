@@ -61,10 +61,55 @@ from intraday.domain.market_data.aggregation import (
 from intraday.domain.market_data.promotion import evaluate_bar_promotion
 from intraday.domain.session.contracts import TradingSession
 from intraday.infrastructure.api.active_loop_runtime import run_active_loop_tick
-from intraday.trading_engine.strategy_execution.contracts import StrategyConfigurationValues
+from intraday.trading_engine.strategy_execution.contracts import (
+    StrategyConfigurationValues,
+    coerce_configuration_values,
+    default_configuration_values,
+)
+from intraday.trading_engine.strategy_execution.registry import build_default_registry
 
 DEFAULT_STRATEGY_ID = "ema_crossover"
 DEFAULT_QUANTITY = Decimal("1")
+
+
+def _configuration_values_for(strategy_id: str) -> dict[str, object]:
+    """CHECKPOINT 78: the fix for the exact gap `CHECKPOINT_77` found -
+    every registered strategy's OWN schema defaults, from the EXISTING
+    registry - never a hardcoded parameter dictionary in this module.
+    Reuses `default_configuration_values()` verbatim (no new mechanism
+    invented), the SAME helper `replay_paper_session_runtime.py`'s own
+    `configuration_values_for()` already established for exactly this
+    purpose - so a live session now runs the same starting parameters
+    the Strategy Configuration screen already shows for that strategy,
+    instead of the empty `{}` this function used to pass, which made
+    every real strategy evaluation fail with a silent `KeyError` the
+    instant a live session actually ran (see `CHECKPOINT_77_SUMMARY.md`
+    for the full trace of that gap).
+
+    CHECKPOINT 78's OWN direct verification found `default_configuration_
+    values()` alone is not sufficient for a DECIMAL-typed parameter: a
+    `ParameterDefinition.default` is a plain Python literal (e.g. `2.0`,
+    a `float`), and `require_decimal()` (`contracts.py`) does a strict
+    `isinstance(value, Decimal)` check - a bare float fails it. This is
+    the EXACT, already-documented reason `coerce_configuration_values()`
+    exists (see that function's own docstring: "a value ... can NEVER
+    satisfy that isinstance(value, Decimal) check by any client-side
+    encoding choice" - written for the JSON-API case, but the same
+    float-vs-Decimal gap applies here too) and the SAME established
+    pairing `StrategyConfigurationService.save_configuration()` already
+    uses (`coerce_configuration_values()` then `validate_configuration()`)
+    - reused verbatim here too, not a second, parallel coercion
+    invented. Confirmed directly: `sma_trend_filter`/`atr_volatility_
+    breakout` (both DECIMAL-typed) would have raised
+    `InvalidParameterValueError` from `require_decimal()` on their own
+    float defaults without this - caught by testing with a real,
+    warmed-up feature value present (an empty `feature_values` dict
+    short-circuits before `require_decimal()` is ever reached, masking
+    this for a quick check - the regression test added this checkpoint
+    does not make that mistake)."""
+    strategy = build_default_registry().get(strategy_id)
+    schema = strategy.parameter_schema()
+    return coerce_configuration_values(schema, default_configuration_values(schema))
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,7 +195,9 @@ def promote_bars_and_trigger_signals(
                 # never even referenced below this point for this bar.
                 continue
 
-            configuration = StrategyConfigurationValues(strategy_id, "v1", "v1", "v1", {})
+            configuration = StrategyConfigurationValues(
+                strategy_id, "v1", "v1", "v1", _configuration_values_for(strategy_id)
+            )
             run_active_loop_tick(
                 instrument_id=bar.instrument_id,
                 strategy_id=strategy_id,
