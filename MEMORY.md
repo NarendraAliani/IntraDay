@@ -1416,6 +1416,47 @@ re-deriving them. Not a full transcript; no invented detail.
   source code modified, only data via the sanctioned path. See
   `CHECKPOINT_85_SUMMARY.md` for the full diagnosis and per-slot
   recovery table.
+- **`CHECKPOINT_86`**: two independent threads left open by
+  `[[CHECKPOINT_85]]`. **Part 1**: recovered `2026-08-17`'s boundary
+  bars for ALL 4 symbols (checked directly rather than assuming only
+  RELIANCE needed it - TCS/HDFCBANK/INFY were ALSO incomplete, missing
+  a day-start + day-end 1-bar-each variant of the same pattern).
+  Re-verified the same purely-additive safety proof
+  `[[CHECKPOINT_85]]` established still holds (re-read the code, not
+  assumed) before writing. **4/4 symbols recovered to 72/72
+  COMPLETE, net +8 rows, 0 duplicate keys**, all previously-
+  canonicalized rows re-confirmed untouched. Research gate: RELIANCE's
+  own individual count rose 27->28, but the COMMON count across all 4
+  symbols stayed at 24 - TCS/HDFCBANK/INFY's `08-17` shifted from
+  `INCOMPLETE_COVERAGE` to `UNCANONICALIZED_TIMESTAMP` (never
+  migrated, since `[[CHECKPOINT_83]]` targeted RELIANCE alone that
+  day and `[[CHECKPOINT_84]]` deliberately excluded `08-17`) - a
+  finding stated plainly, not glossed over. **Part 2** (strictly
+  read-only, no fix attempted per its own rule): diagnosed TCS's
+  residual `UNKNOWN`-provenance rows (87 total, 08-18/08-19/08-24).
+  Traced origin via source inspection: the ONE real ingestion call
+  site always passes a provider's own `.provenance` attribute, and
+  both CURRENT providers stamp a fixed non-UNKNOWN value - so these
+  rows must come from an early/experimental provider that predates
+  the provenance-hook system, left in place. **Critical reframe**:
+  this is NOT a TCS-isolated anomaly - a table-wide scan found 5,100
+  `UNKNOWN`-provenance rows across 23 instruments, almost entirely
+  NON-target symbols (Adani group, Tata group, etc.) - RELIANCE/
+  HDFCBANK/INFY have ZERO such rows; TCS's 87 is a small piece of a
+  much broader, pre-existing dataset characteristic. Confirmed
+  directly (not assumed) that the existing upsert mechanism will
+  NEVER naturally supersede these rows - `get_coverage()` already
+  reports these days provenance-blind-complete, so `prepare()` makes
+  zero provider calls for them, ever. Proposed 3 fix approaches
+  (force-overwrite via fetch, metadata-only relabel, delete+refetch),
+  each requiring separate P4-authorization the checkpoint's own rule
+  forbade attempting here - explicitly left for a future checkpoint's
+  own decision. Common gate-verified day count remains **24** (47-day
+  tuning threshold still NOT met; no tuning resumed). Full suite: 3391
+  passed / 7 failed, identical to `[[CHECKPOINT_85]]`, zero new
+  failures - no source code modified, only data (Part 1) + this
+  checkpoint's own tracking docs. See `CHECKPOINT_86_SUMMARY.md` for
+  the full recovery table and diagnostic detail.
 - **`LIVE-2-FINALIZE`**: an end-of-day close-out checkpoint for
   `LIVE-2` was requested with the premise that market had just closed
   on the same day as the `LIVE-2` run — but this conversation's

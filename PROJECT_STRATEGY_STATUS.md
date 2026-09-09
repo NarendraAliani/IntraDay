@@ -317,6 +317,38 @@ MET** — 24 of 47, a real gain of 6 days but 23 days short. No strategy
 tuning was resumed. See `CHECKPOINT_85_SUMMARY.md` for the full
 diagnosis and per-slot recovery table.
 
+**`CHECKPOINT_86` update — the `2026-08-17` gap `CHECKPOINT_85` left
+outside its own scope is now recovered for all 4 symbols; the TCS
+provenance issue is diagnosed but deliberately NOT fixed**. `[F]`
+Part 1: confirmed directly (not assumed) that TCS/HDFCBANK/INFY, not
+just RELIANCE, were also missing `08-17`'s boundary bars (a day-start
++ day-end variant of the same pattern). Recovered all 4 to `72/72
+COMPLETE`, net +8 rows, 0 duplicate keys, purely additive — re-
+verified the same safety proof by re-reading the code, not by
+assuming it still held. RELIANCE's own individual gate-verified count
+rose `27 → 28`; the COMMON count across all 4 symbols stayed at
+**24**, because TCS/HDFCBANK/INFY's `08-17` shifted from
+`INCOMPLETE_COVERAGE` to `UNCANONICALIZED_TIMESTAMP` (these 3 symbols'
+`08-17` was never targeted by any migration checkpoint — row
+completeness alone doesn't make an un-migrated day research-eligible)
+— stated plainly rather than glossed over. `[F]` Part 2 (strictly
+read-only, per its own rule — no fix attempted): diagnosed TCS's 87
+residual `UNKNOWN`-provenance rows (`08-18`/`08-19`/`08-24`). Traced
+origin via source inspection to an early/experimental ingestion
+provider predating this codebase's current provenance-hook system.
+**Critical reframe**: NOT a TCS-isolated anomaly — a table-wide scan
+found 5,100 `UNKNOWN`-provenance rows across 23 instruments, almost
+entirely non-target symbols; RELIANCE/HDFCBANK/INFY have zero such
+rows. Confirmed directly that the existing upsert mechanism will
+NEVER naturally supersede these rows (`get_coverage()` already reports
+these days provenance-blind-complete). Proposed 3 fix approaches
+(force-overwrite, metadata-only relabel, delete+refetch), each
+requiring separate P4 authorization this checkpoint's own rule forbade
+attempting — left for a future checkpoint's own explicit decision.
+**Common gate-verified day count remains 24; 47-day tuning threshold
+still NOT MET.** No tuning resumed. See `CHECKPOINT_86_SUMMARY.md` for
+the full recovery table and diagnostic detail.
+
 ## 4. When can paper trading realistically start?
 
 > **SUPERSEDED BY `CHECKPOINT_77` — see §6 below.** The "technically
