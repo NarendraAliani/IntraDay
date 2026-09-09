@@ -1310,6 +1310,38 @@ re-deriving them. Not a full transcript; no invented detail.
   decision to reopen real-write capability at all is the operator's
   own to make, not inferred from this session's general authorization
   pattern. Zero code changes, zero migration execution.
+- **`CHECKPOINT_83`**: implemented `SINGLE_ENV_AUTHORIZATION_
+  PROPOSAL.md` §2.3(a)-(d) exactly as operator-approved (flag name
+  `--i-have-reviewed-this-real-write`, row ceiling `200`), then
+  performed exactly ONE real rehearsal execution - the deadlock
+  `[[RECON-SINGLE-ENV-AUTHORIZATION]]` documented and `CHECKPOINT_82`
+  confirmed live is now resolved. New
+  `assert_write_capable_connection_is_verified_production()` guard
+  re-derives legitimacy from `verify_environment_identity()`'s own
+  evidence chain, never a database-naming convention;
+  `HistoricalBarMigrationExecutor` gained `allow_non_test_database`
+  (default `False`, `migration_67_10.py`'s own construction call
+  confirmed unchanged by grep, its own 28-test suite re-run unmodified
+  and passing identically); `migration_production_execute.py` is the
+  ONLY caller that ever passes `True`, gated behind its own 3 already-
+  existing gates plus the new mandatory CLI flag. Real rehearsal:
+  RELIANCE/`5m`/`2026-08-17` (same unit `CHECKPOINT_82` dry-run-proved
+  safe) - fresh dry-run re-derived the same scope fingerprint
+  independently, all 3 gates PASSED for the first time this session,
+  write COMMITTED, all 70 rows flipped to `CANONICALIZED`, confirmed
+  directly every other row in the 55,134-row table is untouched (0
+  duplicate keys, exactly 1 `MigrationUnit`/70 `MigrationRow` audit
+  records exist total, source-level proof the write's raw SQL is
+  scoped by row id to this unit alone). Research gate re-run against
+  this exact day: still `REJECTED (INCOMPLETE_COVERAGE, 70/72 bars)` -
+  reported honestly, canonicalization does not create the 2
+  already-known-missing bars from `CHECKPOINT_72`. Full suite: 3391
+  passed / 7 failed, same 5 pre-existing + 2 known `--reuse-db` flakes
+  as every prior checkpoint, zero new failures. Hard-stopped after
+  exactly one unit per the checkpoint's own rule - confirmed via the
+  audit tables, not scaled to the remaining 9 interior-gap days this
+  checkpoint. See `CHECKPOINT_83_SUMMARY.md` for full gate transcripts
+  and verification detail.
 - **`LIVE-2-FINALIZE`**: an end-of-day close-out checkpoint for
   `LIVE-2` was requested with the premise that market had just closed
   on the same day as the `LIVE-2` run — but this conversation's

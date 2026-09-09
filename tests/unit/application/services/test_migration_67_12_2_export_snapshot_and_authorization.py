@@ -388,20 +388,22 @@ def test_j_authorization_denied_if_any_single_prerequisite_missing(monkeypatch) 
     # (d) even with environment identity "VERIFIED_PRODUCTION" fabricated
     # and target/scope both matching, a failing write-capability guard
     # still independently denies -- proving check (5) is never bypassed
-    # by checks (1)-(4) passing. This workspace's REAL connection is a
-    # legitimate `test_`-prefixed database, so the guard normally
-    # ACCEPTS here (proven separately by test K) -- to exercise the
-    # guard's DENIAL path specifically, patch it (within the
-    # authorization module's own namespace only) to simulate the
-    # production-guard's refusal, exactly the exception type the real
-    # guard raises.
+    # by checks (1)-(4) passing. CHECKPOINT_83: check (5) now calls
+    # `assert_write_capable_connection_is_verified_production()` (this
+    # workspace's REAL connection genuinely cannot satisfy it either --
+    # no production settings module, no marker -- so this actually
+    # denies for real, with no patching needed; patched anyway, for the
+    # same explicit, reviewable-failure-mode reason the original test
+    # patched the old guard, and to keep this proof independent of
+    # verify_environment_identity()'s own real, environment-dependent
+    # answer).
     import intraday.application.services.migration_execution_authorization as authz_module
-    from intraday.application.services.migration_execute import ProductionWriteGuardError
+    from intraday.application.services.migration_execute import VerifiedProductionWriteGuardError
 
     def _refuse(*args, **kwargs):
-        raise ProductionWriteGuardError("simulated: connection is not a disposable test database")
+        raise VerifiedProductionWriteGuardError("simulated: identity is not VERIFIED_PRODUCTION")
 
-    monkeypatch.setattr(authz_module, "assert_write_capable_connection_is_test_database", _refuse)
+    monkeypatch.setattr(authz_module, "assert_write_capable_connection_is_verified_production", _refuse)
     req_d = ExecutionAuthorizationRequest(
         environment_identity=verified_env, intended_target_unit=unit.unit,
         backup_artifact=artifact, expected_scope_fingerprint=artifact.scope_fingerprint,

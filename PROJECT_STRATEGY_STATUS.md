@@ -206,6 +206,46 @@ execution boundary — not a code fix available to any future checkpoint
 operating under the current design. See `CHECKPOINT_82_SUMMARY.md` for
 the full gate-by-gate trace.
 
+**`CHECKPOINT_83` update — the Gate 3 deadlock above is now RESOLVED,
+and the first real production write of this session's history
+succeeded**: with the operator's explicit review and approval of
+`SINGLE_ENV_AUTHORIZATION_PROPOSAL.md` §2.3(a)-(d) (flag name
+`--i-have-reviewed-this-real-write`, row-count ceiling `200`), check
+(5) inside `authorize_one_unit_execution()` was replaced with a new
+`assert_write_capable_connection_is_verified_production()` guard that
+re-derives legitimacy from `verify_environment_identity()`'s own
+evidence chain rather than the permanently-unsatisfiable
+`test_`-prefix convention. `migration_67_10.py`'s own test-only path
+is untouched (confirmed by grep and by its own 28-test suite passing
+identically, unmodified). `[F]` Real rehearsal against the exact same
+unit `CHECKPOINT_82` left denied (RELIANCE, `5m`, `2026-08-17`): fresh
+dry-run re-derived the same scope fingerprint independently; all 3
+gates PASSED for the first time; the write COMMITTED; all 70 rows now
+`CANONICALIZED` (0 `UNCANONICALIZED` remaining for this unit).
+Verified directly that no other row in the 55,134-row table was
+touched (0 duplicate keys; exactly 1 `MigrationUnit`/70 `MigrationRow`
+audit records exist in total; the write's own raw SQL is scoped by row
+id to this unit alone, confirmed by source inspection). The research
+gate, re-run against this same day, still returns **`REJECTED
+(INCOMPLETE_COVERAGE, 70/72 bars)`** — canonicalization does not
+create the 2 bars this day was already known to be missing
+(`CHECKPOINT_72`), so this day is **not yet research-eligible despite
+being gate-verified-canonicalized** — a reminder that
+"canonicalized" and "complete" are separate, independently-required
+properties. Per this checkpoint's own hard-stop rule, **the remaining
+9 days of the interior gap were deliberately NOT executed this
+checkpoint** — the day-count figures above (18 canonicalized days per
+symbol) remain accurate for TCS/HDFCBANK/INFY; RELIANCE's
+`2026-08-17` specifically moved from `UNCANONICALIZED` to
+`CANONICALIZED` but is not yet research-eligible and is not counted
+toward the 18/47-day tallies above (those tallies track
+research-gate-eligible days, a stricter bar than canonicalization
+alone). The migration-execution architecture question that blocked
+`CHECKPOINT_82` is now resolved as a matter of code; scaling to the
+rest of the interior gap remains a separate, not-yet-taken decision.
+See `CHECKPOINT_83_SUMMARY.md` for the full gate-by-gate trace and
+verification detail.
+
 ## 4. When can paper trading realistically start?
 
 > **SUPERSEDED BY `CHECKPOINT_77` — see §6 below.** The "technically

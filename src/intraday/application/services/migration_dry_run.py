@@ -209,7 +209,23 @@ class HistoricalBarMigrationDryRunner:
     def _live_eligible_rows(self) -> tuple[tuple[int, str, datetime], ...]:
         """The ONLY database access this runner performs. Pure read:
         `.values_list()` over `.filter()` — no `.update()`, no
-        `.bulk_create()`, no `.save()`, no `.delete()`."""
+        `.bulk_create()`, no `.save()`, no `.delete()`.
+
+        CHECKPOINT_83, SINGLE_ENV_AUTHORIZATION_PROPOSAL.md §2.3(e) —
+        REPLAY PROTECTION, documented here rather than added as new
+        code: `canonicalization_state=CANONICALIZATION_STATE_
+        UNCANONICALIZED` below is what makes re-running the same real
+        execution command twice, against the same unit, safe by
+        construction. Once a unit's row is successfully canonicalized,
+        THIS SAME query stops returning it on the very next dry-run —
+        no separate replay-detection mechanism is needed. Combined
+        with `migration_production_execute.py`'s own "unit not found
+        in a fresh dry-run plan" refusal (raised when a requested unit
+        no longer appears in `report.units`), a second invocation for
+        an already-canonicalized unit fails closed at Gate 3's own
+        evidence-gathering step, before authorization is even
+        evaluated — not a new guard, a consequence of this one
+        pre-existing filter."""
         qs = HistoricalBar.objects.filter(
             provenance=PROVENANCE_REAL_DHAN,
             exchange="NSE",

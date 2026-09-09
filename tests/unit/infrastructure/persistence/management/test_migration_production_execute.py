@@ -96,6 +96,7 @@ def test_gate_1_denies_by_default_in_the_real_test_environment() -> None:
             "migration_production_execute",
             "--unit", "RELIANCE,5m,2026-08-17",
             "--expected-scope-fingerprint", "deadbeef",
+            "--i-have-reviewed-this-real-write",
         )
     assert HistoricalBar.objects.count() == 0
 
@@ -127,6 +128,7 @@ def test_gate_2_refuses_a_test_database_even_when_gate_1_is_bypassed(
             "migration_production_execute",
             "--unit", "RELIANCE,5m,2026-08-17",
             "--expected-scope-fingerprint", "deadbeef",
+            "--i-have-reviewed-this-real-write",
         )
     assert HistoricalBar.objects.count() == 0
 
@@ -154,6 +156,7 @@ def test_gate_3_still_denies_even_if_gates_1_and_2_were_both_bypassable(
             "migration_production_execute",
             "--unit", "RELIANCE,5m,2026-08-10",
             "--expected-scope-fingerprint", "deadbeef",
+            "--i-have-reviewed-this-real-write",
         )
     # No row was canonicalized - the fake expected_scope_fingerprint
     # ("deadbeef") deliberately never matches the freshly-computed real

@@ -38,6 +38,7 @@ from intraday.application.services.migration_dry_run import (
     HistoricalBarMigrationDryRunner,
     MigrationUnitKey,
 )
+from intraday.application.services.migration_environment_identity import verify_environment_identity
 from intraday.domain.instrument.contracts import make_instrument_id
 from intraday.domain.market_data.migration_scope_fingerprint import (
     MigrationScopeInputs,
@@ -56,6 +57,18 @@ from intraday.infrastructure.persistence.models import HistoricalBar, MigrationR
 
 MIGRATION_VERSION = "67.10"
 ELIGIBILITY_PREDICATE_VERSION = "67.7-cas-5m-nse-open-uncanonicalized-v1"
+
+MAX_ROWS_PER_EXECUTION_UNIT = 200
+"""CHECKPOINT_83, `SINGLE_ENV_AUTHORIZATION_PROPOSAL.md` §2.3(d),
+operator-approved value. A hard, enforced ceiling on how many rows a
+SINGLE unit's execution may touch — bounds the blast radius of any one
+invocation regardless of which guard (test-database or verified-
+production) admitted it. `67.13-C`'s own `--unit` CLI argument already
+restricts every invocation to exactly one `(symbol, timeframe, date)` -
+comfortably under 100 rows for any real `5m` CAS-era trading day
+(`CHECKPOINT_82`'s own dry-run: 70 rows for RELIANCE/`2026-08-17`) -
+this makes that existing, informal convention an explicit, coded
+assertion instead of relying on the CLI shape alone."""
 
 
 class ProductionWriteGuardError(RuntimeError):
@@ -76,6 +89,48 @@ def assert_write_capable_connection_is_test_database() -> None:
             f"database {db_name!r}, which does not look like a Django disposable test "
             "database (expected a 'test_' prefixed name). This checkpoint must NEVER write "
             "to a non-test database."
+        )
+
+
+class VerifiedProductionWriteGuardError(RuntimeError):
+    """CHECKPOINT_83, implementing `SINGLE_ENV_AUTHORIZATION_PROPOSAL.md`
+    §2.3(a), operator-approved. Raised (never silently swallowed) if the
+    REAL, non-test production execution path is ever reached without
+    `verify_environment_identity()` positively reporting
+    `VERIFIED_PRODUCTION` right now, in this process, on this
+    connection. Deliberately a DISTINCT exception type from
+    `ProductionWriteGuardError` (same discipline `67.13-C`'s own
+    `ProductionEntryPointTestDatabaseRefusalError` already established)
+    so a reviewer can tell, from the exception class alone, which of
+    the two independent guards actually fired.
+
+    This is NOT a database-naming-convention check — this project has
+    exactly one real database (confirmed directly,
+    `SINGLE_ENV_AUTHORIZATION_PROPOSAL.md` §1.3: every settings module
+    derives `DATABASES['default']['NAME']` from the same `POSTGRES_DB`
+    env var) — a `test_`-prefix requirement would be permanently
+    unsatisfiable against it, exactly the deadlock `CHECKPOINT_82`
+    confirmed live. This guard instead re-derives legitimacy from the
+    SAME positive-evidence chain `verify_environment_identity()`
+    already establishes (real `.production` settings module + the
+    operator's own out-of-band `INTRADAY_VERIFIED_PRODUCTION_IDENTITY`
+    marker + a live `current_database()` round-trip) — it adds no
+    further condition of its own beyond re-checking that chain, right
+    here, at the write boundary, so this call site is explicit and
+    reviewable rather than a silent inheritance from a caller who may
+    have already checked (or forgotten to)."""
+
+
+def assert_write_capable_connection_is_verified_production() -> None:
+    report = verify_environment_identity()
+    if not report.fail_closed_ok_to_proceed():
+        reasons = "; ".join(report.reasons) or "none recorded"
+        raise VerifiedProductionWriteGuardError(
+            "migration_execute refuses to run against a non-test database: "
+            "verify_environment_identity() did not report VERIFIED_PRODUCTION "
+            f"(verdict={report.verdict.value}); reasons: {reasons}. This "
+            "checkpoint must NEVER write to a real database without positively "
+            "verified production identity."
         )
 
 
@@ -126,12 +181,25 @@ def _cas_scope_inputs(
 @dataclass(frozen=True, slots=True)
 class HistoricalBarMigrationExecutor:
     """Write-capable. MUST only ever be constructed against a
-    connection that `assert_write_capable_connection_is_test_database`
-    accepts — the executor calls that guard itself, first thing,
-    inside `run()`, so even a caller that forgets to check is still
-    protected."""
+    connection one of the two independent guards below accepts — the
+    executor calls the relevant guard itself, first thing, inside
+    `run()`, so even a caller that forgets to check is still
+    protected.
+
+    CHECKPOINT_83: `allow_non_test_database` defaults to `False`,
+    preserving `migration_67_10.py`'s own exact prior behavior for
+    every existing caller, unmodified —
+    `assert_write_capable_connection_is_test_database()` still fires,
+    exactly as it always has, for the test-only path.
+    `migration_production_execute.py` (`67.13-C`, `CHECKPOINT_83`) is
+    the ONLY caller anywhere in this codebase that ever constructs
+    this executor with `allow_non_test_database=True`, and only after
+    its own gates 1-3 (environment identity, its own dedicated
+    test-database refusal, `authorize_one_unit_execution()`) have
+    already passed — see `SINGLE_ENV_AUTHORIZATION_PROPOSAL.md` §2.3(b)."""
 
     dry_runner: HistoricalBarMigrationDryRunner
+    allow_non_test_database: bool = False
 
     def run(
         self,
@@ -139,7 +207,10 @@ class HistoricalBarMigrationExecutor:
         unit_filter: frozenset[MigrationUnitKey] | None = None,
         limit: int | None = None,
     ) -> MigrationExecuteReport:
-        assert_write_capable_connection_is_test_database()
+        if self.allow_non_test_database:
+            assert_write_capable_connection_is_verified_production()
+        else:
+            assert_write_capable_connection_is_test_database()
 
         # Step 1 - PLANNING pass: reuse the exact same read-only
         # enumeration/evaluation the dry-run path uses. This produces,
@@ -227,6 +298,27 @@ class HistoricalBarMigrationExecutor:
                 unit=unit_key, outcome=ExecuteOutcome.REFUSED_UNSAFE,
                 final_state=MigrationUnitState.FAILED, row_count=planned_unit.row_count,
                 reasons=planned_unit.unsafe_reasons,
+            )
+
+        # CHECKPOINT_83, SINGLE_ENV_AUTHORIZATION_PROPOSAL.md §2.3(d):
+        # a hard, enforced ceiling on this unit's own blast radius -
+        # refused before ANY lock or transaction is opened, same as
+        # the DRY_RUN_SAFE check above, never something a caller could
+        # bypass by constructing the executor directly.
+        if planned_unit.row_count > MAX_ROWS_PER_EXECUTION_UNIT:
+            reason = (
+                f"unit row_count={planned_unit.row_count} exceeds "
+                f"MAX_ROWS_PER_EXECUTION_UNIT={MAX_ROWS_PER_EXECUTION_UNIT} - refused "
+                "before any lock or transaction was opened."
+            )
+            self._write_unit_audit(
+                unit_key, MigrationUnitState.FAILED, planned_unit.row_count,
+                error_code="REFUSED_ROW_COUNT_CEILING_EXCEEDED",
+            )
+            return UnitExecutionResult(
+                unit=unit_key, outcome=ExecuteOutcome.REFUSED_UNSAFE,
+                final_state=MigrationUnitState.FAILED, row_count=planned_unit.row_count,
+                reasons=(reason,),
             )
 
         # Snapshot fingerprint from the PLANNING pass - what this unit
@@ -528,8 +620,11 @@ def resume_migration_run(
 __all__ = [
     "MIGRATION_VERSION",
     "ELIGIBILITY_PREDICATE_VERSION",
+    "MAX_ROWS_PER_EXECUTION_UNIT",
     "ProductionWriteGuardError",
+    "VerifiedProductionWriteGuardError",
     "assert_write_capable_connection_is_test_database",
+    "assert_write_capable_connection_is_verified_production",
     "ExecuteOutcome",
     "UnitExecutionResult",
     "MigrationExecuteReport",

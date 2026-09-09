@@ -9,24 +9,34 @@
 # NOT sufficient authorization to execute a real one-unit migration
 # write — it says nothing about which unit is being targeted, whether
 # that unit's scope is still what it was planned against, or whether
-# the write-capability guard (`assert_write_capable_connection_is_test_
-# database`) even agrees the connection is writable in the first place
-# (in production that guard by design REFUSES — it only ever allows
-# `test_`-prefixed databases, so it can never itself authorize a real
-# production write; a genuine production execution path, if one is ever
-# built, would need to replace/parameterize that guard, which is
-# explicitly out of scope here and NOT done).
+# the write-capability guard even agrees the connection is writable in
+# the first place.
+#
+# CHECKPOINT_83 UPDATE (implementing `SINGLE_ENV_AUTHORIZATION_
+# PROPOSAL.md` §2.3(a), operator-approved): check (5) below used to
+# re-invoke `assert_write_capable_connection_is_test_database()` — the
+# guard `migration_67_10`'s own TEST-ONLY execution path was built
+# for, which by design only ever accepts a `test_`-prefixed database.
+# This function's own ONLY real caller in this codebase is
+# `migration_production_execute.py` (`67.13-C`) — the genuine
+# production entry point, which by definition never connects to a
+# `test_`-prefixed database — so reusing that guard here made check (5)
+# structurally unsatisfiable forever (`CHECKPOINT_82` confirmed this
+# live). Check (5) now calls
+# `assert_write_capable_connection_is_verified_production()` instead —
+# re-deriving legitimacy from the SAME positive-evidence chain check
+# (1) above already establishes, not a database-naming convention.
+# `migration_67_10.py`'s own test-only command never calls this
+# function at all (confirmed directly — grepped its own source), so
+# this change affects the production path only, exactly as approved.
 #
 # This module composes the ENTIRE evidence chain the checkpoint
 # directive lists — environment identity, database identity, intended
 # target identity, scope fingerprint, evidence/snapshot requirements,
-# and (for completeness of the honesty check, even though it always
-# fails closed against this workspace) the existing write-capability
-# guard — into ONE fail-closed decision function,
-# `authorize_one_unit_execution`. It is intentionally narrow: one
-# dataclass in, one dataclass out, no new framework, no persistence,
-# no wiring into `migration_execute.py`'s actual write path (see the
-# module-level rationale below `NOT_WIRED_RATIONALE`).
+# and the write-capability guard — into ONE fail-closed decision
+# function, `authorize_one_unit_execution`. It is intentionally narrow:
+# one dataclass in, one dataclass out, no new framework, no
+# persistence.
 from __future__ import annotations
 
 import enum
@@ -38,8 +48,8 @@ from intraday.application.services.migration_environment_identity import (
     EnvironmentIdentityVerdict,
 )
 from intraday.application.services.migration_execute import (
-    ProductionWriteGuardError,
-    assert_write_capable_connection_is_test_database,
+    VerifiedProductionWriteGuardError,
+    assert_write_capable_connection_is_verified_production,
 )
 from intraday.application.services.migration_dry_run import MigrationUnitKey
 from intraday.domain.market_data.migration_scope_fingerprint import compute_scope_fingerprint
@@ -160,18 +170,21 @@ def authorize_one_unit_execution(
             "source_before_fingerprint — internally inconsistent evidence"
         )
 
-    # (5) The existing, untouched write-capability guard. This is
-    # deliberately re-checked HERE too (not only inside the executor)
-    # so that authorization itself, evaluated in isolation, already
-    # reflects the same real-world fact the executor will independently
-    # re-check at its own boundary — two independent evaluations of the
-    # same invariant, not one trusted blindly by the other. This
-    # function does not weaken, wrap, or catch-and-suppress that guard;
-    # a `ProductionWriteGuardError` here is recorded as a denial reason,
-    # never silently swallowed into an AUTHORIZED verdict.
+    # (5) CHECKPOINT_83: the write-capability guard appropriate for THIS
+    # function's own real caller (the production entry point) — see the
+    # module-level comment above for why this is no longer
+    # `assert_write_capable_connection_is_test_database()`. Deliberately
+    # re-checked HERE too (not only inside the executor) so that
+    # authorization itself, evaluated in isolation, already reflects
+    # the same real-world fact the executor will independently re-check
+    # at its own boundary — two independent evaluations of the same
+    # invariant, not one trusted blindly by the other. This function
+    # does not weaken, wrap, or catch-and-suppress that guard; a
+    # `VerifiedProductionWriteGuardError` here is recorded as a denial
+    # reason, never silently swallowed into an AUTHORIZED verdict.
     try:
-        assert_write_capable_connection_is_test_database()
-    except ProductionWriteGuardError as exc:
+        assert_write_capable_connection_is_verified_production()
+    except VerifiedProductionWriteGuardError as exc:
         reasons.append(f"write-capability guard refuses this connection: {exc}")
 
     if reasons:
@@ -184,48 +197,29 @@ def authorize_one_unit_execution(
 
 
 # ---------------------------------------------------------------------
-# NOT_WIRED_RATIONALE — why `authorize_one_unit_execution` is NOT called
-# from inside `migration_execute.py`'s actual write path in this
-# checkpoint, even though the directive allows wiring it in "if
-# trivially safe":
+# NOT_WIRED_RATIONALE — HISTORICAL, SUPERSEDED BY CHECKPOINT_83.
 #
-#   1. `assert_write_capable_connection_is_test_database()` is, BY
-#      DESIGN, mutually exclusive with `VERIFIED_PRODUCTION` identity —
-#      it only ever accepts a `test_`-prefixed database, and
-#      `verify_environment_identity()` can only report
-#      `VERIFIED_PRODUCTION` for a REAL production database name (the
-#      marker env var must equal the live `current_database()`, and a
-#      genuine production database is never named with a `test_`
-#      prefix). Check (1) and check (5) above are therefore, in this
-#      codebase's CURRENT configuration, structurally UNSATISFIABLE
-#      together — `authorize_one_unit_execution` can never return
-#      AUTHORIZED as this codebase is configured today. Wiring an
-#      always-DENIED gate into `migration_execute.py`'s existing
-#      disposable-test-database execution path (the ONLY path this
-#      checkpoint is permitted to exercise) would either (a) silently
-#      block that legitimate, already-proven-safe test path, which is
-#      an unrelated regression this checkpoint must not introduce, or
-#      (b) require inventing a bypass/parameterization for tests, which
-#      is exactly the kind of new generic-framework complexity Part 7
-#      forbids adding "for smallest correct fix" reasons.
-#   2. A REAL production execution path does not exist in this
-#      repository yet (`migration_execute.py`'s only caller is the
-#      `--execute` management command gated to the disposable pytest
-#      test database — see that module's own docstring). Wiring an
-#      authorization boundary into a write path that has no legitimate
-#      production caller would be authorization theater: it could never
-#      be exercised against the scenario it exists to gate, so it would
-#      add code with no test coverage of its actual intended purpose.
-#   3. Instead, this checkpoint proves the boundary is REAL and
-#      MEANINGFUL the honest way available today: focused unit tests
-#      (Part 4, tests F-J below) exercise `authorize_one_unit_execution`
-#      directly against real evidence objects (real `EnvironmentIdentityReport`
-#      from `verify_environment_identity()`, real `CanaryBackupArtifact`
-#      from `build_canary_backup()`) and prove it fails closed for
-#      every single missing prerequisite, independently. When a real
-#      production execution path is designed in a FUTURE checkpoint,
-#      wiring this function in front of it becomes the trivial,
-#      already-tested step — not a new one.
+# This comment originally explained why `authorize_one_unit_execution`
+# was not wired to any real write path as of `67.12.2-B`: check (5)
+# then called `assert_write_capable_connection_is_test_database()`,
+# which is BY DESIGN mutually exclusive with `VERIFIED_PRODUCTION`
+# identity (check 1) — the two could never both pass, so this function
+# could never return AUTHORIZED against a real database, and no
+# genuine production write path existed yet to wire it into anyway.
+#
+# `CHECKPOINT_83` (`SINGLE_ENV_AUTHORIZATION_PROPOSAL.md` §2.3(a))
+# resolved this: check (5) now calls
+# `assert_write_capable_connection_is_verified_production()` instead —
+# see the module-level comment at the top of this file. This function
+# IS now wired to a real write path:
+# `migration_production_execute.py` (`67.13-C`) calls it as its own
+# gate 3, and — only after it returns AUTHORIZED — constructs
+# `HistoricalBarMigrationExecutor(..., allow_non_test_database=True)`.
+# `migration_67_10.py`'s disposable-test-database path is untouched:
+# it never calls `authorize_one_unit_execution` at all (confirmed
+# directly, grepped its own source), so nothing above affects it.
+# Kept here, rather than deleted, as an honest record of the earlier
+# deadlock and how it was actually resolved — not as current guidance.
 __all__ = [
     "ExecutionAuthorizationVerdict",
     "ExecutionAuthorizationRequest",

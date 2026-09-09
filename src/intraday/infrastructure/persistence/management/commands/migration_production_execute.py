@@ -112,8 +112,9 @@ class Command(BaseCommand):
         "to write unless verify_environment_identity() reports VERIFIED_PRODUCTION, "
         "this command's own dedicated test-database refusal passes, AND "
         "authorize_one_unit_execution() reports AUTHORIZED. Three independent "
-        "gates, not one. This command has never been invoked against real data "
-        "as of Checkpoint 67.13-C — that decision is the operator's, separately."
+        "gates, not one. Also requires --i-have-reviewed-this-real-write "
+        "(CHECKPOINT_83). First real invocation, if any, is a separate, "
+        "explicit, operator-approved act per checkpoint."
     )
 
     def add_arguments(self, parser: CommandParser) -> None:
@@ -128,10 +129,36 @@ class Command(BaseCommand):
             "fingerprint for this unit — authorize_one_unit_execution()'s check "
             "(3) denies if this does not match the freshly-computed evidence.",
         )
+        parser.add_argument(
+            "--i-have-reviewed-this-real-write", action="store_true", required=True,
+            help="CHECKPOINT_83, SINGLE_ENV_AUTHORIZATION_PROPOSAL.md §2.3(c), "
+            "operator-approved. REQUIRED - this command refuses to proceed "
+            "without it, no default. A mandatory, explicit, single-use operator "
+            "confirmation per invocation, matching the same 'explicit operator "
+            "action per checkpoint' discipline already established for live "
+            "paper sessions - nothing in this project auto-starts a real write. "
+            "Its own presence (or absence) in a logged command line is a "
+            "visible, reviewable signal of what ran and whether the operator "
+            "consciously chose to run it, distinct from a copy-pasted history "
+            "entry that would be missing this flag.",
+        )
 
     def handle(self, *args: object, **options: object) -> None:
         unit = _parse_unit(str(options["unit"]))
         expected_scope_fingerprint = str(options["expected_scope_fingerprint"])
+
+        # CHECKPOINT_83, SINGLE_ENV_AUTHORIZATION_PROPOSAL.md §2.3(c) —
+        # defense in depth: argparse's own `required=True` on this flag
+        # already refuses to invoke `handle()` at all without it, but this
+        # command re-checks explicitly here too, matching this codebase's
+        # own established "never trust caller discipline alone" style
+        # (the same pattern gate 2 and gate 3 already use for other facts
+        # that are also enforced upstream).
+        if options["i_have_reviewed_this_real_write"] is not True:
+            raise CommandError(
+                "--i-have-reviewed-this-real-write was not explicitly confirmed — "
+                "refusing to proceed. No write attempted."
+            )
 
         # GATE 1 — environment identity.
         self.stdout.write("Gate 1/3: verify_environment_identity()...")
@@ -195,7 +222,9 @@ class Command(BaseCommand):
         # Only past all three gates: the SAME, UNCHANGED write mechanism
         # every other execution path in this project already uses.
         self.stdout.write(self.style.WARNING("All 3 gates passed — executing real write..."))
-        executor = HistoricalBarMigrationExecutor(dry_runner=dry_runner)
+        executor = HistoricalBarMigrationExecutor(
+            dry_runner=dry_runner, allow_non_test_database=True
+        )
         exec_report = executor.run(unit_filter=frozenset({unit}), limit=1)
         self.stdout.write(f"run_state={exec_report.run_state.value}")
         for unit_result_out in exec_report.units:
