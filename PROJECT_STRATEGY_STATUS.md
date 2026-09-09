@@ -346,19 +346,63 @@ shaped code, not a test-only helper's own hand-built one.
 today.** See `CHECKPOINT_78_SUMMARY.md` for the full fix trace and the
 restated (not executed) operator command sequence.
 
-### `LIVE-PAPER-1` attempt — halted pre-flight, market closed
+### `LIVE-PAPER-1` — the project's first completed live paper session (`2026-09-09`)
 
-`[F]` Two live paper session attempts (`LIVE-PAPER-1`) were made the
-same day — `2026-09-08 20:24 IST` and, after `RECON-FRONTEND-LAUNCH`
-narrowed the checkpoint's own scope to worker-launch-only, again at
-`20:30 IST` — both halted immediately at Part 0 pre-flight, since real
-time checked directly (`date`) both times was well past NSE's 15:30
-IST close. No worker was launched, no `ScannerConfiguration` changed,
-zero DB writes, either time. **This does not affect the READY verdict
-above** — nothing about infrastructure readiness was tested, changed,
-or contradicted; the session simply never reached a point where
-readiness would matter. Needs re-attempt on a future trading day
-during market hours, with a fresh Dhan credential check (the one
-`CHECKPOINT_78` recorded expires `2026-09-09 10:17:40 UTC` and should
-not be reused). See
-`LIVE_PAPER-1_SUMMARY.md` for the full (brief) record.
+`[F]` Two earlier attempts on `2026-09-08` (20:24/20:30 IST) halted at
+Part 0 pre-flight, market closed — see prior entry below, unchanged.
+**A third attempt on `2026-09-09`, during genuine NSE market hours,
+ran the full session** (worker launch → operator-driven UI start →
+Part 2 monitoring → Part 3 clean stop). Full detail in
+`LIVE_PAPER-1_SUMMARY.md`; summarized here as this project's first
+real paper-trading data point.
+
+**Outcome: zero signals, but a fully successful validation** — per
+this document's own §2, the documented procedure's Success Criteria
+are entirely infrastructure-based, and every infrastructure item was
+real and correct: `ScannerConfiguration` genuinely active (15
+instruments, `5m`, the 3 registered strategies, operator-set via the
+real UI), scanner completed dozens of full cycles (15/15 instruments,
+3/3 strategies) across the session, `drift=False` throughout,
+`SignalRecord`/`PaperOrderRecord`/`CommunicationLedgerRecord` counts
+for the day all genuinely `0` (a real all-zero Daily Session Report,
+not a missing one).
+
+**Two genuine crash/recovery cycles, both handled correctly** — the
+market-data worker hit the same intermittent Dhan `close_code=1006`
+WebSocket disconnect `LIVE-1`/`LIVE-3`/`LIVE-4` already diagnosed as
+real and external, not a code defect. The first bounded supervisor run
+(`--max-restarts 40`) genuinely exhausted its budget (a today-specific
+crash burst, 40 restarts in ~90 minutes — busier than those prior
+checkpoints' own observed cadence) and stopped itself exactly as
+designed, leaving a real, honestly-reported ~7-minute data gap before
+this session's own monitoring caught it and relaunched with a larger
+budget (`--max-restarts 200`, matching `LIVE-4`'s own precedent); the
+second run used only 4 restarts and reached session-end cleanly.
+**This does not affect the READY verdict above** — it demonstrates the
+existing crash-recovery mechanism working as intended under real,
+unusually heavy reconnect pressure, not a new infrastructure gap.
+
+**One real, minor state-machine nuance found**: `derive_live_paper_
+session_state()` settles at `STOPPING` rather than `STOPPED` when the
+underlying worker process has already exited before the session-level
+stop is issued (no further worker-side reconciliation tick occurs to
+advance it) — noted for a future checkpoint, not fixed here (safety-
+irrelevant: the worker process, `PaperBroker` exclusivity, and
+`real_trading_state=DISABLED` were all unaffected).
+
+Needs a fresh Dhan credential check before any future session (today's
+token was `VALID`→`EXPIRING_SOON` by session end, `2026-09-09
+10:17:40 UTC` expiry — do not reuse).
+
+### `LIVE-PAPER-1` — two earlier halted attempts, `2026-09-08`
+
+`[F]` Two live paper session attempts were made the same day —
+`2026-09-08 20:24 IST` and, after `RECON-FRONTEND-LAUNCH` narrowed the
+checkpoint's own scope to worker-launch-only, again at `20:30 IST` —
+both halted immediately at Part 0 pre-flight, since real time checked
+directly (`date`) both times was well past NSE's 15:30 IST close. No
+worker was launched, no `ScannerConfiguration` changed, zero DB
+writes, either time. This did not affect the READY verdict above —
+nothing about infrastructure readiness was tested, changed, or
+contradicted; the session simply never reached a point where readiness
+would matter.

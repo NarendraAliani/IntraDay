@@ -1084,6 +1084,54 @@ re-deriving them. Not a full transcript; no invented detail.
   page or instrument picker beyond confirming their post-
   `FRONTEND-DATA-TABLES` state. The user's own `app.bat` dev servers
   (5173/8000) were left untouched - isolated test port (5198) used.
+- **`LIVE-PAPER-1` (2026-09-09) — the project's first completed live
+  paper session**: after 2 prior halted attempts (2026-09-08, market
+  closed), a 3rd attempt during genuine NSE market hours ran the full
+  session. Part 0 pre-flight confirmed directly (not assumed): market
+  OPEN, Dhan token VALID (expires 10:17:40 UTC), `real_trading_state`
+  structurally DISABLED (`TRADING_MODE=RESEARCH`, no order-placing
+  broker under `infrastructure/brokers/dhan/`), `PaperBroker` the only
+  order-execution broker. Part 1: launched `run_market_data_worker`
+  only, confirmed READY_FOR_PAPER, stopped per the checkpoint's own
+  narrowed scope for the operator to configure/start via the real UI
+  (`LiveScannerConsole`/`LivePaperOperationsConsole`, confirmed working
+  by `RECON-FRONTEND-LAUNCH`). Operator started via UI: 15 instruments,
+  `5m`, the 3 registered strategies - confirmed directly via
+  `derive_live_paper_session_state()`=RUNNING,
+  `drift=False` (effective config version matched desired).
+  **Outcome: zero signals for the whole session, but a fully
+  successful validation** per the documented procedure's own
+  infrastructure-only Success Criteria - scanner completed dozens of
+  full cycles, `SignalRecord`/`PaperOrderRecord`/
+  `CommunicationLedgerRecord` all genuinely 0 (a real all-zero Daily
+  Session Report, not a missing one). **Two genuine crash/recovery
+  cycles handled correctly**: the same intermittent Dhan
+  `close_code=1006` disconnect `LIVE-1`/`LIVE-3`/`LIVE-4` already
+  diagnosed as real/external - first bounded supervisor
+  (`--max-restarts 40`) genuinely exhausted (40 restarts in ~90 min, a
+  busier-than-usual burst) and stopped itself exactly as designed,
+  leaving an honest ~7-minute data gap before this session's own
+  monitoring caught and relaunched it with `--max-restarts 200`
+  (matching `LIVE-4`'s own precedent); second run used only 4 restarts,
+  reached session-end cleanly. A process-kill attempted mid-session
+  (to proactively resize the first supervisor's budget before
+  exhaustion) was correctly refused by the permission system and NOT
+  worked around - fell back to letting it exhaust naturally instead,
+  per `LIVE-4`'s own precedent. At session-end, the worker was slow to
+  notice the supervisor's own stop request; re-issued the same
+  real stop-request row directly and it exited cleanly ~12s later.
+  Also called the real `stop_live_paper_session()` service (same as
+  the UI's own STOP button) since the worker-level stop alone left
+  `ScannerConfiguration.enabled=True`. One minor, safety-irrelevant
+  state-machine nuance found and reported: `derive_live_paper_
+  session_state()` settles at STOPPING not STOPPED when the worker
+  already exited before the session-level stop (no further
+  reconciliation tick occurs) - noted for a future checkpoint, not
+  fixed. `PROJECT_STRATEGY_STATUS.md` §6 and this entry both confirm
+  the READY verdict is unaffected - this demonstrated existing
+  crash-recovery working under real, heavy reconnect pressure, not a
+  new gap. See `LIVE_PAPER-1_SUMMARY.md` for the full trace (Parts
+  0-3).
 - **`LIVE-2-FINALIZE`**: an end-of-day close-out checkpoint for
   `LIVE-2` was requested with the premise that market had just closed
   on the same day as the `LIVE-2` run — but this conversation's
