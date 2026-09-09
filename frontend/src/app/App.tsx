@@ -76,26 +76,77 @@ type Screen =
   | "paper-trading"
   | "reports";
 
+interface NavItem {
+  id: Screen;
+  label: string;
+  icon: IconName;
+}
+
 /** Checkpoint 64.80-F2 Phase 8: every navigation entry carries a
  * semantic icon from the ONE icon system. The icons are decorative -
  * the text label is always present and is what assistive technology
- * announces - so they are `aria-hidden` by construction (see Icon.tsx). */
-const NAV_ITEMS: Array<{ id: Screen; label: string; icon: IconName }> = [
-  { id: "dashboard", label: "Dashboard", icon: "dashboard" },
-  { id: "configuration", label: "Configuration", icon: "settings" },
-  { id: "settings", label: "Settings", icon: "settings" },
-  { id: "live-scanner", label: "Live Scanner", icon: "signal" },
-  { id: "live-paper-operations", label: "Live Paper Operations", icon: "paper-trading" },
-  { id: "market-data", label: "Market Data", icon: "market" },
-  { id: "market-data-archive", label: "Market Data Archive", icon: "archive" },
-  { id: "strategies", label: "Strategies", icon: "research" },
-  { id: "backtesting", label: "Backtesting", icon: "research" },
-  { id: "comparison", label: "Compare", icon: "research" },
-  { id: "watchlists", label: "Watchlists", icon: "market" },
-  { id: "strategy-monitor", label: "Strategy Monitor", icon: "system-health" },
-  { id: "paper-trading", label: "Paper Trading", icon: "paper-trading" },
-  { id: "reports", label: "Reports", icon: "archive" },
+ * announces - so they are `aria-hidden` by construction (see Icon.tsx).
+ *
+ * Checkpoint FRONTEND-4: grouped by function into 4 dropdown groups
+ * (plus Dashboard, which stays a standalone top-level entry - it's the
+ * landing screen, not a member of any category). This replaces the
+ * flat 14-button row that wrapped across 3 lines at a normal viewport
+ * width (`FRONTEND-2`'s own Category 3 finding). Every screen/route
+ * this app has is still here, under exactly the same `Screen` id - only
+ * how they're grouped for display changed, nothing was removed or
+ * renamed. */
+const NAV_GROUPS: Array<{ id: string; label: string; icon: IconName; items: NavItem[] }> = [
+  {
+    id: "live-operations",
+    label: "Live Operations",
+    icon: "signal",
+    items: [
+      { id: "live-scanner", label: "Live Scanner", icon: "signal" },
+      { id: "live-paper-operations", label: "Live Paper Operations", icon: "paper-trading" },
+      { id: "market-data", label: "Market Data", icon: "market" },
+    ],
+  },
+  {
+    id: "research",
+    label: "Research",
+    icon: "research",
+    items: [
+      { id: "strategies", label: "Strategies", icon: "research" },
+      { id: "backtesting", label: "Backtesting", icon: "research" },
+      { id: "comparison", label: "Compare", icon: "research" },
+      { id: "watchlists", label: "Watchlists", icon: "market" },
+    ],
+  },
+  {
+    // Checkpoint FRONTEND-4: the group is deliberately labeled
+    // "System Setup," not "Configuration" - a group whose own summary
+    // shares an accessible name with one of its own items (the
+    // "Configuration" screen) is a real, genuine collision in a real
+    // browser's accessibility tree (Chromium exposes `<summary>` with
+    // an implicit `button` role) - found live via Playwright, which
+    // enforces this; jsdom-based unit tests do not, and missed it.
+    id: "configuration",
+    label: "System Setup",
+    icon: "settings",
+    items: [
+      { id: "configuration", label: "Configuration", icon: "settings" },
+      { id: "settings", label: "Settings", icon: "settings" },
+      { id: "strategy-monitor", label: "Strategy Monitor", icon: "system-health" },
+    ],
+  },
+  {
+    id: "trading-record",
+    label: "Trading Record",
+    icon: "archive",
+    items: [
+      { id: "paper-trading", label: "Paper Trading", icon: "paper-trading" },
+      { id: "reports", label: "Reports", icon: "archive" },
+      { id: "market-data-archive", label: "Market Data Archive", icon: "archive" },
+    ],
+  },
 ];
+
+const DASHBOARD_ITEM: NavItem = { id: "dashboard", label: "Dashboard", icon: "dashboard" };
 
 function AppShell(): JSX.Element {
   const { state, logout } = useAuth();
@@ -121,18 +172,42 @@ function AppShell(): JSX.Element {
           IntraDay
         </p>
         <nav className="app-shell__nav" aria-label="Primary">
-          {NAV_ITEMS.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              className={screen === item.id ? "nav-link nav-link--active" : "nav-link"}
-              aria-current={screen === item.id ? "page" : undefined}
-              onClick={() => setScreen(item.id)}
-            >
-              <Icon name={item.icon} />
-              {item.label}
-            </button>
-          ))}
+          <button
+            type="button"
+            className={screen === DASHBOARD_ITEM.id ? "nav-link nav-link--active" : "nav-link"}
+            aria-current={screen === DASHBOARD_ITEM.id ? "page" : undefined}
+            onClick={() => setScreen(DASHBOARD_ITEM.id)}
+          >
+            <Icon name={DASHBOARD_ITEM.icon} />
+            {DASHBOARD_ITEM.label}
+          </button>
+          {NAV_GROUPS.map((group) => {
+            const containsActive = group.items.some((item) => item.id === screen);
+            return (
+              <details key={group.id} className="nav-group" open={containsActive || undefined}>
+                <summary
+                  className={containsActive ? "nav-group__toggle nav-group__toggle--active" : "nav-group__toggle"}
+                >
+                  <Icon name={group.icon} />
+                  {group.label}
+                </summary>
+                <div className="nav-group__items">
+                  {group.items.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className={screen === item.id ? "nav-link nav-link--active" : "nav-link"}
+                      aria-current={screen === item.id ? "page" : undefined}
+                      onClick={() => setScreen(item.id)}
+                    >
+                      <Icon name={item.icon} />
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+              </details>
+            );
+          })}
         </nav>
         <div className="app-shell__identity">
           <ThemeSelector />

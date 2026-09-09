@@ -1,14 +1,25 @@
-# CHECKPOINT FRONTEND-4 — Paper-Account Labeling Fix + Icon Audit for Color-Only Status
+# CHECKPOINT FRONTEND-4 — Summary
 
-Branch: `active-development`. Frontend-only. No backend, no navigation/router,
-no Reports-page change. Continuation of FRONTEND-3's accessibility thread
-(contrast fix, disclosure control) — this checkpoint's thread is "no status
-conveyed by color alone."
+Branch: `active-development`. This file covers TWO passes under the
+same `FRONTEND-4` name: Round 1 (paper-account labeling fix + icon
+audit for color-only status) and Round 2 (Reports density + navigation
+restructuring). Kept as one file, in order, rather than one silently
+overwriting the other — same discipline established for
+`CHECKPOINT_FRONTEND-3_SUMMARY.md`.
 
-## Part 1 — Paper-Account labeling fix (implemented)
+---
 
-Applied FRONTEND-3's own approved recommendation, copy-only, no data flow /
-endpoint / component-structure change:
+## Round 1 — Paper-Account Labeling Fix + Icon Audit for Color-Only Status
+
+Frontend-only. No backend, no navigation/router, no Reports-page
+change (explicitly out of scope for this round). Continuation of
+`FRONTEND-3`'s accessibility thread (contrast fix, disclosure
+control) — this round's thread is "no status conveyed by color alone."
+
+### Round 1 — Part 1 — Paper-Account labeling fix (implemented)
+
+Applied `FRONTEND-3`'s own approved recommendation, copy-only, no data
+flow / endpoint / component-structure change:
 
 - `src/features/paper-trading/PaperSessionPanel.tsx`: heading renamed
   `Paper Account` → **"Replay Session Account (Simulated)"**, with a new
@@ -31,9 +42,9 @@ endpoint / component-structure change:
   headings and captions are legible in both Focus (light) and Midnight
   (dark) theme, and remain visually distinct from each other.
 
-## Part 2 — Icon system audit
+### Round 1 — Part 2 — Icon system audit
 
-### 2.1 `src/common/icons/Icon.tsx` — full `IconName` set (19 names, unchanged)
+#### 2.1 `src/common/icons/Icon.tsx` — full `IconName` set (19 names, unchanged)
 
 `dashboard`, `market`, `archive`, `paper-trading`, `research`,
 `system-health`, `settings`, `security`, `gainz`, `refresh`, `warning`,
@@ -46,7 +57,7 @@ inline SVG, documented rationale in the file's own header comment).
 Decorative by default (`aria-hidden`), promotable to `role="img"` via a
 `label` prop.
 
-### 2.2 Where `<Icon>` is already used (before this checkpoint)
+#### 2.2 Where `<Icon>` is already used (before this checkpoint)
 
 Nav/section headers across `DashboardPage.tsx` (all fully icon-paired,
 including every `StatusBadge`/`TONE_ICON_NAME` status site — this page
@@ -55,14 +66,14 @@ status components below, and scattered action-button icons
 (`View Market Data`, `Open Paper Trading`, etc.) — all decorative pairings
 with adjacent text, not status-color pairings.
 
-### 2.3 Shared status components — already had an icon slot, already used it
+#### 2.3 Shared status components — already had an icon slot, already used it
 
 `ActiveBadge.tsx`, `ConnectionStatusBadge.tsx`, `CapabilityStatus.tsx` all
 already render `<Icon name={...}/>` next to their badge text (added in
 Checkpoint 64.80-F2 Phase 8, predating this checkpoint). **No gap found
 here** — these were confirmed, not fixed.
 
-### 2.4 Color-only status sites found (no icon, color/class carried extra
+#### 2.4 Color-only status sites found (no icon, color/class carried extra
 meaning beyond the text already shown, or a raw Unicode glyph stood in
 for a real icon) — the actual gaps this checkpoint closed:
 
@@ -90,8 +101,10 @@ for a real icon) — the actual gaps this checkpoint closed:
 
 **Explicitly left untouched (out of scope / not a genuine gap):**
 - `ReportsOverviewPage.tsx` — Reports page is prohibited from any change
-  this checkpoint (still has its own `✕ Not Satisfied` Unicode glyph;
-  flagged for a future checkpoint, not fixed here).
+  this round (still had its own `✕ Not Satisfied` Unicode glyph;
+  flagged for a future checkpoint — closed by Round 2 below, though
+  Round 2's own scope was layout/density, not this glyph specifically;
+  see Round 2's Part 3).
 - `LivePaperOperationsConsole.tsx` safety-strip badges ("Execution Mode:
   PAPER" / "Real Trading: DISABLED" / "Broker Execution: PAPER ONLY") —
   the file's own existing comment states these are deliberately
@@ -109,7 +122,7 @@ for a real icon) — the actual gaps this checkpoint closed:
   diff scoped to what was asked. **Honestly flagged as an area not yet
   audited to the same depth**, not confirmed clean.
 
-## Part 3 — Gap check before adding anything new
+### Round 1 — Part 3 — Gap check before adding anything new
 
 Every color-only site above maps cleanly onto an **existing** `IconName`:
 `success` (active/ready/healthy/valid/approved/bullish), `warning`
@@ -125,7 +138,7 @@ A new small helper, `src/common/components/statusIcon.ts`
 warning` / `badge--historical → info` mapping in ONE place instead of
 re-deriving it per file — this is refactor scaffolding, not a new icon.
 
-## Part 4 — Applied
+### Round 1 — Part 4 — Applied
 
 All sites in the table above now render `<Icon name={...}/>` immediately
 before the badge/status text, reusing `badgeIconName()` wherever the
@@ -147,7 +160,7 @@ that had literally nothing but color (`TokenStateBadge` before this
 checkpoint, the timeline "current step" highlight) are the ones with the
 strongest, least-arguable case.
 
-## Part 5 — Verification
+### Round 1 — Part 5 — Verification
 
 - `npm run typecheck` — clean (`tsc --noEmit`, no errors).
 - `npm run build` — clean (`tsc -b && vite build`, 95 modules, no
@@ -179,6 +192,145 @@ strongest, least-arguable case.
     paired error icon (red circle-X) instead of a bare color chip;
     layout/contrast unaffected in either theme.
 
-## Commit
+### Round 1 — Commit
 
 Committed to `active-development`. No push, no merge to `main`.
+
+---
+
+## Round 2 — Reports Density + Navigation Restructuring
+
+Scope: the two Category 2/3 items deferred since `FRONTEND-2`/`3`
+(Reports page density, 14-button nav wrapping), now explicitly
+authorized. Read `docs/architecture/FRONTEND_DESIGN_SYSTEM.md` first.
+Playwright/network-mocked testing only; no backend/API changes.
+
+### Round 2 — Part 1 — Audit
+
+Re-captured all 12 generic-mock screens fresh (`frontend/scripts/
+capture-design-audit-screenshots.mjs`, both themes, 24 images) —
+confirmed the nav had grown to 14 items across 3 wrapped rows since
+`FRONTEND-2` first flagged it (Live Paper Operations, Strategy
+Monitor, and others added since).
+
+### Round 2 — Part 2 — Navigation restructuring (implemented)
+
+**Grouped into 5 top-level entries**: Dashboard (standalone, the
+landing screen) + 4 dropdown groups —
+
+- **Live Operations**: Live Scanner, Live Paper Operations, Market Data
+- **Research**: Strategies, Backtesting, Compare, Watchlists
+- **System Setup**: Configuration, Settings, Strategy Monitor
+- **Trading Record**: Paper Trading, Reports, Market Data Archive
+
+(Adjusted the user's own suggested "Configuration" group label to
+"System Setup" — see the real collision this avoided, below.)
+
+**Implementation**: reused the SAME native `<details>`/`<summary>`
+disclosure idiom the Dashboard's own evidence section (`FRONTEND-3`)
+already established, rather than building a new dropdown/menu
+component — `frontend/src/app/App.tsx`'s `NAV_GROUPS` array, rendered
+as one `<details className="nav-group">` per group inside the
+existing `<nav aria-label="Primary">`. The group containing the
+currently active screen auto-opens (`open={containsActive ||
+undefined}`) so the operator always sees where they are. Every
+existing `Screen` id, route, and button label is unchanged — this is
+purely a rendering/grouping change.
+
+**Two real bugs found and fixed while verifying with a real browser
+(Playwright), neither caught by the jsdom-based unit test suite**:
+
+1. **Naming collision**: the user's own suggested "Configuration"
+   group label collided with the "Configuration" screen's own item
+   inside it — both exposed as `role="group"`/`role="button"`-
+   adjacent elements sharing one accessible name in Chromium. Fixed
+   by renaming the group to "System Setup" (the screen's own label is
+   untouched).
+2. **`<details>` is `role="group"`, not `role="button"`** — Chromium
+   folds the `<summary>` text into the GROUP's own accessible name; a
+   closed `<details>`'s content is also excluded from the
+   accessibility tree entirely (not merely visually hidden). Neither
+   fact is obvious from the DOM alone, and jsdom's `getByRole`/click
+   handling in `@testing-library/react` does not enforce either
+   behavior, so the existing unit tests (below) never caught it — only
+   driving a real browser did. This governs how any future Playwright/
+   e2e navigation script must locate a group (open by its own visible
+   text, not by role or by searching for an item inside it before
+   opening).
+
+**Confirmed no existing test broke** — `App.test.tsx` and
+`AppDashboardNavigation.test.tsx` (the two files with real nav-button
+clicks, including one that iterates `Dashboard`/`Market Data`/`Market
+Data Archive`/`Paper Trading`/`Backtesting` and asserts each is inside
+`nav[aria-label="Primary"]`) **both pass unmodified** — jsdom doesn't
+enforce visibility on `fireEvent.click`, so a button inside a closed
+`<details>` remains clickable and DOM-contained in that test
+environment, and the grouped structure is transparent to those
+assertions. **Keyboard operability confirmed directly** (not assumed):
+`Tab` from the Dashboard button lands on the first group's `<summary>`,
+and `Enter` toggles it open — native, no custom key handling needed.
+
+### Round 2 — Part 3 — Reports page density (implemented)
+
+**Wrapped every major section in a collapsible `<details>`** (same
+established idiom, `ReportSection` helper component in
+`ReportsOverviewPage.tsx`) instead of building a new ARIA tabs pattern
+— `FRONTEND_DESIGN_SYSTEM.md`'s own Deferred list already named Tabs
+as "not yet needed," so reusing the disclosure pattern already proven
+elsewhere in this app is the lower-risk option the checkpoint asked
+for. **Report Catalogue** and **Market Data Quality Report** (the two
+sections an operator most likely opens Reports FOR) stay **open by
+default**; **Report Export**, **Research**, **Market Data**,
+**Trading**, and **Notifications** start collapsed. Every existing
+badge, table, and piece of content is unchanged and fully present in
+the DOM — only whether each section is expanded by default changed.
+Visually: the page now shows 2 open sections + 5 one-line collapsed
+headers at rest, instead of one continuous scroll of 7 full sections.
+
+### Round 2 — Part 4 — Categorized, not implemented
+
+Nothing new surfaced that warranted deferral beyond what was already
+authorized — both threads stayed within their described, low-risk
+scope. No Category 2/3 items to report from this round.
+
+### Round 2 — Part 5 — Verification
+
+- `npx tsc --noEmit`: clean.
+- `npx vitest run`: **34 files, 367 tests passing** — zero test files
+  needed updating for either restructuring (confirmed both bugs above
+  via direct, hand-written Playwright reproduction scripts, not via
+  the unit suite, which structurally cannot see them).
+- `styles.quality.test.ts`/`theme.quality.test.ts`: both pass (new CSS
+  for `.nav-group`/`.reports-overview__section` uses only existing
+  tokens — 2 stray fallback literals, `rgba(0,0,0,0.15)` and a
+  redundant `--space-1` fallback, were caught by the quality gate
+  during development and removed in favor of the real, already-
+  defined tokens).
+- 24 screenshots re-captured (both themes) and visually confirmed: nav
+  fits in one row at 1440px (was 3 wrapped rows), Reports page is a
+  fraction of its previous scroll length.
+
+### Round 2 — `MEMORY.md` update — confirmed made
+
+Appended (never rewritten), recording both restructurings, the two
+real Playwright-only bugs found, and verification results.
+
+### Round 2 — Governance compliance
+
+- No backend/API change.
+- Every existing route/page remains reachable — confirmed directly via
+  the re-captured screenshots and the unmodified passing nav tests,
+  not assumed.
+- Playwright/network-mocked testing only; no real backend/Dhan
+  dependency.
+- P11/P16: this summary, `App.tsx`, `ReportsOverviewPage.tsx`,
+  `styles.css`, the updated screenshot script, the re-captured
+  screenshots, and `MEMORY.md` committed to `active-development` only.
+
+### Note on this file's own history
+
+This pass's own first tool call would have overwritten Round 1's
+content via a blind `Write`. Caught before committing (`git status`
+showed the file as modified, not new, matching the exact same
+`CHECKPOINT_FRONTEND-3_SUMMARY.md` incident earlier this session) and
+corrected by merging both rounds into this one file in order.

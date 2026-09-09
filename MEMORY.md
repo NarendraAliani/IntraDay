@@ -1161,6 +1161,34 @@ re-deriving them. Not a full transcript; no invented detail.
   §6's `LIVE-PAPER-1` entry updated to reflect the fix (superseding its
   own prior "not fixed here" note). No live session launched, no
   strategy/registry changes.
+- **`FRONTEND-4`**: implemented the two Category 2/3 items deferred
+  since `FRONTEND-2`/`3` (Reports density, 14-button nav wrapping),
+  now explicitly authorized. **Nav**: grouped 14 flat items into
+  Dashboard (standalone) + 4 dropdown groups (Live Operations/
+  Research/System Setup/Trading Record), reusing the existing
+  `<details>`/`<summary>` disclosure idiom (`App.tsx`'s `NAV_GROUPS`) -
+  no new component, every route/label unchanged. **Reports**: wrapped
+  each of the 7 major sections in the same collapsible pattern
+  (`ReportsOverviewPage.tsx`'s `ReportSection`); Report Catalogue and
+  Market Data Quality Report open by default, the rest start collapsed
+  - page went from one continuous 7-section scroll to 2 open + 5
+  one-line collapsed headers. Found 2 real bugs only a real browser
+  (Playwright) catches, not the jsdom-based unit suite: (1) the user's
+  own suggested "Configuration" group label collided with the
+  "Configuration" screen inside it (same accessible name) - renamed
+  the group to "System Setup"; (2) `<details>` is exposed as
+  `role="group"` in Chromium (summary folded into the group's own
+  name, never `role="button"`), and a CLOSED `<details>`'s content is
+  excluded from the accessibility tree entirely, not just visually
+  hidden - governs how any future Playwright/e2e script must locate a
+  nav group (by its own visible text, opened BEFORE querying for an
+  item inside it). Keyboard operability confirmed directly (Tab lands
+  on summary, Enter toggles - native, no custom handling). Zero
+  existing tests broke (`App.test.tsx`/`AppDashboardNavigation.test.tsx`
+  both pass unmodified - jsdom doesn't enforce click-visibility, so the
+  grouped structure is transparent to those assertions). Full suite:
+  34 files/367 tests passing, typecheck clean, both quality gates
+  pass. No backend/API change.
 - **`LIVE-2-FINALIZE`**: an end-of-day close-out checkpoint for
   `LIVE-2` was requested with the premise that market had just closed
   on the same day as the `LIVE-2` run — but this conversation's

@@ -4,7 +4,7 @@
 // discoverability home for every report type and major product
 // capability, including ones not yet available - a deliberate
 // placeholder, never a blank page, per Part 11's explicit instruction.
-import type { JSX } from "react";
+import type { JSX, ReactNode } from "react";
 
 import { CapabilityStatus } from "../../common/components/CapabilityStatus";
 import { Icon } from "../../common/icons/Icon";
@@ -38,6 +38,38 @@ const CONDITION_CLASS: Record<string, string> = {
   BLOCKED: "badge badge--historical",
 };
 
+/** Checkpoint FRONTEND-4: every major section is a collapsible
+ * `<details>` panel - the SAME native-disclosure idiom the Dashboard's
+ * own evidence section (`FRONTEND-3`) and the grouped navigation
+ * (`FRONTEND-4`'s own Part 2) already use, chosen deliberately over
+ * building a new ARIA tabs pattern (a Tabs component was explicitly
+ * named as "not yet needed" in `FRONTEND_DESIGN_SYSTEM.md`'s own
+ * Deferred list - reusing an established, already-accessible pattern
+ * is the lower-risk option the checkpoint asked for). No content was
+ * removed or restructured - only whether each section is expanded by
+ * default changed. Report Catalogue and Market Data Quality Report
+ * (the two sections an operator most likely opens Reports FOR - "what
+ * can this produce" and "is today's data trading-grade") stay open by
+ * default; the remaining, more detailed capability grids start
+ * collapsed. */
+function ReportSection(props: {
+  id: string;
+  title: string;
+  defaultOpen: boolean;
+  children: ReactNode;
+}): JSX.Element {
+  return (
+    <details className="reports-overview__section" open={props.defaultOpen || undefined}>
+      <summary className="reports-overview__section-toggle">
+        <h2 id={props.id}>{props.title}</h2>
+      </summary>
+      <div className="reports-overview__section-body" aria-labelledby={props.id}>
+        {props.children}
+      </div>
+    </details>
+  );
+}
+
 export function ReportsOverviewPage(): JSX.Element {
   return (
     <div className="reports-overview">
@@ -48,8 +80,7 @@ export function ReportsOverviewPage(): JSX.Element {
         state. Nothing here claims a capability is working when it is not.
       </p>
 
-      <section className="capability-status-section" aria-labelledby="report-catalogue-heading">
-        <h2 id="report-catalogue-heading">Report Catalogue</h2>
+      <ReportSection id="report-catalogue-heading" title="Report Catalogue" defaultOpen>
         <div className="capability-status-grid">
           {REPORT_CATALOGUE.map((entry) => (
             <CapabilityStatus
@@ -60,13 +91,13 @@ export function ReportsOverviewPage(): JSX.Element {
             />
           ))}
         </div>
-      </section>
+      </ReportSection>
 
-      <section
-        className="capability-status-section"
-        aria-labelledby="market-data-quality-heading"
+      <ReportSection
+        id="market-data-quality-heading"
+        title="Market Data Quality Report"
+        defaultOpen
       >
-        <h2 id="market-data-quality-heading">Market Data Quality Report</h2>
         <p>
           Current classification:{" "}
           <span
@@ -106,10 +137,9 @@ export function ReportsOverviewPage(): JSX.Element {
         <p className="capability-status__doc-link">
           Full evidence: <code>docs/research/TRADING_GRADE_BAR_VALIDATION.md</code>
         </p>
-      </section>
+      </ReportSection>
 
-      <section className="capability-status-section" aria-labelledby="export-heading">
-        <h2 id="export-heading">Report Export</h2>
+      <ReportSection id="export-heading" title="Report Export" defaultOpen={false}>
         <div className="capability-status-grid">
           <CapabilityStatus
             title="Export PDF"
@@ -129,21 +159,21 @@ export function ReportsOverviewPage(): JSX.Element {
             prerequisite="A dedicated export endpoint - the underlying data already exists via the results API."
           />
         </div>
-      </section>
+      </ReportSection>
 
       {CAPABILITY_REGISTRY.map((group) => (
-        <section
+        <ReportSection
           key={group.groupTitle}
-          className="capability-status-section"
-          aria-labelledby={`capability-${group.groupTitle}`}
+          id={`capability-${group.groupTitle}`}
+          title={group.groupTitle}
+          defaultOpen={false}
         >
-          <h2 id={`capability-${group.groupTitle}`}>{group.groupTitle}</h2>
           <div className="capability-status-grid">
             {group.capabilities.map((capability) => (
               <CapabilityStatus key={capability.title} {...capability} />
             ))}
           </div>
-        </section>
+        </ReportSection>
       ))}
     </div>
   );

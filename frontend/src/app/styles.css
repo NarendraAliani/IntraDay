@@ -590,7 +590,76 @@ dd {
 .app-shell__nav {
   display: flex;
   flex-wrap: wrap;
+  align-items: flex-start;
   gap: 0.5rem;
+}
+
+/* Checkpoint FRONTEND-4: grouped navigation - 4 dropdown groups
+   (`<details>`/`<summary>`, same native-disclosure idiom the dashboard
+   evidence section already established) instead of one flat 14-button
+   row that wrapped across 3 lines. Every button's own `.nav-link`
+   styling and click behavior is unchanged - only where it renders. */
+.nav-group {
+  position: relative;
+}
+
+.nav-group__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0.4rem 0.9rem;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--color-text-muted);
+  font-weight: 500;
+  list-style: none;
+}
+
+.nav-group__toggle::-webkit-details-marker {
+  display: none;
+}
+
+.nav-group__toggle::after {
+  content: "▾";
+  margin-left: 0.15rem;
+  font-size: 0.7em;
+}
+
+.nav-group__toggle--active {
+  border-color: var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.nav-group[open] > .nav-group__toggle {
+  background: var(--color-surface-raised);
+}
+
+.nav-group__items {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: var(--z-dropdown);
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-top: 0.3rem;
+  padding: 0.4rem;
+  min-width: 12rem;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  box-shadow: var(--shadow-md);
+}
+
+.nav-group__items .nav-link {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+  justify-content: flex-start;
+  text-align: left;
 }
 
 .nav-link {
@@ -1513,6 +1582,53 @@ dd {
 
 .capability-status-section h2 {
   margin-bottom: 0.75rem;
+}
+
+/* Checkpoint FRONTEND-4: the Reports page's own collapsible sections -
+   same native <details>/<summary> idiom as the Dashboard's evidence
+   disclosure and the grouped navigation, reused rather than a new
+   pattern. Report Catalogue/Market Data Quality open by default;
+   everything else starts collapsed so the page is scannable at a
+   glance instead of one long scroll of badge grids. */
+.reports-overview__section {
+  margin: var(--space-5) 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  padding: var(--space-3) var(--space-4);
+}
+
+.reports-overview__section-toggle {
+  cursor: pointer;
+  list-style: none;
+  padding: var(--space-2) 0;
+}
+
+.reports-overview__section-toggle::-webkit-details-marker {
+  display: none;
+}
+
+.reports-overview__section-toggle h2 {
+  display: inline;
+  margin: 0;
+}
+
+.reports-overview__section-toggle::before {
+  content: "▸ ";
+  color: var(--color-accent);
+}
+
+.reports-overview__section[open] > .reports-overview__section-toggle::before {
+  content: "▾ ";
+}
+
+.reports-overview__section[open] > .reports-overview__section-toggle {
+  margin-bottom: var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.reports-overview__section-body {
+  padding-top: var(--space-2);
 }
 
 /* Checkpoint 35: Paper Trading page - reuses the same KPI/form/table

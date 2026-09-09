@@ -26,19 +26,25 @@ const BASE_URL = "http://127.0.0.1:5173";
 // Screens named in the checkpoint directive, mapped to the visible nav
 // label App.tsx renders (see NAV_ITEMS in src/app/App.tsx) so the script
 // clicks through the real navigation exactly as a user would.
+// Checkpoint FRONTEND-4: `group` mirrors App.tsx's own `NAV_GROUPS`
+// exactly (`null` for Dashboard, which stays standalone) - matching
+// substring text ("Market Data" is a substring of BOTH the "Market
+// Data" item and the "Market Data Archive" item, in different groups)
+// turned out ambiguous in a real browser's accessibility tree, so the
+// group is named explicitly here instead of inferred.
 const SCREENS = [
-  { id: "dashboard", label: "Dashboard" },
-  { id: "configuration", label: "Configuration" },
-  { id: "market-data-archive", label: "Market Data Archive" },
-  { id: "market-data", label: "Market Data" },
-  { id: "settings", label: "Settings" },
-  { id: "strategies", label: "Strategies" },
-  { id: "backtesting", label: "Backtesting" },
-  { id: "comparison", label: "Compare" },
-  { id: "watchlists", label: "Watchlists" },
-  { id: "strategy-monitor", label: "Strategy Monitor" },
-  { id: "paper-trading", label: "Paper Trading" },
-  { id: "reports", label: "Reports" },
+  { id: "dashboard", label: "Dashboard", group: null },
+  { id: "configuration", label: "Configuration", group: "System Setup" },
+  { id: "market-data-archive", label: "Market Data Archive", group: "Trading Record" },
+  { id: "market-data", label: "Market Data", group: "Live Operations" },
+  { id: "settings", label: "Settings", group: "System Setup" },
+  { id: "strategies", label: "Strategies", group: "Research" },
+  { id: "backtesting", label: "Backtesting", group: "Research" },
+  { id: "comparison", label: "Compare", group: "Research" },
+  { id: "watchlists", label: "Watchlists", group: "Research" },
+  { id: "strategy-monitor", label: "Strategy Monitor", group: "System Setup" },
+  { id: "paper-trading", label: "Paper Trading", group: "Trading Record" },
+  { id: "reports", label: "Reports", group: "Trading Record" },
 ];
 // Live Scanner / Live Paper Operations are deliberately NOT added here
 // - each already has its own dedicated, more accurately-fixtured
@@ -282,9 +288,25 @@ async function captureScreen(browser, screen, themeName, themeId) {
 
   await page.goto(BASE_URL, { waitUntil: "networkidle" });
 
+  if (screen.group) {
+    // Checkpoint FRONTEND-4: nav items now live inside collapsible
+    // <details> groups. Two real, non-obvious browser facts, both
+    // confirmed directly (not assumed) via a Playwright ARIA snapshot
+    // before writing this: (1) Chromium exposes <details> as
+    // `role="group"`, folding its own <summary> text into the GROUP's
+    // accessible name - it is never a `role="button"`, so a
+    // `getByRole("button", { name: <group label> })` query times out
+    // forever waiting for something that was never going to exist.
+    // (2) a CLOSED <details>'s content is excluded from the
+    // accessibility tree entirely (not merely visually hidden), so
+    // `getByRole` finds nothing inside it pre-expansion either. Text-
+    // based location sidesteps both: the group's own <summary> is
+    // always rendered (only its ITEMS are hidden pre-expansion), so
+    // `getByText` finds and can click it directly.
+    await page.getByText(screen.group, { exact: true }).click();
+  }
   if (screen.id !== "dashboard") {
-    const navButton = page.getByRole("button", { name: screen.label, exact: true });
-    await navButton.click();
+    await page.getByRole("button", { name: screen.label, exact: true }).click();
   }
   await page.waitForTimeout(500); // let the screen's own fetch effects settle
 
