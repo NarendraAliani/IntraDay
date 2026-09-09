@@ -1457,6 +1457,38 @@ re-deriving them. Not a full transcript; no invented detail.
   failures - no source code modified, only data (Part 1) + this
   checkpoint's own tracking docs. See `CHECKPOINT_86_SUMMARY.md` for
   the full recovery table and diagnostic detail.
+- **`CHECKPOINT_87`**: attempted to migrate TCS/HDFCBANK/INFY's
+  `2026-08-17` (3 units) - **BLOCKED, 0/3, correctly, by a
+  pre-existing guard.** The fresh dry-run (Task item #1) immediately
+  showed all 3 units `FAILED`/`ALREADY_CANONICAL_COLLISION` at
+  projected `new_timestamp=09:45` - no real command was ever
+  attempted. Root cause diagnosed directly: `[[CHECKPOINT_86]]`'s own
+  boundary-bar recovery fetched each day's session-END bar fresh,
+  which (since 5m/CAS-era is 67.0-proven) arrived ALREADY in its final
+  `09:45` CLOSE-timestamp form - exactly the slot the still-unmigrated
+  OLD row (raw `09:40`) would shift INTO. Both rows hold near-
+  identical real market data for the SAME candle (byte-identical
+  high/low/close/volume; open differs <0.1% for 2 of 3 symbols - a
+  Dhan data-revision nuance, not corruption). Neither `[[CHECKPOINT_86]]`
+  nor this checkpoint did anything wrong - the collision classifier
+  (`migration_dry_run.py`'s pre-existing, unmodified
+  `ALREADY_CANONICAL_COLLISION`) caught a genuine interaction neither
+  checkpoint could have anticipated in isolation, and refused rather
+  than silently duplicating data. RELIANCE's own `08-17`
+  (`[[CHECKPOINT_83]]`'s unit, migrated BEFORE `[[CHECKPOINT_86]]`
+  ran) confirmed unaffected - no day-end gap ever existed for it.
+  Verified zero writes occurred: table row count and `MigrationUnit`
+  count both identical to `[[CHECKPOINT_86]]`'s own final state;
+  research gate re-run: common day count **unchanged at 24**. No fix
+  attempted - resolving the duplicate (deciding which row is
+  authoritative, deleting/superseding the other) is a genuine P4
+  mutation/deletion needing separate explicit authorization, same
+  category as `[[CHECKPOINT_86]]`'s own TCS-provenance finding,
+  explicitly left for a future checkpoint. 47-day tuning threshold
+  still NOT met (24 of 47); no tuning resumed. Full suite: 3391
+  passed / 7 failed, identical to `[[CHECKPOINT_86]]`, zero new
+  failures - no source code or data modified at all this checkpoint.
+  See `CHECKPOINT_87_SUMMARY.md` for the full root-cause trace.
 - **`LIVE-2-FINALIZE`**: an end-of-day close-out checkpoint for
   `LIVE-2` was requested with the premise that market had just closed
   on the same day as the `LIVE-2` run — but this conversation's

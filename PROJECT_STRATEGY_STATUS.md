@@ -349,6 +349,30 @@ attempting — left for a future checkpoint's own explicit decision.
 still NOT MET.** No tuning resumed. See `CHECKPOINT_86_SUMMARY.md` for
 the full recovery table and diagnostic detail.
 
+**`CHECKPOINT_87` update — attempted to migrate TCS/HDFCBANK/INFY's
+`2026-08-17` (3 units); BLOCKED, 0/3, correctly, by a pre-existing
+guard**. `[F]` The fresh dry-run required before any real write
+immediately showed all 3 units `FAILED`/`ALREADY_CANONICAL_COLLISION`
+at the projected `09:45` timestamp — no real command was attempted.
+Root cause diagnosed directly: `CHECKPOINT_86`'s own boundary-bar
+recovery fetched each day's session-end bar fresh, which arrived
+already in its final canonical `09:45` form (5m/CAS-era is
+`67.0`-proven) — exactly the slot the still-unmigrated old row (raw
+`09:40`) would shift into. Both rows hold near-identical real data for
+the same candle (byte-identical high/low/close/volume; open differs
+<0.1% for 2 of 3 symbols) — not corruption, a genuine duplicate
+representation neither checkpoint could have anticipated in isolation.
+RELIANCE's own `08-17` (migrated before `CHECKPOINT_86` ran) confirmed
+unaffected. `[F]` Verified zero writes occurred (table row count and
+`MigrationUnit` count identical to `CHECKPOINT_86`'s own final state).
+**Common gate-verified day count: unchanged at 24. 47-day tuning
+threshold still NOT MET.** No fix attempted — resolving the duplicate
+requires deciding which row is authoritative and deleting/superseding
+the other, a genuine P4 mutation needing separate explicit
+authorization, the same category as `CHECKPOINT_86`'s own TCS-
+provenance finding — left for a future checkpoint's own decision. See
+`CHECKPOINT_87_SUMMARY.md` for the full root-cause trace.
+
 ## 4. When can paper trading realistically start?
 
 > **SUPERSEDED BY `CHECKPOINT_77` — see §6 below.** The "technically
