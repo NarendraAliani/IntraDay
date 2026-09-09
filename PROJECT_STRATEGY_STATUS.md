@@ -103,24 +103,69 @@ walk-forward number.
 
 ## 3. Data status
 
-`[F]` Current real, gate-verified `HistoricalBar` coverage: **17
-`CANONICALIZED` trading days per symbol** (RELIANCE/TCS/HDFCBANK/INFY),
-re-checked directly this checkpoint — unchanged since
-`CHECKPOINT-VWAP-D`'s own check (still the same calendar day,
-`2026-09-08`). Two contiguous blocks: `2026-08-03`–`08-14` (10 days)
-and `2026-08-31`–`09-08` (7 days). The `fromDate`-exclusive fix
-(`CHECKPOINT_69`) resolved the original day-start-bar gap and has held
-on every fresh day since, including the daily backfill routine's own
-first genuinely-new-day run (`CHECKPOINT_74` Part 3, `2026-09-08`).
+`[F]` Current real, gate-verified `HistoricalBar` coverage, updated by
+`CHECKPOINT_81`: **18 `CANONICALIZED` trading days per symbol**
+(RELIANCE/TCS/HDFCBANK/INFY) — up from 17, `2026-09-09` newly added.
+Two contiguous blocks, unchanged in shape: `2026-08-03`–`08-14`
+(10 days) and `2026-08-31`–`09-09` (8 days). The `fromDate`-exclusive
+fix (`CHECKPOINT_69`) continues to hold — spot-checked directly on
+`2026-09-09` and on the new pre-CAS rows below (both show the full
+72-bar day, first bar at the correct day-open timestamp, no missing
+day-start bar).
+
+**`CHECKPOINT_81`'s own central finding, stated plainly**: an attempt
+to widen this to ~50-60 real trading days found a **hard, structural
+ceiling this session had not previously quantified**.
+`CAS_EFFECTIVE_DATE = 2026-08-03` (`domain/session/calendar.py`) means
+`_PROVEN_INTRADAY_SCOPES` only certifies `(NSE_EQ, FIVE_MINUTE,
+CAS_ERA)` — any fetch window entirely BEFORE `2026-08-03` resolves to
+the unproven `PRE_CAS` era and can never produce a `CANONICALIZED` row,
+no matter how it's requested. `[F]` A real backfill of
+`2026-06-01`–`08-02` (44 real trading days, confirmed via
+`HistoricalDataCoverageService`) was executed and persisted
+successfully (12,319 new rows across the 4 symbols, real Dhan REST
+calls, `status=COMPLETE`) — but **all of it landed as
+`UNCANONICALIZED`/`UNKNOWN`, not `CANONICALIZED`**, exactly as this
+scope rule predicts. `[F]` Zero existing rows mutated (0 duplicate
+`(instrument, bar_timestamp)` pairs found across all 4 symbols; a
+spot-checked pre-existing row's own values are byte-identical). The
+data itself is real, valid, and left in place (P4: never mutate/delete
+a `HistoricalBar` row) — it is simply not, and structurally cannot be,
+gate-verified.
+
+**The actual reachable ceiling today**: only **28 real trading days
+total** have occurred since `CAS_EFFECTIVE_DATE` (`2026-08-03`)
+through today (`2026-09-09`), of which **10 fall inside the
+deliberately untouched interior gap** (`2026-08-17`–`08-28`) — leaving
+a maximum of **18 canonicalizable days available in the entire real
+calendar right now**, which this checkpoint reached exactly (17→18,
+`2026-09-09` fetched). **Reaching 50-60 gate-verified days is not
+achievable by backfilling at all** — it requires real calendar time to
+pass (roughly 6-7 more real trading weeks beyond today, holidays
+notwithstanding), not a wider fetch window. See
+`CHECKPOINT_81_SUMMARY.md` for the full trace.
+
+**The 30-new-real-day resumption criterion for Gainz/VWAP/ORB tuning
+(`CHECKPOINT_75`/`76`/`79`) is NOT met** — this checkpoint added
+exactly **1** new gate-verified day (17→18), not 30. Stated plainly,
+not buried: tuning resumption remains unauthorized: the dataset needs
+to reach **47 gate-verified days** (18 + 29 more) before that
+criterion is satisfied, at the current real-calendar pace of at most 1
+new day per real trading day (minus any future interior-gap-style
+losses).
+
 The daily backfill routine itself (`CHECKPOINT_72`,
 `manage.py backfill_daily_coverage`) is built, tested, and proven —
 but remains **operator-triggered only**, deliberately not auto-
 scheduled (Celery Beat was considered and explicitly rejected — see
 `CHECKPOINT_72`'s own §1 — because an unconditional daily Dhan call
 with no per-run operator action would conflict with this project's own
-P6/"no surprise automation" discipline). It has been run for real
-exactly once so far (`CHECKPOINT_74`). **The interior
-`2026-08-17`–`08-28` gap remains open**, deferred, unfixed —
+P6/"no surprise automation" discipline). It has now been run for real
+twice (`CHECKPOINT_74`, and implicitly superseded by `CHECKPOINT_81`'s
+own direct `HistoricalDataPreparationService.prepare()` calls for the
+`2026-09-09` extension). **The interior `2026-08-17`–`08-28` gap
+remains open**, deferred, unfixed, and untouched by `CHECKPOINT_81`
+(the backward extension stopped at `08-02`, strictly before it) —
 confirmed (`CHECKPOINT_71`'s recon, refined by `CHECKPOINT_72`'s
 incidental finding) to be rows written before the write-time
 canonicalization logic existed, exactly the class of row the

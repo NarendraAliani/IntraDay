@@ -1189,6 +1189,39 @@ re-deriving them. Not a full transcript; no invented detail.
   grouped structure is transparent to those assertions). Full suite:
   34 files/367 tests passing, typecheck clean, both quality gates
   pass. No backend/API change.
+- **`CHECKPOINT_81`**: attempted to widen the real backfill to ~50-60
+  trading days/symbol - found a hard, previously-unquantified
+  structural ceiling instead. `CAS_EFFECTIVE_DATE = 2026-08-03`
+  (`domain/session/calendar.py`) means `_PROVEN_INTRADAY_SCOPES` only
+  certifies `(NSE_EQ, FIVE_MINUTE, CAS_ERA)` - any fetch window
+  entirely before 08-03 resolves PRE_CAS and can NEVER produce a
+  CANONICALIZED row, regardless of window choice. `[F]` Backfilled
+  2026-06-01..08-02 for real (44 trading days, 12,247 new rows across
+  4 symbols, real Dhan REST, status=COMPLETE) - confirmed directly it
+  landed entirely UNCANONICALIZED/UNKNOWN, exactly as this scope rule
+  predicts; left in place per P4 (real, valid data, just structurally
+  ineligible, not deleted). Only remaining lever was forward
+  extension: fetched 2026-09-09 (72 bars/symbol, the one additional
+  real closed trading day available) - this DID canonicalize,
+  17->18 days/symbol. `[F]` Computed the real ceiling directly: only
+  28 real trading days total have occurred since CAS_EFFECTIVE_DATE
+  through today, 10 inside the untouched interior gap
+  (2026-08-17..08-28) - leaving a hard maximum of 18 canonicalizable
+  days right now, reached exactly. Reaching 50-60 requires ~6-7 more
+  real trading weeks to pass, not a different backfill choice. Stated
+  plainly: the 30-new-day Gainz/VWAP/ORB tuning-resumption criterion
+  (CHECKPOINT_75/76/79) is NOT met - only 1 new day added, not 30;
+  target is now 47 total gate-verified days. P4 verified independently
+  (0 duplicate (instrument, bar_timestamp) pairs, spot-checked
+  pre-existing row unchanged). fromDate-exclusive fix spot-checked on
+  3 newly-fetched days, holds. No migration executed, interior gap
+  untouched, no strategy/registry/tuning change.
+  `PROJECT_STRATEGY_STATUS.md` §3 rewritten with the new baseline and
+  full structural-ceiling finding. **Process note**: this checkpoint
+  explicitly re-affirmed the "read before writing any file that might
+  exist" discipline after 2 near-misses this session (`FRONTEND-3`/
+  `FRONTEND-4` both nearly overwrote pre-existing summaries) - checked
+  directly this file didn't exist before creating it.
 - **`LIVE-2-FINALIZE`**: an end-of-day close-out checkpoint for
   `LIVE-2` was requested with the premise that market had just closed
   on the same day as the `LIVE-2` run — but this conversation's
