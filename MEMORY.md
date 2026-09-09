@@ -1264,6 +1264,52 @@ re-deriving them. Not a full transcript; no invented detail.
   production" means for this project's real single-environment
   deployment), per 67.13's own original recommendation, still
   unactioned.
+- **`RECON-SINGLE-ENV-AUTHORIZATION`**: design-proposal-only checkpoint
+  (no code changes, no migration execution), answering `CHECKPOINT_82`'s
+  own "still blocked, needs a separately-authorized design decision"
+  finding. Wrote `SINGLE_ENV_AUTHORIZATION_PROPOSAL.md` at repo root -
+  **deliberately uncommitted**, same convention as `GAINZ_ROADMAP.md`/
+  `VWAP_STRATEGY_ROADMAP.md`/`ORB_STRATEGY_ROADMAP.md` (a living,
+  pre-decision document for operator review, not yet authorized for
+  implementation). Traced the guard's own original purpose directly:
+  `assert_write_capable_connection_is_test_database()` was built at
+  Checkpoint 67.10 specifically to stop the TEST-ONLY
+  `migration_67_10 --execute` command from escaping its pytest-only
+  context - not a general "wrong database" multi-environment guard.
+  The real design flaw is that `authorize_one_unit_execution()`
+  (67.12.2) later reused this exact test-only guard as its own check
+  (5), and `migration_production_execute.py` (67.13-C) - the genuine
+  production entry point - inherited it via that reuse, making the
+  production path permanently unsatisfiable. `[F]` Confirmed directly:
+  `POSTGRES_DB=intraday` is the only real database configured anywhere
+  in this codebase (every settings module derives from the same env
+  var) - no staging DB, no second developer DB exists today, though
+  `ARCHITECTURE_DECISIONS.md` #27 records a genuine multi-environment
+  deployment as the project's own long-term intent (noted honestly as
+  a caveat, not glossed over). Proposed replacement (recommended as
+  ONE coherent approach, not a menu): (a) a new, purpose-built guard
+  re-deriving legitimacy from the SAME `VERIFIED_PRODUCTION` evidence
+  chain instead of a database-naming convention; (b) a new
+  `allow_non_test_database` constructor parameter on
+  `HistoricalBarMigrationExecutor` (default False, unchanged for
+  `migration_67_10.py`'s own test-only path - confirmed that path's
+  own direct internal guard call stays completely untouched); (c) a
+  mandatory, explicit per-invocation operator confirmation flag,
+  matching the "explicit operator action" discipline already
+  established for live sessions; (d) an enforced row-count ceiling per
+  invocation (the existing one-unit-only convention made an explicit,
+  coded assertion, not just a CLI convention). Confirmed directly that
+  replay protection needs no new mechanism - the dry-run's own
+  UNCANONICALIZED-only eligibility scan already makes re-running an
+  already-executed unit a safe, hard refusal (verified against
+  `migration_production_execute.py`'s own "unit not found in fresh
+  plan" CommandError). Honest risk assessment: implementing this
+  necessarily reopens genuine real-write capability that is currently
+  impossible by design - named as the real trade-off, not minimized.
+  Explicitly flagged one reservation NOT resolved toward "proceed": the
+  decision to reopen real-write capability at all is the operator's
+  own to make, not inferred from this session's general authorization
+  pattern. Zero code changes, zero migration execution.
 - **`LIVE-2-FINALIZE`**: an end-of-day close-out checkpoint for
   `LIVE-2` was requested with the premise that market had just closed
   on the same day as the `LIVE-2` run — but this conversation's
