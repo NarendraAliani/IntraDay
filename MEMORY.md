@@ -1222,6 +1222,48 @@ re-deriving them. Not a full transcript; no invented detail.
   exist" discipline after 2 near-misses this session (`FRONTEND-3`/
   `FRONTEND-4` both nearly overwrote pre-existing summaries) - checked
   directly this file didn't exist before creating it.
+- **`CHECKPOINT_82`**: operator-authorized first real attempt at
+  production-boot + one-unit migration execution against the interior
+  gap. Confirmed `[F]` directly, before touching anything, that the
+  `67.13`/`67.13-C` deadlock is unchanged: `verify_environment_
+  identity()` requires BOTH `.production` settings module AND
+  `INTRADAY_VERIFIED_PRODUCTION_IDENTITY` matching the live DB name.
+  Part 1: generated a real `SETTINGS_ENCRYPTION_KEY` via
+  `Fernet.generate_key()` (session-only env var, never committed/
+  written to `.env`), set `INTRADAY_VERIFIED_PRODUCTION_IDENTITY=
+  intraday`, confirmed `intraday.settings.production` genuinely boots
+  (`manage.py check` clean) with `TRADING_MODE` still safely resolving
+  to `RESEARCH` (not LIVE - `DHAN_CLIENT_ID`/`DHAN_ACCESS_TOKEN` env
+  vars were never set). `[F]` `verify_environment_identity()` reported
+  `VERIFIED_PRODUCTION` for the first time this session - genuine new
+  progress beyond 67.13/67.13-C. Part 2: ran the real
+  `migration_production_execute` command against RELIANCE/5m/
+  2026-08-17 (70 rows, dry-run `PROVEN`/`DRY_RUN_SAFE`) with a
+  freshly-derived real scope fingerprint. Gate 1 PASSED, Gate 2
+  PASSED, **Gate 3 (`authorize_one_unit_execution()`) DENIED** - its
+  own internal re-check of `assert_write_capable_connection_is_test_
+  database()` refuses any non-`test_`-prefixed database, and the real
+  DB is `intraday`. This is exactly the "structurally UNSATISFIABLE"
+  condition the code's own `NOT_WIRED_RATIONALE` comment
+  (`migration_execution_authorization.py`) already documented -
+  confirmed live, for the first time, not just traced in the
+  abstract. `[F]` Zero rows written (RELIANCE 2026-08-17 still 70
+  UNCANONICALIZED rows, unchanged) - stopped immediately per the
+  checkpoint's own rule, no workaround attempted (P7). Bonus finding:
+  even a successful write wouldn't have made this day gate-eligible
+  alone - `ResearchDataGateService.get_research_eligible_bars()`
+  independently rejects it with INCOMPLETE_COVERAGE (70/72 bars,
+  matching CHECKPOINT_72's own prior finding that this gap block is
+  missing its day-start/day-end bars too). Zero files touched (env
+  vars only), git status clean throughout. Full test suite re-run for
+  completeness (no code changed). `PROJECT_STRATEGY_STATUS.md` §3
+  updated with the full gate-by-gate trace. Scaling to the rest of the
+  interior gap remains blocked at the architecture level, not
+  something more caution or a different unit would resolve -
+  requires a separately-authorized design decision (what "verified
+  production" means for this project's real single-environment
+  deployment), per 67.13's own original recommendation, still
+  unactioned.
 - **`LIVE-2-FINALIZE`**: an end-of-day close-out checkpoint for
   `LIVE-2` was requested with the premise that market had just closed
   on the same day as the `LIVE-2` run — but this conversation's

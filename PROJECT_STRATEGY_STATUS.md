@@ -173,6 +173,39 @@ still-unexecuted migration (`67.7`–`67.13-C`) was built to
 retroactively fix. Migration execution remains the operator's own
 deferred decision, not re-litigated by any checkpoint since.
 
+**`CHECKPOINT_82` update — a real, operator-authorized execution
+attempt against the interior gap, confirmed still blocked, precisely
+diagnosed for the first time**: with the operator's explicit
+authorization, `CHECKPOINT_82` booted `intraday.settings.production`
+for real (a real `SETTINGS_ENCRYPTION_KEY` generated via
+`Fernet.generate_key()`, set as a session-only env var, never
+committed) and set `INTRADAY_VERIFIED_PRODUCTION_IDENTITY=intraday` —
+`[F]` `verify_environment_identity()` genuinely reported
+`VERIFIED_PRODUCTION` for the first time this session (Gate 1 of 3).
+`[F]` Ran the real `migration_production_execute` command
+(`67.13-C`) against one real unit (RELIANCE, `5m`, `2026-08-17`, the
+first day of the interior gap): Gate 1 PASSED, Gate 2 PASSED, **Gate 3
+(`authorize_one_unit_execution()`) DENIED** — its own internal
+re-check of `assert_write_capable_connection_is_test_database()`
+refuses any connection not named with a `test_` prefix, and the real
+database is named `intraday`. **Zero rows written, confirmed
+directly** (RELIANCE `2026-08-17` still 70 `UNCANONICALIZED` rows,
+unchanged). This is not new information in outcome (`CHECKPOINT_67.13`
+already found this blocking in the abstract) but is now confirmed with
+full precision, live, against a genuinely production-booted process —
+the code's own explicit comment
+(`migration_execution_authorization.py`'s `NOT_WIRED_RATIONALE`)
+states plainly: *"Check (1) and check (5) ... are therefore, in this
+codebase's CURRENT configuration, structurally UNSATISFIABLE together
+— `authorize_one_unit_execution` can never return AUTHORIZED as this
+codebase is configured today."* Resolving this requires either a
+separately-authorized architecture decision (what "verified
+production" concretely means for this project's real, single-
+environment deployment) or accepting a different, explicitly-reviewed
+execution boundary — not a code fix available to any future checkpoint
+operating under the current design. See `CHECKPOINT_82_SUMMARY.md` for
+the full gate-by-gate trace.
+
 ## 4. When can paper trading realistically start?
 
 > **SUPERSEDED BY `CHECKPOINT_77` — see §6 below.** The "technically
