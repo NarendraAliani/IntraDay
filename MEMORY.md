@@ -1376,6 +1376,46 @@ re-deriving them. Not a full transcript; no invented detail.
   zero new failures - no source code was modified this checkpoint,
   only data via the sanctioned path. See `CHECKPOINT_84_SUMMARY.md`
   for the full per-unit result table and verification detail.
+- **`CHECKPOINT_85`**: diagnosed `[[CHECKPOINT_84]]`'s
+  `INCOMPLETE_COVERAGE` finding, then recovered it. Hypothesis
+  (interior-gap days were fetched before `CHECKPOINT_69`'s
+  `fromDate`-exclusive fix landed) CONFIRMED for 34/36 slots via
+  direct `ingested_at` evidence (all well before `CHECKPOINT_69`'s
+  commit `eb8fa9d`/`2026-09-07`) and exact missing-range identification
+  (`HistoricalDataCoverageService.get_coverage()` directly): a 2-bar
+  day-start gap, exactly the pattern a single-bar (pre-fix) widening
+  leaves behind. TCS/`2026-08-24` REFUTED the hypothesis and was
+  reported as a genuinely different, separate issue (missing the
+  session-END bar instead, ingested same-day via a different pipeline,
+  71/72 rows already `UNKNOWN` provenance) - proceeded anyway since
+  the safety guarantee is root-cause-independent. Safety proof before
+  any write: `prepare()` only ever fetches `missing_ranges`;
+  `fetch()`'s own filter strictly confines returned bars to that exact
+  range; `bulk_upsert()`'s upsert-on-conflict semantics can therefore
+  never collide with an existing row for THIS recovery specifically -
+  every write is a genuine INSERT. Hit and resolved a real blocker:
+  the stored `DhanCredential` couldn't decrypt under a fresh
+  session-only `SETTINGS_ENCRYPTION_KEY` (it was encrypted under the
+  ordinary dev-fallback key) - this recovery is a plain data backfill,
+  not a migration-authorization write, so it correctly runs under
+  ordinary `.development` settings instead (same single real DB
+  either way). **36/36 slots recovered to 72/72 COMPLETE, net +71
+  rows, 0 duplicate keys, all 35 previously-canonicalized units
+  re-confirmed untouched.** Research gate re-run: gate-verified day
+  count common across all 4 symbols rose **18 -> 24**
+  (RELIANCE/HDFCBANK/INFY individually at 27; TCS capped at 24 by a
+  SEPARATE, pre-existing, deliberately-NOT-fixed residual
+  `UNKNOWN`-provenance issue on 3 of its own days - fixing it would
+  require overwriting existing rows, out of this checkpoint's
+  purely-additive scope). RELIANCE/`2026-08-17`
+  (`[[CHECKPOINT_83]]`'s own unit) was outside this checkpoint's
+  9-day target range and remains incomplete - noted as an easy future
+  recovery, not fixed here. **47-day tuning threshold still NOT MET**
+  (24 of 47) - no tuning resumed. Full suite: 3391 passed / 7 failed,
+  identical failure set to `CHECKPOINT_84`, zero new failures - no
+  source code modified, only data via the sanctioned path. See
+  `CHECKPOINT_85_SUMMARY.md` for the full diagnosis and per-slot
+  recovery table.
 - **`LIVE-2-FINALIZE`**: an end-of-day close-out checkpoint for
   `LIVE-2` was requested with the premise that market had just closed
   on the same day as the `LIVE-2` run — but this conversation's

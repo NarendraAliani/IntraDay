@@ -282,6 +282,41 @@ investigated or fixed by this checkpoint (out of its own scope, P9/
 P10). See `CHECKPOINT_84_SUMMARY.md` for the full per-unit result
 table and verification detail.
 
+**`CHECKPOINT_85` update — the `INCOMPLETE_COVERAGE` blocker
+`CHECKPOINT_84` flagged is now RESOLVED for 24 of the 47 target days**:
+diagnosed the exact cause before acting, per the checkpoint's own
+requirement. `[F]` Confirmed directly (via `ingested_at` timestamps,
+all before `CHECKPOINT_69`'s own fix-landing commit `eb8fa9d`, and via
+`HistoricalDataCoverageService.get_coverage()`'s exact missing-range
+output): 34 of 36 interior-gap slots were missing exactly the 2-bar
+day-start range `CHECKPOINT_69`'s `fromDate`-exclusive fix was built
+to prevent — these days were simply fetched before that fix existed.
+One slot (TCS/`2026-08-24`) had a genuinely different cause (missing
+the session-end bar instead, same-day ingestion, 71/72 rows already
+`UNKNOWN` provenance) — reported honestly rather than folded into the
+confirmed hypothesis. `[F]` Proved directly, by source inspection
+before any write, that a re-fetch through the current pipeline is
+structurally incapable of touching an existing row (`prepare()` only
+ever fetches currently-missing ranges; `fetch()`'s own filter confines
+returned bars to exactly that range; the write path's upsert-on-
+conflict semantics therefore can never collide with a pre-existing
+key for this recovery). `[F]` **Real recovery: 36/36 slots now 72/72
+COMPLETE**, net +71 new rows, 0 duplicate keys, all 35 previously-
+canonicalized units (`CHECKPOINT_83`/`84`) re-confirmed untouched.
+`[F]` Research gate re-run: gate-verified day count common across all
+4 symbols rose **18 → 24** (RELIANCE/HDFCBANK/INFY individually at
+**27** each; TCS capped at 24 by a SEPARATE, pre-existing residual
+`UNKNOWN`-provenance issue on 3 of its own days, deliberately NOT
+fixed — resolving it would mean overwriting already-stored rows, a
+different and riskier operation than this checkpoint's purely-additive
+scope authorizes). RELIANCE/`2026-08-17` (`CHECKPOINT_83`'s own unit)
+was outside this checkpoint's 9-day target range and remains
+incomplete — a likely-easy future recovery, not attempted here.
+**The 47-day Gainz/VWAP/ORB tuning-resumption criterion is still NOT
+MET** — 24 of 47, a real gain of 6 days but 23 days short. No strategy
+tuning was resumed. See `CHECKPOINT_85_SUMMARY.md` for the full
+diagnosis and per-slot recovery table.
+
 ## 4. When can paper trading realistically start?
 
 > **SUPERSEDED BY `CHECKPOINT_77` — see §6 below.** The "technically
