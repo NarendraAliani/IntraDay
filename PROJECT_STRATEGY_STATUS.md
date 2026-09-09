@@ -373,6 +373,31 @@ authorization, the same category as `CHECKPOINT_86`'s own TCS-
 provenance finding — left for a future checkpoint's own decision. See
 `CHECKPOINT_87_SUMMARY.md` for the full root-cause trace.
 
+**`CHECKPOINT_88` update — `CHECKPOINT_87`'s 3-row duplicate is now
+resolved (operator-authorized real deletion), but the underlying 3
+days are STILL not migrated**. `[F]` Re-verified all 6 rows by primary
+key first — nothing had changed since `CHECKPOINT_87`. Backed up the
+exact 3 old rows' full field values to
+`docs/baselines/checkpoint_88_pre_delete_backup.json` (this project's
+own proven repeatable-read snapshot mechanism) before deleting them by
+primary key only. `deleted_count=3` exactly, table row count `-3`
+exactly, 0 duplicate keys, every previously-touched row (including
+RELIANCE's own migrated `08-17`) confirmed untouched. Re-ran the
+dry-run for all 3 units: **now `DRY_RUN_SAFE`** — the collision is
+gone (migration itself deliberately not run this checkpoint). **A
+correction to the checkpoint's own suggested reasoning, checked
+directly rather than assumed**: "re-migrating is likely unnecessary"
+was WRONG — 69 rows per symbol remain `UNCANONICALIZED` (the
+surviving `09:45` row resolves only one bar); these 3 days remain
+non-research-eligible and need a future, separately-authorized
+migration-execution checkpoint against these now-`DRY_RUN_SAFE`
+units. **Common gate-verified day count: unchanged at 24** (this
+checkpoint canonicalized zero new data, only removed a blocker).
+47-day tuning threshold still NOT MET; no tuning resumed;
+`CHECKPOINT_86`'s own broader TCS provenance issue left completely
+untouched, per its own rules. See `CHECKPOINT_88_SUMMARY.md` for the
+full verification trace.
+
 ## 4. When can paper trading realistically start?
 
 > **SUPERSEDED BY `CHECKPOINT_77` — see §6 below.** The "technically

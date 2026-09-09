@@ -1489,6 +1489,37 @@ re-deriving them. Not a full transcript; no invented detail.
   passed / 7 failed, identical to `[[CHECKPOINT_86]]`, zero new
   failures - no source code or data modified at all this checkpoint.
   See `CHECKPOINT_87_SUMMARY.md` for the full root-cause trace.
+- **`CHECKPOINT_88`**: operator-authorized real deletion resolving
+  `[[CHECKPOINT_87]]`'s own 3-row duplicate (TCS `7046`, HDFCBANK
+  `7660`, INFY `8360` - the old, pre-canonicalization row for each
+  symbol's `2026-08-17` `09:40`-`09:45` candle, superseded by an
+  independently-fetched, already-`CANONICALIZED` `09:45` row for the
+  SAME candle). Re-verified all 6 rows by primary key first - nothing
+  had changed since `[[CHECKPOINT_87]]`. Backed up the exact 3 old
+  rows' full field values (via this project's own proven
+  `_repeatable_read_atomic()` snapshot primitive) to
+  `docs/baselines/checkpoint_88_pre_delete_backup.json` BEFORE
+  deleting. Deleted exactly those 3 rows by primary key -
+  `deleted_count=3`, table row count `-3` exactly, 0 duplicate keys,
+  RELIANCE's own already-migrated `08-17` unit and every other
+  previously-touched row confirmed untouched. Re-ran the dry-run for
+  the 3 units: **all now `DRY_RUN_SAFE`** - the collision is gone
+  (migration itself deliberately NOT run, per this checkpoint's own
+  rule). **Important correction, checked directly rather than
+  assumed**: the checkpoint's own suggested reasoning ("re-migrating
+  is likely unnecessary") was WRONG - 69 rows per symbol remain
+  `UNCANONICALIZED` (the surviving `09:45` row resolves only ONE bar);
+  these 3 days remain non-research-eligible and STILL need a future,
+  separately-authorized migration-execution checkpoint to actually run
+  `migration_production_execute` against these now-`DRY_RUN_SAFE`
+  units. Common gate-verified day count: **unchanged at 24** (this
+  checkpoint canonicalized zero new data, only removed a blocker).
+  47-day tuning threshold still NOT met; no tuning resumed;
+  `[[CHECKPOINT_86]]`'s own broader TCS provenance issue left
+  completely untouched, exactly as its own rules required. Full
+  suite: 3391 passed / 7 failed, identical to `[[CHECKPOINT_87]]`,
+  zero new failures. See `CHECKPOINT_88_SUMMARY.md` for the full
+  verification trace and backup file location.
 - **`LIVE-2-FINALIZE`**: an end-of-day close-out checkpoint for
   `LIVE-2` was requested with the premise that market had just closed
   on the same day as the `LIVE-2` run — but this conversation's

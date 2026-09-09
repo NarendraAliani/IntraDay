@@ -1,0 +1,67 @@
+{
+  "checkpoint": "CHECKPOINT_88",
+  "generated_at": "2026-09-09T15:51:42.139617+00:00",
+  "purpose": "pre-deletion backup of the 3 OLD (pre-canonicalization, UNCANONICALIZED) rows superseded by an independently-fetched, already-CANONICALIZED row for the same real candle - see CHECKPOINT_87_SUMMARY.md for the root cause and CHECKPOINT_88_SUMMARY.md for the deletion this backup precedes.",
+  "row_count": 3,
+  "rows": [
+    {
+      "bar_timestamp": "2026-08-17T09:40:00+00:00",
+      "canonicalization_state": "UNCANONICALIZED",
+      "close_price": "2314.3000",
+      "exchange": "NSE",
+      "high_price": "2317.3000",
+      "id": 7046,
+      "ingested_at": "2026-08-31T11:12:07.505486+00:00",
+      "instrument_id": "NSE:TCS",
+      "low_price": "2310.6000",
+      "open_price": "2316.0000",
+      "provenance": "REAL_DHAN",
+      "source": "API_FETCH",
+      "source_timestamp_semantics": "OPEN",
+      "symbol": "TCS",
+      "timeframe": "5m",
+      "volume": "210394.0000"
+    },
+    {
+      "bar_timestamp": "2026-08-17T09:40:00+00:00",
+      "canonicalization_state": "UNCANONICALIZED",
+      "close_price": "731.3500",
+      "exchange": "NSE",
+      "high_price": "732.1000",
+      "id": 7660,
+      "ingested_at": "2026-08-31T11:12:10.343527+00:00",
+      "instrument_id": "NSE:HDFCBANK",
+      "low_price": "729.9500",
+      "open_price": "729.9500",
+      "provenance": "REAL_DHAN",
+      "source": "API_FETCH",
+      "source_timestamp_semantics": "OPEN",
+      "symbol": "HDFCBANK",
+      "timeframe": "5m",
+      "volume": "1056015.0000"
+    },
+    {
+      "bar_timestamp": "2026-08-17T09:40:00+00:00",
+      "canonicalization_state": "UNCANONICALIZED",
+      "close_price": "1136.1000",
+      "exchange": "NSE",
+      "high_price": "1139.3000",
+      "id": 8360,
+      "ingested_at": "2026-08-31T11:12:13.411063+00:00",
+      "instrument_id": "NSE:INFY",
+      "low_price": "1129.7000",
+      "open_price": "1138.7000",
+      "provenance": "REAL_DHAN",
+      "source": "API_FETCH",
+      "source_timestamp_semantics": "OPEN",
+      "symbol": "INFY",
+      "timeframe": "5m",
+      "volume": "952648.0000"
+    }
+  ],
+  "target_row_ids": [
+    7046,
+    7660,
+    8360
+  ]
+}
