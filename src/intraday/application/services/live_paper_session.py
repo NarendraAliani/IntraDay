@@ -98,9 +98,31 @@ def derive_live_paper_session_state(
     i.e. real evidence the worker reconciled. The same discipline
     applies in the stop direction: `STOPPING` (not `STOPPED`) is
     returned while `desired.enabled is False` but the worker's last
-    reported `configuration_version` has not yet caught up."""
+    reported `configuration_version` has not yet caught up.
+
+    CHECKPOINT_80: a worker that has genuinely, cleanly exited
+    (`worker_state == "STOPPED"` - the real, terminal value the
+    `WorkerState` state machine only reaches via a `STOPPING ->
+    STOPPED_CLEANLY` transition, `infrastructure/market_data_providers
+    /dhan/worker_state.py`) can never be genuinely RUNNING, regardless
+    of `desired.enabled` - the SAME priority `FAILED` already has just
+    above. Found live in `LIVE-PAPER-1` (2026-09-09): the
+    `supervise_market_data_worker` supervisor's own session-end stop
+    (`worker_stop_request.py`'s `request_stop()`) cleanly exits the
+    worker process WITHOUT touching `ScannerConfiguration.enabled` (by
+    design - see that module's own docstring), which used to leave
+    this function reporting `RUNNING` for an operator who had never
+    actually pressed STOP, purely because `effective_configuration_
+    version` still matched `desired`'s (a clean stop does not bump or
+    clear that field). This is a read/report-only fix - it changes
+    nothing about which flag governs "should a worker be running"; it
+    only makes the DERIVED STATE stop lying about a worker that
+    provably isn't there anymore."""
     if effective is not None and effective.worker_state in _FAILED_WORKER_STATES:
         return LivePaperSessionState.FAILED
+
+    if effective is not None and effective.worker_state == "STOPPED":
+        return LivePaperSessionState.STOPPED
 
     version_reconciled = (
         effective is not None

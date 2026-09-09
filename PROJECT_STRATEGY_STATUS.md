@@ -382,13 +382,47 @@ second run used only 4 restarts and reached session-end cleanly.
 existing crash-recovery mechanism working as intended under real,
 unusually heavy reconnect pressure, not a new infrastructure gap.
 
-**One real, minor state-machine nuance found**: `derive_live_paper_
-session_state()` settles at `STOPPING` rather than `STOPPED` when the
-underlying worker process has already exited before the session-level
-stop is issued (no further worker-side reconciliation tick occurs to
-advance it) — noted for a future checkpoint, not fixed here (safety-
-irrelevant: the worker process, `PaperBroker` exclusivity, and
-`real_trading_state=DISABLED` were all unaffected).
+**`CHECKPOINT_80` update — crash-rate diagnostic + a real fix, not just
+a documented quirk**:
+
+- **Crash-rate diagnostic**: pulled precise timestamps from today's
+  worker logs. `[F]` **66% of the day's 44 crashes (29 of them)
+  clustered in one ~10-minute window** (`08:13:14`–`08:23:30 UTC` /
+  `13:43`–`13:53 IST`), spaced almost exactly 22 seconds apart, and
+  **26 of the first supervisor run's 40 crashes received zero quotes**
+  before failing — a qualitatively different, tighter, more severe
+  signature than the sparser (7–17 minute gaps, real data streamed
+  first) pattern surrounding it. This reads as a genuine, temporary
+  Dhan-side or network-path outage for that ~10-minute window, layered
+  on top of the ordinary intermittent `close_code=1006` pattern
+  `LIVE-1`/`LIVE-3`/`LIVE-4` already diagnosed as real and external —
+  not a new or different root cause, and (per this checkpoint's own
+  rule) not something a code fix can address. No fix attempted; the
+  existing bounded-restart supervisor already responded correctly.
+- **A real bug found and fixed**: `derive_live_paper_session_state()`
+  never checked for a genuinely, cleanly stopped worker
+  (`worker_state == "STOPPED"`) — it fell through to the
+  `desired.enabled`/version-match logic, which could report `RUNNING`
+  for a worker that had already exited (exactly what `LIVE-PAPER-1`
+  observed after the supervisor's own session-end stop, which by
+  design never touches `ScannerConfiguration.enabled`). This is a
+  narrow, one-clause fix (treating `STOPPED` with the same
+  top-priority short-circuit `FAILED` already has), proven by a
+  regression test that fails on the reverted code with the exact live
+  symptom and passes with the fix. **The same fix also resolves the
+  "STOPPING forever" nuance** originally reported as a documentation-
+  only item — confirmed directly (a dedicated regression test
+  reproduces `LIVE-PAPER-1`'s exact stale-version scenario and now
+  correctly reports `STOPPED`, not `STOPPING`), since both were the
+  same missing case. See `CHECKPOINT_80_SUMMARY.md` for the full trace.
+- **The two-independent-controls design itself (`ScannerConfiguration.
+  enabled` = operator intent vs. the worker process's own runtime
+  state) was confirmed correct-as-designed, not a gap** — the module's
+  own docstring already states this intentionally ("adds NOTHING to
+  what happens after that write... the already-running worker process
+  picks up the change on its own"). The bug was narrower: the STATE-
+  REPORTING function's own blind spot for one specific worker state,
+  not the two-controls architecture itself.
 
 Needs a fresh Dhan credential check before any future session (today's
 token was `VALID`→`EXPIRING_SOON` by session end, `2026-09-09

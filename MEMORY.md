@@ -1132,6 +1132,35 @@ re-deriving them. Not a full transcript; no invented detail.
   crash-recovery working under real, heavy reconnect pressure, not a
   new gap. See `LIVE_PAPER-1_SUMMARY.md` for the full trace (Parts
   0-3).
+- **`CHECKPOINT_80`**: crash-rate diagnostic + a real session-stop-gap
+  fix, both following from `LIVE-PAPER-1`'s own findings. **Part 1**:
+  extracted precise timestamps from today's logs - all 90 disconnects
+  share the same `close_code=1006` LIVE-1/LIVE-3 already diagnosed as
+  external, but 66% of today's 44 crashes (29) clustered in one tight
+  ~10-minute window (08:13:14-08:23:30 UTC/13:43-13:53 IST) at ~22s
+  intervals, 26 of them receiving zero quotes before failing - a
+  genuine, temporary outage burst distinct from the sparser surrounding
+  pattern, not a new root cause. No fix attempted (external, per the
+  checkpoint's own rule). **Part 2**: traced the actual stop flow -
+  confirmed `ScannerConfiguration.enabled` (operator intent) and
+  `WorkerRuntimeStatus` (worker process's own state) are correctly two
+  independent controls by design, NOT a gap - but found a real,
+  recurring bug in `derive_live_paper_session_state()`
+  (`live_paper_session.py`): it never checked for
+  `worker_state=="STOPPED"`, so a worker that cleanly exited (e.g. the
+  supervisor's own session-end stop, which by design never touches
+  `ScannerConfiguration`) could be reported as RUNNING - exactly what
+  `LIVE-PAPER-1` hit. Fixed with one clause (same top-priority
+  short-circuit `FAILED` already has), causation proven by reverting
+  just the fix and confirming the new regression test fails with the
+  exact live symptom. **Part 3**: confirmed the "STOPPING forever"
+  quirk shares the exact same root cause and is RESOLVED (not just
+  documented) by the same fix - proven by a second regression test
+  reproducing the exact stale-version scenario. `test_live_paper_
+  session.py`: 12 tests before -> 14 after. `PROJECT_STRATEGY_STATUS.md`
+  §6's `LIVE-PAPER-1` entry updated to reflect the fix (superseding its
+  own prior "not fixed here" note). No live session launched, no
+  strategy/registry changes.
 - **`LIVE-2-FINALIZE`**: an end-of-day close-out checkpoint for
   `LIVE-2` was requested with the premise that market had just closed
   on the same day as the `LIVE-2` run — but this conversation's

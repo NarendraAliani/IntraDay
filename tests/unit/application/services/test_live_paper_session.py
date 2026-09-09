@@ -234,6 +234,43 @@ def test_derive_state_stopping_when_disabled_but_worker_has_not_yet_reconciled()
     assert state is LivePaperSessionState.STOPPING
 
 
+def test_derive_state_stopped_not_stopping_when_worker_already_exited_with_a_stale_version() -> None:
+    """Checkpoint 80, Part 3: the exact scenario `LIVE-PAPER-1`
+    (2026-09-09) reported as a "STOPPING forever" quirk - the worker
+    process had ALREADY exited (`worker_state="STOPPED"`) before the
+    session-level stop bumped `desired.configuration_version`, so
+    `effective_configuration_version` can never catch up (no worker is
+    running to write it). Confirmed to share the exact same root cause
+    as, and be resolved by, the same fix as the test above this one:
+    a genuinely stopped worker is reported as STOPPED immediately, not
+    left waiting forever for a reconciliation tick that will never
+    come."""
+    effective = WorkerRuntimeStatusRecord(
+        provider="dhan",
+        worker_state="STOPPED",
+        token_state="VALID",
+        watchdog_state="HEALTHY",
+        last_packet_at=None,
+        last_bar_at=None,
+        reconnect_count=0,
+        consecutive_failures=0,
+        subscribed_instrument_count=0,
+        last_error_safe="",
+        updated_at=None,
+        effective_configuration_version=1,  # stale, and will NEVER catch up - no worker is running
+        effective_timeframe="5m",
+        effective_strategy_ids=(),
+        effective_universe_requested_count=0,
+        effective_universe_subscribed_count=0,
+    )
+    state = derive_live_paper_session_state(
+        desired=_record(enabled=False, version=2),
+        effective=effective,
+        readiness=_readiness(can_start=True),
+    )
+    assert state is LivePaperSessionState.STOPPED
+
+
 def test_derive_state_failed_when_the_worker_reports_a_real_failure_state() -> None:
     """Checkpoint 64.14 §8: FAILED is derived from the REAL,
     already-existing WorkerState vocabulary (AUTH_FAILED/TOKEN_EXPIRED/
@@ -301,3 +338,38 @@ def test_derive_state_running_when_enabled_and_versions_match() -> None:
         readiness=_readiness(can_start=True),
     )
     assert state is LivePaperSessionState.RUNNING
+
+
+def test_derive_state_stopped_when_enabled_but_worker_has_genuinely_stopped() -> None:
+    """Checkpoint 80: found live in `LIVE-PAPER-1` (2026-09-09) - the
+    supervisor's own session-end stop cleanly exits the worker process
+    without touching `ScannerConfiguration.enabled`. A worker that has
+    genuinely, cleanly stopped can never be RUNNING, regardless of
+    `desired.enabled` or whether `effective_configuration_version`
+    still happens to match (a clean stop does not clear that field) -
+    the exact real scenario this reproduces: `desired.enabled=True`,
+    versions match, but `worker_state="STOPPED"`."""
+    effective = WorkerRuntimeStatusRecord(
+        provider="dhan",
+        worker_state="STOPPED",
+        token_state="VALID",
+        watchdog_state="HEALTHY",
+        last_packet_at=None,
+        last_bar_at=None,
+        reconnect_count=0,
+        consecutive_failures=0,
+        subscribed_instrument_count=5,
+        last_error_safe="",
+        updated_at=None,
+        effective_configuration_version=2,  # still matches desired - a clean stop doesn't clear this
+        effective_timeframe="5m",
+        effective_strategy_ids=("ema_crossover",),
+        effective_universe_requested_count=5,
+        effective_universe_subscribed_count=5,
+    )
+    state = derive_live_paper_session_state(
+        desired=_record(enabled=True, version=2),  # operator's own flag was never touched
+        effective=effective,
+        readiness=_readiness(can_start=True),
+    )
+    assert state is LivePaperSessionState.STOPPED
