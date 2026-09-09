@@ -1342,6 +1342,40 @@ re-deriving them. Not a full transcript; no invented detail.
   audit tables, not scaled to the remaining 9 interior-gap days this
   checkpoint. See `CHECKPOINT_83_SUMMARY.md` for full gate transcripts
   and verification detail.
+- **`CHECKPOINT_84`**: scaled `[[CHECKPOINT_83]]`'s proven mechanism
+  to the rest of the `2026-08-17`–`08-28` interior gap (9 remaining
+  real trading days × 4 symbols = 36 candidate units). One unit
+  (TCS/`2026-08-24`) was never eligible - all 71 rows for that day
+  carry `provenance=UNKNOWN`, not `REAL_DHAN` - confirmed a genuine,
+  pre-existing data characteristic (TCS/`08-18`/`08-19` show the same
+  pattern partially, 62/70 rows eligible). The remaining 35 units were
+  each processed one at a time: a FRESH dry-run + freshly-rederived
+  scope fingerprint per unit (never batch-computed or reused), then
+  the real `migration_production_execute` command with
+  `--i-have-reviewed-this-real-write`. **35/35 attempted units
+  COMMITTED, zero gate failures.** Verified at full scale: all 2,434
+  `REAL_DHAN` rows across the 35 units now `CANONICALIZED`; table-wide
+  duplicate-key check across all 55,134 rows found 0 duplicates; total
+  table row count unchanged (UPDATE-only, no inserts/deletes); exactly
+  36 `MigrationUnit`/2,504 `MigrationRow` audit records exist in the
+  whole database (1+70 from `CHECKPOINT_83`, 35+2,434 from this
+  checkpoint) - precisely matching, nothing more; a 30-row broader
+  spot-check outside the target scope found no corruption.
+  **The honest, unwelcome finding**: re-running the research gate
+  across the full `2026-08-03`–`09-09` range found the gate-verified
+  day count **UNCHANGED at 18** - every one of the 9 interior-gap days
+  independently fails `INCOMPLETE_COVERAGE` (missing 2-4
+  session-boundary bars each, the same day-start/day-end truncation
+  pattern documented since `CHECKPOINT_69`/`72`), so canonicalizing
+  them made zero of them research-eligible.
+  **The 47-day Gainz/VWAP/ORB tuning-resumption criterion remains NOT
+  MET - this checkpoint made zero progress toward it**, despite 35
+  real production writes succeeding cleanly. No strategy tuning was
+  resumed. Full suite: 3391 passed / 7 failed, identical failure set
+  to `CHECKPOINT_83` (5 pre-existing + 2 known `--reuse-db` flakes),
+  zero new failures - no source code was modified this checkpoint,
+  only data via the sanctioned path. See `CHECKPOINT_84_SUMMARY.md`
+  for the full per-unit result table and verification detail.
 - **`LIVE-2-FINALIZE`**: an end-of-day close-out checkpoint for
   `LIVE-2` was requested with the premise that market had just closed
   on the same day as the `LIVE-2` run — but this conversation's

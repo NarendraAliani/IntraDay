@@ -246,6 +246,42 @@ rest of the interior gap remains a separate, not-yet-taken decision.
 See `CHECKPOINT_83_SUMMARY.md` for the full gate-by-gate trace and
 verification detail.
 
+**`CHECKPOINT_84` update — the interior gap is now fully
+canonicalized, but the gate-verified day count is UNCHANGED at 18**:
+scaled `CHECKPOINT_83`'s proven mechanism to the remaining 9 interior-
+gap days × 4 symbols (36 candidate units). `[F]` One unit
+(TCS/`2026-08-24`) was never eligible — confirmed directly, all 71
+rows for that day carry `provenance=UNKNOWN`, not `REAL_DHAN` (the
+same pattern TCS/`08-18`/`08-19` show partially). `[F]` The remaining
+**35 units were each processed individually — fresh dry-run, freshly
+re-derived scope fingerprint, real `migration_production_execute`
+invocation with `--i-have-reviewed-this-real-write` — 35/35
+COMMITTED, zero gate failures.** `[F]` Verified at full scale: all
+2,434 `REAL_DHAN` rows across the 35 units now `CANONICALIZED`; 0
+duplicate keys across the entire 55,134-row table; total row count
+unchanged (UPDATE-only); exactly 36 `MigrationUnit`/2,504
+`MigrationRow` audit records exist in total, precisely matching. **The
+honest finding, reported plainly rather than buried**: re-running the
+research gate across `2026-08-03`–`09-09` found the gate-verified day
+count **UNCHANGED at 18 trading days per symbol** — every one of the 9
+interior-gap days independently fails `INCOMPLETE_COVERAGE` (2–4
+missing session-boundary bars each, the same day-start/day-end
+truncation pattern documented since `CHECKPOINT_69`/`72`), so
+canonicalizing them made zero of them research-eligible.
+Canonicalization and research-eligibility are separate, independently
+required properties — this checkpoint conclusively proves the former
+at scale (35 real units) and changes nothing about the latter. **The
+47-day Gainz/VWAP/ORB tuning-resumption criterion remains NOT MET —
+this checkpoint made zero progress toward it** (18, not 47; no
+change from before this checkpoint). No strategy tuning was resumed.
+What would actually move the day count — resolving the underlying
+`INCOMPLETE_COVERAGE` gap itself (missing session-boundary bars,
+possibly a data-fetch/ingestion question, not a migration-
+authorization one) — is flagged as the honest next blocker, not
+investigated or fixed by this checkpoint (out of its own scope, P9/
+P10). See `CHECKPOINT_84_SUMMARY.md` for the full per-unit result
+table and verification detail.
+
 ## 4. When can paper trading realistically start?
 
 > **SUPERSEDED BY `CHECKPOINT_77` — see §6 below.** The "technically
