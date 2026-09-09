@@ -398,6 +398,36 @@ checkpoint canonicalized zero new data, only removed a blocker).
 untouched, per its own rules. See `CHECKPOINT_88_SUMMARY.md` for the
 full verification trace.
 
+**`CHECKPOINT_89` update — the actual migration ran; 3/3 units
+COMMITTED cleanly, but a genuine NEW data gap surfaced, honestly
+reported rather than fixed**. `[F]` Ran the real, explicitly-
+authorized migration for TCS/HDFCBANK/INFY's `2026-08-17` (3 units,
+`CHECKPOINT_88` had confirmed all `DRY_RUN_SAFE`, 69 rows each). Fresh
+dry-run + freshly-derived fingerprint per unit; all 3 gates passed for
+each; **3/3 units COMMITTED**. Each day is now genuinely `71/71
+CANONICALIZED` (self-corrected an overly-strict own postcondition
+check mid-checkpoint rather than trusting a false alarm — TCS already
+held 2 pre-existing canonical rows outside the 69-row unit, from
+`CHECKPOINT_86`'s own earlier fetch). P4: 0 duplicate keys, table row
+count unchanged (UPDATE-only), RELIANCE and all 35 previously-
+migrated units re-confirmed untouched. **A genuine new finding,
+surfaced by this migration's own cascading timestamp shift**: all 3
+symbols now show a real, previously-masked 1-bar gap at `03:55` on
+`2026-08-17` — the original raw chain's first row coincidentally sat
+at that exact coordinate pre-migration (representing a different
+candle), masking a genuinely separate missing candle
+`CHECKPOINT_86`'s own earlier fetch had no way to know about. Same
+class of phenomenon as the `09:40` collision `CHECKPOINT_87`/
+`CHECKPOINT_88` resolved, at the other boundary. Recovering it needs
+one more real Dhan fetch per symbol (the same proven, purely-additive
+mechanism) — explicitly NOT attempted, out of this checkpoint's
+authorized scope (migration only). **Common gate-verified day count:
+unchanged at 24** — migration succeeded completely but didn't unlock
+these days, since their remaining blocker turned out to be a data
+gap, not a canonicalization gap. 47-day tuning threshold still NOT
+MET; no tuning resumed; `CHECKPOINT_86`'s own broader TCS provenance
+issue untouched. See `CHECKPOINT_89_SUMMARY.md` for the full trace.
+
 ## 4. When can paper trading realistically start?
 
 > **SUPERSEDED BY `CHECKPOINT_77` — see §6 below.** The "technically

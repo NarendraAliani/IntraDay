@@ -1520,6 +1520,42 @@ re-deriving them. Not a full transcript; no invented detail.
   suite: 3391 passed / 7 failed, identical to `[[CHECKPOINT_87]]`,
   zero new failures. See `CHECKPOINT_88_SUMMARY.md` for the full
   verification trace and backup file location.
+- **`CHECKPOINT_89`**: ran the actual, explicitly-authorized migration
+  for TCS/HDFCBANK/INFY's `2026-08-17` (3 units) -
+  `[[CHECKPOINT_88]]` had confirmed all 3 `DRY_RUN_SAFE`, 69 rows
+  each. Fresh dry-run + freshly-derived fingerprint per unit, real
+  `migration_production_execute` with `--i-have-reviewed-this-real-
+  write`. **3/3 units COMMITTED, zero gate failures** - all 3 days
+  now genuinely `71/71 CANONICALIZED` (self-corrected an overly-strict
+  own postcondition check mid-checkpoint: TCS already held 2
+  pre-existing canonical rows outside the 69-row unit, from
+  `[[CHECKPOINT_86]]`'s own earlier fetch - confirmed the CORRECT
+  postcondition directly rather than trusting the first check's
+  false alarm). P4: 0 duplicate keys, table row count unchanged
+  (UPDATE-only), RELIANCE + all 35 previously-migrated units
+  re-confirmed untouched, `MigrationUnit` +3/`MigrationRow` +207
+  (69x3) exactly matching. **A genuine new finding, surfaced by this
+  migration's own cascading `+5min` shift, honestly reported and NOT
+  fixed**: all 3 symbols now show a real, previously-masked 1-bar gap
+  at `03:55` on `2026-08-17` - the day's original raw chain's first
+  row coincidentally sat at that exact coordinate pre-migration
+  (representing a DIFFERENT candle), masking a genuinely separate,
+  real missing candle that `[[CHECKPOINT_86]]`'s own earlier fetch
+  had no way to know about. Same class of phenomenon as the `09:40`
+  collision `[[CHECKPOINT_87]]`/`[[CHECKPOINT_88]]` resolved, just at
+  the OTHER boundary, surfacing only once migration ran. Recovering
+  it needs one more real Dhan fetch per symbol (the same proven,
+  purely-additive mechanism) - explicitly NOT attempted, out of this
+  checkpoint's authorized scope (migration only). Common gate-
+  verified day count: **unchanged at 24** (migration succeeded
+  completely but didn't unlock these days - their remaining blocker
+  turned out to be a data gap, not a canonicalization gap). 47-day
+  tuning threshold still NOT met; no tuning resumed;
+  `[[CHECKPOINT_86]]`'s own broader TCS provenance issue untouched.
+  Full suite: 3391 passed / 7 failed, identical to `[[CHECKPOINT_88]]`,
+  zero new failures. Posted status updates during the ~12-minute test
+  run per this checkpoint's own new instruction not to go silent on
+  long steps. See `CHECKPOINT_89_SUMMARY.md` for the full trace.
 - **`LIVE-2-FINALIZE`**: an end-of-day close-out checkpoint for
   `LIVE-2` was requested with the premise that market had just closed
   on the same day as the `LIVE-2` run — but this conversation's
