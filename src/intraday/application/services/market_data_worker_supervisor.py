@@ -157,6 +157,41 @@ async def supervise_market_data_worker(
                 f"cooling down {cooldown_seconds}s before restart "
                 f"{restarts_used + 1}/{max_restarts}.",
             )
+            # CHECKPOINT_90: `worker_state=FAILED` is written by the
+            # crashing process itself, near the end of its OWN shutdown
+            # sequence (`health_tracker.persist()`) - but real, nonzero
+            # wall-clock work still follows that write before the OS
+            # process genuinely exits (`sink.flush_remainder()`, closing
+            # DB connections, unwinding back through `handle()`). Without
+            # this wait, `start_worker()` below unconditionally reassigns
+            # `child_process` to the NEW subprocess, abandoning the OLD
+            # handle without ever confirming its exit - during a fast
+            # crash-restart burst (LIVE-PAPER-2: ~22s apart), a prior
+            # process can still be mid-shutdown when the next one spawns,
+            # leaving it alive and orphaned: `run_market_data_worker.py`'s
+            # own `watch_for_stop_request()` polls independently of which
+            # process the supervisor currently tracks, so an orphan keeps
+            # polling and writing its OWN periodic health-tracker
+            # heartbeat to the SAME `WorkerRuntimeStatus` row indefinitely,
+            # masking whatever the CURRENTLY-tracked process later writes
+            # (confirmed live, LIVE_PAPER-2_SUMMARY.md: a clean STOPPED
+            # write was repeatedly overwritten back to a stale RUNNING).
+            # `wait_for_worker_exit()` already exists for exactly this
+            # purpose (the session-end path already uses it) - reusing it
+            # here, before `start_worker()` replaces the handle, makes
+            # "only one worker process alive at a time" a genuine
+            # invariant instead of an assumption. In the ordinary case
+            # (the process has already fully exited by the time FAILED is
+            # observed - the common case, since the DB write happens near
+            # the very end of its own shutdown) this resolves immediately,
+            # adding no meaningful delay; it only ever blocks for the
+            # genuine remaining shutdown time of a still-exiting process.
+            await wait_for_worker_exit()
+            _log(
+                "previous_worker_exit_confirmed",
+                "confirmed the crashed process's OS-level exit before spawning its replacement "
+                "- Checkpoint 90 fix for the orphaned-process race.",
+            )
             await sleep(cooldown_seconds)
             restarts_used += 1
             await start_worker()

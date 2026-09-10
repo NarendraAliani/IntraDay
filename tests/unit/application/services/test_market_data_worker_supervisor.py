@@ -475,3 +475,180 @@ def test_phantom_restart_race_is_prevented_by_the_post_restart_grace_period() ->
     assert len(restart_events) == 1
     assert result.stopped_cleanly is True
     assert result.restarts_used == 1
+
+
+# --- Checkpoint 90: the orphaned-process race, found live during
+# `LIVE-PAPER-2`.
+#
+# `start_worker()` unconditionally reassigns the supervisor's own
+# `child_process` handle on every restart - before this checkpoint's fix,
+# NOTHING confirmed the PREVIOUS process had genuinely exited at the OS
+# level first. During a fast crash-restart burst (LIVE-PAPER-2 observed
+# crashes ~22s apart), a prior process can still be mid-shutdown
+# (`health_tracker.persist()` writes its own terminal state near the END
+# of its shutdown sequence, but real wall-clock work - flushing, closing
+# DB connections, unwinding the call stack - still follows that write
+# before the OS process truly exits) when the next one is spawned. The
+# orphan keeps polling `watch_for_stop_request()` independently and
+# keeps writing its own periodic heartbeat to the SAME shared
+# `WorkerRuntimeStatus` row, masking whatever the newly-tracked process
+# writes - confirmed live: a genuine, correct `STOPPED` write was
+# repeatedly overwritten back to a stale `RUNNING` by an orphan
+# (`LIVE_PAPER-2_SUMMARY.md`).
+def test_orphaned_process_race_is_prevented_by_confirming_exit_before_restart() -> None:
+    """Simulates a slow-to-exit crashed process (worker_state=FAILED is
+    observed immediately, but the real OS-level exit - here,
+    `wait_for_worker_exit()` - only resolves some simulated time later,
+    exactly like the real `flush_remainder()`/`close_old_connections()`
+    tail every real crash shutdown goes through) across a fast
+    crash-restart burst. Proves the fix: `start_worker()` for restart N+1
+    is never called before `wait_for_worker_exit()` for restart N has
+    been awaited and returned - the previous process is always confirmed
+    gone before its replacement is spawned, so at most one process is
+    ever alive/writing to `WorkerRuntimeStatus` at a time."""
+    repo = DjangoWorkerRuntimeStatusRepository()
+    provider = "dhan"
+    repo.save(
+        provider,
+        worker_state="STOPPED",
+        token_state="VALID",
+        watchdog_state="DISCONNECTED",
+        last_packet_at=None,
+        last_bar_at=None,
+        reconnect_count=0,
+        consecutive_failures=0,
+        subscribed_instrument_count=0,
+        last_error_safe="",
+    )
+
+    start = dt.datetime(2026, 9, 3, 4, 0, 0, tzinfo=dt.UTC)
+    session_end = start + dt.timedelta(hours=6)
+    clock_state = {"now": start}
+
+    def now() -> dt.datetime:
+        return clock_state["now"]
+
+    # `event_order` records the exact interleaving of starts and
+    # confirmed exits - the one thing this test actually proves.
+    event_order: list[str] = []
+    starts: list[int] = []
+    # Tracks, for each started process (by its 1-based start index),
+    # whether `wait_for_worker_exit()` has genuinely been awaited for it
+    # yet - the crux of the fix under test.
+    exited: dict[int, bool] = {}
+
+    async def start_worker() -> None:
+        idx = len(starts) + 1
+        # THE invariant this test exists to prove: no new process may
+        # start while the immediately-previous one has not yet been
+        # confirmed exited.
+        if idx > 1:
+            assert exited.get(idx - 1) is True, (
+                f"start_worker() for process #{idx} was called before process "
+                f"#{idx - 1}'s exit was confirmed - the orphaned-process race "
+                "this checkpoint fixes would reproduce here."
+            )
+        starts.append(idx)
+        event_order.append(f"start:{idx}")
+        exited[idx] = False
+        # Every process here immediately fails - a pathologically fast
+        # crash-restart burst, matching LIVE-PAPER-2's own ~22s-apart
+        # observed cadence far more tightly than real wall-clock passing
+        # through this fake's own `sleep()` below.
+        await sync_to_async(repo.save)(
+            provider,
+            worker_state="FAILED",
+            token_state="VALID",
+            watchdog_state="DISCONNECTED",
+            last_packet_at=now(),
+            last_bar_at=None,
+            reconnect_count=5,
+            consecutive_failures=5,
+            subscribed_instrument_count=0,
+            last_error_safe="reconnect_attempts_exhausted",
+        )
+
+    async def is_worker_alive() -> bool:
+        return True
+
+    async def request_session_end_stop() -> None:
+        await sync_to_async(repo.save)(
+            provider,
+            worker_state="STOPPED",
+            token_state="VALID",
+            watchdog_state="DISCONNECTED",
+            last_packet_at=now(),
+            last_bar_at=None,
+            reconnect_count=0,
+            consecutive_failures=0,
+            subscribed_instrument_count=0,
+            last_error_safe="",
+        )
+
+    async def wait_for_worker_exit() -> None:
+        # Simulates the real, nonzero shutdown tail (flush/close/unwind)
+        # that follows the FAILED write - genuine simulated time passes
+        # here, exactly like the real `child_process.wait()` would take
+        # for a still-exiting process, proving this isn't a no-op stub.
+        idx = len(starts)
+        if idx >= 1 and not exited.get(idx, True):
+            clock_state["now"] = clock_state["now"] + dt.timedelta(seconds=0.5)
+            exited[idx] = True
+            event_order.append(f"exit_confirmed:{idx}")
+
+    async def refresh_archive() -> None:
+        return None
+
+    poll_count = {"n": 0}
+
+    async def sleep(seconds: float) -> None:
+        poll_count["n"] += 1
+        clock_state["now"] = clock_state["now"] + dt.timedelta(seconds=seconds)
+        if poll_count["n"] >= 20:
+            # Defensive cutoff so a regression can't hang the test suite.
+            clock_state["now"] = session_end + dt.timedelta(seconds=1)
+
+    result = __import__("asyncio").run(
+        supervise_market_data_worker(
+            provider=provider,
+            max_restarts=4,
+            cooldown_seconds=1.0,
+            session_end=session_end,
+            poll_interval_seconds=5.0,
+            status_repository=repo,
+            start_worker=start_worker,
+            is_worker_alive=is_worker_alive,
+            request_session_end_stop=request_session_end_stop,
+            wait_for_worker_exit=wait_for_worker_exit,
+            refresh_archive=refresh_archive,
+            sleep=sleep,
+            now=now,
+        )
+    )
+
+    # The burst crashes every single restart, 4 times over, exhausting
+    # the bound - proving the fix holds across a genuinely fast,
+    # repeated crash cycle, not just a single isolated one.
+    assert result.max_restarts_exhausted is True
+    assert result.restarts_used == 4
+    assert len(starts) == 5  # initial start + 4 restarts
+
+    # THE fix proof, on the actual recorded interleaving: every start
+    # (after the first) is immediately preceded by that same index's own
+    # exit confirmation - never two starts back-to-back with no
+    # confirmed exit between them.
+    assert event_order == [
+        "start:1",
+        "exit_confirmed:1",
+        "start:2",
+        "exit_confirmed:2",
+        "start:3",
+        "exit_confirmed:3",
+        "start:4",
+        "exit_confirmed:4",
+        "start:5",
+    ]
+    # Every started process was confirmed exited except the very last
+    # one (still "alive" when max_restarts_exhausted stops the loop
+    # without a further wait - correct, since nothing restarts it).
+    assert exited == {1: True, 2: True, 3: True, 4: True, 5: False}

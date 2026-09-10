@@ -1607,6 +1607,42 @@ re-deriving them. Not a full transcript; no invented detail.
   throughout, including by the orphaned-process bug (data-ingestion-
   only, never touched order logic). See `LIVE_PAPER-2_SUMMARY.md` for
   the full trace.
+- **`CHECKPOINT_90`**: fixed the orphaned-worker-process bug
+  `[[LIVE-PAPER-2]]` found live and worked around (not fixed) in the
+  moment. Root cause, confirmed by reading the actual code, not
+  guessed: `supervise_market_data_worker()`'s restart branch called
+  `start_worker()` unconditionally, reassigning its tracked
+  `child_process` handle WITHOUT ever confirming the PREVIOUS
+  process's genuine OS-level exit first - `wait_for_worker_exit()`
+  already existed and was already used, but only in the session-end
+  branch, never on restart. Confirmed a real, nonzero wall-clock gap
+  exists between a crashing process's own `FAILED` DB write
+  (`health_tracker.persist()`, near the START of its shutdown
+  sequence) and its actual OS exit (real work - `flush_remainder()`,
+  closing DB connections, unwinding the call stack - still follows).
+  During a fast crash burst (`LIVE-PAPER-2` observed ~22s apart), a
+  prior process can still be mid-shutdown when the next spawns -
+  confirmed `watch_for_stop_request()` polls independently of
+  supervisor tracking, so the orphan keeps writing its own heartbeat
+  to the SAME shared row, masking whatever the tracked process
+  writes. **Fix**: reuse the ALREADY-EXISTING `wait_for_worker_exit()`
+  callable in the restart branch too, immediately after crash
+  detection, before `start_worker()` replaces the handle - one line,
+  no new mechanism, placed before the cooldown sleep so existing
+  `--cooldown-seconds`/`--max-restarts` timing semantics stay
+  untouched. **Causation proven empirically** (this session's own
+  established discipline): new regression test simulating a 4-restart
+  burst with slow-to-exit processes FAILED on the reverted code with
+  the exact predicted symptom (`start_worker() for process #2 was
+  called before process #1's exit was confirmed`), PASSED restored.
+  Confirmed ordinary-case behavior unchanged: both pre-existing
+  restart tests (including `LIVE-1-INSTRUMENT`'s own phantom-restart-
+  race regression test) still pass unmodified, since their no-op
+  `wait_for_worker_exit()` fakes resolve instantly. Full suite: 3392
+  passed / 7 failed (+1 net test), identical failure set to
+  `[[LIVE-PAPER-2]]`, zero new failures. No live session launched, no
+  strategy/registry/data changes. See `CHECKPOINT_90_SUMMARY.md` for
+  the full trace.
 - **`LIVE-2-FINALIZE`**: an end-of-day close-out checkpoint for
   `LIVE-2` was requested with the premise that market had just closed
   on the same day as the `LIVE-2` run — but this conversation's
