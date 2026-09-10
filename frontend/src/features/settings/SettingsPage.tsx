@@ -18,9 +18,19 @@ export function SettingsPage(): JSX.Element {
         and are never shown in full once saved.
       </p>
       <div className="settings-page__cards">
-        <DhanSettingsCard />
-        <TelegramSettingsCard />
-        <DiscordSettingsCard />
+        {/* CHECKPOINT-FRONTEND-6: the three connection-status cards are
+            genuinely independent (each its own provider, its own form,
+            no shared state) and similarly shaped - grouped in a
+            responsive grid per FRONTEND_DESIGN_SYSTEM.md's own density
+            rule. `HistoricalMarketDataCard` stays full-width below,
+            deliberately excluded - it is a different KIND of content
+            (a multi-instrument/timeframe fetch tool, not a peer
+            "connection status" card) and needs its own full row. */}
+        <div className="page-summary-grid">
+          <DhanSettingsCard />
+          <TelegramSettingsCard />
+          <DiscordSettingsCard />
+        </div>
         <HistoricalMarketDataCard />
       </div>
     </div>

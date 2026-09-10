@@ -204,6 +204,16 @@ export function PaperTradingPage(): JSX.Element {
 
       {state.phase === "ready" && (
         <>
+          {/* CHECKPOINT-FRONTEND-6: Kill Switch and Live Paper Trading
+              Account are two genuinely independent status/summary
+              sections (neither reads the other's data) - grouped in a
+              responsive grid instead of two full-width stacked blocks,
+              per FRONTEND_DESIGN_SYSTEM.md's own density rule. Every
+              other section below (order entry, the order/trade/position
+              tables) stays full-width - a table or a primary action
+              form is not the "independent summary panel" this rule is
+              for. */}
+          <div className="page-summary-grid">
           <section className="capability-status-section" aria-labelledby="kill-switch-heading">
             <h2 id="kill-switch-heading">Kill Switch</h2>
             <p>
@@ -303,6 +313,7 @@ export function PaperTradingPage(): JSX.Element {
               </div>
             </div>
           </section>
+          </div>
 
           {canOperate && (
             <section

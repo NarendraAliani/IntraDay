@@ -1252,6 +1252,28 @@ dd {
   margin: 0;
 }
 
+/* CHECKPOINT-FRONTEND-6: the shared responsive parameter-grid pattern -
+   see FRONTEND_DESIGN_SYSTEM.md's own "Density: responsive grid by
+   default" section for the durable rule this implements. Used by
+   ParameterSchemaFields.tsx (so it applies to every strategy's
+   parameter panel, current and future, in both Strategy Configuration
+   and the Backtest Workbench) and reusable anywhere else a set of
+   independent form fields would otherwise force a single column. */
+.parameter-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 0 var(--space-5);
+}
+
+/* `.strategy-config-page__field` is a generic field-wrapper class also
+   used OUTSIDE any grid (e.g. WatchlistPage.tsx's plain "Watchlist
+   name" field) - its own `margin-bottom` is left untouched globally;
+   scoped to zero only inside the grid, where `gap` already provides
+   the vertical rhythm between rows (avoids doubled spacing). */
+.parameter-grid > .strategy-config-page__field {
+  margin-bottom: var(--space-4);
+}
+
 /* Checkpoint FRONTEND-3: `SegmentedToggle` - a single click for a few
    (<=5) real options, in place of opening a dropdown. */
 .segmented-toggle {
@@ -1651,6 +1673,26 @@ dd {
 
 .capability-status-section {
   margin: 2rem 0;
+}
+
+/* CHECKPOINT-FRONTEND-6: wraps a handful of adjacent, mutually
+   independent page-level summary/status SECTIONS (e.g. PaperTradingPage's
+   own "Kill Switch" + "Live Paper Trading Account") in a responsive
+   grid instead of a forced full-width vertical stack - see
+   FRONTEND_DESIGN_SYSTEM.md's own density rule. `.capability-status-section`'s
+   own `margin: 2rem 0` is overridden to 0 for sections placed inside
+   this grid - the grid's own `gap` already supplies spacing on every
+   side, so the old top/bottom-only margin would otherwise double up
+   vertically and do nothing horizontally between grid columns. */
+.page-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: var(--space-5);
+  margin: 2rem 0;
+}
+
+.page-summary-grid > .capability-status-section {
+  margin: 0;
 }
 
 .capability-status-section h2 {

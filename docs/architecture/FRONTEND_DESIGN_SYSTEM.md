@@ -313,6 +313,105 @@ is enforced by test.
 transforms (the pre-existing global rule only zeroed durations, which
 still let elements move).
 
+## Density: responsive grid by default (Checkpoint FRONTEND-6)
+
+**The rule, stated explicitly so a future checkpoint never has to
+rediscover it**: a form/parameter panel, or a set of independent
+summary/stat sections, uses a **responsive grid layout by default at
+desktop widths** - never a single forced column that leaves most of
+the panel's own width empty. Single-column stacking is reserved for
+content that is **genuinely sequential or dependent** (a multi-step
+form where step 2 depends on step 1's answer, a data table, a primary
+action form that is the one thing on the page the user is doing) or
+for **narrow/mobile viewports**, where a grid naturally collapses to
+one column anyway.
+
+### Why this checkpoint exists
+
+The operator found this directly, by screenshot: `Strategy
+Configuration`'s Parameters panel rendered ATR Volatility Breakout's 7
+parameters in one long column, leaving roughly half the panel's own
+width empty at an ordinary 1280px viewport. The same shape recurred on
+`Settings` (three independent provider-connection cards stacked full-
+width) and `Paper Trading` (the "Kill Switch" and "Live Paper Trading
+Account" summary sections, each genuinely independent of the other,
+stacked full-width one after another).
+
+### The pattern
+
+```css
+/* Independent form fields - see ParameterSchemaFields.tsx. */
+.parameter-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 0 var(--space-5); /* row spacing comes from each field's own margin-bottom */
+}
+
+/* Independent page-level SECTIONS - a section carries more content
+   than a single field, so it needs a higher minmax() floor before a
+   second column makes sense. */
+.page-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: var(--space-5);
+}
+```
+
+**No new breakpoint is needed.** `repeat(auto-fit, minmax(...))` is
+already responsive by construction - the browser fits as many columns
+of at least the `minmax()` floor as the container allows, and
+collapses to one column automatically once the container narrows
+below `2 * minmax-floor` (roughly matching this design system's
+existing 768px/480px breakpoints without a dedicated media query).
+Verified directly at a 420px viewport: both `.parameter-grid` and
+`.page-summary-grid` collapse to a single column with no manual
+breakpoint override required.
+
+### Where this is implemented
+
+- **`.parameter-grid`** (`common/components/ParameterSchemaFields.tsx`) -
+  the ONE shared, schema-driven parameter renderer both `Strategy
+  Configuration` and the `Backtest Workbench` already reuse (Part 14's
+  own "no duplicated strategy fields" rule) - so this is a property of
+  the shared component, not a per-strategy or per-page fix. Every
+  current strategy (EMA Crossover, SMA Trend Filter, ATR Volatility
+  Breakout) and every future one gets it automatically.
+- **`.page-summary-grid`** (`app/styles.css`) - a general-purpose
+  wrapper for a handful of adjacent, mutually independent page-level
+  sections. Used by `PaperTradingPage.tsx` (Kill Switch + Live Paper
+  Trading Account) and `SettingsPage.tsx` (the Dhan/Telegram/Discord
+  connection cards). Reuse this class directly rather than inventing a
+  new grid wrapper the next time a page has 2+ adjacent, independent
+  summary sections.
+
+### What is deliberately NOT gridded, and why
+
+- **Tables and table-heavy sections** (Paper Orders/Positions/Trades/
+  Signals, the Screener's own results table) stay full-width - a wide
+  table cramped into a grid column loses readability, and
+  `.table-scroll` already handles overflow correctly at full width.
+  This is the "genuinely sequential/dependent" exemption in practice:
+  a trader reads these top-to-bottom, not side-by-side.
+- **Primary action forms** that are the one thing a screen exists for
+  (`Submit Paper Order`, the Screener's own rule builder) stay full-
+  width, even though their own fields already use `.form-grid`
+  internally - the FIELDS within the form are gridded, but the form
+  SECTION itself is not squeezed beside an unrelated section.
+- **`HistoricalMarketDataCard`** on `Settings` stays outside the
+  provider-card grid - it is a different KIND of content (a multi-
+  instrument/timeframe fetch tool with its own instrument picker,
+  not a peer "connection status" card) and needs its own full row.
+- **`PaperSessionPanel`'s own "Replay Session Account" KPI block** is
+  a genuine independent-summary CANDIDATE by content, but it is nested
+  deep inside one much larger section (setup form + 3 tables) rather
+  than being its own top-level page section - grouping it with `Paper
+  Trading`'s Kill Switch/Live Paper Trading Account sections would
+  require restructuring `PaperSessionPanel` into multiple top-level
+  sections first. Documented here as a deferred Category 2 finding,
+  not implemented this checkpoint - see
+  `CHECKPOINT_FRONTEND-6_DENSITY-AUDIT_SUMMARY.md` for the full,
+  categorized audit.
+
 ## Deferred / explicitly out of scope
 
 A dedicated `<Button>`/`<Input>` React component library (classes are

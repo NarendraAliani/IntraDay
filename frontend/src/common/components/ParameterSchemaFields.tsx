@@ -87,7 +87,14 @@ export function ParameterSchemaFields({
   fields: FieldDefinition[];
 }): JSX.Element {
   return (
-    <>
+    // CHECKPOINT-FRONTEND-6: a responsive grid, not a forced single
+    // column - see FRONTEND_DESIGN_SYSTEM.md's own "Density: grid by
+    // default" rule. Applied HERE, in the one shared renderer, so every
+    // consumer (Strategy Configuration, the Backtest Workbench, and any
+    // future one) gets it automatically - never a per-strategy or
+    // per-page fix. Source order (and therefore tab order/screen-reader
+    // order) is completely unchanged - this is a CSS-only reflow.
+    <div className="parameter-grid">
       {parameters.map((parameter) => (
         <div className="strategy-config-page__field" key={parameter.parameter_id}>
           <label htmlFor={`param-${parameter.parameter_id}`}>
@@ -105,7 +112,7 @@ export function ParameterSchemaFields({
           )}
         </div>
       ))}
-    </>
+    </div>
   );
 }
 

@@ -1846,3 +1846,30 @@ re-deriving them. Not a full transcript; no invented detail.
   Full suites: frontend 388/388, backend 5 pre-existing/unrelated
   failures (same baseline as every prior checkpoint), no regressions.
   See `CHECKPOINT_FRONTEND-5_NAV-WATCHLIST_SUMMARY.md`.
+- **`CHECKPOINT-FRONTEND-6` (density audit)**: THIRD filename collision
+  in this repo - `CHECKPOINT_FRONTEND-6_SUMMARY.md` already existed
+  from an earlier, unrelated glyph-audit checkpoint; this one's summary
+  is `CHECKPOINT_FRONTEND-6_DENSITY-AUDIT_SUMMARY.md`. Fixed the
+  operator's own reported single-column-with-wasted-space pattern:
+  (1) `ParameterSchemaFields.tsx` (the ONE shared renderer behind both
+  Strategy Configuration and the Backtest Workbench, all 3 strategies)
+  now wraps fields in `.parameter-grid` (`auto-fit, minmax(240px,1fr)`)
+  - applies automatically to every current/future strategy. (2)
+  `PaperTradingPage.tsx`'s Kill Switch + Live Paper Trading Account,
+  and (3) `SettingsPage.tsx`'s Dhan/Telegram/Discord cards (a THIRD
+  instance found beyond the 2 named pages) both wrapped in a new,
+  reusable `.page-summary-grid` (`auto-fit, minmax(320px,1fr)`) -
+  `HistoricalMarketDataCard` deliberately excluded (different kind of
+  content). No breakpoint needed - `auto-fit` collapses to 1 column
+  natively, verified at 420px. New durable rule documented in
+  `FRONTEND_DESIGN_SYSTEM.md` ("Density: responsive grid by default")
+  with the exact CSS pattern and explicit exemptions (tables, primary
+  action forms, `PaperSessionPanel`'s own "Replay Session Account" -
+  deferred, Category 2, needs restructuring into top-level sections
+  first). Live Scanner/Live Paper Operations/Live Market Data Monitor
+  NOT visually audited (mock-fixture complexity too high for this
+  checkpoint's budget) - stated honestly, deferred for a future
+  checkpoint. Full frontend suite: 388/388 passing (one transient
+  flaky failure confirmed NOT a regression via isolated + full clean
+  reruns), typecheck clean. No backend changes. See
+  `CHECKPOINT_FRONTEND-6_DENSITY-AUDIT_SUMMARY.md`.
