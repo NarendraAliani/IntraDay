@@ -1978,3 +1978,28 @@ re-deriving them. Not a full transcript; no invented detail.
   frontend suite: 396/396 passing on a clean rerun (one unrelated
   transient flake confirmed not a regression), typecheck clean. No
   backend changes. See `CHECKPOINT_BACKTEST-PDF-B_SUMMARY.md`.
+- **`CHECKPOINT-BACKTEST-PDF-C`**: fixed 3 real, operator-confirmed
+  bugs in the PDF report (builds on PDF-A/-B). (1) Added a full
+  per-trade Trade Ledger page (11 cols, reused `TRADES_PER_PAGE=15`
+  pagination and the on-screen `BULLISH→Long`/`BEARISH→Short` mapping
+  verbatim; Total/P&L% are honestly-stated derivations, not stored
+  fields). (2) Root-caused the operator's own garbled-text bug to
+  plain-`str` `Table` cells not word-wrapping in reportlab (overflows
+  into the next column) - fixed by wrapping every text cell in a
+  `Paragraph`, and switched the footer from raw `drawString()` to a
+  wrapped `Paragraph.wrap()/drawOn()`. (3) `?run_id=` PDFs now bundle
+  EVERY scanned instrument's own complete multi-page report (index
+  page + per-instrument divider + full report each) into one file via
+  per-instrument reportlab `PageTemplate`s switched with
+  `NextPageTemplate` - caught and fixed a real self-introduced bug
+  where `NextPageTemplate` only takes effect on the *next* page break
+  processed after it, so the first attempt put each divider page on
+  the *previous* instrument's footer; verified fixed via real per-page
+  text extraction. Perf: 6 instruments x 30 trades = 0.53s/86KB, fine
+  at this project's real 4-6 symbol scale (named honestly as a future
+  scaling boundary, not built). 8 new tests + 2 stale PDF-A page-count
+  assertions updated (legitimate consequence of the new pages, not a
+  regression) = 12/12 passing; full suite 3426 passed/5 pre-existing
+  unrelated failures (same as every prior checkpoint's baseline); PDF-B
+  frontend button unaffected (25/25). See
+  `CHECKPOINT_BACKTEST-PDF-C_SUMMARY.md`.

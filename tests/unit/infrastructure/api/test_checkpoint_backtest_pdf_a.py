@@ -79,11 +79,12 @@ def test_pdf_report_is_a_real_valid_multipage_pdf_with_expected_field_labels() -
     assert pdf_response["Content-Type"] == "application/pdf"
 
     text, page_count = _extract_text(pdf_response.content)
-    # Single-instrument result -> 3 pages (Summary, Signal/Trade
-    # Breakdown, Ratio Analysis), never a 4th "Results by Instrument"
-    # page (that requires a real ?run_id= for a multi-instrument run -
-    # see the next test).
-    assert page_count == 3
+    # Single-instrument result -> 4 pages (Summary, Signal/Trade
+    # Breakdown, Ratio Analysis, Trade Ledger - the Trade Ledger page
+    # is CHECKPOINT-BACKTEST-PDF-C's own Issue 1 addition), never a
+    # "Results by Instrument" page (that requires a real ?run_id= for
+    # a multi-instrument run - see the next test).
+    assert page_count == 4
 
     # Page 1 - Summary.
     assert "Backtest Report" in text
@@ -108,6 +109,9 @@ def test_pdf_report_is_a_real_valid_multipage_pdf_with_expected_field_labels() -
     assert "Ratio Analysis" in text
     assert "Sharpe" in text
     assert "Sortino" in text
+
+    # Page 4 - Trade Ledger (CHECKPOINT-BACKTEST-PDF-C Issue 1).
+    assert "Trade Ledger" in text
 
     # The exact on-screen disclaimer language, reused verbatim - every
     # page's own footer, never dropped for a "cleaner" report.
@@ -218,6 +222,12 @@ def test_pdf_report_with_run_id_adds_results_by_instrument_page_for_a_multi_inst
     )
     assert pdf_response.status_code == 200
     text, page_count = _extract_text(pdf_response.content)
-    assert page_count == 4, "expected a 4th 'Results by Instrument' page"
+    # CHECKPOINT-BACKTEST-PDF-C Issue 3: the combined file now carries
+    # an index page PLUS every instrument's own complete report (5
+    # pages each here: divider, Summary, Signal/Trade, Ratio, Trade
+    # Ledger - each real result has exactly 1 trade) - 1 + 5 + 5 = 11 -
+    # never just a one-line summary row per sibling.
+    assert page_count == 11
     assert "Results by Instrument" in text
     assert "NSE:FIXTURE01" in text
+    assert text.count("Trade Ledger") == 2, "every scanned instrument gets its own full report"
