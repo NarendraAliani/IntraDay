@@ -128,10 +128,15 @@ describe("Iconography - one system only", () => {
     const violations = collectSourceFiles(SRC_ROOT).filter(
       (file) => file !== ICON_MODULE && /<svg/i.test(readFileSync(file, "utf-8")),
     );
-    // EquityChart is the one documented exception: it is a DATA
-    // rendering (an equity curve), not an icon, so it is not part of the
-    // iconography system and must not be forced into it.
-    const unexpected = violations.filter((file) => !file.endsWith("EquityChart.tsx"));
+    // EquityChart and Sparkline are the documented exceptions: both are
+    // DATA renderings (an equity curve, a per-row price trend), not
+    // icons, so neither is part of the iconography system and must not
+    // be forced into it. CHECKPOINT-WATCHLIST-B added Sparkline.tsx
+    // following EquityChart's own established buildPath() idiom.
+    const DATA_CHART_FILES = ["EquityChart.tsx", "Sparkline.tsx"];
+    const unexpected = violations.filter(
+      (file) => !DATA_CHART_FILES.some((name) => file.endsWith(name)),
+    );
     expect(unexpected).toEqual([]);
   });
 

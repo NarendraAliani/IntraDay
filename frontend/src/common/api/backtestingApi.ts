@@ -41,6 +41,9 @@ export function asDataQualityView(result: BacktestResult): DataQualityView {
 export type WatchlistResponse = components["schemas"]["WatchlistResponse"];
 export type WatchlistSaveRequest = components["schemas"]["WatchlistSaveRequest"];
 export type ResearchStatusResponse = components["schemas"]["ResearchStatusResponse"];
+// CHECKPOINT-WATCHLIST-A/B: the read-only watchlist market-data view.
+export type WatchlistMarketDataResponse = components["schemas"]["WatchlistMarketDataResponse"];
+export type WatchlistInstrumentMarketData = components["schemas"]["WatchlistInstrumentMarketData"];
 
 export function runBacktest(body: BacktestRunRequest): Promise<BacktestResult> {
   return apiPost<BacktestResult>("/api/v1/config/backtesting/run/", body);
@@ -89,6 +92,10 @@ export function saveWatchlist(body: WatchlistSaveRequest): Promise<WatchlistResp
 
 export function deleteWatchlist(name: string): Promise<void> {
   return apiDelete(`/api/v1/config/watchlists/${name}/delete/`);
+}
+
+export function getWatchlistMarketData(name: string): Promise<WatchlistMarketDataResponse> {
+  return apiGet<WatchlistMarketDataResponse>(`/api/v1/config/watchlists/${name}/market-data/`);
 }
 
 export function listResearchStatuses(): Promise<ResearchStatusResponse[]> {

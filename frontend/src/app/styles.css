@@ -1343,6 +1343,34 @@ dd {
   color: var(--color-text-muted);
 }
 
+/* CHECKPOINT-WATCHLIST-B: the per-row watchlist sparkline
+   (common/components/Sparkline.tsx) - same buildPath() idiom as
+   .equity-chart above, deliberately tiny (fits inside a table cell).
+   Rising/falling is a supplementary color cue only - the row's own
+   change_percent text already carries the same fact in words. */
+.sparkline {
+  display: inline-block;
+  width: 96px;
+  height: 28px;
+  vertical-align: middle;
+}
+
+.sparkline--empty {
+  color: var(--color-text-muted);
+}
+
+.sparkline__line {
+  stroke-width: 1.5;
+}
+
+.sparkline--up .sparkline__line {
+  stroke: var(--color-success-border);
+}
+
+.sparkline--down .sparkline__line {
+  stroke: var(--color-danger-border);
+}
+
 .backtest-results__warning {
   color: var(--color-error-border);
 }
@@ -1669,6 +1697,40 @@ dd {
 .paper-trading__pnl--negative {
   color: var(--color-danger-border);
   font-variant-numeric: tabular-nums;
+}
+
+/* CHECKPOINT-WATCHLIST-B: the market-data table replacing the old
+   comma-separated instrument-id string on WatchlistPage.tsx. */
+.watchlist-page__change--positive {
+  color: var(--color-success-border);
+  font-variant-numeric: tabular-nums;
+}
+
+.watchlist-page__change--negative {
+  color: var(--color-danger-border);
+  font-variant-numeric: tabular-nums;
+}
+
+.watchlist-page__cell-muted {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.watchlist-page__price-note {
+  display: block;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.watchlist-page__section {
+  margin-top: var(--space-6);
+}
+
+.watchlist-page__section-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
 }
 
 .form-grid {

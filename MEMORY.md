@@ -1801,3 +1801,23 @@ re-deriving them. Not a full transcript; no invented detail.
   same set as this session's own pre-flight baseline). OpenAPI schema
   + `api-types.ts` regenerated. No UI yet - Phase B's own scope. See
   `CHECKPOINT_WATCHLIST-A_SUMMARY.md`.
+- **`CHECKPOINT-WATCHLIST-B`**: Phase B of `WATCHLIST_REDESIGN_ROADMAP.md`,
+  built on `CHECKPOINT-WATCHLIST-A`'s endpoint. `WatchlistPage.tsx`
+  now renders a real Symbol/Price/Change%/Volume/Sparkline/As-of table
+  per watchlist (was a comma-separated instrument-id string). New
+  `Sparkline.tsx` (small inline-SVG, same `buildPath()` idiom as
+  `EquityChart.tsx`, no new charting dependency). Mode badge reuses
+  `ScreenerPage.tsx`'s own `.badge--historical`/`.badge--active`
+  classes verbatim ("Historical mode"/"Live mode"). Honest labeling:
+  `NOT_GATE_VERIFIED` rows show a "Not verified" badge and plain `—`
+  cells (never fabricated), volume_basis labeled inline
+  (session-to-date vs full day), and a row that fell back to its
+  historical close under a LIVE envelope gets its own
+  "last close (no live quote)" note - proven in both Vitest and real
+  Playwright screenshots (both themes). Small fix: extended
+  `theme.quality.test.ts`'s raw-`<svg>` allowlist (previously only
+  `EquityChart.tsx`) to cover `Sparkline.tsx` too - same kind of
+  documented exception, not a weakened gate. No backend changes
+  (confirmed via `git status` + a targeted backend re-run, 14/14
+  passing). Full frontend suite: 380/380 passing, typecheck clean.
+  See `CHECKPOINT_WATCHLIST-B_SUMMARY.md`.
