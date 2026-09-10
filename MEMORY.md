@@ -1643,6 +1643,79 @@ re-deriving them. Not a full transcript; no invented detail.
   `[[LIVE-PAPER-2]]`, zero new failures. No live session launched, no
   strategy/registry/data changes. See `CHECKPOINT_90_SUMMARY.md` for
   the full trace.
+- **`RECON-SCANNER-BUILDER`**: read-only investigation for a
+  discretionary, MANUAL stock-screening feature (competitor-inspired
+  visual rule-builder), producing `SCANNER_BUILDER_ROADMAP.md`
+  (deliberately uncommitted, same convention as `GAINZ_ROADMAP.md`
+  etc.). Confirmed `ScannerConfiguration` has zero condition-filtering
+  concept (universe/timeframe/strategy selection only). Found a
+  mature, 27-field `signal_intelligence/feature_engine/field_registry.py`
+  catalog already covering everything the reference UI needs (EMA,
+  SMA, RSI, ATR, ADX, MACD, RVOL, rolling breakout, VWAP, opening
+  range, candle patterns, market regime), dispatched through ONE
+  existing pure function, `compute_feature_series`. **Key honest
+  finding**: two genuinely different data sources exist -
+  `HistoricalBar` (end-of-day, inherits this project's own active data-
+  completeness gaps) vs `AggregatedBarObservation` (real-time, but only
+  populated while a worker is actively running - no standing market-
+  data service exists). No existing whole-universe ad-hoc query
+  mechanism; a `FIELD_REFERENCE` dropdown UI primitive already exists
+  and is reusable, but no operator/AND-OR UI exists anywhere. Roadmap:
+  4-6 symbol scope (not thousands like the reference site), a new
+  `AdhocScreeningService` that never imports `Strategy`/
+  `StrategyExecutionCoordinator`/`PaperBroker`, 4 phases (A: pure
+  logic, B: historical-mode API+UI, C: live-mode, D: optional saved
+  rules). **Stated plainly per its own instruction**: this is a
+  legitimate but LOWER-PRIORITY nice-to-have relative to the project's
+  actual current bottleneck (the data-completeness/47-day tuning-
+  threshold work and live-worker infrastructure hardening from the
+  last ~10 checkpoints) - not manufactured urgency from a screenshot.
+- **`CHECKPOINT-SCANNER-A`**: Phase A of `[[RECON-SCANNER-BUILDER]]`'s
+  own roadmap - pure condition-evaluation logic, no UI, no
+  persistence. **Step 1, mechanical relocation**: moved
+  `compute_feature_series` out of `strategy_execution.py` into
+  `signal_intelligence/feature_engine/dispatch.py` (a pure move, not a
+  rewrite) - confirmed directly it never actually depended on anything
+  strategy-execution-specific, only `domain` + its own `feature_engine`
+  siblings, so composing it there needs no `.importlinter`
+  cross-bounded-context permission at all (chose this over the
+  roadmap's own first-suggested `application/services/
+  feature_computation.py`, documented why in both files' own headers).
+  Every one of the 25 real callers across `src/`/`tests/` imports via
+  `application.services.strategy_execution`, which still transparently
+  re-exports the name - **zero other files needed a single line
+  changed**. Byte-identical-behavior proof: 49 + 1523 pre-existing
+  tests pass completely unmodified. **New domain types**
+  (`domain/screening/contracts.py`): `ScreeningCondition`/
+  `RuleCombinator`/`ScreeningRule`/`ScreeningMatch` - deliberately NOT
+  reusing `Strategy`'s own parameter/signal types. **A real design gap
+  found and fixed mid-checkpoint, not glossed over**: the first draft
+  treated every `str` comparison target as a field-vs-field reference,
+  which broke comparing a categorical field to a literal constant
+  (`market_regime == "BULL"`) - caught by the new test suite itself
+  (wrong exception fired), fixed by resolving a `str` as a field
+  reference ONLY when it names a real registered field_id, otherwise
+  treating it as a literal categorical constant. **New pure logic**
+  (`application/services/adhoc_screening.py`): `evaluate_condition()`
+  (field-vs-constant, field-vs-field, graceful `False` on missing/
+  warm-up data vs loud `ValueError` on a genuine type mismatch) and
+  `AdhocScreeningService.screen()` (AND/OR combination, bars supplied
+  by the caller - Phase B's own concern to wire a real data source).
+  **Architecture boundary mechanically proven**
+  (`test_adhoc_screening_boundary.py`, 4 tests): zero imports of
+  `Strategy`/`StrategyRegistry`/`StrategyExecutionCoordinator`/
+  `PaperBroker`/`ScannerConfiguration`/`domain.signal` anywhere in the
+  new code, PLUS a positive check that `adhoc_screening.py` actually
+  uses the relocated dispatcher (not the old import path) and that
+  `ScreeningMatch` carries no signal/order field. `lint-imports` run
+  before/after (`git stash`/`pop`): the one pre-existing "Application
+  must not depend on infrastructure" break is identical on both runs,
+  confirmed not introduced by this checkpoint; none of the new files
+  appear in any broken contract. Full suite: 3412 passed / 7 failed
+  (+20 net tests), identical failure set to `[[CHECKPOINT_90]]`, zero
+  new failures. No UI, no API endpoint, no persistence, no
+  strategy/registry change - exactly Phase A's own stated scope. See
+  `CHECKPOINT_SCANNER-A_SUMMARY.md` for the full trace.
 - **`LIVE-2-FINALIZE`**: an end-of-day close-out checkpoint for
   `LIVE-2` was requested with the premise that market had just closed
   on the same day as the `LIVE-2` run — but this conversation's
