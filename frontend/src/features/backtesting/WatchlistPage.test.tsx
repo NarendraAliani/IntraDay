@@ -70,7 +70,13 @@ describe("WatchlistPage", () => {
       "/watchlists/": [{ name: "core", instrument_ids: ["NSE:FIXTURE01"] }],
     });
     renderWithAuth(<WatchlistPage />);
-    await waitFor(() => expect(screen.getByText(/core/)).toBeInTheDocument());
+    // Scoped to the heading - CHECKPOINT-FRONTEND-8's own "Load from
+    // watchlist" control also renders "core" inside a <select><option>
+    // (the shared InstrumentPickerMulti's own new feature), so a bare
+    // /core/ text match is genuinely ambiguous now.
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "core", level: 2 })).toBeInTheDocument(),
+    );
     await waitFor(() => expect(screen.getByText("NSE:FIXTURE01")).toBeInTheDocument());
     expect(screen.getByText("₹171.0000")).toBeInTheDocument();
     expect(screen.getByText("2.50%")).toBeInTheDocument();

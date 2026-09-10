@@ -1900,3 +1900,28 @@ re-deriving them. Not a full transcript; no invented detail.
   frontend 388/388, backend 5 pre-existing/unrelated failures /
   3414 passed (up from 3412 - the 2 new tests). See
   `CHECKPOINT_FRONTEND-7_SUMMARY.md`.
+- **`CHECKPOINT-FRONTEND-8`**: Part 1 - "Load from watchlist" added
+  ONCE at the shared `InstrumentPickerMulti` component (not
+  `InstrumentPickerSingle` - stated explicitly why not), reusing the
+  existing `listWatchlists()` endpoint (no new backend call).
+  ADDITIVE merge (Set union), not destructive replace - explicit
+  design decision. Confirmed working on all 6 real consumers
+  (LiveScannerConsole, PaperTradingPage, WatchlistPage, ScreenerPage,
+  BacktestingWorkbenchPage, HistoricalMarketDataCard) via their own
+  existing test suites + real screenshots. Part 2 - fixed
+  BacktestingWorkbenchPage.tsx's own hand-authored "Backtest Settings"
+  fieldset (the exact single-column shape FRONTEND-6 fixed in
+  ParameterSchemaFields.tsx, but this one wasn't routed through that
+  shared component so the earlier fix never reached it) - wrapped in
+  `.parameter-grid`. Genuinely exhaustive final sweep confirmed
+  ConfigurationViewer (a tabbed interface, not stacked panels),
+  ComparisonPage, and StrategyMonitorPage (a plain table) are all
+  correctly NOT density gaps - no further Category 1 fixes found.
+  Documentation extended in FRONTEND_DESIGN_SYSTEM.md with explicit
+  reasoning for why `.parameter-grid`/`.page-summary-grid` stay a CSS-
+  class convention rather than becoming a wrapper React component
+  (this project's own established "no component-for-layout-only"
+  philosophy; ParameterSchemaFields.tsx already IS the real
+  architectural enforcement point for strategy panels specifically).
+  Full frontend suite: 392/392 passing (up from 388), typecheck
+  clean. No backend changes. See `CHECKPOINT_FRONTEND-8_SUMMARY.md`.

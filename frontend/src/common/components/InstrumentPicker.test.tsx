@@ -28,18 +28,36 @@ interface StubInstrument {
   displayName: string;
 }
 
+interface StubWatchlist {
+  name: string;
+  instrument_ids: string[];
+}
+
 function stub(options: {
   quotes?: unknown[];
   nseInstruments?: StubInstrument[];
   bseInstruments?: StubInstrument[];
   masterAvailable?: boolean;
+  watchlists?: StubWatchlist[];
+  watchlistsFail?: boolean;
 }): void {
-  const { quotes = [], nseInstruments = [], bseInstruments = [], masterAvailable = true } = options;
+  const {
+    quotes = [],
+    nseInstruments = [],
+    bseInstruments = [],
+    masterAvailable = true,
+    watchlists = [],
+    watchlistsFail = false,
+  } = options;
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input.toString();
       if (url.includes("/market-data/quotes/")) return jsonResponse(quotes);
+      if (url.endsWith("/watchlists/")) {
+        if (watchlistsFail) return jsonResponse({ error_code: "internal_error", message: "fail" }, 500);
+        return jsonResponse(watchlists);
+      }
       if (url.includes("/market-data/instruments/")) {
         if (!masterAvailable) {
           return jsonResponse({ exchange: "NSE", instruments: [], data_source: "UNAVAILABLE" });
@@ -225,5 +243,72 @@ describe("InstrumentPickerMulti", () => {
 
     expect(onChange).toHaveBeenCalledWith(expect.arrayContaining(many.map((i) => `NSE:${i.symbol}`)));
     expect((onChange.mock.calls[0][0] as string[]).length).toBe(120);
+  });
+
+  describe("CHECKPOINT-FRONTEND-8: Load from watchlist", () => {
+    it("offers the operator's own saved watchlists and adds a chosen one's instruments to the selection", async () => {
+      stub({
+        nseInstruments: [RELIANCE, TCS, INFY],
+        watchlists: [{ name: "core-momentum", instrument_ids: ["NSE:RELIANCE", "NSE:TCS"] }],
+      });
+      const onChange = vi.fn();
+      renderWithAuth(<InstrumentPickerMulti idPrefix="test-multi" value={[]} onChange={onChange} />);
+
+      await waitFor(() =>
+        expect(screen.getByText("core-momentum (2)")).toBeInTheDocument(),
+      );
+      fireEvent.change(screen.getByLabelText("Load from watchlist"), {
+        target: { value: "core-momentum" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Add to selection" }));
+
+      expect(onChange).toHaveBeenCalledWith(
+        expect.arrayContaining(["NSE:RELIANCE", "NSE:TCS"]),
+      );
+      expect((onChange.mock.calls[0][0] as string[]).length).toBe(2);
+    });
+
+    it("is ADDITIVE - a watchlist load never removes an already-selected instrument, and never duplicates one", async () => {
+      stub({
+        nseInstruments: [RELIANCE, TCS, INFY],
+        watchlists: [{ name: "core-momentum", instrument_ids: ["NSE:RELIANCE", "NSE:INFY"] }],
+      });
+      const onChange = vi.fn();
+      // The operator already manually picked TCS before loading the watchlist.
+      renderWithAuth(
+        <InstrumentPickerMulti idPrefix="test-multi" value={["NSE:TCS"]} onChange={onChange} />,
+      );
+
+      await waitFor(() =>
+        expect(screen.getByText("core-momentum (2)")).toBeInTheDocument(),
+      );
+      fireEvent.change(screen.getByLabelText("Load from watchlist"), {
+        target: { value: "core-momentum" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Add to selection" }));
+
+      const result = onChange.mock.calls[0][0] as string[];
+      expect(new Set(result)).toEqual(new Set(["NSE:TCS", "NSE:RELIANCE", "NSE:INFY"]));
+      expect(result.length).toBe(3); // no duplicates
+    });
+
+    it("shows nothing when the operator has no saved watchlists yet - never an empty/broken control", async () => {
+      stub({ nseInstruments: [RELIANCE], watchlists: [] });
+      renderWithAuth(<InstrumentPickerMulti idPrefix="test-multi" value={[]} onChange={() => {}} />);
+
+      await waitFor(() => expect(screen.getByText("Reliance Industries")).toBeInTheDocument());
+      expect(screen.queryByLabelText("Load from watchlist")).not.toBeInTheDocument();
+    });
+
+    it("degrades honestly when the watchlists list fails to load", async () => {
+      stub({ nseInstruments: [RELIANCE], watchlistsFail: true });
+      renderWithAuth(<InstrumentPickerMulti idPrefix="test-multi" value={[]} onChange={() => {}} />);
+
+      await waitFor(() =>
+        expect(screen.getByText("Unable to load your saved watchlists.")).toBeInTheDocument(),
+      );
+      // The rest of the picker still works even though watchlist loading failed.
+      expect(screen.getByText("Reliance Industries")).toBeInTheDocument();
+    });
   });
 });

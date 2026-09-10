@@ -50,6 +50,8 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { getCurrentQuotes, listInstruments } from "../api/marketDataApi";
+import { listWatchlists } from "../api/backtestingApi";
+import type { WatchlistResponse } from "../api/backtestingApi";
 import { Pagination, paginate } from "./Pagination";
 
 // Checkpoint FRONTEND-DATA-TABLES: an exchange can carry ~8,558
@@ -278,6 +280,88 @@ export function InstrumentPickerSingle(props: InstrumentPickerSingleProps): JSX.
   );
 }
 
+/** CHECKPOINT-FRONTEND-8: a "load from watchlist" convenience, added
+ * ONCE here (the one shared `InstrumentPickerMulti`) so every real
+ * consumer (Backtesting, the Watchlists page's own create/edit form,
+ * the Screener, the Live Scanner's own SELECTED-mode universe,
+ * Settings' Historical Market Data fetch) gets it automatically -
+ * never patched per-page. Reuses the existing `listWatchlists()` read
+ * endpoint (`WatchlistService`/`DjangoWatchlistRepository` - the SAME
+ * mechanism `CHECKPOINT-WATCHLIST-A/B` built), no new backend call.
+ *
+ * ADDITIVE, not a destructive replace: "Load" unions the chosen
+ * watchlist's own instrument_ids into the CURRENT selection (a
+ * `Set`, so already-selected/duplicate instruments are a no-op, never
+ * a duplicate entry) - deliberately, so an operator can combine a
+ * saved watchlist with a few extra manual picks in the same session,
+ * never lose picks they already made by loading a watchlist. Not
+ * offered on `InstrumentPickerSingle` - "load a watchlist's
+ * instruments" has no sensible meaning for a picker that can only
+ * ever hold one instrument. */
+function WatchlistLoader(props: {
+  idPrefix: string;
+  currentValue: string[];
+  onLoad: (instrumentIds: string[]) => void;
+}): JSX.Element | null {
+  const [watchlists, setWatchlists] = useState<WatchlistResponse[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [selectedName, setSelectedName] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load(): Promise<void> {
+      try {
+        const result = await listWatchlists();
+        if (!cancelled) setWatchlists(result);
+      } catch {
+        if (!cancelled) setError("Unable to load your saved watchlists.");
+      }
+    }
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (error) {
+    return <p className="strategy-config-page__help-text">{error}</p>;
+  }
+  if (watchlists === null) {
+    return <p className="strategy-config-page__help-text">Loading saved watchlists…</p>;
+  }
+  if (watchlists.length === 0) {
+    return null; // No watchlists saved yet - nothing honest to offer here.
+  }
+
+  function handleLoad(): void {
+    const watchlist = watchlists?.find((w) => w.name === selectedName);
+    if (!watchlist) return;
+    const merged = new Set([...props.currentValue, ...watchlist.instrument_ids]);
+    props.onLoad(Array.from(merged));
+  }
+
+  return (
+    <div className="instrument-picker__row instrument-picker__watchlist-loader">
+      <label htmlFor={`${props.idPrefix}-watchlist`}>Load from watchlist</label>
+      <select
+        id={`${props.idPrefix}-watchlist`}
+        value={selectedName}
+        onChange={(e) => setSelectedName(e.target.value)}
+      >
+        <option value="">Select a saved watchlist…</option>
+        {watchlists.map((w) => (
+          <option key={w.name} value={w.name}>
+            {w.name} ({w.instrument_ids.length})
+          </option>
+        ))}
+      </select>
+      <button type="button" disabled={!selectedName} onClick={handleLoad}>
+        Add to selection
+      </button>
+    </div>
+  );
+}
+
 export interface InstrumentPickerMultiProps {
   value: string[];
   onChange: (instrumentIds: string[]) => void;
@@ -321,6 +405,11 @@ export function InstrumentPickerMulti(props: InstrumentPickerMultiProps): JSX.El
   return (
     <div className="instrument-picker">
       <ExchangeSelect id={`${props.idPrefix}-exchange`} value={exchange} onChange={updateExchange} />
+      <WatchlistLoader
+        idPrefix={props.idPrefix}
+        currentValue={props.value}
+        onLoad={props.onChange}
+      />
       <IndexUnavailableNotice />
       {!loading && entries.length > 0 && (
         <SearchInput

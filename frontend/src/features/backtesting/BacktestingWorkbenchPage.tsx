@@ -322,6 +322,15 @@ export function BacktestingWorkbenchPage(): JSX.Element {
                   </p>
                 )}
               </div>
+              {/* CHECKPOINT-FRONTEND-8: the operator's own reported gap -
+                  these fields (unlike the Universe picker above, a wide,
+                  genuinely different kind of content) are simple,
+                  independent settings - gridded per
+                  FRONTEND_DESIGN_SYSTEM.md's own density rule, reusing
+                  ParameterSchemaFields.tsx's own `.parameter-grid`
+                  pattern directly rather than inventing a page-local
+                  variant. */}
+              <div className="parameter-grid">
               <div className="strategy-config-page__field">
                 <label htmlFor="bt-timeframe">Timeframe</label>
                 <input id="bt-timeframe" value={timeframe} onChange={(e) => setTimeframe(e.target.value)} />
@@ -447,6 +456,7 @@ export function BacktestingWorkbenchPage(): JSX.Element {
                   separate from the Cost Model above (statutory/broker costs never include
                   slippage).
                 </p>
+              </div>
               </div>
               <p className="strategy-config-page__help-text">
                 <strong>What does Run Backtest actually do?</strong> It replays the strategy above,

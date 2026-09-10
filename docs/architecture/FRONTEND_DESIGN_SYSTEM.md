@@ -411,6 +411,83 @@ breakpoint override required.
   not implemented this checkpoint - see
   `CHECKPOINT_FRONTEND-6_DENSITY-AUDIT_SUMMARY.md` for the full,
   categorized audit.
+- **`ConfigurationViewer`'s three lookup panels** (Risk Configuration/
+  Universe/Strategy Version) are NOT a density gap - confirmed
+  directly by reading the component (`FRONTEND-8`): it is a WAI-ARIA
+  tabbed interface, one narrow lookup panel visible at a time, not
+  three stacked panels. A grid would have nothing to arrange.
+- **`ComparisonPage`'s** two selects (Strategy, Sort by) and
+  **`StrategyMonitorPage`'s** per-strategy status `<table>` are both
+  genuinely small/sequential content, confirmed by direct screenshot
+  (`FRONTEND-8`) - no real wasted-width problem exists on either page.
+
+### CHECKPOINT-FRONTEND-7/8 additions
+
+- **`LiveScannerConsole.tsx`**'s three independent, orthogonal
+  fieldsets (Scan Universe / Strategies / Notification Channels - none
+  reads another's value) are wrapped in `.page-summary-grid`
+  (`FRONTEND-7`) - the exact same reused class, not a new one, per
+  this section's own "reuse this class directly" rule above.
+  `LivePaperOperationsConsole.tsx` and `LiveMarketDataMonitor.tsx`
+  were confirmed ALREADY fully compliant by rendering them, not by
+  source-level inspection alone - their own pre-existing internal grid
+  classes (`.live-paper-console__check-grid`, `.signal-monitor__details-grid`)
+  genuinely do the job.
+- **`BacktestingWorkbenchPage.tsx`'s own "Backtest Settings" fieldset**
+  (`FRONTEND-8`) was the exact same `.strategy-config-page__field`
+  single-column shape `FRONTEND-6` fixed inside `ParameterSchemaFields.tsx`
+  - but hand-authored directly in this page (Timeframe/Start/End/
+  Initial Capital/Position Size/Cost Model/Slippage), so
+  `FRONTEND-6`'s own fix to the SHARED component never reached it.
+  Now wrapped in `.parameter-grid` directly. The Universe field (an
+  `InstrumentPickerMulti`, wide/complex content with its own search +
+  checklist + pagination) is deliberately kept OUTSIDE the grid, above
+  it, for the same reason `HistoricalMarketDataCard` stays outside
+  `Settings`' own grid.
+
+### Why this stays a CSS-class convention, not a wrapper component
+(`FRONTEND-8`)
+
+Considered, and deliberately NOT built: a `<SummaryGrid>`/
+`<ParameterGrid>` React wrapper component that would structurally
+force every new form-panel/summary-section to use the grid, rather
+than relying on a future checkpoint to remember to apply
+`.parameter-grid`/`.page-summary-grid` themselves.
+
+**Reasoning against it, stated plainly rather than silently skipped:**
+this project's own established, audited architecture
+(`FRONTEND_DESIGN_SYSTEM.md`'s own "CSS architecture" section, above)
+is deliberately **plain, token-driven CSS with no component
+library** - "no CSS framework was introduced... judged still
+appropriate for this app's size." A wrapper component would be the
+first instance of a LAYOUT-ONLY React component existing purely to
+apply a CSS class - every other shared component in this codebase
+(`ParameterSchemaFields`, `InstrumentPicker`, `CapabilityStatus`)
+exists because it carries real, non-trivial BEHAVIOR (data fetching,
+validation, a control's own state), never merely to wrap children in
+a `<div className="...">`. Introducing one now, for exactly two CSS
+classes, would be a structural precedent this project's own stated
+philosophy argues against, for a benefit (a compiler-enforced grid)
+that a documented, discoverable, two-class CSS convention already
+delivers at effectively the same real-world reliability - every
+consumer found this checkpoint (Strategy Configuration, the Backtest
+Workbench, Paper Trading, Settings, Live Scanner) already applied the
+existing classes correctly once this rule existed to point to.
+
+**What DOES genuinely enforce this going forward**, and was already
+true before this checkpoint: `ParameterSchemaFields.tsx` is the ONE
+shared parameter renderer every strategy panel already goes through
+(Part 14's own "no duplicated strategy fields" rule) - a new strategy
+added to the registry gets `.parameter-grid` automatically, with zero
+risk of a future checkpoint forgetting to apply it, BECAUSE the
+density fix lives in the shared component's own render logic, not in
+each consumer. The real, durable enforcement point for STRATEGY
+PARAMETER panels specifically is architectural (one shared renderer),
+not a CSS convention a future author must remember - this section's
+own "Density" rule matters most for the OTHER case, a page's own
+hand-authored settings/summary panel, where no such shared component
+exists to enforce it structurally, and a clear, discoverable written
+rule (this section) is the correct, proportionate tool.
 
 ## Deferred / explicitly out of scope
 
