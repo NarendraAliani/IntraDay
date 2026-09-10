@@ -1032,6 +1032,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/config/screening/evaluate/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Historical mode only (Phase B's own explicit scope - Live mode,
+         *     reading `AggregatedBarObservation`, is Phase C's own concern). A
+         *     read-only, synchronous evaluation - this project's screening
+         *     universe (4-6 symbols) makes a background task/polling mechanism
+         *     (the shape `create_historical_backtest_run_view` needs) genuinely
+         *     unnecessary here; a request completes in well under a second even
+         *     across the full requested range.
+         */
+        post: operations["api_v1_config_screening_evaluate_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/config/settings/{provider}/status/": {
         parameters: {
             query?: never;
@@ -2088,6 +2113,12 @@ export interface components {
             retry_count: number;
             error_message: string;
         };
+        /**
+         * @description * `AND` - AND
+         *     * `OR` - OR
+         * @enum {string}
+         */
+        CombinatorEnum: "AND" | "OR";
         CommunicationAttempt: {
             communication_id: string;
             channel: string;
@@ -2620,6 +2651,15 @@ export interface components {
             configured: boolean;
             enabled: boolean;
         };
+        /**
+         * @description * `>` - >
+         *     * `<` - <
+         *     * `>=` - >=
+         *     * `<=` - <=
+         *     * `==` - ==
+         * @enum {string}
+         */
+        OperatorEnum: ">" | "<" | ">=" | "<=" | "==";
         /**
          * @description * `MARKET` - MARKET
          *     * `LIMIT` - LIMIT
@@ -3184,6 +3224,42 @@ export interface components {
             stale: boolean;
             last_error_safe: string;
         };
+        ScreeningConditionRequest: {
+            field_id: string;
+            operator: components["schemas"]["OperatorEnum"];
+            comparison: string;
+        };
+        ScreeningEvaluateRequest: {
+            conditions: components["schemas"]["ScreeningConditionRequest"][];
+            combinator: components["schemas"]["CombinatorEnum"];
+            instrument_ids: string[];
+            timeframe: string;
+            /** Format: date */
+            start_date: string;
+            /** Format: date */
+            end_date: string;
+        };
+        ScreeningEvaluateResponse: {
+            mode: string;
+            results: components["schemas"]["ScreeningInstrumentResult"][];
+            matched_count: number;
+            evaluated_count: number;
+            not_gate_verified_count: number;
+        };
+        ScreeningInstrumentResult: {
+            instrument_id: string;
+            status: components["schemas"]["ScreeningInstrumentResultStatusEnum"];
+            matched_condition_details?: string[];
+            /** @default  */
+            coverage_detail: string;
+        };
+        /**
+         * @description * `MATCHED` - MATCHED
+         *     * `NO_MATCH` - NO_MATCH
+         *     * `NOT_GATE_VERIFIED` - NOT_GATE_VERIFIED
+         * @enum {string}
+         */
+        ScreeningInstrumentResultStatusEnum: "MATCHED" | "NO_MATCH" | "NOT_GATE_VERIFIED";
         SessionResponse: {
             /** Format: date */
             session_date: string;
@@ -4698,6 +4774,39 @@ export interface operations {
                 };
             };
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+        };
+    };
+    api_v1_config_screening_evaluate_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScreeningEvaluateRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["ScreeningEvaluateRequest"];
+                "multipart/form-data": components["schemas"]["ScreeningEvaluateRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScreeningEvaluateResponse"];
+                };
+            };
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };

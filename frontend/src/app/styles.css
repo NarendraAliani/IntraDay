@@ -2560,3 +2560,24 @@ dd {
     gap: var(--space-1);
   }
 }
+
+/* CHECKPOINT-SCANNER-B: Screener page. Page-level vertical rhythm only
+   (`section`/`h2` spacing) - every control inside a section reuses the
+   existing `.form-grid`/`.form-row` layout, `.badge--*` status colors,
+   and `.market-data-monitor__table`/`.table-scroll` table pattern, no
+   new component styles invented. */
+.screener-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+.screener-page section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.screener-page__condition-row {
+  align-items: flex-end;
+}

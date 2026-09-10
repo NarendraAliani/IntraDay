@@ -25,6 +25,7 @@ from intraday.infrastructure.api import (
     reports_views,
     risk_views,
     scanner_configuration_views,
+    screening_views,
     settings_views,
     signal_views,
     strategy_configuration_views,
@@ -261,6 +262,12 @@ urlpatterns = [
         "backtesting/coverage-preview/",
         historical_backtesting_views.coverage_preview_view,
         name="backtesting-coverage-preview",
+    ),
+    # --- CHECKPOINT-SCANNER-B: discretionary screening (Historical mode) --
+    path(
+        "screening/evaluate/",
+        screening_views.evaluate_screening_rule_view,
+        name="screening-evaluate",
     ),
     # --- Follow-up to Checkpoint 63.x: manual historical market-data sync --
     path(

@@ -51,6 +51,7 @@ import { BacktestingWorkbenchPage } from "../features/backtesting/BacktestingWor
 import { ComparisonPage } from "../features/backtesting/ComparisonPage";
 import { StrategyMonitorPage } from "../features/backtesting/StrategyMonitorPage";
 import { WatchlistPage } from "../features/backtesting/WatchlistPage";
+import { ScreenerPage } from "../features/screening/ScreenerPage";
 import { ReportsOverviewPage } from "../features/reports/ReportsOverviewPage";
 import { PaperTradingPage } from "../features/paper-trading/PaperTradingPage";
 // Checkpoint 64.80-F: the Application Dashboard becomes the landing
@@ -72,6 +73,7 @@ type Screen =
   | "backtesting"
   | "comparison"
   | "watchlists"
+  | "screener"
   | "strategy-monitor"
   | "paper-trading"
   | "reports";
@@ -115,6 +117,7 @@ const NAV_GROUPS: Array<{ id: string; label: string; icon: IconName; items: NavI
       { id: "backtesting", label: "Backtesting", icon: "research" },
       { id: "comparison", label: "Compare", icon: "research" },
       { id: "watchlists", label: "Watchlists", icon: "market" },
+      { id: "screener", label: "Screener", icon: "research" },
     ],
   },
   {
@@ -244,6 +247,7 @@ function AppShell(): JSX.Element {
       {screen === "backtesting" && <BacktestingWorkbenchPage />}
       {screen === "comparison" && <ComparisonPage />}
       {screen === "watchlists" && <WatchlistPage />}
+      {screen === "screener" && <ScreenerPage />}
       {screen === "strategy-monitor" && <StrategyMonitorPage />}
       {screen === "paper-trading" && <PaperTradingPage />}
       {screen === "reports" && <ReportsOverviewPage />}

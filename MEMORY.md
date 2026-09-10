@@ -1716,6 +1716,57 @@ re-deriving them. Not a full transcript; no invented detail.
   new failures. No UI, no API endpoint, no persistence, no
   strategy/registry change - exactly Phase A's own stated scope. See
   `CHECKPOINT_SCANNER-A_SUMMARY.md` for the full trace.
+- **`CHECKPOINT-SCANNER-B`**: Phase B of `[[RECON-SCANNER-BUILDER]]`'s
+  roadmap, built on `[[CHECKPOINT-SCANNER-A]]` - read-only API +
+  minimal UI, Historical mode only, no rule persistence. **Backend**:
+  new `POST /api/v1/config/screening/evaluate/`
+  (`screening_views.py`), studied `coverage_preview_view`'s own
+  precedent first (synchronous, read-only, no background task - this
+  project's 4-6 symbol universe makes async polling genuinely
+  unnecessary). **Honest data-coverage labeling, end-to-end tested**:
+  every instrument runs through the REAL `ResearchDataGateService`
+  first - a `ResearchDataRejectedError` becomes its own
+  `NOT_GATE_VERIFIED` status carrying the gate's own real detail,
+  never silently folded into `NO_MATCH`; only gate-verified bars ever
+  reach `AdhocScreeningService.screen()`, called exactly as
+  `[[CHECKPOINT-SCANNER-A]]` designed it, no signature change. 7 new
+  API tests (real Postgres, real gate, fixture bars built at the EXACT
+  close-timestamps `HistoricalDataCoverageService` itself computes -
+  not guessed). Architecture-boundary test extended to scan 4 files
+  (was 2) - the new view + contracts now included, same zero-import
+  guarantee. **Frontend**: read `FRONTEND_DESIGN_SYSTEM.md` first (no
+  dedicated frontend-design Skill exists for this codebase - the
+  equivalent doc was used); new `features/screening/ScreenerPage.tsx`
+  in its own standalone directory (never embedded in
+  `StrategyConfigurationPage`/`BacktestingWorkbenchPage`/Live Paper
+  Operations Console), reusing `InstrumentPickerMulti` and the SAME
+  `FieldDefinition[]`-driven dropdown `ParameterSchemaFields.tsx`
+  established, added to the existing "Research" nav group. Clearly
+  labeled "Historical mode" - checked directly (a dedicated test
+  asserts "live"/"real-time" never appears anywhere on the page).
+  Regenerated the OpenAPI contract (`manage.py spectacular` +
+  `openapi-typescript`) before writing the API client against it - the
+  correct, established mechanism, confirmed working. 6 new vitest
+  tests. **Real Playwright/Chromium screenshots, both themes** -
+  found and fixed two genuine issues along the way: (1) `waitUntil:
+  "networkidle"` never resolves against Vite's own HMR WebSocket
+  (diagnosed via an empty `<div id="root">` debug screenshot, not
+  assumed); (2) the landing Dashboard page needs its own 4 status
+  endpoints mocked with REAL response shapes (matching
+  `AppDashboardNavigation.test.tsx`'s own fixtures) or it crashes -
+  a generic empty-object fallback wasn't enough. Both Focus (light)
+  and Midnight (dark) screenshots captured successfully, legible,
+  consistent - script and PNGs deleted afterward (one-off
+  verification, not committed), only the dev-server process this
+  checkpoint itself launched was terminated (confirmed by port -
+  `netstat`/`taskkill` targeted PID on 5174 specifically, the
+  operator's own pre-existing 5173 dev server was never touched).
+  Full backend suite: 3419 passed / 7 failed (+7 net tests), identical
+  failure set to `[[CHECKPOINT-SCANNER-A]]`, zero new failures. Full
+  frontend suite: 373 passed (367+6), typecheck clean, CSS/theme
+  quality gates clean. No live session, no strategy/registry change,
+  no rule persistence - exactly Phase B's own stated scope. See
+  `CHECKPOINT_SCANNER-B_SUMMARY.md` for the full trace.
 - **`LIVE-2-FINALIZE`**: an end-of-day close-out checkpoint for
   `LIVE-2` was requested with the premise that market had just closed
   on the same day as the `LIVE-2` run — but this conversation's

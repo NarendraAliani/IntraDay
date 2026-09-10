@@ -30,6 +30,12 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 SCREENING_FILES = (
     REPO_ROOT / "src" / "intraday" / "domain" / "screening" / "contracts.py",
     REPO_ROOT / "src" / "intraday" / "application" / "services" / "adhoc_screening.py",
+    # CHECKPOINT-SCANNER-B: the read-only evaluation endpoint and its
+    # own wire contracts - same zero-import-of-Strategy/PaperBroker/
+    # ScannerConfiguration guarantee extends to the API layer, not just
+    # the pure logic underneath it.
+    REPO_ROOT / "src" / "intraday" / "infrastructure" / "api" / "screening_views.py",
+    REPO_ROOT / "src" / "intraday" / "application" / "contracts" / "screening.py",
 )
 
 
