@@ -46,12 +46,18 @@ function fullConfiguration(result: BacktestResult): BacktestConfigurationFull {
   return result.configuration as unknown as BacktestConfigurationFull;
 }
 
+// CHECKPOINT-FRONTEND-9: no `timeZone` option here rendered the
+// VIEWER'S browser-local time for this backtest's own real
+// `generated_at` moment, not IST - fixed to match the same
+// `Asia/Kolkata` convention every other timestamp in this project
+// uses.
 function formatGeneratedAt(isoTimestamp: string): string {
   const parsed = new Date(isoTimestamp);
   if (Number.isNaN(parsed.getTime())) return isoTimestamp;
   return parsed.toLocaleString("en-IN", {
     dateStyle: "medium",
     timeStyle: "short",
+    timeZone: "Asia/Kolkata",
   });
 }
 

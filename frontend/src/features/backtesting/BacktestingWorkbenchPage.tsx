@@ -89,6 +89,22 @@ function parseStrategyValues(
   return parsed;
 }
 
+// CHECKPOINT-FRONTEND-9 Issue 1: a real bug found from
+// CHECKPOINT-BACKTEST-PDF-D's own honest recon - `new Date(...).
+// toLocaleString()` with no `timeZone` option renders the VIEWER'S
+// browser-local time, not IST, for a UTC trade timestamp. Reuses the
+// EXACT same `toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })`
+// pattern already established and confirmed correct elsewhere
+// (`LiveMarketDataMonitor.tsx`/`LiveScannerConsole.tsx`/
+// `LivePaperOperationsConsole.tsx`'s own `formatTimestamp()`), not a
+// new convention.
+function formatIstTimestamp(value: string | null | undefined): string {
+  if (!value) return "—";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
+}
+
 function formatMoney(value: string | null | undefined): string {
   if (value === null || value === undefined) return "—";
   const parsed = Number.parseFloat(value);
@@ -971,8 +987,8 @@ function TradeTable({ trades }: { trades: TradeRow[] }): JSX.Element {
               <Fragment key={trade.trade_id}>
                 <tr className={index % 2 === 0 ? "backtest-results__trade-row--even" : undefined}>
                   <td>{trade.trade_id}</td>
-                  <td>{new Date(trade.entry_timestamp).toLocaleString()}</td>
-                  <td>{new Date(trade.exit_timestamp).toLocaleString()}</td>
+                  <td>{formatIstTimestamp(trade.entry_timestamp)}</td>
+                  <td>{formatIstTimestamp(trade.exit_timestamp)}</td>
                   <td>{trade.direction === "BULLISH" ? "Long" : "Short"}</td>
                   <td>{trade.quantity}</td>
                   <td>{formatMoney(trade.entry_price)}</td>

@@ -6,6 +6,11 @@
 // justification"; two simple line charts do not justify one). Axes,
 // labels, tooltips (via <title>), responsive (viewBox-based) and
 // explicit empty state are all handled here directly.
+//
+// CHECKPOINT-FRONTEND-9: axis-label/tooltip timestamps were rendered
+// with a bare `toLocaleString()` (the VIEWER'S browser-local time, not
+// IST, for a real bar timestamp) - fixed to the same Asia/Kolkata
+// convention used everywhere else in this project.
 import { useMemo } from "react";
 
 export interface EquityPoint {
@@ -100,7 +105,7 @@ function LineChart({
 
 export function EquityCurveChart({ points }: { points: EquityPoint[] }): JSX.Element {
   const values = points.map((p) => toNumber(p.balance));
-  const labels = points.map((p) => new Date(p.timestamp).toLocaleString());
+  const labels = points.map((p) => new Date(p.timestamp).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }));
   return (
     <LineChart
       title="Equity Curve"
@@ -114,7 +119,7 @@ export function EquityCurveChart({ points }: { points: EquityPoint[] }): JSX.Ele
 
 export function DrawdownChart({ points }: { points: EquityPoint[] }): JSX.Element {
   const values = points.map((p) => toNumber(p.drawdown_percent));
-  const labels = points.map((p) => new Date(p.timestamp).toLocaleString());
+  const labels = points.map((p) => new Date(p.timestamp).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }));
   return (
     <LineChart
       title="Drawdown Curve (%)"

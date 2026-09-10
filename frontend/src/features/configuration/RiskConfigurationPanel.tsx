@@ -49,7 +49,11 @@ function formatDateTime(value: string): string {
   if (Number.isNaN(parsed.getTime())) {
     return value;
   }
-  return parsed.toLocaleString("en-IN");
+  // CHECKPOINT-FRONTEND-9: "en-IN" alone controls locale/number
+  // formatting, not the timezone used - this rendered the VIEWER'S
+  // browser-local time, not IST, for a real created_at moment. Fixed
+  // to the same Asia/Kolkata convention used everywhere else.
+  return parsed.toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
 }
 
 function describeApiError(error: unknown): string {

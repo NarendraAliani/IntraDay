@@ -229,12 +229,18 @@ export function describeSystemReadiness(
 // --- Formatting helpers ---------------------------------------------
 
 /** Renders a nullable ISO timestamp honestly - "Never" rather than a
- * fabricated placeholder date. */
+ * fabricated placeholder date - and in IST (CHECKPOINT-FRONTEND-9: a
+ * real bug found from CHECKPOINT-BACKTEST-PDF-D's own recon - a bare
+ * `toLocaleString()` with no `timeZone` renders the VIEWER'S browser-
+ * local time, not IST, for market-session/health timestamps that are
+ * genuinely IST-relevant. Reuses the exact `toLocaleString("en-IN",
+ * { timeZone: "Asia/Kolkata" })` pattern already established
+ * elsewhere, e.g. `LiveMarketDataMonitor.tsx`). */
 export function formatTimestamp(value: string | null | undefined): string {
   if (!value) return "Never";
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return "Not available";
-  return parsed.toLocaleString();
+  return parsed.toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
 }
 
 export function formatAgeSeconds(value: number | null | undefined): string {

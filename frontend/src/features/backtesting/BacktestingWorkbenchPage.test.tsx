@@ -249,6 +249,56 @@ describe("BacktestingWorkbenchPage", () => {
     expect(screen.getByText("ema_crossover-1")).toBeInTheDocument();
   });
 
+  it("CHECKPOINT-FRONTEND-9: renders the Trade Ledger's Entry/Exit time in IST, regardless of the test environment's own system timezone", async () => {
+    // A real bug CHECKPOINT-BACKTEST-PDF-D found and this checkpoint
+    // fixes: a bare `toLocaleString()` renders the VIEWER'S own
+    // browser-local time, not IST. Force the process's own system
+    // timezone to something far from IST (America/New_York, UTC-4/5)
+    // for this test only - if the fix genuinely pins `Asia/Kolkata`
+    // via the `timeZone` option, the rendered text must be identical
+    // regardless of this override; if the old bare-`toLocaleString()`
+    // bug were still present, this test would render a New York time
+    // instead and fail.
+    const originalTz = process.env.TZ;
+    process.env.TZ = "America/New_York";
+    try {
+      stubFetch({
+        "/strategy-engine/fields/": FIELDS,
+        "/strategy-engine/strategies/": STRATEGIES,
+        "/strategy-engine/strategies/ema_crossover/schema/": SCHEMA,
+        "/backtesting/run/": BACKTEST_RESULT,
+      });
+      renderWithAuth(<BacktestingWorkbenchPage />);
+      await waitFor(() => expect(screen.getByText("EMA Crossover")).toBeInTheDocument());
+      fireEvent.click(screen.getByRole("button", { name: "Configure" }));
+      await waitFor(() => expect(screen.getByLabelText(/Fast EMA Lookback/)).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole("button", { name: "Run Backtest" }));
+
+      await waitFor(() => expect(screen.getByText("Results")).toBeInTheDocument());
+
+      // Trade #1's own entry_timestamp is 2026-01-02T04:00:00Z (UTC) ->
+      // 09:30:00 IST; exit_timestamp 2026-01-02T04:10:00Z -> 09:40:00
+      // IST. The same known-good conversion CHECKPOINT-BACKTEST-PDF-D's
+      // own PDF test asserts, proving the on-screen table and the PDF
+      // now genuinely agree.
+      const expectedEntry = new Date("2026-01-02T04:00:00Z").toLocaleString("en-IN", {
+        timeZone: "Asia/Kolkata",
+      });
+      const expectedExit = new Date("2026-01-02T04:10:00Z").toLocaleString("en-IN", {
+        timeZone: "Asia/Kolkata",
+      });
+      // getAllByText, not getByText: the same converted string can also
+      // appear in the equity/drawdown chart's own axis labels (built
+      // from the SAME mark_to_market_curve timestamps) - both are
+      // genuinely correct occurrences of the fix, not a false positive.
+      expect(screen.getAllByText(expectedEntry).length).toBeGreaterThan(0);
+      expect(screen.getAllByText(expectedExit).length).toBeGreaterThan(0);
+    } finally {
+      process.env.TZ = originalTz;
+    }
+  });
+
   it("renders Checkpoint 64.22 TradePlan/risk KPIs and validation rows when present in the API response", async () => {
     const resultWithTradePlanFields = {
       ...BACKTEST_RESULT,

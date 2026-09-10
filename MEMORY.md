@@ -2043,3 +2043,37 @@ re-deriving them. Not a full transcript; no invented detail.
   396/396 + tsc clean + real Playwright screenshots both themes; full
   backend suite 3432 passed/5 pre-existing unrelated failures (same
   baseline). See `CHECKPOINT_BACKTEST-PDF-D_SUMMARY.md`.
+- **`CHECKPOINT-FRONTEND-9`**: fixed the real on-screen IST bug
+  `CHECKPOINT-BACKTEST-PDF-D` flagged but left unfixed
+  (`BacktestingWorkbenchPage.tsx`'s Trade Ledger used bare
+  `toLocaleString()` - browser-local time, not IST) using the SAME
+  `toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })` pattern
+  already established elsewhere. Then swept the ENTIRE frontend for
+  the same bug class (grepped every `toLocaleString`/
+  `toLocaleTimeString`/`toLocaleDateString`/`new Date(` call, not just
+  bare ones) and found 8 more real instances: `dashboardModel.ts`'s
+  shared `formatTimestamp()` (session/health timestamps across
+  `DashboardPage.tsx`), `ComparisonPage.tsx` (backtest `generated_at`),
+  `StrategyConfigurationPage.tsx` (config `created_at`),
+  `EquityChart.tsx` (chart axis-label timestamps),
+  `StrategyVersionPanel.tsx`/`RiskConfigurationPanel.tsx`/
+  `UniversePanel.tsx` (version `created_at`), `DhanSettingsCard.tsx`
+  (token expiry), `PaperTradingPage.tsx` (order/trade times),
+  `PaperSessionPanel.tsx` (signal bar timestamp) - all fixed. A subtler
+  variant of the SAME bug found along the way: several already passed
+  `"en-IN"` as the locale, which controls FORMAT not TIMEZONE - looks
+  correct at a glance but is the identical underlying bug. Correctly
+  left alone: plain-number `.toLocaleString()` calls (scanned_bars/
+  cache_hits/etc.), currency formatting, elapsed/relative "N seconds
+  ago" displays, and internal `new Date().toISOString()` form-state/
+  API-payload plumbing never shown to the operator as a formatted
+  time - each checked individually, not blanket-converted. Re-checked
+  PDF-A through -D and FRONTEND-5 through -8 for other small deferred
+  items: only `PaperSessionPanel`'s own "Replay Session Account" KPI
+  block (FRONTEND-6's own Category 2) is still genuinely open, and
+  stays correctly deferred (needs a larger restructuring). Tests: 2
+  new (TZ-override tests proving the fix holds regardless of the test
+  environment's own system timezone) - 398/398 frontend passing, tsc
+  clean, real Playwright screenshots both themes confirming the
+  on-screen table and the PDF now show identical IST times. No backend
+  changes. See `CHECKPOINT_FRONTEND-9_SUMMARY.md`.

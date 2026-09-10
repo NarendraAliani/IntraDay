@@ -139,6 +139,27 @@ describe("formatting helpers are honest about missing values", () => {
     expect(formatTimestamp("not-a-date")).toBe("Not available");
   });
 
+  it("CHECKPOINT-FRONTEND-9: renders in IST regardless of the test environment's own system timezone", () => {
+    // A real bug CHECKPOINT-BACKTEST-PDF-D found and this checkpoint
+    // fixes: a bare `toLocaleString()` renders the VIEWER'S own
+    // browser-local time, not IST. Force the process's own system
+    // timezone away from IST for this assertion only - if the fix
+    // genuinely pins `Asia/Kolkata` via the `timeZone` option, the
+    // result is identical regardless of this override.
+    const originalTz = process.env.TZ;
+    process.env.TZ = "America/New_York";
+    try {
+      // 2026-01-02T04:00:00Z (UTC) -> 09:30:00 IST.
+      const expected = new Date("2026-01-02T04:00:00Z").toLocaleString("en-IN", {
+        timeZone: "Asia/Kolkata",
+      });
+      expect(formatTimestamp("2026-01-02T04:00:00Z")).toBe(expected);
+      expect(formatTimestamp("2026-01-02T04:00:00Z")).toContain("9:30");
+    } finally {
+      process.env.TZ = originalTz;
+    }
+  });
+
   it("renders a null age as Not available, never as 0 seconds", () => {
     expect(formatAgeSeconds(null)).toBe("Not available");
     expect(formatAgeSeconds(0)).toBe("0s ago");

@@ -105,7 +105,10 @@ function TokenStateBadge(props: {
         <span className="strategy-config-page__help-text">
           {" "}
           {props.state === "EXPIRED" ? "Expired at" : "Expires at"}{" "}
-          {new Date(props.expiresAt).toLocaleString()}
+          {/* CHECKPOINT-FRONTEND-9: was a bare toLocaleString() - the
+              viewer's browser-local time, not IST, for a real token
+              expiry moment. Same Asia/Kolkata fix as elsewhere. */}
+          {new Date(props.expiresAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}
         </span>
       )}
     </span>

@@ -463,7 +463,11 @@ export function PaperSessionPanel(): JSX.Element {
               {session.recent_signals.map((signal) => (
                 <tr key={`${signal.step}-${signal.signal_id ?? "none"}`}>
                   <td>{signal.step}</td>
-                  <td>{new Date(signal.bar_timestamp).toLocaleString("en-IN")}</td>
+                  {/* CHECKPOINT-FRONTEND-9: "en-IN" alone doesn't set
+                      the timezone - was the viewer's browser-local
+                      time, not IST, for a real signal bar timestamp.
+                      Same Asia/Kolkata fix as elsewhere. */}
+                  <td>{new Date(signal.bar_timestamp).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}</td>
                   <td>{signal.direction ?? signal.skipped_reason ?? "—"}</td>
                   <td>
                     {signal.risk_outcome ? (

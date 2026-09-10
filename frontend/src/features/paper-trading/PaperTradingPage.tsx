@@ -443,7 +443,12 @@ export function PaperTradingPage(): JSX.Element {
                             {order.status}
                           </span>
                         </td>
-                        <td>{new Date(order.created_at).toLocaleString("en-IN")}</td>
+                        {/* CHECKPOINT-FRONTEND-9: "en-IN" alone doesn't
+                            set the timezone - was the viewer's browser-
+                            local time, not IST, for a real order
+                            timestamp. Same Asia/Kolkata fix as
+                            elsewhere. */}
+                        <td>{new Date(order.created_at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -535,7 +540,10 @@ export function PaperTradingPage(): JSX.Element {
                         >
                           ₹{trade.realized_pnl}
                         </td>
-                        <td>{new Date(trade.closed_at).toLocaleString("en-IN")}</td>
+                        {/* CHECKPOINT-FRONTEND-9: same fix as
+                            order.created_at above - real trade close
+                            time, now genuinely IST. */}
+                        <td>{new Date(trade.closed_at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}</td>
                       </tr>
                     ))}
                   </tbody>

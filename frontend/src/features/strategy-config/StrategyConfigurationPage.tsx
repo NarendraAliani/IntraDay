@@ -261,7 +261,10 @@ export function StrategyConfigurationPage(): JSX.Element {
                 <tr key={config.configuration_version}>
                   <td>{config.configuration_version}</td>
                   <td>{JSON.stringify(config.values)}</td>
-                  <td>{new Date(config.created_at).toLocaleString()}</td>
+                  {/* CHECKPOINT-FRONTEND-9: was a bare toLocaleString() - the
+                      viewer's browser-local time, not IST, for this real
+                      creation moment. Same Asia/Kolkata fix as elsewhere. */}
+                  <td>{new Date(config.created_at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}</td>
                   <td>{config.created_by}</td>
                 </tr>
               ))}
