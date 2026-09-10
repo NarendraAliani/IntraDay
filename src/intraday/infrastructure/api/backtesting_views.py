@@ -23,6 +23,7 @@
 # still untouched).
 from __future__ import annotations
 
+from django.http import HttpResponse
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -34,6 +35,7 @@ from intraday.application.contracts.backtesting import (
     BacktestRunRequestSerializer,
 )
 from intraday.application.contracts.errors import ApiErrorSerializer
+from intraday.application.services.backtest_pdf_report import build_backtest_report_pdf
 from intraday.application.services.backtesting import BacktestingService
 from intraday.application.services.errors import ResourceNotFoundError
 from intraday.application.services.historical_data_coverage import HistoricalDataCoverageService
@@ -52,6 +54,9 @@ from intraday.infrastructure.market_data_providers.fixtures import (
 )
 from intraday.infrastructure.persistence.historical_bar_repository import (
     DjangoHistoricalBarRepository,
+)
+from intraday.infrastructure.persistence.historical_backtest_run_repository import (
+    DjangoBacktestRunRepository,
 )
 from intraday.infrastructure.persistence.repositories import DjangoBacktestResultRepository
 from intraday.research.backtesting.contracts import BacktestConfiguration, PositionSizingMode
@@ -226,6 +231,60 @@ def get_backtest_result(request: Request, backtest_id: str) -> Response:
     except ResourceNotFoundError as exc:
         return not_found(exc)
     return Response(payload)
+
+
+@extend_schema(
+    responses={200: OpenApiResponse(description="PDF file"), 404: OpenApiResponse(ApiErrorSerializer)}
+)
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def get_backtest_result_report_pdf(request: Request, backtest_id: str) -> Response:
+    """CHECKPOINT-BACKTEST-PDF-A: a read-only rendering of an already-
+    completed backtest result into a multi-page PDF
+    (`application.services.backtest_pdf_report`) - no new backtest
+    computation happens here, this view only fetches already-persisted
+    results and hands them to the pure PDF builder.
+
+    Optional `?run_id=<run_id>` - when the backtest belongs to a
+    multi-instrument historical run, adds a "Results by Instrument"
+    page by resolving that SAME run's own `result_backtest_ids`
+    (`DjangoBacktestRunRepository` - the exact repository
+    `get_historical_backtest_run_progress` already uses, never a
+    second universe-resolution mechanism) and fetching each sibling
+    result through the SAME read path this view itself uses."""
+    service = _service(SYNTHETIC_INSTRUMENT_ID)
+    try:
+        result = service.get_result(backtest_id)
+    except ResourceNotFoundError as exc:
+        return not_found(exc)
+
+    sibling_results: list[dict[str, object]] = []
+    run_id = request.query_params.get("run_id")
+    if run_id:
+        try:
+            snapshot = DjangoBacktestRunRepository().get(run_id)
+        except Exception:  # noqa: BLE001 - the multi-instrument page is a best-effort addition;
+            # an unresolvable run_id must never break the single-result
+            # report the operator actually asked for.
+            snapshot = None
+        if snapshot is not None:
+            for sibling_id in snapshot.result_backtest_ids.values():
+                if sibling_id == backtest_id:
+                    continue
+                try:
+                    sibling_results.append(service.get_result(sibling_id))
+                except ResourceNotFoundError:
+                    # A sibling instrument's own run may have failed
+                    # independently (per-instrument failure is already
+                    # a documented, real possibility - see
+                    # `failed_instruments` on the run snapshot) - skip
+                    # it honestly rather than fail the whole report.
+                    continue
+
+    pdf_bytes = build_backtest_report_pdf(result, sibling_results=sibling_results or None)
+    response = HttpResponse(pdf_bytes, content_type="application/pdf")
+    response["Content-Disposition"] = f'inline; filename="backtest-report-{backtest_id}.pdf"'
+    return response
 
 
 @extend_schema(responses={200: BacktestResultSerializer(many=True)})

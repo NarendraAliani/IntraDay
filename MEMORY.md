@@ -1925,3 +1925,33 @@ re-deriving them. Not a full transcript; no invented detail.
   architectural enforcement point for strategy panels specifically).
   Full frontend suite: 392/392 passing (up from 388), typecheck
   clean. No backend changes. See `CHECKPOINT_FRONTEND-8_SUMMARY.md`.
+- **`CHECKPOINT-BACKTEST-PDF-A`**: Phase A (backend-only) of a new
+  exportable-PDF backtest report feature. Recon confirmed: no PDF
+  library existed anywhere (added `reportlab` for generation, `pypdf`
+  dev-only for test verification); no sector/fundamental data source
+  exists (re-confirmed directly, not from memory) so "Results by
+  Instrument" (per-instrument, already on-screen) is the honest
+  substitute, never sector-wise; Sharpe AND Sortino are both already
+  fully computed on `metrics` (confirmed directly) so Page 3's Ratio
+  Analysis needed zero new derivation - Calmar was considered and
+  explicitly excluded (needs an annualized return; no honest trading-
+  day-annualization convention exists in this intraday-only project).
+  New `application/services/backtest_pdf_report.py` (pure function,
+  consumes the exact `to_json_dict()` shape already served, zero new
+  backtest computation) + `GET /backtesting/results/<id>/report/`
+  (optional `?run_id=` adds a "Results by Instrument" page 4, reusing
+  the SAME `DjangoBacktestRunRepository`/`result_backtest_ids` the
+  existing run-progress endpoint already exposes - no parallel
+  mechanism). Real vector equity/drawdown charts via reportlab's own
+  LinePlot, from the same mark_to_market_curve the frontend renders.
+  4 new tests (real Postgres, real backtest via the deterministic
+  NSE:FIXTURE01 fixture, real pypdf text-extraction check - not just
+  "a PDF was produced"). Real finding caught while writing the test
+  (not fixed, out of scope, by-design): `_deterministic_backtest_id()`
+  doesn't include `strategy_values` in its identity hash, so two
+  backtests differing only in strategy_values silently collide/
+  overwrite - the test varies the date range instead to get two
+  genuinely independent results. Full backend suite: 5 pre-existing/
+  unrelated failures / 3418 passed (up from 3414). No frontend changes
+  (Phase B is the "Download PDF" button, not this checkpoint). See
+  `CHECKPOINT_BACKTEST-PDF-A_SUMMARY.md`.

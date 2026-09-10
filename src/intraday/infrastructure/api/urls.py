@@ -248,6 +248,12 @@ urlpatterns = [
         backtesting_views.list_backtest_results,
         name="backtesting-results-list",
     ),
+    # --- CHECKPOINT-BACKTEST-PDF-A: read-only PDF report export -----------
+    path(
+        "backtesting/results/<str:backtest_id>/report/",
+        backtesting_views.get_backtest_result_report_pdf,
+        name="backtesting-result-report-pdf",
+    ),
     # --- Checkpoint 63.x: DB-first historical backtest runs ---------------
     path(
         "backtesting/historical-runs/",
