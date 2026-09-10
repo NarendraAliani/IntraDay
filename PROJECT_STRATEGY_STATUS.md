@@ -728,6 +728,78 @@ Needs a fresh Dhan credential check before any future session (today's
 token was `VALID`→`EXPIRING_SOON` by session end, `2026-09-09
 10:17:40 UTC` expiry — do not reuse).
 
+### `LIVE-PAPER-2` — second completed live paper session (`2026-09-10`), the `CHECKPOINT_80` fix verified live
+
+Run specifically to confirm `CHECKPOINT_80`'s two fixes hold under a
+real session, not just its own regression tests. Full detail in
+`LIVE_PAPER-2_SUMMARY.md`.
+
+**Outcome: zero signals again, still a fully successful validation** —
+same infrastructure-based Success Criteria as `LIVE-PAPER-1`, all real
+and correct: scanner cycles `COMPLETED` (15/15, 3/3) at every pulse
+check, `drift=False` throughout, `SignalRecord`/today's
+`PaperOrderRecord`/`CommunicationLedgerRecord` counts all genuinely
+`0` for the day.
+
+**A real discrepancy caught by re-verifying rather than trusting the
+operator's own report, twice** — the operator said "started" three
+times before it genuinely took. First: the worker had crashed
+(`close_code=1006`, the same external pattern every prior live
+checkpoint has diagnosed) at the exact moment START was pressed;
+`start_live_paper_session()` correctly refused (`NOT_READY`) since
+`readiness.can_start` was `False` — not a bug, the backend behaved
+exactly as designed. Second: `ScannerConfiguration` genuinely had not
+been touched all day (`session_stopped_at` still stamped from
+`LIVE-PAPER-1`'s own prior-day close) — flagged directly to the
+operator rather than guessed at. Third attempt succeeded, confirmed
+via `configuration_version` bumping and `derive_live_paper_session_state()`
+returning `RUNNING`.
+
+**The actual `CHECKPOINT_80` fix verification: PASSED — but with a
+genuine, new, deeper bug found underneath it, not the fix itself**. At
+market close, `derive_live_paper_session_state()` initially still
+returned `STOPPING` even though the tracked worker had cleanly exited
+and (correctly) written `STOPPED`. Root-caused directly (raw SQL
+bypassing ORM caching, `tasklist`/`wmic` process inspection, not
+assumed): **two orphaned worker child processes from earlier restart
+cycles — never reaped by the supervisor's own single-`child_process`
+tracking — were still alive, idle, and periodically overwriting the
+row back to a stale `RUNNING`**. `CHECKPOINT_80`'s own one-clause
+`worker_state == "STOPPED"` short-circuit was correct the entire
+time; the bug was one layer below it, feeding it wrong underlying
+data. Recovered using only the already-established safe mechanism
+(re-issuing the same real stop-request row the supervisor itself
+writes, `LIVE-PAPER-1`'s own precedent) — one orphan exited within
+seconds, and `derive_live_paper_session_state()` immediately, then
+stably across 3 independent polls over ~1 minute, returned `STOPPED`.
+Cleaned up two remaining already-idle processes via `taskkill /F` —
+safe, since (unlike `LIVE-PAPER-1`'s own blocked pre-emptive kill of a
+still-needed, still-running supervisor) these had already finished
+their work; the permission system allowed it.
+
+**A self-corrected monitoring mistake, reported honestly**: the
+crash-count check used live during Part 2 monitoring
+(`grep -c "crash_detected"`) always returned `0`, because that log
+format is only written by the supervisor's own final report call, not
+incrementally — every "zero crashes" pulse-check report during
+monitoring was based on a broken check. The real count, established
+after the fact: **26 restarts during Part 2 alone, 27 total for the
+whole session** (well within the `--max-restarts 200` budget used from
+the start this time — avoiding `LIVE-PAPER-1`'s own first-run
+exhaustion). This did not affect session correctness (the supervisor
+handled every crash exactly as designed), but the live reporting
+during monitoring was inaccurate and is corrected here for the
+permanent record.
+
+**`real_trading_state=DISABLED`/`PaperBroker` exclusivity unaffected
+throughout**, including by the orphaned-process bug — a data-
+ingestion-only defect, never touching order logic. **Open item for a
+future checkpoint**: the supervisor's own subprocess lifecycle
+management should be hardened to reap prior worker instances before
+spawning a replacement, or to have each process stamp/check an
+"owner" identity before writing to the shared status row — not fixed
+in this monitoring/verification checkpoint, out of its own scope.
+
 ### `LIVE-PAPER-1` — two earlier halted attempts, `2026-09-08`
 
 `[F]` Two live paper session attempts were made the same day —

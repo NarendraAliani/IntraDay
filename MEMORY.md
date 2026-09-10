@@ -1556,6 +1556,57 @@ re-deriving them. Not a full transcript; no invented detail.
   zero new failures. Posted status updates during the ~12-minute test
   run per this checkpoint's own new instruction not to go silent on
   long steps. See `CHECKPOINT_89_SUMMARY.md` for the full trace.
+- **`LIVE-PAPER-2` (2026-09-10)**: second live paper session, run
+  specifically to verify `[[CHECKPOINT_80]]`'s two fixes hold live.
+  Pre-flight/Part 1 identical discipline to `[[LIVE-PAPER-1]]`
+  (worker-only launch, readiness confirmed, stopped for the operator
+  to drive the UI). **Caught a real discrepancy by re-verifying rather
+  than trusting the operator's own "started" message** (twice): first
+  time, the worker had crashed at the exact moment START was pressed
+  (`reconnect_attempts_exhausted`, same `close_code=1006` pattern as
+  every prior live checkpoint) - `start_live_paper_session()` correctly
+  REFUSED (`NOT_READY`) since `readiness.can_start` was `False` - not a
+  bug, recovered via the same supervisor pattern
+  (`--max-restarts 200` from the start this time, avoiding
+  `[[LIVE-PAPER-1]]`'s own first-run exhaustion). Second time,
+  `ScannerConfiguration` genuinely hadn't been touched all day
+  (`session_stopped_at` still stamped from `[[LIVE-PAPER-1]]`'s own
+  prior-day close) - asked the operator to check their own browser;
+  third attempt succeeded for real. Monitoring: 6 pulse checks, all
+  healthy, `drift=False`, `signals_found=0` throughout - but a
+  **self-corrected mistake**: the crash-count check used during
+  monitoring (`grep -c "crash_detected"`) always returned 0 because
+  that log format is only written at the supervisor's own FINAL
+  `_report()` call, not incrementally - the real count, checked after
+  the fact, was 26 restarts during Part 2 alone (27 total for the
+  whole session), none caught live. **The actual CHECKPOINT_80 fix
+  verification, and a genuine NEW bug found underneath it**: at market
+  close, `derive_live_paper_session_state()` initially returned
+  `STOPPING` even though the tracked worker had cleanly exited and
+  correctly written `STOPPED`. Root-caused directly (raw SQL bypassing
+  ORM caching, `tasklist`/`wmic` process inspection): **two orphaned
+  worker child processes from earlier restart cycles, never reaped by
+  the supervisor's own single-`child_process` tracking, were still
+  alive and periodically overwriting the row back to stale `RUNNING`**
+  - a genuinely new finding, distinct from anything `[[CHECKPOINT_80]]`
+  diagnosed (that fix's own one-clause `STOPPED` short-circuit was
+  correct all along; the bug was one layer below it, feeding it wrong
+  data). Recovered using only the already-established safe mechanism
+  (re-issuing the same real stop-request row `[[LIVE-PAPER-1]]`
+  precedent used) - one orphan exited within seconds, and
+  `derive_live_paper_session_state()` immediately, then stably across
+  3 independent polls, returned `STOPPED`. Cleaned up the two remaining
+  already-idle, already-finished processes via `taskkill /F` - safe
+  since (unlike `[[LIVE-PAPER-1]]`'s own blocked pre-emptive kill of a
+  still-needed supervisor) these had already done their job and gone
+  idle; the permission system allowed it. Zero signals/orders/fills for
+  the whole session (2 `PaperOrderRecord` rows exist but are dated
+  08-15/08-18, unrelated, both `REJECTED`) - a fully successful
+  validation per the documented procedure, same as `[[LIVE-PAPER-1]]`.
+  `real_trading_state=DISABLED`/`PaperBroker` exclusivity unaffected
+  throughout, including by the orphaned-process bug (data-ingestion-
+  only, never touched order logic). See `LIVE_PAPER-2_SUMMARY.md` for
+  the full trace.
 - **`LIVE-2-FINALIZE`**: an end-of-day close-out checkpoint for
   `LIVE-2` was requested with the premise that market had just closed
   on the same day as the `LIVE-2` run — but this conversation's
