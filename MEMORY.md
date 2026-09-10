@@ -1873,3 +1873,30 @@ re-deriving them. Not a full transcript; no invented detail.
   flaky failure confirmed NOT a regression via isolated + full clean
   reruns), typecheck clean. No backend changes. See
   `CHECKPOINT_FRONTEND-6_DENSITY-AUDIT_SUMMARY.md`.
+- **`CHECKPOINT-FRONTEND-7`**: Part 1 filled FRONTEND-6's own honest
+  gap - built real fixture shapes (reused from each page's own
+  `.test.tsx`) and screenshotted all 3 Live-* pages. Found and fixed
+  one genuine density gap: `LiveScannerConsole.tsx`'s 3 independent
+  fieldsets (Scan Universe/Strategies/Notification Channels) wrapped
+  in `.page-summary-grid` (FRONTEND-6's own reusable class, reused
+  directly). `LivePaperOperationsConsole.tsx` and
+  `LiveMarketDataMonitor.tsx` confirmed ALREADY fully compliant by
+  actual screenshot (not just source grep) - no fix needed. Part 2
+  investigated "can a saved watchlist drive paper trading via
+  strategies" and confirmed **the feature already works end-to-end,
+  no fix needed** - traced `resolve_scanner_universe()`'s existing
+  WATCHLIST branch (reuses the real `WatchlistRepository` from
+  CHECKPOINT-WATCHLIST-A/B) through to `run_market_data_worker.py`'s
+  real per-strategy loop (`_QuoteSink.aggregate_now()`) and
+  `promote_bars_and_trigger_signals()`. Multi-strategy fan-out and
+  schema-default configuration are both universe-mode-agnostic
+  already - no watchlist-specific gap anywhere. New end-to-end test
+  (`test_checkpoint_frontend_7_watchlist_scanning.py`, 2 tests, real
+  DB, real strategy.evaluate() chain, not faked) proves this
+  concretely: saves a real watchlist, selects 2 of 3 strategies, runs
+  one scan cycle, confirms both strategies evaluated against exactly
+  the watchlist's 2 instruments and the 3rd unselected strategy is
+  never touched. No production backend code changed. Full suites:
+  frontend 388/388, backend 5 pre-existing/unrelated failures /
+  3414 passed (up from 3412 - the 2 new tests). See
+  `CHECKPOINT_FRONTEND-7_SUMMARY.md`.

@@ -574,6 +574,13 @@ export function LiveScannerConsole(): JSX.Element {
             </select>
           </div>
 
+          {/* CHECKPOINT-FRONTEND-7: three independent, orthogonal
+              configuration axes (universe/strategies/notifications) -
+              none reads another's value - grouped in the same
+              .page-summary-grid pattern FRONTEND-6 established, per
+              FRONTEND_DESIGN_SYSTEM.md's own density rule. Timeframe
+              stays above the grid (a single field, not a fieldset). */}
+          <div className="page-summary-grid">
           <fieldset className="signal-monitor__field live-scanner__fieldset">
             <legend className="signal-monitor__field-label">Scan Universe</legend>
             <p className="signal-monitor__hint">
@@ -702,6 +709,7 @@ export function LiveScannerConsole(): JSX.Element {
                 </label>
               ))}
           </fieldset>
+          </div>
         </div>
 
         <section
