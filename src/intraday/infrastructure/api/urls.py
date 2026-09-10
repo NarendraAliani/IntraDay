@@ -33,6 +33,7 @@ from intraday.infrastructure.api import (
     strategy_views,
     system_readiness_view,
     universe_views,
+    watchlist_market_data_views,
     watchlist_views,
     worker_runtime_status_views,
 )
@@ -336,6 +337,12 @@ urlpatterns = [
     path("watchlists/<str:name>/", watchlist_views.get_watchlist, name="watchlists-detail"),
     path(
         "watchlists/<str:name>/delete/", watchlist_views.delete_watchlist, name="watchlists-delete"
+    ),
+    # --- CHECKPOINT-WATCHLIST-A: read-only watchlist market-data view ------
+    path(
+        "watchlists/<str:name>/market-data/",
+        watchlist_market_data_views.watchlist_market_data_view,
+        name="watchlists-market-data",
     ),
     # --- Checkpoint 27: strategy research monitor --------------------------
     path(

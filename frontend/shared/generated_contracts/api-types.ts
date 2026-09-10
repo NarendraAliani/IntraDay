@@ -1625,6 +1625,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/config/watchlists/{name}/market-data/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Read-only. Never fetches, never persists - reports only what
+         *     `HistoricalBar`/`AggregatedBarObservation`/`LiveQuoteObservation`
+         *     already have for each instrument in the named watchlist.
+         */
+        get: operations["api_v1_config_watchlists_market_data_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/config/watchlists/save/": {
         parameters: {
             query?: never;
@@ -2093,6 +2114,8 @@ export interface components {
          * @enum {string}
          */
         BarResponseStatusEnum: "FORMING" | "CLOSED";
+        /** @enum {unknown} */
+        BlankEnum: "";
         /**
          * @description Checkpoint 64.16 §8: the per-channel counterpart to the existing
          *     combined `communication_sent`/`_failed`/`_skipped` fields below -
@@ -2424,6 +2447,12 @@ export interface components {
             version: string;
             description: string;
         };
+        /**
+         * @description * `OK` - OK
+         *     * `NOT_GATE_VERIFIED` - NOT_GATE_VERIFIED
+         * @enum {string}
+         */
+        GateStatusEnum: "OK" | "NOT_GATE_VERIFIED";
         HealthzResponse: {
             status: components["schemas"]["HealthzResponseStatusEnum"];
         };
@@ -2895,6 +2924,13 @@ export interface components {
          * @enum {string}
          */
         PositionSizingModeEnum: "FIXED_QUANTITY" | "PERCENT_OF_EQUITY";
+        /**
+         * @description * `LIVE` - LIVE
+         *     * `HISTORICAL` - HISTORICAL
+         *     * `` -
+         * @enum {string}
+         */
+        PriceSourceEnum: "LIVE" | "HISTORICAL";
         /**
          * @description * `DATABASE` - DATABASE
          *     * `ENVIRONMENT` - ENVIRONMENT
@@ -3511,6 +3547,38 @@ export interface components {
         };
         VersionResponse: {
             version: string;
+        };
+        /**
+         * @description * `SESSION_TO_DATE` - SESSION_TO_DATE
+         *     * `HISTORICAL_DAY` - HISTORICAL_DAY
+         *     * `` -
+         * @enum {string}
+         */
+        VolumeBasisEnum: "SESSION_TO_DATE" | "HISTORICAL_DAY";
+        WatchlistInstrumentMarketData: {
+            instrument_id: string;
+            gate_status: components["schemas"]["GateStatusEnum"];
+            /** @default  */
+            coverage_detail: string;
+            /** Format: decimal */
+            price?: string | null;
+            /** @default  */
+            price_source: components["schemas"]["PriceSourceEnum"] | components["schemas"]["BlankEnum"];
+            /** Format: decimal */
+            change_percent?: string | null;
+            /** Format: decimal */
+            volume?: string | null;
+            /** @default  */
+            volume_basis: components["schemas"]["VolumeBasisEnum"] | components["schemas"]["BlankEnum"];
+            sparkline?: string[];
+            as_of: string;
+            /** @default false */
+            is_stale: boolean;
+        };
+        WatchlistMarketDataResponse: {
+            watchlist_name: string;
+            mode: string;
+            results: components["schemas"]["WatchlistInstrumentMarketData"][];
         };
         WatchlistResponse: {
             name: string;
@@ -5676,6 +5744,35 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    api_v1_config_watchlists_market_data_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WatchlistMarketDataResponse"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
             };
         };
     };

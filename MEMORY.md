@@ -1782,3 +1782,22 @@ re-deriving them. Not a full transcript; no invented detail.
   frontend checkpoint seen in this conversation. Not marked pending
   here since no open frontend item was stated; noted only for
   completeness.
+- **`CHECKPOINT-WATCHLIST-A`**: Phase A of `WATCHLIST_REDESIGN_ROADMAP.md`
+  (itself preceded by `RECON-WATCHLIST-REDESIGN`, uncommitted). Built
+  the read-only `GET /watchlists/<name>/market-data/` endpoint - a
+  thin view (no new service, per the roadmap's own reasoning)
+  composing `DjangoHistoricalBarRepository`/`DjangoAggregatedBarRepository`/
+  `ResearchDataGateService`/`LiveMarketDataService`/
+  `DjangoWorkerRuntimeStatusRepository` directly. Real finding:
+  `Timeframe.DAY` is unusable with the coverage/gate services for a
+  CAS-aware instrument (`expected_continuous_bar_timestamps()` always
+  empty for a 1-day duration) - daily closes are instead derived from
+  the last gate-verified `FIVE_MINUTE` bar of each trading day. Live
+  mode is envelope-level (`WorkerRuntimeStatus.worker_state==RUNNING`,
+  lightweight check, not the full readiness gate) with honest
+  per-instrument fallback to Historical pricing when no live quote
+  exists for that symbol. 8 new tests, real Postgres, all passing;
+  full backend suite unchanged (5 pre-existing, unrelated failures,
+  same set as this session's own pre-flight baseline). OpenAPI schema
+  + `api-types.ts` regenerated. No UI yet - Phase B's own scope. See
+  `CHECKPOINT_WATCHLIST-A_SUMMARY.md`.
