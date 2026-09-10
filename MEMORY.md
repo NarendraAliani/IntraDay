@@ -2003,3 +2003,43 @@ re-deriving them. Not a full transcript; no invented detail.
   unrelated failures (same as every prior checkpoint's baseline); PDF-B
   frontend button unaffected (25/25). See
   `CHECKPOINT_BACKTEST-PDF-C_SUMMARY.md`.
+- **`CHECKPOINT-BACKTEST-PDF-D`**: 5 items. (1) PDF timestamps
+  (Trade Ledger, Generated, date range) were raw UTC - fixed to
+  convert to IST, reusing the SAME `Asia/Kolkata` offset every other
+  presentation boundary in this project already uses. Real, separate,
+  unfixed finding along the way: the ON-SCREEN Trade Ledger
+  (`BacktestingWorkbenchPage.tsx:969-970`) ALSO does not convert to
+  IST (bare `toLocaleString()`, no `timeZone` option) - a pre-existing
+  frontend gap, named honestly, left for the user to prioritize. (2)
+  The old per-instrument divider PAGE (wasted a page for one line) is
+  now a running header BANNER on that instrument's own first content
+  page - page-count math re-verified (9, not 11, for a 2-instrument
+  combined file). (3) Investigated "12 stocks selected, only 2
+  reports" via a REAL dev-DB query of `BacktestRun` rows: all 12 were
+  genuinely attempted (`completed_instruments=12`), 10 failed for
+  real, honest reasons (`INCOMPLETE_COVERAGE` - partial data correctly
+  REJECTED rather than gap-filled; 1 fixture instrument not in the
+  Dhan scrip master) - already correctly surfaced on-screen via a
+  `role="alert"` box (`BacktestingWorkbenchPage.tsx:1353-1372`). No
+  bug, no fix made. (4) Traced "Run Backtest" vs. "Prepare Data &
+  Start Backtest": BOTH use the identical DB-first fetch pipeline -
+  the real difference is scope (1 vs. many) and sync-vs-async, not
+  data handling - rewrote the on-page help text to say so. Grid audit:
+  FRONTEND-8's Backtest Settings fix still intact; found and fixed one
+  real gap - `.historical-run__config`'s fixed `2fr 1fr 1fr` template
+  for only 2 fields left a dead column - changed to
+  `repeat(auto-fit, minmax(200px, 1fr))`. (5) Recon: Configuration
+  Viewer's 3 tabs are genuinely functional (real reads AND real
+  activation writes), but NONE of their "active version" state is
+  consumed anywhere in the live/paper pipeline or backtest engine -
+  `paper_trading_runtime.py:74-82` uses a hard-coded
+  `DEFAULT_RISK_LIMITS`, its own comment naming this as a known gap;
+  every `get_active()` call site across the codebase is only ever
+  called from that same feature's own API views. Added an honest,
+  low-risk, text-only subtitle stating this precisely - no logic
+  change. Tests: 6 new (`test_checkpoint_backtest_pdf_d.py`) + 2
+  page-count updates in PDF-A/-C's own test files (legitimate
+  consequence of Issue 2) = 18/18 across all PDF test files; frontend
+  396/396 + tsc clean + real Playwright screenshots both themes; full
+  backend suite 3432 passed/5 pre-existing unrelated failures (same
+  baseline). See `CHECKPOINT_BACKTEST-PDF-D_SUMMARY.md`.

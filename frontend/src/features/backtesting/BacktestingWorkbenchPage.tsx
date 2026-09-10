@@ -308,12 +308,17 @@ export function BacktestingWorkbenchPage(): JSX.Element {
                   onChange={setSelectedInstrumentIds}
                 />
                 <p className="strategy-config-page__help-text">
-                  What stock(s): pick one, many, or all. "Run Backtest" below runs an
-                  immediate, single-instrument simulation — it requires exactly ONE stock
-                  selected. To backtest 2+ stocks, select them here and use "Prepare Data &amp;
-                  Start Backtest" in the Historical Data Readiness panel further down instead.
-                  "NSE:FIXTURE01" is this project's deterministic synthetic fixture, always
-                  available for testing regardless of live market data.
+                  What stock(s): pick one, many, or all. Both actions below fetch any missing
+                  historical data from the database first, the same way, before scanning — the
+                  real difference is scope and how you watch it run. "Run Backtest" below scans
+                  exactly ONE stock and returns the result immediately, in this same request — use
+                  it for quick, single-stock iteration while tuning parameters. "Prepare Data &amp;
+                  Start Backtest" (Historical Data Readiness panel further down) scans one, many,
+                  or every selected stock as a background job with live progress and a separate
+                  report per stock — use it for 2+ stocks, or for one stock when you'd rather watch
+                  progress than wait on the request. "NSE:FIXTURE01" is this project's
+                  deterministic synthetic fixture, always available for testing regardless of live
+                  market data.
                 </p>
                 {selectedInstrumentIds.length !== 1 && (
                   <p className="strategy-config-page__help-text backtest-results__warning">
@@ -1201,7 +1206,10 @@ function HistoricalBacktestRunPanel(props: HistoricalBacktestRunPanelProps): JSX
         Runs this strategy against a stock universe, sourcing historical bars from the database
         first and only calling the historical data provider for genuinely missing ranges. Signals
         only ever come from bars already persisted in the database — never directly from the
-        provider. Uses the SAME Universe selected in Backtest Settings above.
+        provider. Uses the SAME Universe selected in Backtest Settings above. Unlike "Run
+        Backtest" above (one stock, an immediate result in the same request), this runs as a
+        background job you watch progress on below, and produces its own separate report per
+        stock scanned.
       </p>
 
       {instrumentIds.length === 0 && (

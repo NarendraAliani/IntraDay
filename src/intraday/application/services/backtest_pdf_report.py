@@ -69,17 +69,36 @@
 #   Issue 3 - `?run_id=` mode now includes every scanned instrument's
 #   OWN complete report (Pages 1-4, trade ledger included) in ONE
 #   file, not just a one-line summary row per sibling. Each
-#   instrument's own section starts with a clear divider page ("N of
-#   M") and gets its OWN footer (that instrument's own data-quality/
-#   cost-model facts, never another instrument's) via a dedicated
-#   reportlab `PageTemplate` per instrument, switched with
+#   instrument's own section gets its OWN footer (that instrument's
+#   own data-quality/cost-model facts, never another instrument's) via
+#   a dedicated reportlab `PageTemplate` per instrument, switched with
 #   `NextPageTemplate` - never one shared, potentially-wrong footer
 #   stamped across every instrument's own pages.
+#
+# CHECKPOINT-BACKTEST-PDF-D ADDS:
+#   Issue 1 - every rendered timestamp (Trade Ledger Entry/Exit Time,
+#   the "Generated" line, the Configuration date range) is now
+#   converted to IST (Asia/Kolkata) before rendering - the PDF is a
+#   presentation boundary, and this project's own established
+#   convention (`Bar.timestamp`/every derived backtest datetime is
+#   stored/serialized in UTC; conversion happens only at the
+#   presentation boundary) was being violated: the PDF was rendering
+#   raw UTC. Reuses the SAME Asia/Kolkata offset every other
+#   presentation boundary in this project already uses (see
+#   `_INDIA_STANDARD_TIME` above), not a new convention.
+#
+#   Issue 2 - the old full per-instrument DIVIDER PAGE (operator
+#   confirmed: wasted a whole page for one line of text) is replaced
+#   with a running header BANNER ("Instrument N of M - <symbol>") at
+#   the TOP of that instrument's own first content page - the combined
+#   file stays just as navigable (the banner is still a clear, single-
+#   glance visual break) without the wasted page.
 from __future__ import annotations
 
 import io
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
+from zoneinfo import ZoneInfo
 
 from reportlab.graphics.charts.lineplots import LinePlot
 from reportlab.graphics.shapes import Drawing, String
@@ -98,6 +117,19 @@ from reportlab.platypus import (
     Table,
     TableStyle,
 )
+
+# CHECKPOINT-BACKTEST-PDF-D Issue 1: this project's own established
+# convention - `Bar.timestamp`/every derived backtest timestamp is
+# stored/serialized in UTC; IST conversion happens ONLY at the
+# presentation boundary (see `calendar.py::INDIA_STANDARD_TIME`,
+# `historical_client.py::_INDIA_STANDARD_TIME`, and the frontend's own
+# `LiveMarketDataMonitor.tsx`/`LiveScannerConsole.tsx`
+# `toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })` pattern). The
+# PDF report is a presentation boundary and was found to render raw
+# (UTC) times - fixed here by converting every rendered timestamp to
+# IST before display, the same offset the rest of the project already
+# uses, not a new convention.
+_INDIA_STANDARD_TIME = ZoneInfo("Asia/Kolkata")
 
 _PAGE_SIZE = A4
 _MARGIN = 1.8 * cm
@@ -124,6 +156,13 @@ _TABLE_HEADER = ParagraphStyle(
 _FOOTER_STYLE = ParagraphStyle(
     "Footer", parent=_styles["BodyText"], fontSize=6.5, leading=8.5,
     textColor=colors.HexColor("#5b6572"),
+)
+# CHECKPOINT-BACKTEST-PDF-D Issue 2: a running header BANNER at the top
+# of each instrument's own first content page, replacing the old
+# full divider PAGE the operator confirmed wasted a page for one line.
+_RUNNING_HEADER = ParagraphStyle(
+    "RunningHeader", parent=_styles["BodyText"], fontSize=10, leading=13,
+    fontName="Helvetica-Bold", textColor=colors.white,
 )
 
 
@@ -158,21 +197,49 @@ def _ratio(value: object) -> str:
         return "—"
 
 
-def _split_timestamp(raw: object) -> tuple[str, str]:
-    """(date, time) from an ISO timestamp string - `Bar`/trade
-    timestamps are always ISO 8601 (`to_json_dict()`'s own
-    `.isoformat()` calls) - never a new time-parsing convention, just
-    splitting the SAME string the frontend already re-parses with
-    `new Date(...).toLocaleString()`. Falls back to the raw string
-    honestly if it is ever not parseable, never a fabricated date."""
+def _parse_ist(raw: object) -> datetime | None:
+    """Parses an ISO 8601 timestamp string (`to_json_dict()`'s own
+    `.isoformat()` calls - always UTC per this project's own
+    established convention, see this module's own header comment) and
+    converts it to IST. Returns `None` honestly if the value is
+    missing or unparseable - never a fabricated timestamp."""
     if not raw:
-        return "—", "—"
+        return None
     text = str(raw)
     try:
         parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
     except ValueError:
-        return text, ""
-    return parsed.date().isoformat(), parsed.strftime("%H:%M:%S")
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(_INDIA_STANDARD_TIME)
+
+
+def _split_timestamp(raw: object) -> tuple[str, str]:
+    """(date, time) from an ISO timestamp string, converted to IST
+    (CHECKPOINT-BACKTEST-PDF-D Issue 1 - the PDF is a presentation
+    boundary and must convert, same as `_format_ist_datetime()` below
+    and the frontend's own `Asia/Kolkata` convention). Falls back to
+    the raw string honestly if it is ever not parseable, never a
+    fabricated date."""
+    if not raw:
+        return "—", "—"
+    ist = _parse_ist(raw)
+    if ist is None:
+        return str(raw), ""
+    return ist.date().isoformat(), ist.strftime("%H:%M:%S")
+
+
+def _format_ist_datetime(raw: object) -> str:
+    """A single-string IST timestamp (date + time), used for the
+    report's "Generated" line and the configuration date range -
+    CHECKPOINT-BACKTEST-PDF-D Issue 1."""
+    if not raw:
+        return "—"
+    ist = _parse_ist(raw)
+    if ist is None:
+        return str(raw)
+    return ist.strftime("%Y-%m-%d %H:%M:%S") + " IST"
 
 
 def _footer_lines(result: dict[str, object]) -> list[str]:
@@ -408,13 +475,21 @@ def _trade_ledger_table(rows: list[list[Paragraph]]) -> Table:
     return table
 
 
-def _build_instrument_story(result: dict[str, object]) -> list[object]:
+def _build_instrument_story(
+    result: dict[str, object], *, running_header: tuple[int, int] | None = None
+) -> list[object]:
     """Builds ONE instrument's own complete report content (Pages 1-3
     + the trade ledger) - the exact same content every single-
     instrument PDF already had, extracted into its own function so
     CHECKPOINT-BACKTEST-PDF-C Issue 3's multi-instrument mode can call
     it once per scanned instrument, never a duplicated/parallel
-    per-instrument rendering path."""
+    per-instrument rendering path.
+
+    `running_header` (CHECKPOINT-BACKTEST-PDF-D Issue 2): optional
+    `(index, total)` - when given, a "Instrument N of M" running
+    header banner is rendered at the TOP of this instrument's own
+    first content page (in place of the old full divider PAGE, which
+    the operator confirmed wasted a page for a single line of text)."""
     config = result.get("configuration", {}) or {}
     metrics = result.get("metrics", {}) or {}
     validation = result.get("validation", {}) or {}
@@ -422,6 +497,25 @@ def _build_instrument_story(result: dict[str, object]) -> list[object]:
     trades = result.get("trades", []) or []
 
     story: list[object] = []
+
+    if running_header is not None:
+        index, total = running_header
+        instrument_id = str(config.get("instrument_id", "—"))
+        story.append(
+            Table(
+                [[Paragraph(f"Instrument {index} of {total} &mdash; {instrument_id}", _RUNNING_HEADER)]],
+                colWidths=[_PAGE_SIZE[0] - 2 * _MARGIN],
+                style=TableStyle(
+                    [
+                        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#1c2530")),
+                        ("LEFTPADDING", (0, 0), (-1, -1), 8),
+                        ("TOPPADDING", (0, 0), (-1, -1), 5),
+                        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                    ]
+                ),
+            )
+        )
+        story.append(Spacer(1, 0.3 * cm))
 
     # --- Page: Summary ------------------------------------------------
     story.append(Paragraph("Backtest Report", _TITLE))
@@ -438,7 +532,7 @@ def _build_instrument_story(result: dict[str, object]) -> list[object]:
     story.append(
         Paragraph(
             f"Backtest ID: {result.get('backtest_id', '—')} &nbsp;|&nbsp; "
-            f"Generated: {result.get('generated_at', '—')}",
+            f"Generated: {_format_ist_datetime(result.get('generated_at'))}",
             _SMALL,
         )
     )
@@ -448,7 +542,11 @@ def _build_instrument_story(result: dict[str, object]) -> list[object]:
         _label_value_table(
             [
                 ["Timeframe", str(config.get("timeframe", "—"))],
-                ["Date range", f"{config.get('start', '—')} to {config.get('end', '—')}"],
+                [
+                    "Date range",
+                    f"{_format_ist_datetime(config.get('start'))} to "
+                    f"{_format_ist_datetime(config.get('end'))}",
+                ],
                 ["Position sizing", str(config.get("position_sizing_mode", "—"))],
                 ["Position size value", str(config.get("position_size_value", "—"))],
                 ["Initial capital", _money(config.get("initial_capital"))],
@@ -608,7 +706,8 @@ def _build_instrument_story(result: dict[str, object]) -> list[object]:
             "Every field below is copied directly from this backtest's own real trade "
             "records, except \"Total\" (= Qty &times; Entry Rate - this trade's own position "
             "value at entry) and \"P&amp;L %\" (= P&amp;L &divide; Total &times; 100) - both "
-            "simple, stated arithmetic over already-computed fields, never a new computation.",
+            "simple, stated arithmetic over already-computed fields, never a new computation. "
+            "Entry/Exit Time and the Date column are shown in IST (Asia/Kolkata).",
             _SMALL,
         )
     )
@@ -627,19 +726,6 @@ def _build_instrument_story(result: dict[str, object]) -> list[object]:
                 story.append(PageBreak())
 
     return story
-
-
-def _instrument_divider(*, index: int, total: int, result: dict[str, object]) -> list[object]:
-    """CHECKPOINT-BACKTEST-PDF-C Issue 3: a clear per-instrument
-    section divider - so a combined multi-instrument file is
-    navigable, never one undifferentiated page stream."""
-    config = result.get("configuration", {}) or {}
-    return [
-        Spacer(1, 6 * cm),
-        Paragraph(f"Instrument {index} of {total}", _SMALL),
-        Paragraph(str(config.get("instrument_id", "—")), _TITLE),
-        PageBreak(),
-    ]
 
 
 def build_backtest_report_pdf(
@@ -736,19 +822,21 @@ def build_backtest_report_pdf(
         # `NextPageTemplate` only takes effect on the NEXT page break
         # AFTER it is processed - it must therefore be appended BEFORE
         # this instrument's own leading `PageBreak()` (i > 0), not
-        # after, or that leading break (and the divider content drawn
-        # on the page it creates) would still render with the
-        # PREVIOUS instrument's template/footer. A real off-by-one
-        # bug found and fixed here directly, confirmed via a real
-        # generated PDF's own per-page footer text before this fix.
+        # after, or that leading break (and the content drawn on the
+        # page it creates) would still render with the PREVIOUS
+        # instrument's template/footer. A real off-by-one bug found
+        # and fixed here directly (CHECKPOINT-BACKTEST-PDF-C), confirmed
+        # via a real generated PDF's own per-page footer text before
+        # this fix.
         story.append(NextPageTemplate(f"instrument-{i}"))
         if i > 0:
             story.append(PageBreak())
-        if is_multi:
-            story.extend(
-                _instrument_divider(index=i + 1, total=len(all_results), result=one_result)
-            )
-        story.extend(_build_instrument_story(one_result))
+        # CHECKPOINT-BACKTEST-PDF-D Issue 2: no more separate divider
+        # PAGE - a running header banner is rendered at the top of
+        # this instrument's own first content page instead (see
+        # `_build_instrument_story()`'s own `running_header` param).
+        running_header = (i + 1, len(all_results)) if is_multi else None
+        story.extend(_build_instrument_story(one_result, running_header=running_header))
 
     doc.build(story)
     return buffer.getvalue()

@@ -223,11 +223,14 @@ def test_pdf_report_with_run_id_adds_results_by_instrument_page_for_a_multi_inst
     assert pdf_response.status_code == 200
     text, page_count = _extract_text(pdf_response.content)
     # CHECKPOINT-BACKTEST-PDF-C Issue 3: the combined file now carries
-    # an index page PLUS every instrument's own complete report (5
-    # pages each here: divider, Summary, Signal/Trade, Ratio, Trade
-    # Ledger - each real result has exactly 1 trade) - 1 + 5 + 5 = 11 -
-    # never just a one-line summary row per sibling.
-    assert page_count == 11
+    # an index page PLUS every instrument's own complete report (4
+    # pages each here: Summary, Signal/Trade, Ratio, Trade Ledger -
+    # each real result has exactly 1 trade) - never just a one-line
+    # summary row per sibling. CHECKPOINT-BACKTEST-PDF-D Issue 2:
+    # the old per-instrument divider PAGE is gone (a running header
+    # banner replaces it, at the top of each instrument's own first
+    # content page) - 1 + 4 + 4 = 9, not 11.
+    assert page_count == 9
     assert "Results by Instrument" in text
     assert "NSE:FIXTURE01" in text
     assert text.count("Trade Ledger") == 2, "every scanned instrument gets its own full report"

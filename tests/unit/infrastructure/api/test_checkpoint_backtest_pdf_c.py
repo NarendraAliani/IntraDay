@@ -271,37 +271,40 @@ def test_multi_instrument_report_includes_every_instruments_complete_report() ->
     for symbol in ["NSE:FIXTURE01", "NSE:FIXTUREB", "NSE:FIXTUREC"]:
         assert symbol in text
 
-    # 1 index page + instrument1 (divider+summary+signal+ratio+1
-    # ledger page, 5 trades) + instrument2 (same shape, 3 trades) +
-    # instrument3 (divider+summary+signal+ratio+2 ledger pages, 18
-    # trades) = 1 + 5 + 5 + 6 = 17.
-    assert page_count == 17
+    # CHECKPOINT-BACKTEST-PDF-D Issue 2: no more separate divider page
+    # (a running header banner replaces it on each instrument's own
+    # first content page). 1 index page + instrument1
+    # (summary+signal+ratio+1 ledger page, 5 trades) + instrument2
+    # (same shape, 3 trades) + instrument3 (summary+signal+ratio+2
+    # ledger pages, 18 trades) = 1 + 4 + 4 + 5 = 14.
+    assert page_count == 14
 
 
 def test_multi_instrument_report_each_instruments_pages_carry_its_own_correct_footer() -> None:
-    """Each instrument's own pages (including its own divider page)
-    must show THAT instrument's own data-quality/cost-model facts -
-    never another instrument's, which a single shared footer across
-    the whole combined file would have silently gotten wrong."""
+    """Each instrument's own pages (including its own running-header
+    page - CHECKPOINT-BACKTEST-PDF-D Issue 2) must show THAT
+    instrument's own data-quality/cost-model facts - never another
+    instrument's, which a single shared footer across the whole
+    combined file would have silently gotten wrong."""
     primary = _result("NSE:FIXTURE01", n_trades=2, long_disclaimers=True)
     sibling = _result("NSE:FIXTUREB", n_trades=2, long_disclaimers=False)
 
     pdf_bytes = build_backtest_report_pdf(primary, sibling_results=[sibling])
     page_texts = _extract_page_texts(pdf_bytes)
 
-    divider_2_page = next(p for p in page_texts if "Instrument 2 of 2" in p)
-    assert "No slippage assumed." in divider_2_page
-    assert "MODEL ASSUMPTION, not a" not in divider_2_page
+    running_header_2_page = next(p for p in page_texts if "Instrument 2 of 2" in p)
+    assert "No slippage assumed." in running_header_2_page
+    assert "MODEL ASSUMPTION, not a" not in running_header_2_page
 
-    divider_1_page = next(p for p in page_texts if "Instrument 1 of 2" in p)
-    assert "MODEL ASSUMPTION, not a" in divider_1_page
+    running_header_1_page = next(p for p in page_texts if "Instrument 1 of 2" in p)
+    assert "MODEL ASSUMPTION, not a" in running_header_1_page
 
 
-def test_single_instrument_report_unchanged_structurally_no_index_or_divider() -> None:
+def test_single_instrument_report_unchanged_structurally_no_index_or_running_header() -> None:
     """CHECKPOINT-BACKTEST-PDF-C's own explicit requirement: the
     single-instrument case (no siblings) stays exactly as it was
-    structurally - no "Results by Instrument" index page, no divider
-    page - only the new Issue 1 trade ledger content is added."""
+    structurally - no "Results by Instrument" index page, no running
+    header - only the new Issue 1 trade ledger content is added."""
     result = _result(n_trades=1)
     pdf_bytes = build_backtest_report_pdf(result)
     text, _ = _extract_text(pdf_bytes)

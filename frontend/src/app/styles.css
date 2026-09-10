@@ -1884,16 +1884,17 @@ dd {
   border-top: 1px solid var(--color-border);
 }
 
+/* CHECKPOINT-BACKTEST-PDF-D Issue 4: this panel only ever renders TWO
+   fields (Start Date, End Date) - the old fixed 3-column template
+   (2fr 1fr 1fr) left a dead, empty third column at every viewport
+   width instead of the responsive `repeat(auto-fit, minmax(...))`
+   idiom every other grid on this project uses (`.parameter-grid`/
+   `.page-summary-grid`, FRONTEND_DESIGN_SYSTEM.md's own "Density"
+   section) - fixed to match. */
 .historical-run__config {
   display: grid;
-  grid-template-columns: 2fr 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: var(--space-4);
-}
-
-@media (max-width: 640px) {
-  .historical-run__config {
-    grid-template-columns: 1fr;
-  }
 }
 
 .historical-run__actions {

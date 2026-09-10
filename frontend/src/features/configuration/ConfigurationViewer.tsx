@@ -34,7 +34,14 @@ export function ConfigurationViewer(): JSX.Element {
     <div className="configuration-viewer">
       <h1>Configuration Viewer</h1>
       <p className="configuration-viewer__subtitle">
-        Read-only view of persisted risk, universe, and strategy configuration versions.
+        Audit trail and version-activation tool for this project's persisted risk, universe, and
+        strategy configuration records — activating a version here updates its own audit history
+        genuinely (a real database write, not a preview), but does NOT change what the live/paper
+        trading engine or a backtest run actually uses: paper trading runs on its own fixed,
+        hard-coded risk limits, and a backtest/live scan's strategy version and instrument
+        universe are chosen directly on the Strategy Backtesting / Scanner pages, not read from
+        here. Use this page to review and record configuration history, not to control a running
+        session.
       </p>
 
       <div role="tablist" aria-label="Configuration sections" onKeyDown={handleKeyDown}>
