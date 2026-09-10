@@ -1442,6 +1442,14 @@ dd {
   color: var(--color-error-border);
 }
 
+/* CHECKPOINT-BACKTEST-PDF-B: the "Download PDF Report" control -
+   spaced consistently with the other result sub-sections, its own
+   error state (a failed download) uses the shared ErrorState
+   component directly, no bespoke styling needed for it. */
+.backtest-results__pdf-export {
+  margin: var(--space-3) 0 var(--space-4);
+}
+
 .backtest-results {
   display: flex;
   flex-direction: column;

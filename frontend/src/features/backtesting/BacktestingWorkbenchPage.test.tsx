@@ -936,4 +936,197 @@ describe("BacktestingWorkbenchPage", () => {
     await waitFor(() => expect(screen.getByText("ema_crossover-1")).toBeInTheDocument());
     expect(screen.getAllByText("Net P&L").length).toBeGreaterThan(0);
   });
+
+  describe("CHECKPOINT-BACKTEST-PDF-B: Download PDF Report", () => {
+    function pdfBlobResponse(): Response {
+      return new Response(new Blob([new Uint8Array([1, 2, 3])], { type: "application/pdf" }), {
+        status: 200,
+        headers: { "Content-Type": "application/pdf" },
+      });
+    }
+
+    it("shows the Download PDF Report button once a single-instrument result exists, and requests it with no run_id", async () => {
+      const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.includes("/strategy-engine/fields/")) return jsonResponse(FIELDS);
+        if (url.includes("/strategy-engine/strategies/ema_crossover/schema/")) return jsonResponse(SCHEMA);
+        if (url.endsWith("/strategy-engine/strategies/")) return jsonResponse(STRATEGIES);
+        if (url.includes("/backtesting/run/")) return jsonResponse(BACKTEST_RESULT);
+        if (url.includes("/backtesting/results/abc123/report/")) return pdfBlobResponse();
+        return jsonResponse({ error_code: "not_found", message: "no route" }, 404);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      URL.createObjectURL = vi.fn(() => "blob:mock");
+      URL.revokeObjectURL = vi.fn();
+
+      renderWithAuth(<BacktestingWorkbenchPage />);
+      await waitFor(() => expect(screen.getByText("EMA Crossover")).toBeInTheDocument());
+      fireEvent.click(screen.getByRole("button", { name: "Configure" }));
+      await waitFor(() => expect(screen.getByLabelText(/Fast EMA Lookback/)).toBeInTheDocument());
+      fireEvent.click(screen.getByRole("button", { name: "Run Backtest" }));
+      await waitFor(() => expect(screen.getByText("Results")).toBeInTheDocument());
+
+      const button = screen.getByRole("button", { name: "Download PDF Report" });
+      fireEvent.click(button);
+
+      await waitFor(() =>
+        expect(fetchMock).toHaveBeenCalledWith(
+          expect.stringContaining("/backtesting/results/abc123/report/"),
+          expect.anything(),
+        ),
+      );
+      const reportCall = fetchMock.mock.calls.find(([reqUrl]) =>
+        String(reqUrl).includes("/report/"),
+      );
+      expect(reportCall?.[0]).not.toEqual(expect.stringContaining("run_id"));
+      await waitFor(() => expect(screen.getByRole("button", { name: "Download PDF Report" })).not.toBeDisabled());
+    });
+
+    it("shows a 'Generating…' loading state while the PDF request is in flight", async () => {
+      let resolveReport: () => void = () => {};
+      const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.includes("/strategy-engine/fields/")) return jsonResponse(FIELDS);
+        if (url.includes("/strategy-engine/strategies/ema_crossover/schema/")) return jsonResponse(SCHEMA);
+        if (url.endsWith("/strategy-engine/strategies/")) return jsonResponse(STRATEGIES);
+        if (url.includes("/backtesting/run/")) return jsonResponse(BACKTEST_RESULT);
+        if (url.includes("/backtesting/results/abc123/report/")) {
+          await new Promise<void>((resolve) => {
+            resolveReport = resolve;
+          });
+          return pdfBlobResponse();
+        }
+        return jsonResponse({ error_code: "not_found", message: "no route" }, 404);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      URL.createObjectURL = vi.fn(() => "blob:mock");
+      URL.revokeObjectURL = vi.fn();
+
+      renderWithAuth(<BacktestingWorkbenchPage />);
+      await waitFor(() => expect(screen.getByText("EMA Crossover")).toBeInTheDocument());
+      fireEvent.click(screen.getByRole("button", { name: "Configure" }));
+      await waitFor(() => expect(screen.getByLabelText(/Fast EMA Lookback/)).toBeInTheDocument());
+      fireEvent.click(screen.getByRole("button", { name: "Run Backtest" }));
+      await waitFor(() => expect(screen.getByText("Results")).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole("button", { name: "Download PDF Report" }));
+
+      await waitFor(() => expect(screen.getByRole("button", { name: "Generating…" })).toBeDisabled());
+      resolveReport();
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Download PDF Report" })).not.toBeDisabled(),
+      );
+    });
+
+    it("shows an honest error message when the PDF request fails - never a silent failure", async () => {
+      const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.includes("/strategy-engine/fields/")) return jsonResponse(FIELDS);
+        if (url.includes("/strategy-engine/strategies/ema_crossover/schema/")) return jsonResponse(SCHEMA);
+        if (url.endsWith("/strategy-engine/strategies/")) return jsonResponse(STRATEGIES);
+        if (url.includes("/backtesting/run/")) return jsonResponse(BACKTEST_RESULT);
+        if (url.includes("/backtesting/results/abc123/report/")) {
+          return jsonResponse({ error_code: "not_found", message: "no backtest result found" }, 404);
+        }
+        return jsonResponse({ error_code: "not_found", message: "no route" }, 404);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      renderWithAuth(<BacktestingWorkbenchPage />);
+      await waitFor(() => expect(screen.getByText("EMA Crossover")).toBeInTheDocument());
+      fireEvent.click(screen.getByRole("button", { name: "Configure" }));
+      await waitFor(() => expect(screen.getByLabelText(/Fast EMA Lookback/)).toBeInTheDocument());
+      fireEvent.click(screen.getByRole("button", { name: "Run Backtest" }));
+      await waitFor(() => expect(screen.getByText("Results")).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole("button", { name: "Download PDF Report" }));
+
+      await waitFor(() => expect(screen.getByText("no backtest result found")).toBeInTheDocument());
+      expect(screen.getByRole("button", { name: "Download PDF Report" })).not.toBeDisabled();
+    });
+
+    it("includes ?run_id= when downloading a multi-instrument historical run's per-instrument result", async () => {
+      const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : input.toString();
+        const method = init?.method ?? "GET";
+        if (url.includes("/strategy-engine/fields/")) return jsonResponse(FIELDS);
+        if (url.includes("/strategy-engine/strategies/ema_crossover/schema/")) return jsonResponse(SCHEMA);
+        if (url.endsWith("/strategy-engine/strategies/")) return jsonResponse(STRATEGIES);
+        if (url.includes("/market-data/quotes/")) {
+          return jsonResponse([
+            {
+              symbol: "RELIANCE",
+              exchange: "NSE",
+              last_price: "1234.56",
+              source_timestamp: "2026-08-14T06:00:00Z",
+              freshness_age_seconds: 5,
+              is_stale: false,
+            },
+          ]);
+        }
+        if (url.includes("/market-data/instruments/")) {
+          return jsonResponse({ exchange: "NSE", instruments: [], data_source: "UNAVAILABLE" });
+        }
+        if (url.includes("/backtesting/results/abc123/report/")) return pdfBlobResponse();
+        if (url.includes("/backtesting/results/abc123/")) return jsonResponse(BACKTEST_RESULT);
+        if (method === "POST" && url.endsWith("/backtesting/historical-runs/")) {
+          return jsonResponse({ run_id: "run-1" });
+        }
+        if (url.includes("/progress/")) {
+          return jsonResponse({
+            run_id: "run-1",
+            status: "COMPLETED",
+            phase: "COMPLETED",
+            progress_percent: 100,
+            current_instrument: "NSE:RELIANCE",
+            current_strategy: "ema_crossover",
+            message: "done",
+            total_instruments: 1,
+            completed_instruments: 1,
+            total_bars: 10,
+            scanned_bars: 10,
+            signals_generated: 1,
+            cache_hits: 0,
+            cache_misses: 10,
+            api_requests: 1,
+            failed_instruments: [],
+            result_backtest_ids: { "NSE:RELIANCE": "abc123" },
+            error_message: "",
+            created_at: "2026-08-17T06:00:00Z",
+            started_at: "2026-08-17T06:00:00Z",
+            completed_at: "2026-08-17T06:01:00Z",
+            elapsed_seconds: 1,
+            eta_seconds: null,
+          });
+        }
+        return jsonResponse({ error_code: "not_found", message: "no route" }, 404);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      URL.createObjectURL = vi.fn(() => "blob:mock");
+      URL.revokeObjectURL = vi.fn();
+
+      renderWithAuth(<BacktestingWorkbenchPage />);
+      await waitFor(() => expect(screen.getByText("EMA Crossover")).toBeInTheDocument());
+      fireEvent.click(screen.getByRole("button", { name: "Configure" }));
+      await waitFor(() => expect(screen.getByLabelText(/Fast EMA Lookback/)).toBeInTheDocument());
+      await waitFor(() => expect(screen.getAllByText("RELIANCE").length).toBeGreaterThan(0));
+      fireEvent.click(screen.getAllByRole("checkbox", { name: "RELIANCE" })[0]);
+
+      fireEvent.click(screen.getByRole("button", { name: "Prepare Data & Start Backtest" }));
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: /View Results: NSE:RELIANCE/ })).toBeInTheDocument(),
+      );
+      fireEvent.click(screen.getByRole("button", { name: /View Results: NSE:RELIANCE/ }));
+      await waitFor(() => expect(screen.getByText("ema_crossover-1")).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole("button", { name: "Download PDF Report" }));
+
+      await waitFor(() =>
+        expect(fetchMock).toHaveBeenCalledWith(
+          expect.stringContaining("/backtesting/results/abc123/report/?run_id=run-1"),
+          expect.anything(),
+        ),
+      );
+    });
+  });
 });

@@ -25,6 +25,7 @@ import {
   asDataQualityView,
   createHistoricalBacktestRun,
   getBacktestResult,
+  getBacktestResultReportPdf,
   getCoveragePreview,
   getHistoricalBacktestRunProgress,
   runBacktest,
@@ -579,7 +580,69 @@ function EngineValidationIndicator(): JSX.Element {
   );
 }
 
-function BacktestResultsPanel({ result }: { result: BacktestResult }): JSX.Element {
+/** CHECKPOINT-BACKTEST-PDF-B: downloads the multi-page PDF report
+ * Phase A's own read-only endpoint renders. `runId` is only passed by
+ * the multi-instrument historical-run flow (`PerInstrumentResults`) -
+ * the single-instrument "Run Backtest" flow never has one, and the
+ * backend endpoint already treats a missing `run_id` as "no Results by
+ * Instrument page" correctly, so this component never needs to guess.
+ *
+ * reportlab generation of a multi-page report with real charts can
+ * take a real moment - "Generating…" is a genuine in-flight state, not
+ * a token spinner, and a failure (network error, 404) is shown
+ * honestly via the same `ErrorState` every other failure on this page
+ * already uses, never a silent no-op. */
+function DownloadPdfReportButton({
+  backtestId,
+  runId,
+}: {
+  backtestId: string;
+  runId?: string;
+}): JSX.Element {
+  const [status, setStatus] = useState<"idle" | "generating" | "error">("idle");
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleDownload(): Promise<void> {
+    setStatus("generating");
+    setError(null);
+    try {
+      const blob = await getBacktestResultReportPdf(backtestId, runId);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `backtest-${backtestId}-report.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setStatus("idle");
+    } catch (err) {
+      setStatus("error");
+      setError(describeError(err));
+    }
+  }
+
+  return (
+    <div className="backtest-results__pdf-export">
+      <button
+        type="button"
+        onClick={() => void handleDownload()}
+        disabled={status === "generating"}
+      >
+        {status === "generating" ? "Generating…" : "Download PDF Report"}
+      </button>
+      {status === "error" && error && <ErrorState message={error} />}
+    </div>
+  );
+}
+
+function BacktestResultsPanel({
+  result,
+  runId,
+}: {
+  result: BacktestResult;
+  runId?: string;
+}): JSX.Element {
   const m = result.metrics as Record<string, string | number | null>;
   const configuration = asConfigurationView(result);
   const dataQuality = asDataQualityView(result);
@@ -599,6 +662,8 @@ function BacktestResultsPanel({ result }: { result: BacktestResult }): JSX.Eleme
   return (
     <section className="backtest-results" aria-label="Backtest Results">
       <h3>Results</h3>
+
+      <DownloadPdfReportButton backtestId={result.backtest_id} runId={runId} />
 
       <div className="callout callout--warn" role="note">
         <strong>RESULT, not a promise.</strong> Backtest results are historical simulations and
@@ -1320,6 +1385,7 @@ function HistoricalBacktestRunPanel(props: HistoricalBacktestRunPanelProps): JSX
               </p>
               <PerInstrumentResults
                 resultBacktestIds={progress.result_backtest_ids as Record<string, string>}
+                runId={progress.run_id}
               />
             </>
           )}
@@ -1337,7 +1403,10 @@ function HistoricalBacktestRunPanel(props: HistoricalBacktestRunPanelProps): JSX
  * instrument, fetched on demand (never all of them eagerly - a run can
  * span hundreds of instruments) via the same getBacktestResult() the
  * Compare page already uses. */
-function PerInstrumentResults(props: { resultBacktestIds: Record<string, string> }): JSX.Element | null {
+function PerInstrumentResults(props: {
+  resultBacktestIds: Record<string, string>;
+  runId: string;
+}): JSX.Element | null {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [results, setResults] = useState<Record<string, BacktestResult>>({});
   const [loadingId, setLoadingId] = useState<string | null>(null);
@@ -1383,7 +1452,7 @@ function PerInstrumentResults(props: { resultBacktestIds: Record<string, string>
             )}
             {expandedId === instrumentId && error && <ErrorState message={error} />}
             {expandedId === instrumentId && results[instrumentId] && (
-              <BacktestResultsPanel result={results[instrumentId]} />
+              <BacktestResultsPanel result={results[instrumentId]} runId={props.runId} />
             )}
           </li>
         ))}

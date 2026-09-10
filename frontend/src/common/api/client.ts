@@ -193,6 +193,28 @@ export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
 }
 
 /**
+ * CHECKPOINT-BACKTEST-PDF-B: fetches a BINARY response body (a PDF
+ * report, so far the only non-JSON response this frontend consumes)
+ * as a `Blob`, reusing `performRequest()`'s own request-construction
+ * and `credentials: "include"` handling exactly. A non-2xx response is
+ * still routed through the SAME `ApiRequestError`/`ApiNetworkError`
+ * handling every other verb uses (the backend's own error responses
+ * are always JSON, `ApiErrorSerializer`, even on an endpoint whose
+ * success response is binary) - never a silently-broken download with
+ * no explanation.
+ */
+export async function apiGetBlob(path: string): Promise<Blob> {
+  const response = await performRequest(`${resolveBaseUrl()}${path}`, "GET");
+  if (!response.ok) {
+    // Reuses decodeResponse()'s own error-shape handling - it only
+    // ever reads the body and throws for a non-ok response, the
+    // `Promise<never>` path here, so the declared `T` is irrelevant.
+    return decodeResponse<Blob>(response);
+  }
+  return response.blob();
+}
+
+/**
  * Perform a DELETE request. Deliberately does not decode a JSON body -
  * delete endpoints return 204 No Content (see `watchlist_views.
  * delete_watchlist`) - but still routes a non-2xx response through the

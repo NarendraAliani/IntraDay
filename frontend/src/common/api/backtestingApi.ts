@@ -5,7 +5,7 @@
 // /api/v1/config/watchlists/, /api/v1/config/strategy-engine/
 // research-status/), mirroring strategyApi.ts's own established
 // pattern - generated OpenAPI contract types only, thin fetch wrappers.
-import { apiDelete, apiGet, apiPost } from "./client";
+import { apiDelete, apiGet, apiGetBlob, apiPost } from "./client";
 import type { components } from "@shared/generated_contracts/api-types";
 
 export type BacktestRunRequest = components["schemas"]["BacktestRunRequest"];
@@ -76,6 +76,18 @@ export function getCoveragePreview(body: CoveragePreviewRequest): Promise<Covera
 
 export function getBacktestResult(backtestId: string): Promise<BacktestResult> {
   return apiGet<BacktestResult>(`/api/v1/config/backtesting/results/${backtestId}/`);
+}
+
+// CHECKPOINT-BACKTEST-PDF-B: Phase B of the PDF report feature -
+// downloads the multi-page PDF Phase A's own read-only endpoint
+// renders from an already-completed result. `runId` is optional and
+// only meaningful for a multi-instrument historical run (adds the
+// "Results by Instrument" page server-side) - reuses whatever
+// `run_id` the caller already has from `HistoricalBacktestRunProgress`,
+// never a second run-tracking mechanism on this side either.
+export function getBacktestResultReportPdf(backtestId: string, runId?: string): Promise<Blob> {
+  const query = runId ? `?run_id=${encodeURIComponent(runId)}` : "";
+  return apiGetBlob(`/api/v1/config/backtesting/results/${backtestId}/report/${query}`);
 }
 
 export function listBacktestResults(strategyId: string): Promise<BacktestResult[]> {

@@ -1955,3 +1955,26 @@ re-deriving them. Not a full transcript; no invented detail.
   unrelated failures / 3418 passed (up from 3414). No frontend changes
   (Phase B is the "Download PDF" button, not this checkpoint). See
   `CHECKPOINT_BACKTEST-PDF-A_SUMMARY.md`.
+- **`CHECKPOINT-BACKTEST-PDF-B`**: Phase B (frontend) of the PDF
+  report feature, building on `CHECKPOINT-BACKTEST-PDF-A`'s backend
+  endpoint. New "Download PDF Report" button inside
+  `BacktestResultsPanel` in `BacktestingWorkbenchPage.tsx` - visible
+  on both the single-instrument "Run Backtest" flow AND each expanded
+  instrument in a multi-instrument historical run's own "Results by
+  Instrument" list. `run_id` reuses `progress.run_id` (already tracked
+  for progress polling) via a new optional `runId` prop threaded
+  through `PerInstrumentResults` - no new state added. No existing
+  binary-download pattern existed anywhere in this frontend (confirmed
+  via grep) - built a new `apiGetBlob()` in `client.ts` (reuses
+  `performRequest()`'s own request/error handling exactly) plus a
+  standard blob+`<a download>` trigger, filename
+  `backtest-<id>-report.pdf`. "Generating..." loading state (button
+  disabled) + honest ErrorState on failure, never a silent no-op. 4
+  new tests (button visibility, no-run_id URL, loading state,
+  multi-instrument ?run_id= URL, honest error) - found and fixed a
+  real jsdom gotcha along the way (`vi.stubGlobal("URL", {...URL,...})`
+  silently breaks URL as a constructor since spreading a class copies
+  no methods - direct property assignment works instead). Full
+  frontend suite: 396/396 passing on a clean rerun (one unrelated
+  transient flake confirmed not a regression), typecheck clean. No
+  backend changes. See `CHECKPOINT_BACKTEST-PDF-B_SUMMARY.md`.
