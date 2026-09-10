@@ -94,6 +94,16 @@
   /* --- Layout ------------------------------------------------------------- */
   --page-max-width: 960px;
   --page-max-width-wide: 1200px;
+  /* CHECKPOINT-FRONTEND-5: the app-shell CHROME (brand + primary nav +
+     identity block) is not page CONTENT and must not share
+     `--page-max-width`'s 960px reading-width cap - measured directly
+     (Playwright, real bounding boxes) at 960/1024/1280/1440/1920px
+     viewports: the header's own content needs ~1393px to lay out on
+     one line, and `main`'s width was identical (960px) at every one
+     of those viewports, so the header wrapped to 3 lines at EVERY
+     standard desktop width, not only narrow ones. See
+     CHECKPOINT_FRONTEND-5_SUMMARY.md. */
+  --shell-max-width: 1440px;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -205,7 +215,20 @@ main {
   -webkit-overflow-scrolling: touch;
 }
 
+/* CHECKPOINT-FRONTEND-5: the chrome bar itself has NO reading-width
+   cap - it spans the full viewport (matching `main`'s own left/right
+   padding so the two visually align at any width) so `.app-shell__header`
+   inside it gets real room to lay out on one line at standard desktop
+   widths, instead of inheriting `main`'s 960px page-content cap (the
+   root cause measured directly - see the `--shell-max-width` token's
+   own comment above). */
+.app-shell__header-bar {
+  padding: var(--space-6) var(--space-5) 0;
+}
+
 .app-shell__header {
+  max-width: var(--shell-max-width);
+  margin: 0 auto;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -216,7 +239,29 @@ main {
   border-bottom: 1px solid var(--color-border);
 }
 
+/* Mirrors `main`'s own 768px/480px horizontal-padding reductions
+   (defined above) so the chrome bar's left/right edges keep matching
+   `main`'s at every breakpoint - these rules must stay AFTER the base
+   `.app-shell__header-bar` rule in source order (equal selector
+   specificity - a media-query rule earlier in the file does not
+   "win" over a later unconditional one). */
+@media (max-width: 768px) {
+  .app-shell__header-bar {
+    padding: var(--space-5) var(--space-4) 0;
+  }
+}
+
+@media (max-width: 480px) {
+  .app-shell__header-bar {
+    padding: var(--space-4) var(--space-3) 0;
+  }
+}
+
 @media (max-width: 640px) {
+  .app-shell__header-bar {
+    padding-top: var(--space-4);
+  }
+
   .app-shell__header {
     flex-direction: column;
     align-items: stretch;
@@ -1731,6 +1776,12 @@ dd {
   align-items: center;
   gap: var(--space-2);
   flex-wrap: wrap;
+}
+
+.watchlist-page__form-actions {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
 }
 
 .form-grid {

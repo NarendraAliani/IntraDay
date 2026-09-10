@@ -215,6 +215,110 @@ describe("WatchlistPage", () => {
     await waitFor(() => expect(screen.getByText(/new-list/)).toBeInTheDocument());
   });
 
+  it("loads an existing watchlist's instruments into the picker on Edit, and Save changes updates it via the same upsert save call", async () => {
+    let currentInstruments = ["NSE:FIXTURE01"];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.includes("/market-data/quotes/")) {
+          return jsonResponse([
+            {
+              symbol: "FIXTURE01",
+              exchange: "NSE",
+              last_price: "100.00",
+              source_timestamp: "2026-08-14T06:00:00Z",
+              freshness_age_seconds: 5,
+              is_stale: false,
+            },
+            {
+              symbol: "FIXTURE02",
+              exchange: "NSE",
+              last_price: "200.00",
+              source_timestamp: "2026-08-14T06:00:00Z",
+              freshness_age_seconds: 5,
+              is_stale: false,
+            },
+          ]);
+        }
+        if (url.includes("/market-data/instruments/")) {
+          return jsonResponse({ exchange: "NSE", instruments: [], data_source: "UNAVAILABLE" });
+        }
+        if (url.includes("/watchlists/existing/market-data/")) {
+          return jsonResponse({
+            watchlist_name: "existing",
+            mode: "HISTORICAL",
+            results: currentInstruments.map((id) => ({ ...GATE_VERIFIED_ROW, instrument_id: id })),
+          });
+        }
+        if (url.endsWith("/watchlists/save/") && init?.method === "POST") {
+          const body = JSON.parse(String(init.body)) as { name: string; instrument_ids: string[] };
+          expect(body.name).toBe("existing"); // the locked name, never renamed
+          currentInstruments = body.instrument_ids;
+          return jsonResponse({ name: body.name, instrument_ids: body.instrument_ids }, 201);
+        }
+        if (url.endsWith("/watchlists/")) {
+          return jsonResponse([{ name: "existing", instrument_ids: currentInstruments }]);
+        }
+        return jsonResponse({ error_code: "not_found", message: "no route" }, 404);
+      }),
+    );
+    renderWithAuth(<WatchlistPage />);
+    await waitFor(() => expect(screen.getByText("existing")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    expect(await screen.findByText('Editing "existing"')).toBeInTheDocument();
+    // The name field is locked while editing - rename is out of scope.
+    expect(screen.getByLabelText("Watchlist name")).toBeDisabled();
+    expect(screen.getByLabelText("Watchlist name")).toHaveValue("existing");
+    // The existing instrument is pre-checked in the picker.
+    const fixture01Checkbox = screen.getByLabelText("FIXTURE01") as HTMLInputElement;
+    expect(fixture01Checkbox.checked).toBe(true);
+
+    // Add the second instrument, then save.
+    fireEvent.click(screen.getByLabelText("FIXTURE02"));
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(currentInstruments).toEqual(["NSE:FIXTURE01", "NSE:FIXTURE02"]));
+    // Editing state is cleared after a successful save.
+    await waitFor(() => expect(screen.queryByText('Editing "existing"')).not.toBeInTheDocument());
+    expect(screen.getByText("New watchlist")).toBeInTheDocument();
+  });
+
+  it("Cancel leaves the existing watchlist untouched and restores the create-new form", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.includes("/market-data/quotes/")) return jsonResponse([]);
+        if (url.includes("/market-data/instruments/")) {
+          return jsonResponse({ exchange: "NSE", instruments: [], data_source: "UNAVAILABLE" });
+        }
+        if (url.includes("/watchlists/existing/market-data/")) {
+          return jsonResponse({
+            watchlist_name: "existing",
+            mode: "HISTORICAL",
+            results: [GATE_VERIFIED_ROW],
+          });
+        }
+        if (url.endsWith("/watchlists/")) {
+          return jsonResponse([{ name: "existing", instrument_ids: ["NSE:FIXTURE01"] }]);
+        }
+        return jsonResponse({ error_code: "not_found", message: "no route" }, 404);
+      }),
+    );
+    renderWithAuth(<WatchlistPage />);
+    await waitFor(() => expect(screen.getByText("existing")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    expect(await screen.findByText('Editing "existing"')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByText("New watchlist")).toBeInTheDocument();
+    expect(screen.getByLabelText("Watchlist name")).not.toBeDisabled();
+    expect(screen.getByLabelText("Watchlist name")).toHaveValue("");
+  });
+
   it("never lets the operator type a free-text instrument symbol", async () => {
     stubFetch({
       "/market-data/quotes/": [],

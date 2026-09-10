@@ -58,6 +58,39 @@ def test_save_list_get_delete_watchlist() -> None:
 
 @requires_postgres
 @pytest.mark.django_db
+def test_save_again_with_same_name_edits_instrument_list_in_place() -> None:
+    """CHECKPOINT-FRONTEND-5 Issue 3: confirms directly (not assumed)
+    that `save_watchlist`/`WatchlistService.save()` is already an
+    UPSERT keyed by (owner, name) - editing an existing watchlist's
+    instrument list is exactly a second `save()` call with the SAME
+    name and a different `instrument_ids` list. No new backend
+    endpoint or repository method was needed for this capability."""
+    client = _client_as_reader()
+    client.post(
+        "/api/v1/config/watchlists/save/",
+        data={"name": "editable", "instrument_ids": ["NSE:FIXTURE01"]},
+        content_type="application/json",
+    )
+
+    edit_response = client.post(
+        "/api/v1/config/watchlists/save/",
+        data={"name": "editable", "instrument_ids": ["NSE:FIXTURE01", "NSE:FIXTURE02"]},
+        content_type="application/json",
+    )
+    assert edit_response.status_code == 201
+
+    # Still exactly one watchlist named "editable" - the upsert replaced
+    # the existing row rather than creating a second one.
+    list_response = client.get("/api/v1/config/watchlists/")
+    names = [row["name"] for row in list_response.json()]
+    assert names == ["editable"]
+
+    get_response = client.get("/api/v1/config/watchlists/editable/")
+    assert get_response.json()["instrument_ids"] == ["NSE:FIXTURE01", "NSE:FIXTURE02"]
+
+
+@requires_postgres
+@pytest.mark.django_db
 def test_watchlists_are_isolated_per_owner() -> None:
     client_a = _client_as_reader("wl-owner-a")
     client_b = _client_as_reader("wl-owner-b")

@@ -32,7 +32,7 @@
 // still no routing library. `ThemeProvider` wraps the shell here rather
 // than in `main.tsx` so that every test which renders <App /> gets a
 // correctly themed tree without having to know the theme system exists.
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { useAuth } from "../common/auth/AuthContext";
 import { Icon } from "../common/icons/Icon";
@@ -154,6 +154,34 @@ const DASHBOARD_ITEM: NavItem = { id: "dashboard", label: "Dashboard", icon: "da
 function AppShell(): JSX.Element {
   const { state, logout } = useAuth();
   const [screen, setScreen] = useState<Screen>("dashboard");
+  // CHECKPOINT-FRONTEND-5 Issue 1: which nav dropdown (if any) is open -
+  // fully CONTROLLED state, not the native <details> "open" attribute
+  // driven by `containsActive`. The old approach forced a group back
+  // open on every render whenever the active screen lived inside it,
+  // which meant a group containing the current screen could never
+  // actually be closed - the operator's own "requires an extra click
+  // elsewhere" report. Selecting an item, clicking outside the nav, or
+  // pressing Escape all now close it in one action.
+  const [openGroupId, setOpenGroupId] = useState<string | null>(null);
+  const navRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    if (openGroupId === null) return;
+    function handlePointerDown(event: MouseEvent): void {
+      if (navRef.current && !navRef.current.contains(event.target as Node)) {
+        setOpenGroupId(null);
+      }
+    }
+    function handleKeyDown(event: KeyboardEvent): void {
+      if (event.key === "Escape") setOpenGroupId(null);
+    }
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [openGroupId]);
 
   if (state.status === "loading") {
     return (
@@ -168,60 +196,80 @@ function AppShell(): JSX.Element {
   }
 
   return (
-    <main>
-      <header className="app-shell__header">
-        <p className="app-shell__brand">
-          <Icon name="signal" />
-          IntraDay
-        </p>
-        <nav className="app-shell__nav" aria-label="Primary">
-          <button
-            type="button"
-            className={screen === DASHBOARD_ITEM.id ? "nav-link nav-link--active" : "nav-link"}
-            aria-current={screen === DASHBOARD_ITEM.id ? "page" : undefined}
-            onClick={() => setScreen(DASHBOARD_ITEM.id)}
-          >
-            <Icon name={DASHBOARD_ITEM.icon} />
-            {DASHBOARD_ITEM.label}
-          </button>
-          {NAV_GROUPS.map((group) => {
-            const containsActive = group.items.some((item) => item.id === screen);
-            return (
-              <details key={group.id} className="nav-group" open={containsActive || undefined}>
-                <summary
-                  className={containsActive ? "nav-group__toggle nav-group__toggle--active" : "nav-group__toggle"}
-                >
-                  <Icon name={group.icon} />
-                  {group.label}
-                </summary>
-                <div className="nav-group__items">
-                  {group.items.map((item) => (
-                    <button
-                      key={item.id}
-                      type="button"
-                      className={screen === item.id ? "nav-link nav-link--active" : "nav-link"}
-                      aria-current={screen === item.id ? "page" : undefined}
-                      onClick={() => setScreen(item.id)}
-                    >
-                      <Icon name={item.icon} />
-                      {item.label}
-                    </button>
-                  ))}
-                </div>
-              </details>
-            );
-          })}
-        </nav>
-        <div className="app-shell__identity">
-          <ThemeSelector />
-          <span>
-            Signed in as <strong>{state.username}</strong>
-          </span>
-          <button type="button" onClick={() => void logout()}>
-            Sign out
-          </button>
-        </div>
-      </header>
+    <>
+      <div className="app-shell__header-bar">
+        <header className="app-shell__header">
+          <p className="app-shell__brand">
+            <Icon name="signal" />
+            IntraDay
+          </p>
+          <nav className="app-shell__nav" aria-label="Primary" ref={navRef}>
+            <button
+              type="button"
+              className={screen === DASHBOARD_ITEM.id ? "nav-link nav-link--active" : "nav-link"}
+              aria-current={screen === DASHBOARD_ITEM.id ? "page" : undefined}
+              onClick={() => {
+                setScreen(DASHBOARD_ITEM.id);
+                setOpenGroupId(null);
+              }}
+            >
+              <Icon name={DASHBOARD_ITEM.icon} />
+              {DASHBOARD_ITEM.label}
+            </button>
+            {NAV_GROUPS.map((group) => {
+              const containsActive = group.items.some((item) => item.id === screen);
+              const isOpen = openGroupId === group.id;
+              return (
+                <details key={group.id} className="nav-group" open={isOpen}>
+                  <summary
+                    className={
+                      containsActive ? "nav-group__toggle nav-group__toggle--active" : "nav-group__toggle"
+                    }
+                    onClick={(e) => {
+                      // Fully controlled - the native disclosure toggle
+                      // is never trusted on its own (see the state
+                      // comment above), so the default browser toggle
+                      // is prevented and replaced with explicit state.
+                      e.preventDefault();
+                      setOpenGroupId((prev) => (prev === group.id ? null : group.id));
+                    }}
+                  >
+                    <Icon name={group.icon} />
+                    {group.label}
+                  </summary>
+                  <div className="nav-group__items">
+                    {group.items.map((item) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        className={screen === item.id ? "nav-link nav-link--active" : "nav-link"}
+                        aria-current={screen === item.id ? "page" : undefined}
+                        onClick={() => {
+                          setScreen(item.id);
+                          setOpenGroupId(null);
+                        }}
+                      >
+                        <Icon name={item.icon} />
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                </details>
+              );
+            })}
+          </nav>
+          <div className="app-shell__identity">
+            <ThemeSelector />
+            <span>
+              Signed in as <strong>{state.username}</strong>
+            </span>
+            <button type="button" onClick={() => void logout()}>
+              Sign out
+            </button>
+          </div>
+        </header>
+      </div>
+      <main>
       {screen === "dashboard" && (
         <DashboardPage
           onOpenMarketData={() => setScreen("market-data")}
@@ -251,7 +299,8 @@ function AppShell(): JSX.Element {
       {screen === "strategy-monitor" && <StrategyMonitorPage />}
       {screen === "paper-trading" && <PaperTradingPage />}
       {screen === "reports" && <ReportsOverviewPage />}
-    </main>
+      </main>
+    </>
   );
 }
 

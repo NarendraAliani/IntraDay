@@ -192,6 +192,16 @@ export function WatchlistPage(): JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [instruments, setInstruments] = useState<string[]>([]);
+  // CHECKPOINT-FRONTEND-5 Issue 3: which existing watchlist (by name) is
+  // being edited, or `null` for the ordinary "create new" form. `save()`/
+  // `WatchlistService.save()` (confirmed directly) is already an UPSERT
+  // keyed by `(owner, name)`, so editing an existing watchlist's own
+  // instrument list reuses the exact same `saveWatchlist` call as
+  // creating one - no new backend endpoint was needed. Rename is
+  // deliberately OUT OF SCOPE for this checkpoint (a separate concern -
+  // there is no atomic rename operation, only upsert-by-name), so the
+  // name field is locked while editing.
+  const [editingName, setEditingName] = useState<string | null>(null);
 
   async function reload(): Promise<void> {
     try {
@@ -205,15 +215,28 @@ export function WatchlistPage(): JSX.Element {
     void reload();
   }, []);
 
+  function startEdit(watchlist: WatchlistResponse): void {
+    setEditingName(watchlist.name);
+    setName(watchlist.name);
+    setInstruments(watchlist.instrument_ids);
+  }
+
+  function cancelEdit(): void {
+    setEditingName(null);
+    setName("");
+    setInstruments([]);
+  }
+
   async function handleSave(): Promise<void> {
     if (!name.trim()) return;
     try {
       await saveWatchlist({
-        name: name.trim(),
+        name: (editingName ?? name).trim(),
         instrument_ids: instruments,
       });
       setName("");
       setInstruments([]);
+      setEditingName(null);
       await reload();
     } catch (err) {
       setError(describeError(err));
@@ -223,6 +246,7 @@ export function WatchlistPage(): JSX.Element {
   async function handleDelete(watchlistName: string): Promise<void> {
     try {
       await deleteWatchlist(watchlistName);
+      if (editingName === watchlistName) cancelEdit();
       await reload();
     } catch (err) {
       setError(describeError(err));
@@ -247,9 +271,15 @@ export function WatchlistPage(): JSX.Element {
         }}
         className="watchlist-page__form"
       >
+        <h2>{editingName ? `Editing "${editingName}"` : "New watchlist"}</h2>
         <div className="strategy-config-page__field">
           <label htmlFor="watchlist-name">Watchlist name</label>
-          <input id="watchlist-name" value={name} onChange={(e) => setName(e.target.value)} />
+          <input
+            id="watchlist-name"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            disabled={editingName !== null}
+          />
         </div>
         <InstrumentPickerMulti
           idPrefix="watchlist-instruments"
@@ -257,9 +287,16 @@ export function WatchlistPage(): JSX.Element {
           value={instruments}
           onChange={setInstruments}
         />
-        <button type="submit" disabled={!name.trim()}>
-          Save Watchlist
-        </button>
+        <div className="watchlist-page__form-actions">
+          <button type="submit" disabled={!name.trim()}>
+            {editingName ? "Save changes" : "Save Watchlist"}
+          </button>
+          {editingName && (
+            <button type="button" onClick={cancelEdit}>
+              Cancel
+            </button>
+          )}
+        </div>
       </form>
 
       {watchlists.length === 0 ? (
@@ -269,6 +306,9 @@ export function WatchlistPage(): JSX.Element {
           <section key={w.name} className="watchlist-page__section" aria-label={`Watchlist ${w.name}`}>
             <div className="watchlist-page__section-header">
               <h2>{w.name}</h2>
+              <button type="button" onClick={() => startEdit(w)}>
+                Edit
+              </button>
               <button type="button" onClick={() => void handleDelete(w.name)}>
                 Delete
               </button>

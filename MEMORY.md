@@ -1821,3 +1821,28 @@ re-deriving them. Not a full transcript; no invented detail.
   (confirmed via `git status` + a targeted backend re-run, 14/14
   passing). Full frontend suite: 380/380 passing, typecheck clean.
   See `CHECKPOINT_WATCHLIST-B_SUMMARY.md`.
+- **`CHECKPOINT-FRONTEND-5` (nav/navbar/watchlist-edit)**: NOTE - this
+  identifier collides with an EARLIER, unrelated checkpoint (an icon
+  audit) that already produced `CHECKPOINT_FRONTEND-5_SUMMARY.md` -
+  this checkpoint's own summary was written to
+  `CHECKPOINT_FRONTEND-5_NAV-WATCHLIST_SUMMARY.md` instead to avoid
+  overwriting it; flag this collision if "FRONTEND-5" is referenced
+  again. Fixed 3 issues: (1) nav dropdown required 2 clicks to close -
+  root cause was `open={containsActive || undefined}` forcing a group
+  back open forever once its own screen became active; replaced with
+  fully controlled `openGroupId` state + click-outside + Escape
+  handling (`NavDropdown.test.tsx`, 6 tests). (2) navbar wrapped to 3
+  lines at EVERY desktop width from 960-1920px (measured directly,
+  not assumed) because `<header>` lived inside `<main>`'s 960px
+  reading-width cap; moved header outside `<main>` into its own
+  `--shell-max-width: 1440px` chrome bar - now single-line ≥1400px,
+  clean 2-row split 961-1399px (not a broken 3-way wrap), unchanged
+  full stack ≤640px. (3) watchlist edit - `WatchlistService.save()`
+  was ALREADY an upsert by (owner,name), so editing an existing
+  watchlist's instruments needed ZERO backend changes (proven with a
+  new backend test); added an "Edit"/"Save changes"/"Cancel" flow to
+  `WatchlistPage.tsx` with the name field locked (rename explicitly
+  deferred as a separate future concern, not silently skipped).
+  Full suites: frontend 388/388, backend 5 pre-existing/unrelated
+  failures (same baseline as every prior checkpoint), no regressions.
+  See `CHECKPOINT_FRONTEND-5_NAV-WATCHLIST_SUMMARY.md`.
